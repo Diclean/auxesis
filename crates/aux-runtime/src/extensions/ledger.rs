@@ -26,6 +26,9 @@ pub const FROZEN: &str = "ext.frozen";
 pub const VERIFY: &str = "ext.verify";
 /// See [`INSTALL`].
 pub const CATALOG_REFUSED: &str = "ext.catalog_refused";
+/// M6-2: the owner approved one MCP install preview. The payload is the server
+/// id, the agent and the binding hash — never a secret or a tool argument.
+pub const MCP_APPROVE: &str = "mcp.approve";
 
 /// Write one row through an already-open store.
 pub fn log_with(store: &aux_store::Store, kind: &str, payload: &Value) -> Result<(), String> {

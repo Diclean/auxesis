@@ -96,6 +96,11 @@ pub struct McpServerConfig {
     /// never been confirmed by the daemon, whatever `stdio_confirmed` says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdio_confirmation: Option<String>,
+    /// M6-2: the owner's approval of the whole install preview, keyed by the
+    /// daemon token. `None` means never approved; an enabled server without a
+    /// matching record never starts (one-approval install).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<String>,
     /// Whether the server needs network access. A sandboxed stdio child gets
     /// sockets only when this is set; the default denies all sockets.
     #[serde(default)]
@@ -181,6 +186,7 @@ const SERVER_ENTRY_KEYS: &[&str] = &[
     "data_class",
     "stdio_confirmed",
     "stdio_confirmation",
+    "approval",
     "network",
     "transport",
     "url",
@@ -682,6 +688,9 @@ fn sync_server_fields(table: &mut Table, current: &McpServerConfig, desired: &Mc
             desired.stdio_confirmation.as_deref(),
         );
     }
+    if current.approval != desired.approval {
+        set_optional_string(table, "approval", desired.approval.as_deref());
+    }
     if current.network != desired.network {
         table.insert("network", toml_edit::value(desired.network));
     }
@@ -764,6 +773,9 @@ fn server_to_table(server: &McpServerConfig) -> Table {
     table.insert("stdio_confirmed", toml_edit::value(server.stdio_confirmed));
     if let Some(confirmation) = &server.stdio_confirmation {
         table.insert("stdio_confirmation", toml_edit::value(confirmation.clone()));
+    }
+    if let Some(approval) = &server.approval {
+        table.insert("approval", toml_edit::value(approval.clone()));
     }
     table.insert("network", toml_edit::value(server.network));
     table.insert(
@@ -938,6 +950,96 @@ impl McpServerConfig {
         };
         self.stdio_confirmed && self.confirmation_binding(secret).as_deref() == Some(stored)
     }
+
+    /// The M6-2 install approval for this exact preview under `secret`.
+    ///
+    /// `catalog_pin` is the curated `catalog_hash` for a catalog entry; a
+    /// catalog server without a pin gets no binding (fail closed). Like the
+    /// confirmation, an empty secret yields `None`.
+    pub fn approval_binding(&self, secret: &[u8], catalog_pin: Option<&str>) -> Option<String> {
+        approval_digest(secret, self, catalog_pin)
+    }
+
+    /// Whether the owner approved **this** install: a keyed digest over the
+    /// id, catalog id and pin, transport, endpoint or launch, data class,
+    /// network and every agent→tool allowlist. A hand-edited `enabled = true`
+    /// never passes; the lifecycle fields are deliberately not hashed, so the
+    /// same hash the preview returned is still valid for the approve call.
+    pub fn is_approved_with(&self, secret: &[u8], catalog_pin: Option<&str>) -> bool {
+        let Some(stored) = self.approval.as_deref() else {
+            return false;
+        };
+        self.approval_binding(secret, catalog_pin).as_deref() == Some(stored)
+    }
+}
+
+/// Bind one install approval to one exact server preview and a daemon secret.
+///
+/// Covers every install-relevant field, never the mutable lifecycle fields
+/// (`enabled`, `approval`, `stdio_confirmed`): the preview hash must stay the
+/// same before and after the approve write. `catalog_pin` is required for a
+/// catalog server, so a lost or unverifiable entry invalidates the approval.
+fn approval_digest(
+    secret: &[u8],
+    server: &McpServerConfig,
+    catalog_pin: Option<&str>,
+) -> Option<String> {
+    if secret.is_empty() {
+        return None;
+    }
+    let pin = match (server.catalog_id.as_deref(), catalog_pin) {
+        (Some(_), Some(pin)) => pin,
+        (Some(_), None) => return None,
+        (None, _) => "",
+    };
+    let mut hasher = blake3::Hasher::new_keyed(blake3::hash(secret).as_bytes());
+    // v2: every field carries a tag and a length/count, so no two shapes can
+    // serialise to the same byte stream (v1 joined args then env with no
+    // boundary, so `args=["X"], env=[]` and `args=[], env=["X"]` collided).
+    hasher.update(b"mcp-approval-v2\0");
+    hash_field(&mut hasher, b"id:", &server.id);
+    hash_field(
+        &mut hasher,
+        b"catalog:",
+        server.catalog_id.as_deref().unwrap_or(""),
+    );
+    hash_field(&mut hasher, b"pin:", pin);
+    hash_field(&mut hasher, b"transport:", server.transport.as_str());
+    hash_field(&mut hasher, b"url:", server.url.as_deref().unwrap_or(""));
+    hash_field(
+        &mut hasher,
+        b"command:",
+        server.command.as_deref().unwrap_or(""),
+    );
+    hash_count(&mut hasher, b"args:", server.args.len());
+    for arg in &server.args {
+        hash_field(&mut hasher, b"arg:", arg);
+    }
+    let mut names: Vec<&str> = server.env.iter().map(String::as_str).collect();
+    names.sort_unstable();
+    names.dedup();
+    hash_count(&mut hasher, b"env:", names.len());
+    for name in names {
+        hash_field(&mut hasher, b"env-name:", name);
+    }
+    hash_flag(&mut hasher, b"network:", server.network);
+    hash_field(
+        &mut hasher,
+        b"class:",
+        match server.data_class {
+            McpDataClass::Public => "public",
+            McpDataClass::Sensitive => "sensitive",
+        },
+    );
+    hash_count(&mut hasher, b"agents:", server.agents.len());
+    for (agent, tools) in &server.agents {
+        hash_field(&mut hasher, b"agent:", agent);
+        hash_count(&mut hasher, b"agent-tools:", tools.len());
+        for tool in tools {
+            hash_field(&mut hasher, b"tool:", tool);
+        }
+    }
+    Some(hasher.finalize().to_hex().to_string())
 }
 
 /// Bind one confirmation to one exact launch **and** to a daemon-held secret.
@@ -965,49 +1067,71 @@ fn confirmation_digest(
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|_| command.to_owned());
     let mut hasher = blake3::Hasher::new_keyed(blake3::hash(secret).as_bytes());
-    hasher.update(canonical.as_bytes());
-    hasher.update(&[0u8]);
+    // v2: tagged, length-prefixed and counted, exactly like the approval
+    // digest, so an args/env swap (or a tool moving between agents) invalidates
+    // the confirmation instead of reusing the old bytes.
+    hasher.update(b"mcp-confirmation-v2\0");
+    hash_field(&mut hasher, b"command:", &canonical);
+    hash_count(&mut hasher, b"args:", server.args.len());
     for arg in &server.args {
-        hasher.update(arg.as_bytes());
-        hasher.update(&[0u8]);
+        hash_field(&mut hasher, b"arg:", arg);
     }
-    hasher.update(&[1u8]);
     let mut names: Vec<&str> = server.env.iter().map(String::as_str).collect();
     names.sort_unstable();
     names.dedup();
+    hash_count(&mut hasher, b"env:", names.len());
     for name in names {
-        hasher.update(name.as_bytes());
-        hasher.update(&[0u8]);
+        hash_field(&mut hasher, b"env-name:", name);
     }
-    hasher.update(&[2u8]);
-    hasher.update(if server.network { b"net=1" } else { b"net=0" });
-    hasher.update(&[0u8]);
-    hasher.update(match server.data_class {
-        McpDataClass::Public => &b"class=public"[..],
-        McpDataClass::Sensitive => &b"class=sensitive"[..],
-    });
-    hasher.update(&[0u8]);
-    hasher.update(server.transport.as_str().as_bytes());
-    hasher.update(&[0u8]);
+    hash_flag(&mut hasher, b"network:", server.network);
+    hash_field(
+        &mut hasher,
+        b"class:",
+        match server.data_class {
+            McpDataClass::Public => "public",
+            McpDataClass::Sensitive => "sensitive",
+        },
+    );
+    hash_field(&mut hasher, b"transport:", server.transport.as_str());
     // Item 7: the per-agent tools allowlist is part of the confirmed launch. A
     // `BTreeMap` iterates in key order, so the digest is deterministic.
-    hasher.update(&[3u8]);
+    hash_count(&mut hasher, b"agents:", server.agents.len());
     for (agent, tools) in &server.agents {
-        hasher.update(agent.as_bytes());
-        hasher.update(&[0u8]);
+        hash_field(&mut hasher, b"agent:", agent);
+        hash_count(&mut hasher, b"agent-tools:", tools.len());
         for tool in tools {
-            hasher.update(tool.as_bytes());
-            hasher.update(&[0u8]);
+            hash_field(&mut hasher, b"tool:", tool);
         }
-        hasher.update(&[1u8]);
     }
-    hasher.update(&[4u8]);
     let sha = match verified_sha {
         Some(sha) => sha.to_ascii_lowercase(),
         None => binary_sha256(Path::new(&canonical)),
     };
-    hasher.update(sha.as_bytes());
+    hash_field(&mut hasher, b"sha256:", &sha);
     Some(hasher.finalize().to_hex().to_string())
+}
+
+/// Feed one tagged, length-prefixed field into a digest.
+///
+/// The tag names the field and the length makes the encoding prefix-free, so a
+/// value can never be read as another field's tag, as an item of another list,
+/// or as the next field.
+fn hash_field(hasher: &mut blake3::Hasher, tag: &[u8], value: &str) {
+    hasher.update(tag);
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+/// Feed one tagged list count into a digest, before the tagged items.
+fn hash_count(hasher: &mut blake3::Hasher, tag: &[u8], count: usize) {
+    hasher.update(tag);
+    hasher.update(&(count as u64).to_le_bytes());
+}
+
+/// Feed one tagged boolean into a digest.
+fn hash_flag(hasher: &mut blake3::Hasher, tag: &[u8], value: bool) {
+    hasher.update(tag);
+    hasher.update(&[u8::from(value)]);
 }
 
 /// SHA-256 of the file at `path`, streamed so a large binary is never held in
@@ -2252,6 +2376,7 @@ mod tests {
             data_class: McpDataClass::Sensitive,
             stdio_confirmed: true,
             stdio_confirmation: None,
+            approval: None,
             network: false,
             transport: McpTransport::Stdio,
             url: None,
@@ -2331,6 +2456,61 @@ mod tests {
         assert!(
             !sha_confirmed.stdio_is_confirmed_with(secret),
             "a binary swapped after the catalog check must be refused at spawn"
+        );
+    }
+
+    #[test]
+    fn approval_and_confirmation_digests_separate_args_from_env() {
+        // Review P2: `args=["X"], env=[]` and `args=[], env=["X"]` must not
+        // collide. The env name is a legal declared name, so without the fix a
+        // hand edit moves a `.env` value into the child's argv (or the reverse)
+        // while the old approval still validates.
+        let mut server = McpServerConfig {
+            id: "plain".into(),
+            catalog_id: None,
+            data_class: McpDataClass::Sensitive,
+            stdio_confirmed: false,
+            stdio_confirmation: None,
+            approval: None,
+            network: false,
+            transport: McpTransport::Stdio,
+            url: None,
+            command: Some("/bin/echo".into()),
+            args: vec!["X".into()],
+            env: vec![],
+            enabled: false,
+            agents: Default::default(),
+        };
+        let secret = b"daemon-token";
+        let mut moved = server.clone();
+        moved.args = vec![];
+        moved.env = vec!["X".into()];
+        assert_ne!(
+            server.approval_binding(secret, None),
+            moved.approval_binding(secret, None),
+            "moving an item between args and env must change the approval digest"
+        );
+        assert_ne!(
+            server.confirmation_binding(secret),
+            moved.confirmation_binding(secret),
+            "moving an item between args and env must change the confirmation digest"
+        );
+        // The same lists in the same field still bind identically.
+        assert_eq!(
+            server.approval_binding(secret, None),
+            server.clone().approval_binding(secret, None)
+        );
+        // A tool cannot be moved between agents without changing the digest.
+        server.agents.insert("main".into(), vec!["read".into()]);
+        server.agents.insert("aux".into(), vec!["write".into()]);
+        let mut same_tools_one_agent = server.clone();
+        same_tools_one_agent.agents.clear();
+        same_tools_one_agent
+            .agents
+            .insert("main".into(), vec!["read".into(), "write".into()]);
+        assert_ne!(
+            server.approval_binding(secret, None),
+            same_tools_one_agent.approval_binding(secret, None)
         );
     }
 
@@ -3186,6 +3366,7 @@ mod tests {
             data_class: McpDataClass::Sensitive,
             stdio_confirmed: false,
             stdio_confirmation: None,
+            approval: None,
             network: false,
             transport: McpTransport::Http,
             url: Some("https://added.invalid/mcp".to_owned()),

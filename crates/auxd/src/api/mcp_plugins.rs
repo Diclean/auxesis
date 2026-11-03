@@ -272,6 +272,24 @@ pub(super) async fn enable_pack(
     if eligible.is_empty() {
         return fail(StatusCode::BAD_REQUEST, "pack_no_eligible_servers");
     }
+    // A pack enable is itself the owner's approval for the curated read-only
+    // entries it names; the binding is still keyed by the daemon token.
+    let approval_secret = state.token.confirmation_key().to_vec();
+    // Review P2: an existing server is only approved when every tool it would
+    // mount is one the pack curates as read-only. Discovery before this call
+    // is the only trusted source for that set: an unstarted or failed server
+    // has none, so a non-empty allowlist can never be proven in-pack and stays
+    // pending for the normal install preview.
+    let runtime_before = state.mcp.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let curated: std::collections::BTreeMap<String, Vec<String>> = eligible
+        .iter()
+        .map(|entry| {
+            (
+                entry.id.clone(),
+                read_only_tool_names(&runtime_before.descriptors_for(&entry.id)),
+            )
+        })
+        .collect();
     let added = mutate(&state, move |config| {
         for entry in &to_add {
             if let Some(existing) = config.server.iter_mut().find(|s| s.id == entry.id) {
@@ -279,9 +297,27 @@ pub(super) async fn enable_pack(
                     return Err("pack_server_mismatch");
                 }
                 existing.enabled = true;
+                let curated = curated.get(&entry.id).map(Vec::as_slice).unwrap_or(&[]);
+                let allowlist_within_pack = existing
+                    .agents
+                    .values()
+                    .flat_map(|tools| tools.iter())
+                    .all(|tool| curated.contains(tool));
+                if !allowlist_within_pack {
+                    // The pack never blesses an allowlist it does not fully
+                    // cover, and it also revokes an older approval that covered
+                    // more: the server stays `needs_approval` for the owner's
+                    // normal install preview. Never a weaker check.
+                    existing.approval = None;
+                    continue;
+                }
+                let Some((hash, _pin)) = approval_hash(existing, &approval_secret) else {
+                    return Err("approval_unavailable");
+                };
+                existing.approval = Some(hash);
                 continue;
             }
-            config.server.push(kernel_mcp::McpServerConfig {
+            let mut server = kernel_mcp::McpServerConfig {
                 id: entry.id.clone(),
                 catalog_id: Some(entry.id.clone()),
                 data_class: if entry.data_class == "public" {
@@ -291,6 +327,7 @@ pub(super) async fn enable_pack(
                 },
                 stdio_confirmed: false,
                 stdio_confirmation: None,
+                approval: None,
                 network: false,
                 transport: kernel_mcp::McpTransport::Http,
                 url: entry.endpoint.clone(),
@@ -299,7 +336,12 @@ pub(super) async fn enable_pack(
                 env: vec![],
                 enabled: true,
                 agents: Default::default(),
-            });
+            };
+            let Some((hash, _pin)) = approval_hash(&server, &approval_secret) else {
+                return Err("approval_unavailable");
+            };
+            server.approval = Some(hash);
+            config.server.push(server);
         }
         Ok(())
     })
@@ -315,23 +357,7 @@ pub(super) async fn enable_pack(
         .collect();
     let mut enabled_tools = 0usize;
     for entry in eligible {
-        let names: Vec<String> = runtime
-            .descriptors_for(&entry.id)
-            .iter()
-            .filter(|d| {
-                d.risk() == kernel_broker::Risk::Low
-                    && d.tags.contains(&kernel_mcp::McpTag::ReadOnlyHint)
-                    && !d.tags.iter().any(|tag| {
-                        matches!(
-                            tag,
-                            kernel_mcp::McpTag::CreateHint
-                                | kernel_mcp::McpTag::UpdateHint
-                                | kernel_mcp::McpTag::DestructiveHint
-                        )
-                    })
-            })
-            .map(|d| d.remote_name.clone())
-            .collect();
+        let names = read_only_tool_names(&runtime.descriptors_for(&entry.id));
         if !names.is_empty() {
             if prior_ids.contains(&entry.id) {
                 let existing_tools = prior_config
@@ -345,9 +371,14 @@ pub(super) async fn enable_pack(
             enabled_tools += names.len();
             let id = entry.id.clone();
             let agent = req.agent.clone();
+            let secret = state.token.confirmation_key().to_vec();
             let response = mutate(&state, move |c| {
                 if let Some(s) = c.server.iter_mut().find(|s| s.id == id) {
                     s.agents.insert(agent, names);
+                    let Some((hash, _pin)) = approval_hash(s, &secret) else {
+                        return Err("approval_unavailable");
+                    };
+                    s.approval = Some(hash);
                 }
                 Ok(())
             })
@@ -719,10 +750,9 @@ pub(super) async fn servers(State(state): State<std::sync::Arc<ApiState>>) -> Re
         .iter()
         .map(|server| {
             let status = runtime.statuses().iter().find(|s| s.id == server.id);
-            // Installed from a complete pin, still off: the install verified
-            // the SHA-256 and the spawn re-checks the confirmation binding.
+            // Installed from a complete pin, still off: the add verified the
+            // SHA-256, and the approve binds it before any spawn.
             let pinned = server.transport == kernel_mcp::McpTransport::Stdio
-                && server.stdio_confirmed
                 && catalog_match(server) == CatalogMatch::Exact;
             let state = if pinned && !server.enabled {
                 "pinned".to_owned()
@@ -802,11 +832,38 @@ fn catalog_entry(id: Option<&str>) -> Option<CatalogEntry> {
         .find(|e| Some(e.id.as_str()) == id && (e.tier == "recommended" || e.tier == "candidate"))
 }
 fn pack_server_matches(server: &kernel_mcp::McpServerConfig, entry: &CatalogEntry) -> bool {
+    // Every install-relevant field must be the catalogue's, not an override:
+    // a pack only ever enables the curated read-only launch it names.
     server.catalog_id.as_deref() == Some(entry.id.as_str())
         && server.transport == kernel_mcp::McpTransport::Http
         && server.url.as_deref() == entry.endpoint.as_deref()
         && server.command.is_none()
+        && server.args.is_empty()
+        && server.env.is_empty()
+        && !server.network
         && server.data_class == kernel_mcp::McpDataClass::Public
+}
+
+/// The curated read-only tools of one server: discovered low-risk tools the
+/// server itself tags read-only and does not tag as mutating. The pack may
+/// approve nothing outside this set.
+fn read_only_tool_names(descriptors: &[&kernel_mcp::McpToolDescriptor]) -> Vec<String> {
+    descriptors
+        .iter()
+        .filter(|descriptor| {
+            descriptor.risk() == kernel_broker::Risk::Low
+                && descriptor.tags.contains(&kernel_mcp::McpTag::ReadOnlyHint)
+                && !descriptor.tags.iter().any(|tag| {
+                    matches!(
+                        tag,
+                        kernel_mcp::McpTag::CreateHint
+                            | kernel_mcp::McpTag::UpdateHint
+                            | kernel_mcp::McpTag::DestructiveHint
+                    )
+                })
+        })
+        .map(|descriptor| descriptor.remote_name.clone())
+        .collect()
 }
 fn count_pack_tools(names: &[String], existing_allowlist: Option<&[String]>) -> usize {
     match existing_allowlist {
@@ -879,11 +936,12 @@ pub(crate) fn catalog_match(server: &kernel_mcp::McpServerConfig) -> CatalogMatc
 /// The daemon's per-server policy: quarantine or allow, before any transport.
 ///
 /// Order matters: a hard refusal (item 2) or a catalog mismatch (item 7) wins;
-/// then an uncurated or unverifiable `stdio` server needs the owner's
-/// confirmation (item 1) and is reported `needs_confirmation`. `secret` is the
-/// daemon's API token: a confirmation is only honoured when it was minted with
-/// that token, so a hand-edited config file cannot forge one. When the token
-/// cannot be read (`None`) nothing is confirmed (item 5, fail closed).
+/// then an uncurated `stdio` server needs the owner's confirmation (item 1) and
+/// is reported `needs_confirmation`; finally the M6-2 install approval gates
+/// every enabled server. `secret` is the daemon's API token: a confirmation or
+/// approval is only honoured when it was minted with that token, so a
+/// hand-edited config file cannot forge one. When the token cannot be read
+/// (`None`) nothing is confirmed (item 5, fail closed).
 pub(crate) fn server_policy_refusal(
     server: &kernel_mcp::McpServerConfig,
     secret: Option<&[u8]>,
@@ -891,26 +949,69 @@ pub(crate) fn server_policy_refusal(
     if let Err(refusal) = server.check() {
         return Some(kernel_mcp::McpServerRefusal::quarantined(refusal.label));
     }
-    let confirmed = server.transport != kernel_mcp::McpTransport::Stdio
-        || secret.is_some_and(|secret| server.stdio_is_confirmed_with(secret));
-    match server.catalog_id.as_deref() {
-        Some(_) => match catalog_match(server) {
-            CatalogMatch::Exact => None,
-            CatalogMatch::Mismatch => Some(kernel_mcp::McpServerRefusal::quarantined(
-                "catalog_mismatch",
-            )),
-            CatalogMatch::Unknown => Some(kernel_mcp::McpServerRefusal::quarantined(
-                "unknown_catalog_id",
-            )),
-            CatalogMatch::Unverifiable => Some(kernel_mcp::McpServerRefusal::quarantined(
-                "catalog_stdio_unverifiable",
-            )),
-        },
-        None if !confirmed => Some(kernel_mcp::McpServerRefusal::needs_confirmation(
+    if let Some(_catalog_id) = server.catalog_id.as_deref() {
+        match catalog_match(server) {
+            CatalogMatch::Exact => {}
+            CatalogMatch::Mismatch => {
+                return Some(kernel_mcp::McpServerRefusal::quarantined(
+                    "catalog_mismatch",
+                ))
+            }
+            CatalogMatch::Unknown => {
+                return Some(kernel_mcp::McpServerRefusal::quarantined(
+                    "unknown_catalog_id",
+                ))
+            }
+            CatalogMatch::Unverifiable => {
+                return Some(kernel_mcp::McpServerRefusal::quarantined(
+                    "catalog_stdio_unverifiable",
+                ))
+            }
+        }
+    } else if server.transport == kernel_mcp::McpTransport::Stdio
+        && !secret.is_some_and(|secret| server.stdio_is_confirmed_with(secret))
+    {
+        // The old stdio gate stays first: an unconfirmed server reports
+        // `needs_confirmation`, as it did before M6-2. A stored confirmation
+        // that no longer matches (the digest hardening invalidated every
+        // pre-r1 record) is reported as `needs_approval`: the one-approval path
+        // re-mints both records. Both states refuse to spawn (fail closed).
+        if server.stdio_confirmation.is_some() {
+            return Some(kernel_mcp::McpServerRefusal::needs_approval(
+                "approval_required",
+            ));
+        }
+        return Some(kernel_mcp::McpServerRefusal::needs_confirmation(
             "stdio_confirmation_required",
-        )),
-        None => None,
+        ));
     }
+    if server_is_approved(server, secret) {
+        None
+    } else {
+        Some(kernel_mcp::McpServerRefusal::needs_approval(
+            "approval_required",
+        ))
+    }
+}
+
+/// Whether an enabled server carries a valid M6-2 approval.
+///
+/// A pre-M6-2 `stdio` server whose old launch confirmation still matches is
+/// grandfathered (its confirmation was the install approval of its day). A
+/// catalog server and every HTTP server need the new record.
+fn server_is_approved(server: &kernel_mcp::McpServerConfig, secret: Option<&[u8]>) -> bool {
+    let Some(secret) = secret else {
+        return false;
+    };
+    let pin = catalog_pin(server);
+    if server.is_approved_with(secret, pin.as_deref()) {
+        return true;
+    }
+    // A bad or changed approval record never falls back to the old gate.
+    server.approval.is_none()
+        && server.transport == kernel_mcp::McpTransport::Stdio
+        && server.catalog_id.is_none()
+        && server.stdio_is_confirmed_with(secret)
 }
 
 /// The preview shown before a stdio server is confirmed: the exact resolved
@@ -939,6 +1040,230 @@ struct ConfirmationPreview {
 const CONFIRMATION_WARNING_CODE: &str = "mcp_stdio_confirmation";
 /// The generic warning every non-catalog stdio server carries (item 2).
 const UNVERIFIED_PROGRAM_WARNING_CODE: &str = "stdio_unverified_program";
+/// M6-2: the install preview is an approval, not a connection test.
+const APPROVAL_WARNING_CODE: &str = "mcp_install_approval";
+
+/// One tool in the install preview. `risk`/`access` are derived from the
+/// curated catalog when there is one; an uncatalogued server is always high
+/// risk because its own annotations are untrusted.
+#[derive(Serialize)]
+struct ApprovalTool {
+    name: String,
+    risk: &'static str,
+    access: &'static str,
+}
+
+/// What the owner sees before one approval: what the server can call, where it
+/// can connect, which env **names** it needs, its data class and catalog pin.
+#[derive(Serialize)]
+struct ApprovalPreview {
+    id: String,
+    transport: String,
+    enabled: bool,
+    network: bool,
+    env: Vec<String>,
+    data_class: String,
+    endpoint: Option<String>,
+    command: Option<String>,
+    args: Vec<String>,
+    tools: Vec<ApprovalTool>,
+    catalog_version: Option<String>,
+    catalog_pin: Option<String>,
+    hash: String,
+    warning: &'static str,
+}
+
+/// The daemon's approval digest for one configured server, or `None` when the
+/// token is unavailable (fail closed).
+fn approval_hash(
+    server: &kernel_mcp::McpServerConfig,
+    secret: &[u8],
+) -> Option<(String, Option<String>)> {
+    let pin = catalog_pin(server);
+    let hash = server.approval_binding(secret, pin.as_deref())?;
+    Some((hash, pin))
+}
+
+/// The curated catalog hash for a server's claimed entry, if it has one.
+fn catalog_pin(server: &kernel_mcp::McpServerConfig) -> Option<String> {
+    catalog_entry(server.catalog_id.as_deref()).map(|entry| catalog_entry_hash(&entry))
+}
+
+/// The install preview for one configured server.
+fn approval_preview(
+    server: &kernel_mcp::McpServerConfig,
+    secret: &[u8],
+) -> Option<ApprovalPreview> {
+    let (hash, catalog_pin) = approval_hash(server, secret)?;
+    let entry = catalog_entry(server.catalog_id.as_deref());
+    let (risk, access) = match entry.as_ref().map(|entry| entry.access.as_str()) {
+        Some("read-only") => ("low", "read"),
+        _ => ("high", "write"),
+    };
+    let names: std::collections::BTreeSet<String> = server
+        .agents
+        .values()
+        .flat_map(|tools| tools.iter().cloned())
+        .collect();
+    Some(ApprovalPreview {
+        id: server.id.clone(),
+        transport: server.transport.as_str().to_owned(),
+        enabled: server.enabled,
+        network: server.network,
+        env: server.env.clone(),
+        data_class: match server.data_class {
+            kernel_mcp::McpDataClass::Public => "public",
+            kernel_mcp::McpDataClass::Sensitive => "sensitive",
+        }
+        .to_owned(),
+        endpoint: server.url.clone(),
+        command: server.command.clone(),
+        args: server.args.clone(),
+        tools: names
+            .into_iter()
+            .map(|name| ApprovalTool { name, risk, access })
+            .collect(),
+        catalog_version: entry
+            .as_ref()
+            .and_then(|_| parsed_catalog().map(|catalog| catalog.catalog_version)),
+        catalog_pin,
+        hash,
+        warning: APPROVAL_WARNING_CODE,
+    })
+}
+
+/// `GET /v1/mcp/servers/{id}/approval`: the same preview `POST /servers`
+/// returns, for a server already in `mcp.toml` (a hand-edited entry migrates
+/// by approving this preview once).
+pub(super) async fn server_approval(
+    State(state): State<std::sync::Arc<ApiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let config = match read_config(&state.home) {
+        Ok(v) => v,
+        Err(_) => return internal("mcp_config_invalid"),
+    };
+    let Some(server) = config.server.iter().find(|server| server.id == id) else {
+        return fail(StatusCode::NOT_FOUND, "server_not_found");
+    };
+    match approval_preview(server, state.token.confirmation_key()) {
+        Some(preview) => Json(preview).into_response(),
+        None => internal("confirmation_unavailable"),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApproveRequest {
+    hash: String,
+    #[serde(default = "default_agent")]
+    agent: String,
+}
+
+/// `POST /v1/mcp/servers/{id}/approve`: the one owner action that enables a
+/// server, its agent allowlist and the `mcp.approve` ledger row.
+///
+/// The supplied hash must equal the current preview binding; a config edit
+/// between preview and approve returns `409 stale_confirmation`. A repeat with
+/// the same hash is a no-op, so it cannot start a second child.
+pub(super) async fn approve_server(
+    State(state): State<std::sync::Arc<ApiState>>,
+    AxumPath(id): AxumPath<String>,
+    body: Bytes,
+) -> Response {
+    if body.len() > 4096 {
+        return fail(StatusCode::PAYLOAD_TOO_LARGE, "body_too_large");
+    }
+    let req: ApproveRequest = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return fail(StatusCode::BAD_REQUEST, "invalid_request"),
+    };
+    if !valid_agent_name(&req.agent) {
+        return fail(StatusCode::BAD_REQUEST, "invalid_agent");
+    }
+    if !crate::agent::exists(&state.home, &req.agent) {
+        return fail(StatusCode::BAD_REQUEST, "agent_not_found");
+    }
+    let ledger_id = id.clone();
+    let ledger_agent = req.agent.clone();
+    let ledger_hash = req.hash.clone();
+    let secret = state.token.confirmation_key().to_vec();
+    // Review P3: the audit row is written inside the same commit path, before
+    // `mcp.toml` is rewritten and before `mutate` starts the runtime. A store
+    // that cannot record the approval fails the call (500 `ledger_failed`) and
+    // leaves the server disabled.
+    mutate_audited(
+        &state,
+        Some((
+            aux_runtime::extensions::ledger::MCP_APPROVE,
+            serde_json::json!({
+                "server": ledger_id,
+                "agent": ledger_agent,
+                "binding": ledger_hash,
+            }),
+        )),
+        move |config| {
+            let Some(server) = config.server.iter_mut().find(|server| server.id == id) else {
+                return Err("server_not_found");
+            };
+            let Some((binding, _pin)) = approval_hash(server, &secret) else {
+                return Err("approval_unavailable");
+            };
+            if binding != req.hash {
+                // Distinct from the legacy confirm's 400: an approve replay after
+                // a config edit is a 409 `stale_confirmation` (mapped below).
+                return Err("stale_approval");
+            }
+            // M6-2: a catalog stdio binary can be swapped between the preview and
+            // this call. Re-run the catalog checks and bind the PUBLISHED sha —
+            // never a fresh read — so the kernel's spawn-time re-hash only passes
+            // for exactly the curated file.
+            let mut confirmation = None;
+            if server.transport == kernel_mcp::McpTransport::Stdio {
+                if let Some(entry) = catalog_entry(server.catalog_id.as_deref()) {
+                    if catalog_match(server) != CatalogMatch::Exact {
+                        return Err("catalog_mismatch");
+                    }
+                    let Some(pin) = stdio_pin(&entry) else {
+                        return Err("catalog_stdio_unverifiable");
+                    };
+                    if catalog_binary_is_mutable(Path::new(pin.command)) {
+                        return Err("binary_path_mutable");
+                    }
+                    if !kernel_mcp::binary_sha256(Path::new(pin.command))
+                        .eq_ignore_ascii_case(pin.sha256)
+                    {
+                        return Err("checksum_mismatch");
+                    }
+                    confirmation = server.confirmation_binding_for_sha(&secret, pin.sha256);
+                } else {
+                    confirmation = server.confirmation_binding(&secret);
+                }
+                if confirmation.is_none() {
+                    return Err("approval_unavailable");
+                }
+            }
+            // Idempotent by construction: the same binding rewrites the same
+            // fields, and `mutate` sees an unchanged config and starts no child
+            // — so a replay writes no second ledger row either.
+            server.enabled = true;
+            server.approval = Some(binding);
+            if let Some(hash) = confirmation {
+                server.stdio_confirmed = true;
+                server.stdio_confirmation = Some(hash);
+            }
+            Ok(())
+        },
+    )
+    .await
+}
+
+fn valid_agent_name(agent: &str) -> bool {
+    (1..=64).contains(&agent.len())
+        && agent
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
 
 pub(super) async fn confirmation_preview(
     State(state): State<std::sync::Arc<ApiState>>,
@@ -953,6 +1278,12 @@ pub(super) async fn confirmation_preview(
     };
     if server.transport != kernel_mcp::McpTransport::Stdio {
         return fail(StatusCode::BAD_REQUEST, "not_stdio");
+    }
+    // Review P2: a catalog stdio entry has exactly one install path,
+    // `POST .../approve`, which re-runs the published-SHA checks and binds the
+    // verified checksum. The legacy route must not preview a re-read file.
+    if server.catalog_id.is_some() {
+        return fail(StatusCode::CONFLICT, "use_approve");
     }
     let Some(command) = server.command.clone() else {
         return fail(StatusCode::BAD_REQUEST, "invalid_server");
@@ -1015,6 +1346,13 @@ pub(super) async fn confirm_server(
         if server.transport != kernel_mcp::McpTransport::Stdio {
             return Err("not_stdio");
         }
+        // Review P2: never confirm a catalog stdio entry from whatever bytes
+        // currently sit at `command`. `/approve` re-checks `binary_path_mutable`
+        // and the published SHA, and binds that SHA; re-reading the file here
+        // would let a swapped catalog binary be confirmed as if curated.
+        if server.catalog_id.is_some() {
+            return Err("use_approve");
+        }
         let Some(hash) = server.confirmation_binding(&secret) else {
             return Err("invalid_server");
         };
@@ -1023,6 +1361,11 @@ pub(super) async fn confirm_server(
         }
         server.stdio_confirmed = true;
         server.stdio_confirmation = Some(hash);
+        // The legacy confirm is also the owner's approval of this preview:
+        // record it so an enabled server is not left `needs_approval`.
+        if let Some((approval, _pin)) = approval_hash(server, &secret) {
+            server.approval = Some(approval);
+        }
         Ok(())
     })
     .await
@@ -1064,12 +1407,36 @@ pub(super) struct AddRequest {
     #[serde(default)]
     network: bool,
     /// Accepted for backwards compatibility and **ignored**: only the confirm
-    /// endpoint sets `stdio_confirmed`, bound to the launch hash.
+    /// or approve endpoint sets `stdio_confirmed`, bound to the launch hash.
     #[serde(default)]
     #[allow(dead_code)]
     stdio_confirmed: bool,
     #[serde(default)]
     test_digest: Option<String>,
+    /// Agent the one-approval install is staged for (default `main`). The
+    /// preview hash binds this allowlist; `approve` must name the same agent.
+    #[serde(default = "default_agent")]
+    agent: String,
+    /// Tools the owner is approving for a non-catalog server. A stdio server
+    /// cannot be discovered before approval, so its set is declared here; an
+    /// HTTP server uses the tools the connection test discovered.
+    #[serde(default)]
+    tools: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct AddResponse {
+    ok: bool,
+    #[serde(flatten)]
+    preview: ApprovalPreview,
+}
+
+fn valid_tool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 48
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 pub(super) async fn add_server(
     State(state): State<std::sync::Arc<ApiState>>,
@@ -1084,7 +1451,15 @@ pub(super) async fn add_server(
     };
     let config_id = req.catalog_id.clone();
     let data_class = req.data_class;
-    let server = if let Some(cid) = req.catalog_id {
+    let agent = req.agent.clone();
+    if !valid_agent_name(&agent) {
+        return fail(StatusCode::BAD_REQUEST, "invalid_agent");
+    }
+    if req.tools.len() > 256 || req.tools.iter().any(|name| !valid_tool_name(name)) {
+        return fail(StatusCode::BAD_REQUEST, "invalid_tools");
+    }
+    let requested_tools = req.tools.clone();
+    let mut server = if let Some(cid) = req.catalog_id {
         let Some(entry) = catalog_entry(Some(&cid)) else {
             return fail(StatusCode::BAD_REQUEST, "unknown_catalog_entry");
         };
@@ -1104,6 +1479,7 @@ pub(super) async fn add_server(
                 data_class: entry_class,
                 stdio_confirmed: false,
                 stdio_confirmation: None,
+                approval: None,
                 network: false,
                 transport: kernel_mcp::McpTransport::Http,
                 url: Some(url),
@@ -1144,13 +1520,14 @@ pub(super) async fn add_server(
             if !kernel_mcp::binary_sha256(Path::new(pin.command)).eq_ignore_ascii_case(pin.sha256) {
                 return fail(StatusCode::BAD_REQUEST, "checksum_mismatch");
             }
-            let mut server = kernel_mcp::McpServerConfig {
+            kernel_mcp::McpServerConfig {
                 id: req.id,
                 catalog_id: Some(cid),
                 data_class: entry_class,
-                // Never from the request; the catalog pin is the confirmation.
+                // Never from the request; the approve binds the catalog pin.
                 stdio_confirmed: false,
                 stdio_confirmation: None,
+                approval: None,
                 network: pin.permissions.network,
                 transport: kernel_mcp::McpTransport::Stdio,
                 url: None,
@@ -1159,20 +1536,7 @@ pub(super) async fn add_server(
                 env: pin.permissions.env.clone(),
                 enabled: false,
                 agents: Default::default(),
-            };
-            // Reuse the kernel's one stdio pin: it covers the whole launch and
-            // `runtime.rs` re-checks it (binary SHA-256 included) at spawn.
-            // Bind the PUBLISHED hash, never a second read of the file: a swap
-            // between the check above and this line then fails at spawn,
-            // where the kernel hashes the file it is about to run.
-            let Some(hash) =
-                server.confirmation_binding_for_sha(state.token.confirmation_key(), pin.sha256)
-            else {
-                return internal("confirmation_unavailable");
-            };
-            server.stdio_confirmation = Some(hash);
-            server.stdio_confirmed = true;
-            server
+            }
         } else {
             return fail(StatusCode::BAD_REQUEST, "catalog_transport_unavailable");
         }
@@ -1184,6 +1548,7 @@ pub(super) async fn add_server(
             // Never from the request: only the confirm endpoint sets these.
             stdio_confirmed: false,
             stdio_confirmation: None,
+            approval: None,
             network: req.network,
             transport: req.transport.unwrap_or(kernel_mcp::McpTransport::Http),
             url: req.url,
@@ -1256,15 +1621,30 @@ pub(super) async fn add_server(
             Ok(bytes) => bytes,
             Err(_) => return internal("connection_test_failed"),
         };
-        let current_digest = serde_json::from_slice::<serde_json::Value>(&tested_body)
-            .ok()
-            .and_then(|v| {
-                v.get("digest")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            });
+        let tested_json = serde_json::from_slice::<serde_json::Value>(&tested_body).ok();
+        let current_digest = tested_json.as_ref().and_then(|v| {
+            v.get("digest")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
         if current_digest.as_deref() != Some(digest) {
             return fail(StatusCode::CONFLICT, "stale_test_result");
+        }
+        let discovered: Vec<String> = tested_json
+            .as_ref()
+            .and_then(|v| v.get("tools"))
+            .and_then(serde_json::Value::as_array)
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|tool| tool.get("name").and_then(serde_json::Value::as_str))
+                    .filter(|name| valid_tool_name(name))
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !discovered.is_empty() {
+            server.agents.insert(agent.clone(), discovered);
         }
         let Some(url) = server
             .url
@@ -1277,7 +1657,26 @@ pub(super) async fn add_server(
             return fail(StatusCode::BAD_REQUEST, "endpoint_refused");
         }
     }
-    mutate(&state, move |config| {
+    // Stage the allowlist the approval will enable. A catalog entry publishes
+    // its tools; an uncatalogued stdio server declares them (it cannot be
+    // discovered before the one approval starts it); an HTTP connection test
+    // already produced them above.
+    if let Some(entry) = catalog_entry(server.catalog_id.as_deref()) {
+        if let Some(permissions) = entry.permissions {
+            if !permissions.tools.is_empty() {
+                server.agents.insert(agent.clone(), permissions.tools);
+            }
+        }
+    } else if !requested_tools.is_empty() {
+        server
+            .agents
+            .entry(agent.clone())
+            .or_insert(requested_tools);
+    }
+    let Some(preview) = approval_preview(&server, state.token.confirmation_key()) else {
+        return internal("confirmation_unavailable");
+    };
+    let response = mutate(&state, move |config| {
         if config.server.iter().any(|s| s.id == server.id) {
             return Err("server_exists");
         }
@@ -1289,7 +1688,11 @@ pub(super) async fn add_server(
         config.server.push(server);
         Ok(())
     })
-    .await
+    .await;
+    if response.status() != StatusCode::OK {
+        return response;
+    }
+    Json(AddResponse { ok: true, preview }).into_response()
 }
 
 /// Map a static refusal label to the API's error code (they are identical;
@@ -1391,6 +1794,9 @@ pub(super) async fn set_agent_tools(
         } else {
             s.agents.insert(agent, req.tools);
         }
+        // The allowlist is part of the approval digest: an edit leaves the
+        // server `needs_approval` until the owner approves the new preview.
+        // M6-3 adds the permission-growth card on top.
         Ok(())
     })
     .await
@@ -1417,17 +1823,42 @@ async fn mutate(
     state: &std::sync::Arc<ApiState>,
     edit: impl FnOnce(&mut kernel_mcp::McpConfig) -> Result<(), &'static str> + Send + 'static,
 ) -> Response {
+    mutate_audited(state, None, edit).await
+}
+
+/// One MCP mutation, with an optional audit row written **before** the config
+/// write and therefore before any child starts.
+///
+/// Review P3: the `mcp.approve` row used to be written after the enable and a
+/// failure was only warned about, so a crash (or a store that could not open)
+/// left an enabled, spawned server with no ledger row. Now the row is part of
+/// the commit path: if the store cannot open or log, nothing is written,
+/// nothing is enabled or started, and the caller gets 500 `ledger_failed`. The
+/// reverse window (row written, file write then fails) over-records an approval
+/// that did not take effect, which is the fail-closed direction.
+async fn mutate_audited(
+    state: &std::sync::Arc<ApiState>,
+    audit: Option<(&'static str, serde_json::Value)>,
+    edit: impl FnOnce(&mut kernel_mcp::McpConfig) -> Result<(), &'static str> + Send + 'static,
+) -> Response {
     // Keep all MCP mutations ordered through discovery and installation. The
     // discovery path has its own hard timeout, so this lock has a finite hold.
     let _mutation = state.mcp_mutation.lock().await;
     let home = state.home.clone();
     let lock = std::sync::Arc::clone(&state.config_write);
     let generation = std::sync::Arc::clone(&state.mcp_generation);
+    let db_path = state.db_path.clone();
     match tokio::task::spawn_blocking(move || {
         let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
         kernel_core::with_config_lock(&home, || -> Result<u64, &'static str> {
             let mut config = read_config(&home).map_err(|_| "mcp_config_invalid")?;
+            let before = config.clone();
             edit(&mut config)?;
+            // An idempotent approve (or a repeated enable) writes nothing and
+            // replaces no runtime, so it can never start a second child.
+            if config == before {
+                return Ok(0);
+            }
             // Structural only: a single invalid or unconfirmed server is
             // quarantined by the runtime, never a whole-file write failure.
             config.validate_structural().map_err(|_| "invalid_server")?;
@@ -1435,6 +1866,13 @@ async fn mutate(
             // rather than silently replacing the owner's file from scratch.
             let text = config.to_toml_string().map_err(|_| "mcp_config_invalid")?;
             let gateway = kernel_core::SandboxHome::open(&home).map_err(|_| "write_failed")?;
+            // The audit row is the last fallible step before the commit: no
+            // row, no write, no enable, no start.
+            if let Some((kind, row)) = audit.as_ref() {
+                let store = aux_store::Store::open(&db_path).map_err(|_| "ledger_failed")?;
+                aux_runtime::extensions::ledger::log_with(&store, kind, row)
+                    .map_err(|_| "ledger_failed")?;
+            }
             gateway
                 .write_atomic(Path::new("mcp.toml"), text.as_bytes(), 0o600)
                 .map_err(|_| "write_failed")?;
@@ -1444,6 +1882,7 @@ async fn mutate(
     })
     .await
     {
+        Ok(Ok(0)) => Json(Ack { ok: true }).into_response(),
         Ok(Ok(written_generation)) => {
             let config = crate::api::load_config_verified(&state.home).unwrap_or_default();
             let sandbox = aux_engine::shell_sandbox(&config.shell);
@@ -1463,10 +1902,16 @@ async fn mutate(
             }
             Json(Ack { ok: true }).into_response()
         }
+        Ok(Err("approval_unavailable")) => internal("approval_unavailable"),
+        Ok(Err("stale_approval")) => fail(StatusCode::CONFLICT, "stale_confirmation"),
+        Ok(Err("ledger_failed")) => internal("ledger_failed"),
         Ok(Err(code)) => fail(
             if code == "server_not_found" {
                 StatusCode::NOT_FOUND
-            } else if code == "server_exists" || code == "id_taken_by_quarantined_entry" {
+            } else if matches!(
+                code,
+                "server_exists" | "id_taken_by_quarantined_entry" | "use_approve"
+            ) {
                 StatusCode::CONFLICT
             } else {
                 StatusCode::BAD_REQUEST
@@ -1481,6 +1926,9 @@ fn fail(status: StatusCode, code: &'static str) -> Response {
         "pack_server_mismatch" => "An existing server with this ID does not match the selected catalog transport or endpoint. Restore the catalog settings or remove that server first.",
         // Item 1 (keep): never silently create a twin of an unusable entry.
         "id_taken_by_quarantined_entry" => "An entry with this ID is already in mcp.toml but could not be loaded, so it is quarantined. Delete that entry or fix it first, then add this server.",
+        // Review P2: catalog servers have one install path: the approval.
+        "use_approve" => "This server comes from the catalog. Approve its install preview instead: POST /v1/mcp/servers/{id}/approve.",
+        "ledger_failed" => "The approval could not be recorded in the audit log, so nothing was enabled. Check the store and retry.",
         other => other,
     };
     error::error_response(status, code, message, None)
@@ -1665,6 +2113,7 @@ mod tests {
             data_class: kernel_mcp::McpDataClass::Sensitive,
             stdio_confirmed: false,
             stdio_confirmation: None,
+            approval: None,
             network: false,
             transport: kernel_mcp::McpTransport::Http,
             url: Some("https://example.invalid/mcp".into()),
@@ -1716,6 +2165,7 @@ mod tests {
             data_class: kernel_mcp::McpDataClass::Public,
             stdio_confirmed: false,
             stdio_confirmation: None,
+            approval: None,
             network: false,
             transport: kernel_mcp::McpTransport::Http,
             url: entry.endpoint.clone(),
@@ -1738,6 +2188,17 @@ mod tests {
         server.command = Some("/bin/echo".into());
         assert!(!pack_server_matches(&server, &entry));
         server.command = None;
+        assert!(pack_server_matches(&server, &entry));
+        // Review P2: no install-relevant override may ride along with a pack.
+        server.args = vec!["--write".into()];
+        assert!(!pack_server_matches(&server, &entry));
+        server.args.clear();
+        server.env = vec!["SOME_KEY".into()];
+        assert!(!pack_server_matches(&server, &entry));
+        server.env.clear();
+        server.network = true;
+        assert!(!pack_server_matches(&server, &entry));
+        server.network = false;
         assert!(pack_server_matches(&server, &entry));
         assert_eq!(server.agents["main"], vec!["kept"]);
         assert_eq!(

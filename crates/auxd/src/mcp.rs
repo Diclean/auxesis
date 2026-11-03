@@ -277,6 +277,7 @@ enabled = false
             data_class: kernel_mcp::McpDataClass::Sensitive,
             stdio_confirmed: false,
             stdio_confirmation: None,
+            approval: None,
             network: false,
             transport: McpTransport::Http,
             url: Some("https://mcp.example.invalid/mcp".to_string()),

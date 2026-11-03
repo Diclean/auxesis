@@ -167,6 +167,7 @@ fn print_list(runtime: &McpRuntime, lang: Lang) {
             McpServerState::Ready => text(Message::McpStateReady, lang),
             McpServerState::Disabled => text(Message::McpStateDisabled, lang),
             McpServerState::NeedsConfirmation => text(Message::McpStateNeedsConfirmation, lang),
+            McpServerState::NeedsApproval => text(Message::McpStateNeedsApproval, lang),
             McpServerState::Quarantined => text(Message::McpStateQuarantined, lang),
             McpServerState::Failed => text(Message::McpStateFailed, lang),
         };

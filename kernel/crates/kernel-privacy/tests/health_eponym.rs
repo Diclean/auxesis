@@ -162,9 +162,15 @@ fn eponym_rules_stay_linear() {
     for unit in units {
         let time = |n: usize| {
             let text = unit.repeat(n);
-            let started = Instant::now();
-            issue(MODES[0], &text).expect("allowed");
-            started.elapsed()
+            // The fastest of three runs: a loaded machine must not decide a bound.
+            (0..3)
+                .map(|_| {
+                    let started = Instant::now();
+                    issue(MODES[0], &text).expect("allowed");
+                    started.elapsed()
+                })
+                .min()
+                .unwrap_or_default()
         };
         let small = time(40).max(Duration::from_millis(1));
         let large = time(400);

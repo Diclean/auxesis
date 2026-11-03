@@ -25,10 +25,11 @@ on:
 permissions:
   contents: read
 
-# One run per ref: a new push cancels the superseded in-flight run.
+# A pull request keeps one run: a new push cancels the older one. Each push to
+# main gets its own group (its commit SHA), so no main run is ever cancelled or
+# replaced while queued, and every merge gets a finished result.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  # Pushes to main never cancel each other, so every merge gets a finished result.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

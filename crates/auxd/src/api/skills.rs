@@ -71,6 +71,11 @@ fn pending(agent: &str, name: &str) -> PathBuf {
 fn parsed(home: &Path, agent: &str, name: &str, bytes: &[u8]) -> Result<LoadedSkill, String> {
     aux_engine::validate_agent(agent).map_err(|e| e.to_string())?;
     validate_segment(name)?;
+    if crate::agents::is_shipped_skill(agent, name) {
+        return Err(format!(
+            "{name} is a built-in skill; import it under another name"
+        ));
+    }
     let dir = aux_engine::agent_dir(home, agent);
     if !crate::agent::exists(home, agent) {
         return Err("unknown agent".into());

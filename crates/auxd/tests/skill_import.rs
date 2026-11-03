@@ -113,6 +113,21 @@ async fn local_import_waits_for_owner_and_rejects_invalid_or_model_actions() {
     let mut maximal = skill("mail.read");
     maximal.push_str(&"\n".repeat(65536 - maximal.len()));
     assert_eq!(import(&maximal).status, 200);
+    let builtin = post(
+        "/v1/skills/import",
+        json!({
+            "filename": "follow-up.md",
+            "text": skill("mail.read").replace("name: parcel", "name: follow-up"),
+            "agent": "mail"
+        }),
+        Some(TOKEN),
+    );
+    assert_eq!(builtin.status, 400, "{}", builtin.body);
+    assert!(builtin.body.contains("built-in skill"), "{}", builtin.body);
+    assert!(!home
+        .join("skill-imports/pending/mail/follow-up.md")
+        .exists());
+    assert!(!home.join("agents/mail/skills/follow-up.md").exists());
     // JSON cannot carry invalid UTF-8; invalid byte input is rejected by the CLI.
     let original = skill("mail.read");
     assert_eq!(

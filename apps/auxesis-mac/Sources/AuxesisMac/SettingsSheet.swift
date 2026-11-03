@@ -1,5 +1,5 @@
 // Settings, a sheet with tabs (prototype `.set`, 760 wide): General,
-// Providers, Skills, Privacy & Coverage, Budgets & Stop. Usable while stopped.
+// Providers, Skills, Plugins, Privacy & Coverage, Budgets & Stop. Usable while stopped.
 import AuxesisKit
 import SwiftUI
 
@@ -43,6 +43,7 @@ struct SettingsSheet: View {
                     case .general: GeneralTab()
                     case .providers: ProvidersTab()
                     case .skills: SkillsTab()
+                    case .plugins: PluginsTab(store: shell.store)
                     case .privacy: PrivacyTab()
                     case .budgets: BudgetsTab()
                     }
@@ -94,7 +95,7 @@ private struct TabButton: View {
 // MARK: - Building blocks
 
 /// `.lede`
-private struct Lede: View {
+struct Lede: View {
     let text: String
     @Environment(\.palette) private var palette
 

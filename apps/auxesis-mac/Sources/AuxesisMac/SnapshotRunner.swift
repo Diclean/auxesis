@@ -23,7 +23,7 @@ enum SnapshotRunner {
         let setup: (ShellModel) -> Void
     }
 
-    enum Kind { case shell, settings, menu }
+    enum Kind { case shell, settings, menu, pluginPreview }
 
     static let shots: [Shot] = [
         // SOBER-1 + AGENT-MARKS-1: neutral where-labels and footer, the new agent marks.
@@ -157,6 +157,12 @@ enum SnapshotRunner {
         Shot(name: "13-settings-budgets", prototype: nil, size: CGSize(width: 760, height: 640), view: .settings) { shell in
             shell.settingsTab = .budgets
         },
+        Shot(name: "m6-4-plugins-light", prototype: nil, size: CGSize(width: 760, height: 640), view: .settings) { $0.settingsTab = .plugins },
+        // M6-4 r1: the install preview names the agent that gets the tools.
+        Shot(name: "m6-4-plugins-preview-light", prototype: nil, size: CGSize(width: 560, height: 360), view: .pluginPreview) { shell in
+            Task { await shell.store.loadPlugins(); if let entry = shell.store.mcpCatalog.first { await shell.store.installPlugin(entry) } }
+        },
+        Shot(name: "m6-4-plugins-dark", prototype: nil, dark: true, size: CGSize(width: 760, height: 640), view: .settings) { $0.settingsTab = .plugins },
         Shot(name: "14-menu-bar", prototype: "15-menu-bar.png", size: CGSize(width: 270, height: 200), view: .menu) { _ in },
         Shot(name: "15-clients-empty", prototype: nil, scenario: .empty) { shell in
             shell.go(.clients)
@@ -477,6 +483,8 @@ enum SnapshotRunner {
             content = AnyView(SettingsSheet().environmentObject(shell))
         case .menu:
             content = AnyView(MenuBarPanel(onOpen: {}).environmentObject(shell).fixedSize())
+        case .pluginPreview:
+            content = AnyView(shell.store.pluginPreview.map { PreviewSheet(store: shell.store, preview: $0, name: shell.store.mcpCatalog.first?.name ?? $0.id) })
         }
         let root = content
             .environment(\.language, shot.french ? .fr : shell.language)

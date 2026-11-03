@@ -822,3 +822,35 @@ extension FixtureDaemon: CalendarStatusClient {
         ], reminders: [], capturedAt: iso.string(from: Date()))
     }
 }
+
+// M6-4: a short plugin catalog and two installed servers for the Plugins tab snapshot.
+extension FixtureDaemon: PluginsClient {
+    private static func decode<T: Decodable>(_ json: String) -> T { try! JSONDecoder().decode(T.self, from: Data(json.utf8)) }
+    public func mcpCatalog() async throws -> [McpCatalogEntry] {
+        Self.decode("""
+        [{"id":"public-data","name":"Public data search","region":"eu","category":"gov-data","status":"official","tier":"recommended","auth":"none","access":"read-only","transport":"http","endpoint":"https://mcp.data.example/mcp","data_class":"public","notes":"Searches open public datasets with no key. Experimental."},
+         {"id":"notes-local","name":"Local notes","region":"eu","category":"files","status":"community","tier":"recommended","auth":"none","access":"read-write","transport":"stdio","data_class":"sensitive","notes":"Reads and writes plain notes in one folder on this Mac."},
+         {"id":"invoices-hub","name":"Invoices hub","region":"eu","category":"finance","status":"community","tier":"recommended","auth":"api-key","access":"read-only","transport":"http","endpoint":"https://api.invoices.example/mcp","data_class":"sensitive","notes":"Lists received invoices and their due dates."}]
+        """)
+    }
+    public func mcpServers() async throws -> [McpServerView] {
+        Self.decode("""
+        [{"id":"weather","enabled":true,"state":"ready","transport":"http","auth":"none","data_class":"public","tools":[{"name":"forecast","risk":"low"}],"agents":{"main":["forecast"]}},
+         {"id":"invoices-hub","enabled":true,"state":"needs_approval","transport":"http","auth":"api-key","data_class":"sensitive","tools":[],"agents":{},"reason":"approval_required"}]
+        """)
+    }
+    public func mcpPacks() async throws -> [McpPack] { [] }
+    public func addMcpServer(id: String, catalogID: String, agent: String) async throws -> McpApprovalPreview { try await mcpApproval(id: id) }
+    public func mcpApproval(id: String) async throws -> McpApprovalPreview {
+        Self.decode(#"{"id":"\#(id)","transport":"http","enabled":false,"network":true,"env":[],"data_class":"public","endpoint":"https://mcp.data.example/mcp","args":[],"tools":[{"name":"search","risk":"low","access":"read"}],"hash":"fixture"}"#)
+    }
+    public func testMcpServer(url: String) async throws -> McpConnectionTest { throw AuxdError.transport("fixture") }
+    public func mcpConfirmation(id: String) async throws -> McpConfirmationDetails { throw AuxdError.transport("fixture") }
+    public func enableMcpPack(id: String, agent: String) async throws {}
+    public func approveMcpServer(id: String, hash: String, agent: String) async throws {}
+    public func addMcpUrlServer(id: String, url: String, dataClass: String, testDigest: String) async throws {}
+    public func setMcpServer(id: String, enabled: Bool) async throws {}
+    public func setMcpTools(id: String, agent: String, tools: [String]) async throws {}
+    public func deleteMcpServer(id: String) async throws {}
+    public func confirmMcpServer(id: String, hash: String) async throws {}
+}

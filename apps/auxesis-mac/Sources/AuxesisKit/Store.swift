@@ -540,6 +540,15 @@ public final class Store: ObservableObject {
     @Published public var mcpConfirmTarget: McpServerView?
     @Published public private(set) var mcpConfirmation: McpConfirmationDetails?
     @Published public var mcpCustomDataClass = "sensitive"
+    /// M6-4: the install preview waiting for the owner's one yes.
+    @Published public private(set) var pluginPreview: McpApprovalPreview?
+    /// The agent picked in the preview sheet (a team id; Aux by default).
+    @Published public private(set) var pluginAgent = TeamMember.aux.id
+    /// The agent the preview on screen was staged for; `nil` while a new one loads (Approve is off).
+    @Published public private(set) var pluginPreviewAgent: String?
+    /// The catalog entry the preview can be staged again from; `nil` keeps the agent fixed.
+    @Published public private(set) var pluginPreviewCatalogID: String?
+    private var pluginStage = 0
     @Published public private(set) var createdAgentName: String?
     @Published public var selectedProviderID: String?
     /// The key field. Bound to a `SecureField`, cleared after every submit and
@@ -1291,9 +1300,62 @@ public final class Store: ObservableObject {
         try await client.updateAgentTools(name: name, tools: tools)
     }
 
-    public func refreshPlugins() { guard let client = transport as? PluginsClient else { mcpFailed = true; return }; Task { do { async let catalog = client.mcpCatalog(); async let servers = client.mcpServers(); async let packs = client.mcpPacks(); let (c,s,p) = try await (catalog,servers,packs); self.mcpCatalog = c; self.mcpServers = s; self.mcpPacks = p; self.mcpFailed = false } catch { self.mcpFailed = true } } }
+    public func refreshPlugins() { Task { await loadPlugins() } }
+    /// Browse: three GETs, nothing else. No add, no approve, no server starts.
+    public func loadPlugins() async {
+        guard let client = transport as? PluginsClient else { mcpFailed = true; return }
+        do { async let catalog = client.mcpCatalog(); async let servers = client.mcpServers(); async let packs = client.mcpPacks(); let (c, s, p) = try await (catalog, servers, packs); mcpCatalog = c; mcpServers = s; mcpPacks = p; mcpFailed = false } catch { mcpFailed = true }
+    }
     public func enablePluginPack(_ pack: McpPack, agent: String) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.enableMcpPack(id: pack.id, agent: agent); self.refreshPlugins() } catch { self.mcpFailed = true } } }
-    public func addPlugin(_ entry: McpCatalogEntry, id: String) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.addMcpServer(id: id, catalogID: entry.id); self.refreshPlugins(); self.mcpFailureCode = nil } catch { self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
+    /// M6-4: Install stages the entry off for Aux and opens its preview; nothing runs before `approvePluginPreview`.
+    public func installPlugin(_ entry: McpCatalogEntry) async {
+        pluginAgent = TeamMember.aux.id
+        await stagePlugin(id: String(entry.id.prefix(32)), catalogID: entry.id, agent: pluginAgent, replace: false)
+        await loadPlugins()
+    }
+    /// An installed server that is off or waits for a yes: show its preview again. Its staged
+    /// allowlist names the agent; with several agents staged there is no single target to show.
+    public func reviewPlugin(_ server: McpServerView) async {
+        let staged = server.agents.keys.sorted()
+        pluginAgent = staged.first ?? TeamMember.aux.id
+        pluginPreviewCatalogID = mcpCatalog.first { $0.id == server.id }?.id
+        await showPluginPreview(agent: staged.count > 1 ? nil : pluginAgent) { try await $0.mcpApproval(id: server.id) }
+    }
+    /// r1 (#532 P2): the hash binds the agent's allowlist, so another agent means a new staging
+    /// and a new preview. Until it arrives, Approve does nothing: the old hash never goes out.
+    public func choosePluginAgent(_ agent: String) async {
+        guard agent != pluginAgent, pluginPreviewAgent != nil, let preview = pluginPreview, let catalogID = pluginPreviewCatalogID else { return }
+        pluginAgent = agent
+        await stagePlugin(id: preview.id, catalogID: catalogID, agent: agent, replace: true)
+    }
+    private func stagePlugin(id: String, catalogID: String, agent: String, replace: Bool) async {
+        pluginPreviewCatalogID = catalogID
+        await showPluginPreview(agent: agent) { client in
+            if replace { try await client.deleteMcpServer(id: id) } // still off: nothing was running
+            return try await client.addMcpServer(id: id, catalogID: catalogID, agent: agent)
+        }
+    }
+    private func showPluginPreview(agent: String?, _ fetch: (PluginsClient) async throws -> McpApprovalPreview) async {
+        guard let client = transport as? PluginsClient else { return }
+        pluginStage += 1
+        let stage = pluginStage
+        pluginPreviewAgent = nil
+        do {
+            let preview = try await fetch(client)
+            guard stage == pluginStage else { return }
+            pluginPreview = preview; pluginPreviewAgent = agent; mcpFailureCode = nil
+        } catch {
+            guard stage == pluginStage else { return }
+            mcpFailed = true; mcpFailureCode = mcpCode(error)
+        }
+    }
+    /// The owner's one yes: approves exactly the shown preview (its hash) for exactly the shown agent.
+    public func approvePluginPreview() async {
+        guard let client = transport as? PluginsClient, let preview = pluginPreview, let agent = pluginPreviewAgent, agent == pluginAgent else { return }
+        do { try await client.approveMcpServer(id: preview.id, hash: preview.hash, agent: agent); cancelPluginPreview(); mcpFailureCode = nil } catch { mcpFailed = true; mcpFailureCode = mcpCode(error) }
+        await loadPlugins()
+    }
+    public func cancelPluginPreview() { pluginStage += 1; pluginPreview = nil; pluginPreviewAgent = nil; pluginPreviewCatalogID = nil }
     public func clearPluginTest() { mcpTestResult = nil; mcpTestedURL = nil }
     public static func pluginAddReady(url: String, id: String, testedURL: String?) -> Bool {
         !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && testedURL == url

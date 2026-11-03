@@ -128,13 +128,14 @@ public final class ShellModel: ObservableObject {
     nonisolated public static var recordsMenu: [[Route]] { sidebarSections.map(\.destinations) }
 
     public enum SettingsTab: String, CaseIterable, Identifiable {
-        case general, providers, skills, privacy, budgets
+        case general, providers, skills, plugins, privacy, budgets
         public var id: String { rawValue }
         public var titleKey: UIKey {
             switch self {
             case .general: return .tabGeneral
             case .providers: return .tabProviders
             case .skills: return .tabSkills
+            case .plugins: return .tabPlugins
             case .privacy: return .tabPrivacy
             case .budgets: return .tabBudgets
             }
@@ -144,6 +145,7 @@ public final class ShellModel: ObservableObject {
             case .general: return .sliders
             case .providers: return .cpu
             case .skills: return .bolt
+            case .plugins: return .tool
             case .privacy: return .shield
             case .budgets: return .gauge
             }

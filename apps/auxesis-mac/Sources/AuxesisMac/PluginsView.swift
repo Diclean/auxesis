@@ -112,6 +112,10 @@ struct PreviewSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(copy.f(.pluginPreviewTitle, name)).font(.hk(Theme.Text.title, Theme.Weight.bold)).foregroundStyle(palette.ink.color).padding(.bottom, 6)
             Lede(text: copy(.pluginPreviewLede))
+            if store.pluginPreviewChanged {
+                Text(copy(.pluginChangedReview)).font(.ui).foregroundStyle(palette.amber.color)
+                    .fixedSize(horizontal: false, vertical: true).padding(.bottom, 10)
+            }
             target(copy).padding(.bottom, 10)
             VStack(alignment: .leading, spacing: 8) {
                 Fact(copy(.pluginConnects), PluginText.runs(preview))

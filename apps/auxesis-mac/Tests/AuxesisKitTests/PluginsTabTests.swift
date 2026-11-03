@@ -13,6 +13,8 @@ import XCTest
         nonisolated(unsafe) var catalog: [McpCatalogEntry] = []
         nonisolated(unsafe) var servers: [McpServerView] = []
         nonisolated(unsafe) var preview: McpApprovalPreview?
+        /// The preview a refetch answers with after a stale approve.
+        nonisolated(unsafe) var refetchPreview: McpApprovalPreview?
         nonisolated(unsafe) var approved: (id: String, hash: String, agent: String)?
         /// r1: the daemon's hash binds the staged agent; the fake mirrors that per agent.
         nonisolated(unsafe) var hashPerAgent = false
@@ -32,7 +34,7 @@ import XCTest
             guard hashPerAgent, let preview else { return preview! }
             return try JSONDecoder().decode(McpApprovalPreview.self, from: Data(#"{"id":"\#(preview.id)","transport":"http","enabled":false,"network":true,"env":[],"data_class":"public","args":[],"tools":[],"hash":"hash-\#(agent)"}"#.utf8))
         }
-        func mcpApproval(id: String) async throws -> McpApprovalPreview { log("GET approval \(id)"); return preview! }
+        func mcpApproval(id: String) async throws -> McpApprovalPreview { log("GET approval \(id)"); return refetchPreview ?? preview! }
         func approveMcpServer(id: String, hash: String, agent: String) async throws { log("POST approve \(id)"); try write(); approved = (id, hash, agent) }
         func testMcpServer(url: String) async throws -> McpConnectionTest { log("POST test"); throw Unused.call }
         func addMcpUrlServer(id: String, url: String, dataClass: String, testDigest: String) async throws { log("POST add-url") }
@@ -236,5 +238,34 @@ import XCTest
         XCTAssertEqual(fake.calls.filter { $0.hasPrefix("GET approval") }.count, 2, "a fresh preview, no error")
         await store.approvePluginPreview()
         XCTAssertEqual(fake.approved?.hash, "approval-hash-1")
+    }
+
+    /// A 409 `stale_confirmation` means the preview moved (config or binary
+    /// changed). Fetch the current preview once, say so, and wait for a new yes:
+    /// the app never approves the new hash on its own.
+    func testStaleConfirmationRefetchesAndWaitsForANewYes() async throws {
+        let fake = try fake()
+        let store = Store(transport: fake, language: .en)
+        await store.reviewPlugin(fake.servers[2])
+        XCTAssertEqual(store.pluginPreview?.hash, "approval-hash-1")
+
+        fake.calls.removeAll()
+        fake.refetchPreview = try JSONDecoder().decode(McpApprovalPreview.self, from: Data(#"{"id":"public-data","transport":"http","enabled":false,"network":true,"env":[],"data_class":"public","args":[],"tools":[],"hash":"approval-hash-2"}"#.utf8))
+        fake.writeError = Self.conflict("stale_confirmation")
+        await store.approvePluginPreview()
+
+        XCTAssertNil(fake.approved, "the stale yes approves nothing")
+        XCTAssertEqual(fake.calls.filter { $0.hasPrefix("GET approval") }.count, 1, "exactly one fresh preview")
+        XCTAssertEqual(store.pluginPreview?.hash, "approval-hash-2", "the sheet shows the new hash")
+        XCTAssertEqual(fake.calls.filter { $0.hasPrefix("POST approve") }.count, 1, "no second approve without the owner")
+        XCTAssertTrue(store.pluginPreviewChanged, "the sheet says the preview moved")
+        XCTAssertFalse(store.mcpFailed)
+        XCTAssertNil(store.mcpFailureCode)
+        XCTAssertEqual(L10n.ui(.pluginChangedReview, .en), "This plugin changed since you last looked. Review it again, then approve.")
+        XCTAssertEqual(L10n.ui(.pluginChangedReview, .fr), "Ce plugin a changé depuis votre dernier examen. Vérifiez-le à nouveau, puis approuvez.")
+
+        await store.approvePluginPreview()
+        XCTAssertEqual(fake.approved?.hash, "approval-hash-2", "only the owner's second yes enables it")
+        XCTAssertEqual(fake.calls.filter { $0.hasPrefix("POST approve") }.count, 2)
     }
 }

@@ -258,20 +258,16 @@ fn classify_skill_run(_skill: &str, arguments: &Value) -> ActionClass {
         .unwrap_or(ActionClass::LocalWrite)
 }
 
-/// The prefix of a web gate ask raised only because the turn is sensitive
-/// (taint or private owner data); its copy starts with the reason label.
-pub(crate) const WEB_SENSITIVE_TURN: &str = "web: sensitive_turn";
-
 /// A web call runs without a card when the privacy kernel can vet it: the
 /// web gate asked only because the turn is sensitive (never for an owner web
 /// mode, a missing judge or a private-data argument ask), and the kernel's
 /// identifier screen finds no secret, ID, IBAN, card, phone or encoded data
 /// in what would leave. Anything else keeps the card.
 pub fn web_vetted(request: &ApprovalRequest) -> bool {
-    let source = request.taint_source.as_deref().unwrap_or_default();
     let gate_ok = !request.tainted
-        || source.starts_with(WEB_SENSITIVE_TURN)
-        || !(source.starts_with("web") || source.starts_with("egress"));
+        || request
+            .web_approval
+            .is_some_and(|web| !web.untrusted && web.sensitive_only);
     gate_ok && kernel_broker::argument_screen::identifier_in_arguments(&request.arguments).is_none()
 }
 
@@ -449,25 +445,48 @@ mod tests {
 
     #[test]
     fn a_web_call_is_vetted_only_after_a_sensitive_turn_ask_with_a_clean_screen() {
-        let request = |source: Option<&str>, url: &str| ApprovalRequest {
+        use kernel_broker::WebApprovalContext;
+        let request = |source: Option<&str>, web_approval, url: &str| ApprovalRequest {
             agent: "main".to_string(),
             tool: "http_fetch".to_string(),
             risk: kernel_broker::Risk::Medium,
             arguments: json!({ "url": url }),
             tainted: source.is_some(),
             taint_source: source.map(str::to_string),
+            web_approval,
             unsandboxed: false,
             networked: false,
         };
         let sensitive = Some("web: sensitive_turn — l'adresse …");
+        let private_only = Some(WebApprovalContext {
+            untrusted: false,
+            sensitive_only: true,
+        });
+        let untrusted = Some(WebApprovalContext {
+            untrusted: true,
+            sensitive_only: true,
+        });
+        let other_ask = Some(WebApprovalContext {
+            untrusted: false,
+            sensitive_only: false,
+        });
         let plain = "https://example.com/weather?city=Paris";
-        assert!(web_vetted(&request(None, plain)));
-        assert!(web_vetted(&request(sensitive, plain)));
+        assert!(web_vetted(&request(None, None, plain)));
+        assert!(web_vetted(&request(sensitive, private_only, plain)));
+        assert!(!web_vetted(&request(Some("mail_read"), None, plain)));
+        assert!(!web_vetted(&request(sensitive, untrusted, plain)));
+        assert!(!web_vetted(&request(sensitive, None, plain)));
+        assert!(!web_vetted(&request(sensitive, other_ask, plain)));
         let iban = "https://example.com/?iban=FR7630006000011234567890189";
-        assert!(!web_vetted(&request(sensitive, iban)));
-        assert!(!web_vetted(&request(Some("web: mode_always_ask"), plain)));
+        assert!(!web_vetted(&request(sensitive, private_only, iban)));
+        assert!(!web_vetted(&request(
+            Some("web: mode_always_ask"),
+            None,
+            plain
+        )));
         assert!(!web_vetted(&request(
             Some("egress: the conversation"),
+            None,
             plain
         )));
     }
@@ -482,6 +501,10 @@ mod tests {
             arguments: json!({ "memo": "q7f3k9%252540example.com" }),
             tainted: true,
             taint_source: Some("web: sensitive_turn — l'adresse …".to_string()),
+            web_approval: Some(kernel_broker::WebApprovalContext {
+                untrusted: false,
+                sensitive_only: true,
+            }),
             unsandboxed: false,
             networked: false,
         };

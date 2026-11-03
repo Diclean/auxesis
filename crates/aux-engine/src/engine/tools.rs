@@ -111,6 +111,15 @@ fn skill_call_outcome(outcome: &RunOutcome, tool: &str) -> CallOutcome {
             taint: None,
             error_kind: Some("skill_failed"),
         },
+        // A send whose `DATA` was accepted and whose final reply never came:
+        // the mail may be out, so the result never says "failed" and never
+        // invites a resend.
+        RunOutcome::Uncertain { error } => CallOutcome {
+            content: serde_json::json!({ "outcome": "uncertain", "message": error }).to_string(),
+            status: "uncertain",
+            taint: None,
+            error_kind: Some("skill_uncertain"),
+        },
     }
 }
 
@@ -506,7 +515,9 @@ impl<'a> ChatSession<'a> {
             )
         };
         let untrusted = self.registry().is_untrusted_output(&name);
-        let read_only = self.registry().is_read_only(&name);
+        // A web call can leak its arguments even if a tool was mistakenly
+        // registered as read-only. It must never bypass a forced egress ask.
+        let read_only = self.registry().is_read_only(&name) && !performs_egress && !leaves_machine;
         // WS-C round 7: the shell profile is an input to the authorization
         // decision. A tool that will run unsandboxed can never be auto-run by
         // an allow rule — on the *first* call, before any taint mark exists.
@@ -587,7 +598,14 @@ impl<'a> ChatSession<'a> {
             })
             .flatten();
         let forced_taint = web_ask_detail
-            .map(|detail| Taint::Tainted(TaintSource::new("web", Some(detail))))
+            .map(|ask| {
+                let mut source = TaintSource::new("web", Some(ask.detail));
+                source.web_approval = Some(kernel_broker::WebApprovalContext {
+                    untrusted: self.taint.forces_ask(),
+                    sensitive_only: ask.sensitive_only && argument_ask.is_none(),
+                });
+                Taint::Tainted(source)
+            })
             .or_else(|| {
                 argument_ask.map(|detail| Taint::Tainted(TaintSource::new("egress", Some(detail))))
             })
@@ -2240,5 +2258,44 @@ mod follow_up_stamp_tests {
             row(4, "user", "2026-11-02 12:00:00", None),
         ];
         assert_eq!(previous_owner_row(normal, 4).map(|r| r.id), Some(3));
+    }
+}
+
+#[cfg(test)]
+mod send_uncertainty_tests {
+    use super::*;
+
+    #[test]
+    fn an_uncertain_send_is_not_reported_as_failed() {
+        let outcome = RunOutcome::Uncertain {
+            error: aux_runtime::executor::UNCERTAIN_SEND.to_string(),
+        };
+        let call = skill_call_outcome(&outcome, "skill__send-invite");
+        assert_eq!(call.status, "uncertain");
+        assert_eq!(call.error_kind, Some("skill_uncertain"));
+        assert!(
+            call.content.contains(r#""outcome":"uncertain""#),
+            "{}",
+            call.content
+        );
+        assert!(
+            !call.content.contains(r#""outcome":"failed""#),
+            "{}",
+            call.content
+        );
+        assert!(
+            call.content.contains("may have been sent"),
+            "{}",
+            call.content
+        );
+        assert!(
+            call.content.contains("do not send it again"),
+            "{}",
+            call.content
+        );
+        assert!(
+            call.taint.is_none(),
+            "a send result carries no mailbox text"
+        );
     }
 }

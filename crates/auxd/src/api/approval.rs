@@ -1485,6 +1485,7 @@ mod tests {
             arguments: serde_json::json!({ "to": ["a@example.test"], "body": body }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -1565,6 +1566,7 @@ mod tests {
             }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -1634,6 +1636,7 @@ mod tests {
             }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -1693,6 +1696,7 @@ mod tests {
             }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -1724,6 +1728,7 @@ mod tests {
             }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -1754,6 +1759,7 @@ mod tests {
             arguments: serde_json::json!({ "to": ["a@example.test"], "subject": "Hi", "body": body }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -1783,6 +1789,7 @@ mod tests {
                 arguments: serde_json::json!({}),
                 tainted: false,
                 taint_source: None,
+                web_approval: None,
                 unsandboxed: false,
                 networked: false,
             };
@@ -1836,6 +1843,7 @@ mod tests {
             arguments: serde_json::json!({"to":"", "subject":"hi", "body":"body"}),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -2009,6 +2017,7 @@ mod tests {
             arguments: serde_json::json!({"command": "ls"}),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -2156,6 +2165,7 @@ mod tests {
             arguments: serde_json::json!({"command": "ls"}),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -2195,6 +2205,7 @@ mod tests {
             arguments: serde_json::json!({"command": "ls"}),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };

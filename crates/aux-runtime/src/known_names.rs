@@ -64,6 +64,8 @@ pub struct Refusals {
     pub charset_cards: usize,
     /// Fields that are base64, or quoted-printable that does not decode.
     pub encoded_fields: usize,
+    /// vCard `TZ:` values that are not IANA names: no zone was kept.
+    pub time_zone_ignored: usize,
 }
 
 /// The kind of a stored source tag: the part before the first `:`.

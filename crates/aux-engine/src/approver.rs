@@ -240,7 +240,7 @@ pub fn read_only_command(command: &str) -> bool {
 
 /// `approvals = "auto"` (ACT-FREE): answers an ask itself when the call's
 /// [`ActionClass`](crate::action::ActionClass) is free (a read, a local write,
-/// `delegate`) or a web call the kernel vetted, tainted or not, unless an
+/// `delegate`) or a web call the kernel vetted without untrusted content, unless an
 /// owner `ask` rule covers it or it runs unsandboxed. It writes the same
 /// `approval.answered` row as a card answer, `"by": "policy"` with the class.
 /// Sends, payments, deletes, account changes, the shell, unknown tools, or a
@@ -439,6 +439,7 @@ mod tests {
             arguments: serde_json::json!({"command": "echo hi"}),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         }

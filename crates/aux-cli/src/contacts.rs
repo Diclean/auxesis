@@ -192,6 +192,13 @@ fn dry_run(store: &Store, file: &Path, country: Option<&str>) -> Result<String, 
             preview.summary.no_country
         ));
     }
+    if preview.summary.time_zone_ignored > 0 {
+        text.push_str(&format!(
+            "warning: {} time zone(s) are not an IANA name (a UTC offset is not a zone) \
+             and were not kept.\n",
+            preview.summary.time_zone_ignored
+        ));
+    }
     Ok(text)
 }
 

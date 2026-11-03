@@ -1265,6 +1265,7 @@ mod tests {
             tools: Default::default(),
             network: Vec::new(),
             secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
+            oauth: None,
         };
         state.tools.insert("ping".to_owned(), "00".to_owned());
         crate::extensions::mount::store_state(home.path(), &state).unwrap();
@@ -1314,6 +1315,7 @@ mod tests {
                 tools: Default::default(),
                 network: Vec::new(),
                 secrets: vec!["EXT_FOO__TOKEN".to_owned()],
+                oauth: None,
             };
             state.tools.insert("ping".to_owned(), "00".to_owned());
             crate::extensions::mount::store_state(home.path(), &state).unwrap();

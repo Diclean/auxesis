@@ -87,6 +87,9 @@ pub struct Summary {
     pub encoded_fields: usize,
     /// Entries not imported: another size cap of the kernel.
     pub capped: usize,
+    /// vCard `TZ:` values that are not IANA names (a UTC offset is not a zone):
+    /// no zone was kept for those contacts.
+    pub time_zone_ignored: usize,
 }
 
 impl fmt::Display for Summary {
@@ -160,6 +163,14 @@ impl fmt::Display for Summary {
                 self.capped
             )?;
         }
+        if self.time_zone_ignored > 0 {
+            writeln!(
+                f,
+                "warning: {} time zone(s) are not an IANA name (a UTC offset is not a \
+                 zone) and were not kept.",
+                self.time_zone_ignored
+            )?;
+        }
         Ok(())
     }
 }
@@ -207,6 +218,7 @@ fn fetched_of(cards: Cards, source: &str) -> Fetched {
         refusals: Refusals {
             charset_cards: cards.refused_charset,
             encoded_fields: cards.encoded_fields,
+            time_zone_ignored: cards.time_zone_ignored,
         },
     }
 }
@@ -530,6 +542,7 @@ fn plan_fetched(
     let mut own_over = 0;
     summary.refused_charset = fetched.refusals.charset_cards;
     summary.encoded_fields = fetched.refusals.encoded_fields;
+    summary.time_zone_ignored = fetched.refusals.time_zone_ignored;
     for mut contact in fetched.contacts {
         let mut phones = Vec::new();
         let mut needs_country = false;
@@ -732,14 +745,17 @@ pub struct Cards {
     pub refused_charset: usize,
     /// Base64 or undecodable fields: skipped.
     pub encoded_fields: usize,
+    /// Cards whose `TZ:` is not an IANA name: no zone was kept.
+    pub time_zone_ignored: usize,
 }
 
 /// Parse a vCard file (v3 or v4, and v2.1 with its bare parameters). Every
 /// `BEGIN:VCARD` block is one person.
 pub fn parse_vcards(text: &str) -> Cards {
     let mut cards = Cards::default();
-    // The card being read, and whether it is refused for its character set.
-    let mut current: Option<(Parsed, bool)> = None;
+    // The card being read, whether it is refused for its character set, and
+    // whether it carried a `TZ:` that is not an IANA name.
+    let mut current: Option<(Parsed, bool, bool)> = None;
     for line in unfold(text) {
         let Some((head, value)) = line.split_once(':') else {
             continue;
@@ -753,22 +769,27 @@ pub fn parse_vcards(text: &str) -> Cards {
             .to_ascii_uppercase();
         match name.as_str() {
             "BEGIN" if value.eq_ignore_ascii_case("VCARD") => {
-                current = Some((Parsed::default(), false));
+                current = Some((Parsed::default(), false, false));
             }
             "END" if value.eq_ignore_ascii_case("VCARD") => {
-                if let Some((person, refused)) = current.take() {
+                if let Some((person, refused, zone_ignored)) = current.take() {
                     if refused {
                         cards.refused_charset += 1;
                     } else {
+                        // A later valid `TZ:` line keeps the zone: nothing ignored.
+                        if zone_ignored && person.time_zone.is_none() {
+                            cards.time_zone_ignored += 1;
+                        }
                         cards.people.push(finish(person));
                     }
                 }
             }
             _ => {
-                if let Some((person, refused)) = current.as_mut() {
+                if let Some((person, refused, zone_ignored)) = current.as_mut() {
                     match read_field(&name, head, value) {
                         Field::Text(text) => {
-                            apply_vcard_property(person, &name, &controls_as_spaces(&text));
+                            *zone_ignored |=
+                                apply_vcard_property(person, &name, &controls_as_spaces(&text));
                         }
                         Field::Encoded => cards.encoded_fields += 1,
                         Field::Charset => *refused = true,
@@ -934,32 +955,45 @@ fn looks_encoded(value: &str) -> bool {
         .any(|w| w[0] == b'=' && w[1].is_ascii_hexdigit() && w[2].is_ascii_hexdigit())
 }
 
-/// Set one vCard property on the person being read. Other properties are ignored.
-fn apply_vcard_property(person: &mut Parsed, name: &str, value: &str) {
+/// Set one vCard property on the person being read. Other properties are
+/// ignored. Returns true for a `TZ:` that was present but is not an IANA name.
+fn apply_vcard_property(person: &mut Parsed, name: &str, value: &str) -> bool {
     match name {
-        "FN" => person.display_name = non_empty(unescape(value)),
+        "FN" => {
+            person.display_name = non_empty(unescape(value));
+            false
+        }
         "N" => {
             // `family;given;additional;prefix;suffix`: only the first two are kept.
             let parts = split_raw(value, ';');
             person.family = words(&unescape(parts.first().copied().unwrap_or_default()));
             person.given = words(&unescape(parts.get(1).copied().unwrap_or_default()));
+            false
         }
         "NICKNAME" => {
             for nick in split_raw(value, ',') {
                 person.nicknames.extend(non_empty(unescape(nick)));
             }
+            false
         }
         "EMAIL" => {
             let address = strip_scheme(value, "mailto:");
             person.emails.extend(non_empty(unescape(address)));
+            false
         }
-        "TEL" => person
-            .phones
-            .extend(non_empty(strip_scheme(value, "tel:").to_string())),
+        "TEL" => {
+            person
+                .phones
+                .extend(non_empty(strip_scheme(value, "tel:").to_string()));
+            false
+        }
         // `TZ:Europe/Paris` is the client's zone. `TZ:-05:00` is a UTC offset,
         // not a zone: it is left unset instead of being guessed into one.
-        "TZ" => person.time_zone = aux_crm::valid_time_zone(value),
-        _ => {}
+        "TZ" => {
+            person.time_zone = aux_crm::valid_time_zone(value);
+            person.time_zone.is_none() && !value.trim().is_empty()
+        }
+        _ => false,
     }
 }
 
@@ -1523,6 +1557,7 @@ mod tests {
         );
         assert_eq!(cards.people[0].time_zone.as_deref(), Some("Europe/Paris"));
         assert_eq!(cards.people[1].time_zone, None, "an offset is not a zone");
+        assert_eq!(cards.time_zone_ignored, 1, "the report counts the offset");
 
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("store.db")).unwrap();
@@ -1535,7 +1570,12 @@ mod tests {
              TZ:-05:00\nEND:VCARD\n",
         )
         .unwrap();
-        import_file(&store, &file, None, None).unwrap();
+        let summary = import_file(&store, &file, None, None).unwrap();
+        assert_eq!(summary.time_zone_ignored, 1);
+        assert!(
+            summary.to_string().contains("not an IANA name"),
+            "the report says the offset was not kept: {summary}"
+        );
         // `contacts` also holds the `crm` source the party seeding refreshed.
         let contacts: Vec<_> = store
             .contacts()

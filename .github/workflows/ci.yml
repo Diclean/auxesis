@@ -5,11 +5,11 @@ name: CI
 #
 # Every job runs on a GitHub-hosted machine: a pull request from anyone runs
 # here and never on a maintainer's machine. Rules for this file:
-#   * the runs-on label is ubuntu-latest or macos-15, written literally;
+#   * the runs-on label is ubuntu-latest, macos-15 or macos-26, written literally;
 #   * every action pinned by full commit SHA (tag in the trailing comment);
 #   * no repository secret and no job token in any step, a read-only token,
 #     only the push and pull_request triggers.
-# The export that builds the public copy refuses one that breaks these rules.
+# Review every change to this file against these rules.
 # These files cannot stop a pull request that edits them: the public
 # repository itself must register no runner of its own and must hold outside
 # pull requests for approval (CONTRIBUTING.md, Publishing checklist).
@@ -83,6 +83,14 @@ jobs:
           rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
             --profile minimal --component rustfmt --component clippy
           rustup show
+      - name: Owner-like Mac (Paris time, Command Line Tools)
+        # Many tests are written for an owner in Europe/Paris, and the shell
+        # sandbox allows the Command Line Tools, not a full Xcode (which the
+        # image selects by default). Match the maintainer's Mac.
+        run: |
+          sudo systemsetup -settimezone Europe/Paris >/dev/null
+          sudo xcode-select --switch /Library/Developer/CommandLineTools
+          date; xcode-select -p
       - name: Clippy
         run: scripts/ci-sandbox-env.sh cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests (sandboxed, no Keychain)
@@ -92,7 +100,8 @@ jobs:
 
   swift:
     # The SwiftUI app in apps/auxesis-mac: swift build, then swift test.
-    runs-on: macos-15
+    # macos-26: the app needs Swift 6.2 or later (macos-15 ships 6.1).
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

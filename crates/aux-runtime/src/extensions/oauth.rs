@@ -357,8 +357,22 @@ impl PendingFlow {
 
     /// [`Self::complete`] with an explicit wait budget (tests).
     pub async fn complete_with_timeout(self, timeout: Duration) -> Result<TokenSet, OAuthError> {
+        self.complete_if(timeout, || true).await
+    }
+
+    /// [`Self::complete_with_timeout`], but `still_allowed` runs after the
+    /// callback and before the code exchange: `false` ends the flow with
+    /// [`OAuthError::NotConnected`] and no request to the token endpoint.
+    pub async fn complete_if(
+        self,
+        timeout: Duration,
+        still_allowed: impl FnOnce() -> bool,
+    ) -> Result<TokenSet, OAuthError> {
         let redirect_uri = self.listener.redirect_uri();
         let code = self.listener.receive(&self.state, timeout).await?;
+        if !still_allowed() {
+            return Err(OAuthError::NotConnected);
+        }
         exchange_code(&self.endpoints, &code, &self.verifier, &redirect_uri).await
     }
 }

@@ -4,7 +4,8 @@
 //! still asked and the recipient check still runs, for that one address only.
 //!
 //! MAILBOX-LOOKALIKE-HARDEN: that `From` is attacker text: only an address
-//! the owner wrote to (else one that wrote on two days) may be picked.
+//! the owner wrote to may be picked. With no readable Sent folder there is no
+//! such evidence, so nothing from the mailbox is picked.
 
 use serde_json::{json, Value};
 
@@ -34,8 +35,8 @@ pub struct MailboxScan {
     /// False when a cap was hit or a mailbox could not be read.
     pub complete: bool,
     /// To/Cc addresses of the owner's Sent mail. `None` when no configured
-    /// mailbox had a readable Sent folder: the bar then falls back to two
-    /// arrival days.
+    /// mailbox had a readable Sent folder: no mailbox-derived recipient is
+    /// then trusted.
     pub written_to: Option<Vec<String>>,
 }
 
@@ -142,31 +143,12 @@ fn written_to(written_to: &[String], address: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(address))
 }
 
-/// How many different arrival days `address` has in the scan. An empty day
-/// proves nothing and is never counted.
-fn arrival_days(senders: &[MailboxSender], address: &str) -> usize {
-    let mut days: Vec<&str> = Vec::new();
-    for sender in senders {
-        if !sender.address.eq_ignore_ascii_case(address) {
-            continue;
-        }
-        let day = sender.day.trim();
-        if day.is_empty() {
-            continue;
-        }
-        if !days.iter().any(|known| known.eq_ignore_ascii_case(day)) {
-            days.push(day);
-        }
-    }
-    days.len()
-}
-
 /// The trust bar for the one sender a mailbox lookup resolved. `None` lets the
 /// send go to the card; `Some(reason)` refuses it before any card.
 ///
-/// When a Sent folder is readable, only an address the owner has already
-/// written to may be picked. When none is reachable, a sender who wrote on two
-/// different days is trusted instead.
+/// Only an address the owner has already written to may be picked. When no
+/// Sent folder is readable that evidence cannot be read, so the send is
+/// refused rather than trusted on arrival days.
 pub(super) fn trust_refusal(
     value: &str,
     sender: &MailboxSender,
@@ -181,13 +163,10 @@ pub(super) fn trust_refusal(
              before. Add {value} in Clients, or type the address, then ask again"
         ));
     }
-    if arrival_days(&scan.senders, &sender.address) >= 2 {
-        return None;
-    }
     Some(format!(
-        "not sending to {value}: not in Clients and that address has written to the owner on \
-         fewer than two different days. Add {value} in Clients, or type the address, then ask \
-         again"
+        "not sending to {value}: not in Clients, and Aux cannot read the Sent folder to check \
+         who the owner has written to. Add {value} in Clients, or let Aux read the Sent folder, \
+         then ask again"
     ))
 }
 

@@ -22,7 +22,7 @@ use aux_docs::{run_collect_receipts, CollectReport, StoreEvidence};
 use aux_engine::ChatSession;
 use aux_runtime::executor::{
     ConnectorError, FoundEvent, FoundEventFacts, MailboxScan, MailboxSender, RecipientDirectory,
-    SkillConnector, SkillContext, StoredDraft, SENDER_SCAN_LIMIT, UNCERTAIN_DRAFT,
+    SkillConnector, SkillContext, StoredDraft, SENDER_SCAN_LIMIT, UNCERTAIN_DRAFT, UNCERTAIN_SEND,
 };
 #[cfg(feature = "google")]
 use aux_runtime::skills::tool_map;
@@ -840,15 +840,26 @@ impl MailSkillConnector {
                     };
                 }
                 let detail = if uncertain {
-                    UNCERTAIN_DRAFT.to_string()
+                    // A draft says a fresh draft is the way back; a free-form
+                    // send says plainly that it may already be out.
+                    if claimed.is_some() {
+                        UNCERTAIN_DRAFT
+                    } else {
+                        UNCERTAIN_SEND
+                    }
+                    .to_string()
                 } else {
                     error.to_string()
                 };
-                Err(ConnectorError::new(detail).with_ledger(json!({
+                let mut failure = ConnectorError::new(detail).with_ledger(json!({
                     "kind": error.kind(),
                     "reply_class": error.reply_class(),
                     "account": account,
-                })))
+                }));
+                if uncertain {
+                    failure = failure.with_uncertain();
+                }
+                Err(failure)
             }
         }
     }
@@ -1046,7 +1057,8 @@ impl SkillConnector for MailSkillConnector {
     /// locally (no body, nothing to a model). A capped scan or an unreadable
     /// mailbox marks the scan partial: a lone match then only asks. The To/Cc
     /// of a readable Sent folder give the trust bar its "owner wrote to them"
-    /// set; a Sent folder outside `only_folders` is never opened.
+    /// set; a Sent folder outside `only_folders` is never opened, and a scan
+    /// where any configured Sent folder is unreadable carries no set at all.
     ///
     /// The owner's own addresses are dropped before matching: a mail sent to
     /// themself is never a recipient candidate.
@@ -1090,8 +1102,8 @@ impl SkillConnector for MailSkillConnector {
             let Some(folder) = api.sent_folder(account) else {
                 continue;
             };
-            // A Sent read that fails is no signal: the bar falls back to two
-            // arrival days rather than widening.
+            // A Sent read that fails is no signal: the scan then carries no
+            // set, so nothing mailbox-derived is trusted.
             if let Ok(headers) = api
                 .list_headers(account, Some(&folder), SENDER_SCAN_LIMIT)
                 .await
@@ -1124,8 +1136,8 @@ impl SkillConnector for MailSkillConnector {
             let sender = owner_address_key(&sender.address);
             sender != owner && !own.contains(&sender)
         });
-        // The set is only the stricter bar when every configured mailbox's Sent
-        // folder was readable; otherwise the two-day rule applies.
+        // The set is only present when every configured mailbox's Sent folder
+        // was readable; `None` refuses every mailbox-derived recipient.
         let written_to = (sent_readable == accounts.len()).then_some(written_to);
         Some(MailboxScan {
             senders,

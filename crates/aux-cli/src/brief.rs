@@ -392,6 +392,17 @@ pub(crate) async fn call_daemon(
     token: &str,
     lang: Lang,
 ) -> Result<String, BriefDaemonError> {
+    call_daemon_with_body(method, base, path, token, lang, None).await
+}
+
+pub(crate) async fn call_daemon_with_body(
+    method: reqwest::Method,
+    base: &str,
+    path: &str,
+    token: &str,
+    lang: Lang,
+    body: Option<String>,
+) -> Result<String, BriefDaemonError> {
     let client = reqwest::Client::builder()
         // The endpoint is a fixed loopback URL: never follow a redirect off it
         // and never let an environment proxy carry the bearer token.
@@ -405,21 +416,24 @@ pub(crate) async fn call_daemon(
                 Lang::En => format!("cannot build the local client: {err}"),
             })
         })?;
-    let response = client
+    let mut request = client
         .request(method, format!("{base}{path}"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|err| {
-            if err.is_connect() {
-                BriefDaemonError::unreachable(lang)
-            } else {
-                BriefDaemonError::Protocol(match lang {
-                    Lang::Fr => format!("requête vers auxd échouée : {err}"),
-                    Lang::En => format!("request to auxd failed: {err}"),
-                })
-            }
-        })?;
+        .bearer_auth(token);
+    if let Some(body) = body {
+        request = request
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
+    }
+    let response = request.send().await.map_err(|err| {
+        if err.is_connect() {
+            BriefDaemonError::unreachable(lang)
+        } else {
+            BriefDaemonError::Protocol(match lang {
+                Lang::Fr => format!("requête vers auxd échouée : {err}"),
+                Lang::En => format!("request to auxd failed: {err}"),
+            })
+        }
+    })?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {

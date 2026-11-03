@@ -11,7 +11,8 @@ use aux_store::Message;
 /// The value-free outcome summary for one finished tool call.
 #[derive(Debug, Clone, Copy)]
 pub struct ToolEndOutcome<'a> {
-    /// Engine outcome label (`ok`, `denied`, `failed`, `unknown_tool`, `capped`).
+    /// Engine outcome label (`ok`, `denied`, `failed`, `unknown_tool`, `capped`,
+    /// `uncertain`).
     pub status: &'a str,
     /// Text returned as the tool result.
     pub result: &'a str,

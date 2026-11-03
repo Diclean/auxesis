@@ -4,8 +4,9 @@
 //! [`launch`] builds `sandbox-exec -p <profile> /bin/sh -c <cmd>` with a
 //! deny-by-default profile. The profile is deliberately small:
 //!
-//! - **exec**: `/usr`, `/bin`, `/sbin`, `/System`, the Command Line Tools and
-//!   Python framework, plus only the *program* directories inside the package
+//! - **exec**: `/usr`, `/bin`, `/sbin`, `/System`, the Command Line Tools (or
+//!   the full Xcode developer directory when one is selected) and the Python
+//!   framework, plus only the *program* directories inside the package
 //!   prefixes (`bin`, `sbin`, `opt`, `Cellar`, `lib`, `include`, `share`) —
 //!   never the whole prefix. `var`, `etc` and `Caskroom` under
 //!   `/opt/homebrew` and `/usr/local` stay unreadable, so a package manager's
@@ -59,7 +60,7 @@
 //! never turn a finished command into a timeout.
 
 use crate::ToolError;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -284,6 +285,17 @@ const SYSTEM_TREES: &[&str] = &[
     "/Library/Frameworks/Python.framework",
 ];
 
+/// Absolute roots a resolved developer directory may live under. A full Xcode
+/// is only recognised below one of these; anything else (a relocated app, a
+/// relative path, an owner-writable tree) is refused so the profile can never
+/// grow a rule for a path the owner controls.
+const DEVELOPER_DIR_ROOTS: &[&str] = &["/Applications", "/Library/Developer"];
+
+/// The Command Line Tools developer directory. It is already in
+/// [`SYSTEM_TREES`], so resolving it adds no rule and no duplicate: the
+/// existing grant stays byte for byte what it was.
+const CLT_DEVELOPER_DIR: &str = "/Library/Developer/CommandLineTools";
+
 /// The only directories inside the package prefixes (`/opt/homebrew`,
 /// `/usr/local`) that are read + execute allowed: the program directories the
 /// package managers put executables, libraries and headers in. The prefixes
@@ -474,6 +486,104 @@ fn absolute_overlap(workspace: &Path) -> Option<&'static str> {
         .find(|dir| overlaps(workspace, Path::new(dir)))
 }
 
+/// The developer directory `xcrun` shims use for this process.
+///
+/// `DEVELOPER_DIR` wins, mirroring `xcrun`. When it is set, an invalid value
+/// adds nothing: there is deliberately no fallback to `xcode-select`, so a
+/// malformed environment variable cannot widen the profile for a directory
+/// the command will not use. Otherwise ask `xcode-select -p`. Any failure at
+/// either step means no extra rule, exactly as before this allowlist existed.
+fn active_developer_dir() -> Option<PathBuf> {
+    developer_dir_from_env(std::env::var_os("DEVELOPER_DIR").as_deref())
+}
+
+/// Testable core of [`active_developer_dir`]: the `DEVELOPER_DIR` value, if
+/// any, is passed in.
+fn developer_dir_from_env(value: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    if let Some(raw) = value {
+        return resolve_developer_dir(Path::new(raw));
+    }
+    let output = std::process::Command::new("/usr/bin/xcode-select")
+        .arg("-p")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = std::str::from_utf8(&output.stdout).ok()?;
+    resolve_developer_dir(Path::new(path.trim()))
+}
+
+/// Canonicalise and validate a candidate developer directory.
+///
+/// Requires an absolute path with no `..`, an existing directory, a canonical
+/// location under [`DEVELOPER_DIR_ROOTS`], and either the Command Line Tools
+/// path or an `.app/Contents/Developer` layout. Every failure returns `None`:
+/// the caller then adds no rule.
+fn resolve_developer_dir(raw: &Path) -> Option<PathBuf> {
+    if !raw.is_absolute()
+        || raw
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
+        return None;
+    }
+    let canonical = raw.canonicalize().ok()?;
+    if !canonical.is_dir() || !is_allowed_developer_dir(&canonical) {
+        return None;
+    }
+    Some(canonical)
+}
+
+/// True when `dir` is a developer directory the profile may grant read+exec
+/// to: the Command Line Tools, or an Xcode `.app/Contents/Developer` below one
+/// of the two system roots.
+fn is_allowed_developer_dir(dir: &Path) -> bool {
+    if !dir.is_absolute()
+        || dir
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        || !DEVELOPER_DIR_ROOTS.iter().any(|root| dir.starts_with(root))
+    {
+        return false;
+    }
+    if dir == Path::new(CLT_DEVELOPER_DIR) {
+        return true;
+    }
+    let mut tail = dir.components().rev();
+    matches!(
+        (tail.next(), tail.next(), tail.next()),
+        (
+            Some(Component::Normal(developer)),
+            Some(Component::Normal(contents)),
+            Some(Component::Normal(app)),
+        ) if developer == "Developer"
+            && contents == "Contents"
+            && app.to_string_lossy().ends_with(".app")
+    )
+}
+
+/// The read + exec grant for a full Xcode developer directory, or `None` when
+/// the directory is already covered (the Command Line Tools, in
+/// [`SYSTEM_TREES`]).
+///
+/// The two lines mirror exactly what the profile already grants the Command
+/// Line Tools: `file-read*` and `process-exec*`, never a write, network or
+/// `file-map-executable` rule.
+fn developer_dir_rules(developer_dir: &Path) -> Option<String> {
+    if developer_dir == Path::new(CLT_DEVELOPER_DIR) || !is_allowed_developer_dir(developer_dir) {
+        return None;
+    }
+    let dir = scheme_string(developer_dir).ok()?;
+    Some(format!(
+        "; full Xcode selected: the xcrun shims load libxcrun and exec tools from here\n\
+         (allow file-read* (subpath \"{dir}\"))\n\
+         (allow process-exec* (subpath \"{dir}\"))\n"
+    ))
+}
+
 /// Build the deny-by-default Seatbelt profile for one call.
 ///
 /// `home` is the *real* home of the daemon user (canonical), used for the
@@ -481,16 +591,39 @@ fn absolute_overlap(workspace: &Path) -> Option<&'static str> {
 /// the kernel, and rules are ordered last-match-wins, so the sensitive denies
 /// come after the system allows and the workspace/temp allows after the
 /// denies. Refuses a workspace that would override a protected location.
+///
+/// The active developer directory (`DEVELOPER_DIR`, else `xcode-select -p`)
+/// is resolved here. When it is a full Xcode under a system root, that
+/// directory gets the same read+exec grant as the Command Line Tools; every
+/// other value adds no rule.
 pub fn seatbelt_profile(
     workspace: &Path,
     temp: &Path,
     home: Option<&Path>,
     network: bool,
 ) -> Result<String, LaunchError> {
+    let developer_dir = active_developer_dir();
+    seatbelt_profile_with_developer_dir(workspace, temp, home, network, developer_dir.as_deref())
+}
+
+/// [`seatbelt_profile`] with the developer directory passed in: production
+/// callers use the resolved value, tests pin it.
+fn seatbelt_profile_with_developer_dir(
+    workspace: &Path,
+    temp: &Path,
+    home: Option<&Path>,
+    network: bool,
+    developer_dir: Option<&Path>,
+) -> Result<String, LaunchError> {
+    // Only a directory the profile will actually grant is allowed to veto a
+    // workspace: otherwise an ignored candidate under /tmp could refuse a
+    // perfectly valid workspace.
+    let developer_dir = developer_dir.filter(|dir| is_allowed_developer_dir(dir));
     let sensitive = home
         .map(|home| home_overlap(workspace, home).is_some())
         .unwrap_or(false)
-        || absolute_overlap(workspace).is_some();
+        || absolute_overlap(workspace).is_some()
+        || developer_dir.is_some_and(|dir| overlaps(workspace, dir));
     if sensitive {
         return Err(LaunchError::SensitiveWorkspace(
             workspace.display().to_string(),
@@ -630,6 +763,17 @@ pub fn seatbelt_profile(
         profile.push_str(&format!(" (sysctl-name \"{name}\")"));
     }
     profile.push_str(")\n");
+
+    // A full Xcode moves the xcrun shims' libraries and tools under the
+    // selected developer directory; without this grant `/usr/bin/git` (and
+    // every other xcrun shim) dies with "unable to load libxcrun". The rule is
+    // appended last and only ever adds read + exec: the existing profile above
+    // is untouched, and nothing grants a write under the directory.
+    if let Some(developer_dir) = developer_dir {
+        if let Some(rules) = developer_dir_rules(developer_dir) {
+            profile.push_str(&rules);
+        }
+    }
     Ok(profile)
 }
 
@@ -1618,6 +1762,142 @@ mod tests {
         // The helper binary cannot be re-entered from a command either.
         assert!(profile.contains("(deny process-exec* (literal \"/usr/bin/sandbox-exec\"))"));
         assert!(profile.contains("(deny process-exec* (literal \"/usr/bin/osascript\"))"));
+    }
+
+    fn profile_with_developer_dir(developer_dir: Option<&Path>) -> String {
+        seatbelt_profile_with_developer_dir(
+            Path::new("/tmp/ws"),
+            Path::new("/tmp/tmp"),
+            Some(Path::new("/Users/tester")),
+            false,
+            developer_dir,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn resolved_xcode_developer_dir_gets_read_and_exec_but_never_write() {
+        let developer_dir = Path::new("/Applications/Xcode_16.4.app/Contents/Developer");
+        let base = profile_with_developer_dir(None);
+        let profile = profile_with_developer_dir(Some(developer_dir));
+
+        // The profile without the Xcode grant is byte-for-byte a prefix: no
+        // existing rule moves, including the Command Line Tools grants.
+        assert!(profile.starts_with(&base));
+        let added = &profile[base.len()..];
+        let added_rules: Vec<&str> = added
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with(';'))
+            .collect();
+        let expected = format!(
+            "(allow file-read* (subpath \"{dir}\"))\n\
+             (allow process-exec* (subpath \"{dir}\"))",
+            dir = developer_dir.display()
+        );
+        assert_eq!(added_rules.join("\n"), expected);
+
+        // Read + exec only: no write, network, file-map or broad
+        // `/Applications` grant comes with it.
+        assert!(!added.contains("file-map-executable"));
+        assert!(!profile.contains("(allow network*"));
+        assert!(!profile.contains("(subpath \"/Applications\")"));
+        assert!(!added.contains("file-write"));
+        for line in profile
+            .lines()
+            .filter(|line| line.starts_with("(allow file-write*"))
+        {
+            assert!(
+                !line.contains(developer_dir.to_str().unwrap()),
+                "the Xcode directory must never be writable: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn developer_dir_outside_the_allowed_roots_adds_no_rule() {
+        let base = profile_with_developer_dir(None);
+        let sandbox = tempfile::tempdir().unwrap();
+        let fake_xcode = sandbox.path().join("x.app/Contents/Developer");
+        std::fs::create_dir_all(&fake_xcode).unwrap();
+        let fake_home_evil = sandbox.path().join("evil");
+        std::fs::create_dir_all(&fake_home_evil).unwrap();
+        let dotted = fake_xcode.join("../../../x.app/Contents/Developer");
+        let relative = Path::new("Applications/Xcode.app/Contents/Developer");
+
+        // The same values a hostile or stale DEVELOPER_DIR could carry:
+        // a fake Xcode under /tmp, a path under the home, a relative path and
+        // one containing `..` must all resolve to nothing.
+        for candidate in [
+            fake_xcode.as_path(),
+            fake_home_evil.as_path(),
+            dotted.as_path(),
+            relative,
+        ] {
+            assert_eq!(
+                developer_dir_from_env(Some(candidate.as_os_str())),
+                None,
+                "{} must not resolve",
+                candidate.display()
+            );
+            assert_eq!(
+                profile_with_developer_dir(Some(candidate)),
+                base,
+                "{} must add no rule",
+                candidate.display()
+            );
+        }
+
+        // A symlink that canonicalises outside the allowed roots is refused.
+        #[cfg(unix)]
+        {
+            let link = sandbox.path().join("relocated.app/Contents/Developer");
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&fake_xcode, &link).unwrap();
+            assert_eq!(resolve_developer_dir(&link), None);
+        }
+    }
+
+    #[test]
+    fn command_line_tools_rule_is_unchanged_byte_for_byte() {
+        let base = profile_with_developer_dir(None);
+        let clt = Path::new(CLT_DEVELOPER_DIR);
+
+        // Resolving the Command Line Tools adds no rule: its existing grant is
+        // already in the system trees and must not be duplicated or rewritten.
+        assert_eq!(profile_with_developer_dir(Some(clt)), base);
+
+        let exec_line = base
+            .lines()
+            .find(|line| line.starts_with("(allow process-exec*"))
+            .expect("exec allow rule");
+        assert!(exec_line.contains("(subpath \"/Library/Developer/CommandLineTools\")"));
+        let read_line = base
+            .lines()
+            .find(|line| line.starts_with("(allow file-read*"))
+            .expect("read allow rule");
+        assert!(read_line.contains("(subpath \"/Library/Developer/CommandLineTools\")"));
+        assert_eq!(
+            base.matches("(subpath \"/Library/Developer/CommandLineTools\")")
+                .count(),
+            2,
+            "the Command Line Tools grant must stay exactly the two existing rules"
+        );
+    }
+
+    #[test]
+    fn resolved_xcode_developer_dir_cannot_be_the_workspace() {
+        // The new grant is read-only; a workspace there would make it
+        // writable through the unconditional workspace allow.
+        let developer_dir = Path::new("/Applications/Xcode.app/Contents/Developer");
+        let err = seatbelt_profile_with_developer_dir(
+            developer_dir,
+            Path::new("/tmp/tmp"),
+            None,
+            false,
+            Some(developer_dir),
+        )
+        .unwrap_err();
+        assert!(matches!(err, LaunchError::SensitiveWorkspace(_)));
     }
 
     #[test]

@@ -107,6 +107,16 @@ pub fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
     }
 }
 
+/// The curated catalog pin for one configured server, if its claimed entry
+/// resolves.
+///
+/// The CLI applies the daemon's install-approval predicate, and the pin is
+/// part of the approval binding; exposing it keeps the CLI's answer exactly
+/// the daemon's instead of a fail-closed guess.
+pub fn catalog_pin(server: &McpServerConfig) -> Option<String> {
+    crate::api::mcp_plugins::catalog_pin(server)
+}
+
 /// Every declared `env` name across the enabled servers.
 pub fn declared_env_names(config: &McpConfig) -> BTreeSet<String> {
     config

@@ -971,6 +971,29 @@ impl McpServerConfig {
         };
         self.approval_binding(secret, catalog_pin).as_deref() == Some(stored)
     }
+
+    /// Whether this enabled server carries a valid M6-2 install approval.
+    ///
+    /// This is the one approval predicate: the daemon passes the curated
+    /// catalog pin for a catalog entry, and a caller without the catalog (the
+    /// CLI) passes `None`, which fails closed for a catalog server.
+    ///
+    /// A pre-M6-2 `stdio` server whose old launch confirmation still matches
+    /// and which has no approval record is grandfathered: its confirmation was
+    /// the install approval of its day. A bad or changed approval record never
+    /// falls back to the old gate.
+    pub fn is_install_approved(&self, secret: Option<&[u8]>, catalog_pin: Option<&str>) -> bool {
+        let Some(secret) = secret else {
+            return false;
+        };
+        if self.is_approved_with(secret, catalog_pin) {
+            return true;
+        }
+        self.approval.is_none()
+            && self.transport == McpTransport::Stdio
+            && self.catalog_id.is_none()
+            && self.stdio_is_confirmed_with(secret)
+    }
 }
 
 /// Bind one install approval to one exact server preview and a daemon secret.

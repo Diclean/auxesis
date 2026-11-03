@@ -230,7 +230,8 @@ async fn preview_changes_nothing_then_import_tags_the_clients() {
 #[tokio::test]
 async fn vcard_preview_and_country_for_national_numbers() {
     let api = TestApi::start();
-    let card = "BEGIN:VCARD\nVERSION:3.0\nFN:Camille Exemple\nTEL:06 00 00 00 11\nEND:VCARD\n";
+    let card = "BEGIN:VCARD\nVERSION:3.0\nFN:Camille Exemple\nTEL:06 00 00 00 11\n\
+                TZ:-05:00\nEND:VCARD\n";
     let file = api.file("contacts.vcf", card);
 
     let bare = api
@@ -241,6 +242,8 @@ async fn vcard_preview_and_country_for_national_numbers() {
     assert_eq!(bare["contacts"], 1);
     assert_eq!(bare["phones"], 0);
     assert_eq!(bare["skipped"]["phone_needs_country"], 1);
+    // A UTC offset is not an IANA zone: the preview reports it, the card gets none.
+    assert_eq!(bare["skipped"]["time_zone_not_iana"], 1);
     assert!(bare.get("mapped_columns").is_none());
 
     let fr = api

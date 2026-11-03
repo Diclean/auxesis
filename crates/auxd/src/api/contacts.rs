@@ -63,6 +63,8 @@ struct Skipped {
     refused_charset: usize,
     undecodable_fields: usize,
     over_size_cap: usize,
+    /// `TZ:` values that are not IANA names: no zone was kept.
+    time_zone_not_iana: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +110,7 @@ impl ImportAnswer {
                 refused_charset: summary.refused_charset,
                 undecodable_fields: summary.encoded_fields,
                 over_size_cap: summary.capped,
+                time_zone_not_iana: summary.time_zone_ignored,
             },
         }
     }

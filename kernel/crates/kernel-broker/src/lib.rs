@@ -50,7 +50,7 @@ pub use panic_hook::install_payload_free_panic_hook;
 pub use privacy_wiring::{gate_dispatch, retain_mountable};
 pub use registry::ToolRegistry;
 pub use sandbox::{ShellSandbox, StdioSandbox};
-pub use taint::{Taint, TaintSource, Trust};
+pub use taint::{Taint, TaintSource, Trust, WebApprovalContext};
 pub use text::{
     classify_echo, guard_log_redaction, is_secret_shaped, redact_identifiers, redact_log_line,
     redact_log_line_guarded, redact_secrets, sanitize_error_detail, sanitize_external_text,

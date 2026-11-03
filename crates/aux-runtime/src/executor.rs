@@ -699,6 +699,7 @@ impl SkillApprover for BrokerCardApprover {
             arguments: card_arguments(card),
             tainted: self.tainted,
             taint_source: self.taint_source.clone(),
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };

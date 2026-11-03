@@ -41,6 +41,18 @@ pub struct TaintSource {
     /// Where it came from (URL, host), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Facts for a synthetic web gate ask, separate from its display text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_approval: Option<WebApprovalContext>,
+}
+
+/// The conversation and policy facts behind a synthetic web gate ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebApprovalContext {
+    /// The conversation contains untrusted content, or its state is unknown.
+    pub untrusted: bool,
+    /// Only private data made the web policy ask; no other gate requires a card.
+    pub sensitive_only: bool,
 }
 
 impl TaintSource {
@@ -49,6 +61,7 @@ impl TaintSource {
         Self {
             tool: tool.into(),
             detail,
+            web_approval: None,
         }
     }
 

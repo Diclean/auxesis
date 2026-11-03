@@ -515,7 +515,9 @@ impl<'a> ChatSession<'a> {
             )
         };
         let untrusted = self.registry().is_untrusted_output(&name);
-        let read_only = self.registry().is_read_only(&name);
+        // A web call can leak its arguments even if a tool was mistakenly
+        // registered as read-only. It must never bypass a forced egress ask.
+        let read_only = self.registry().is_read_only(&name) && !performs_egress && !leaves_machine;
         // WS-C round 7: the shell profile is an input to the authorization
         // decision. A tool that will run unsandboxed can never be auto-run by
         // an allow rule — on the *first* call, before any taint mark exists.
@@ -596,7 +598,14 @@ impl<'a> ChatSession<'a> {
             })
             .flatten();
         let forced_taint = web_ask_detail
-            .map(|detail| Taint::Tainted(TaintSource::new("web", Some(detail))))
+            .map(|ask| {
+                let mut source = TaintSource::new("web", Some(ask.detail));
+                source.web_approval = Some(kernel_broker::WebApprovalContext {
+                    untrusted: self.taint.forces_ask(),
+                    sensitive_only: ask.sensitive_only && argument_ask.is_none(),
+                });
+                Taint::Tainted(source)
+            })
             .or_else(|| {
                 argument_ask.map(|detail| Taint::Tainted(TaintSource::new("egress", Some(detail))))
             })

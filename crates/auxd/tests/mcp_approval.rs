@@ -744,3 +744,55 @@ async fn a_pack_never_approves_an_existing_server_outside_its_read_only_tools() 
     );
     api.shutdown();
 }
+
+/// M6-3 (#524 P3): a new catalog release is a changed pin, so the approval
+/// preview hash moves and the old approval no longer matches.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_catalog_version_moves_the_approval_hash() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir_in(temp_base()).unwrap();
+    let (home, token) = write_home(dir.path());
+    let script = dir.path().join("catalog-server.sh");
+    fixture_script(&script);
+    let sha256 = kernel_mcp::binary_sha256(&script);
+    let catalog = dir.path().join("catalog.toml");
+    let write_catalog = |version: &str| {
+        std::fs::write(
+            &catalog,
+            format!(
+                "catalog_version = \"{version}\"\n{}",
+                catalog_entry("catalog-fixture", &script, &sha256)
+            ),
+        )
+        .unwrap();
+    };
+    write_catalog("test-1");
+    let _catalog = EnvVar::set("AUXESIS_MCP_CATALOG", &catalog);
+    let api = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let addr = api.addr();
+    let add = serde_json::json!({"id":"catalog-fixture","catalog_id":"catalog-fixture"});
+    let added = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers",
+        Some(add.to_string()),
+    )
+    .await;
+    assert_eq!(added.status, 200, "{}", added.body);
+    let first_pin = added.json()["hash"].as_str().unwrap().to_owned();
+
+    write_catalog("test-2");
+    let approval_path = "/v1/mcp/servers/catalog-fixture/approval";
+    let moved = call(addr, token, "GET", approval_path, None).await;
+    assert_eq!(moved.status, 200, "{}", moved.body);
+    assert_ne!(moved.json()["hash"], first_pin.as_str());
+    api.shutdown();
+}

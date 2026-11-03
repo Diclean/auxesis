@@ -62,14 +62,24 @@ fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
 }
 
 /// Discover the enabled servers, applying the same web deny-domain gate as the
-/// daemon, plus its stdio confirmation policy and sandbox (item 13).
+/// daemon, plus its stdio confirmation and M6-2 install-approval policy, and
+/// its sandbox (item 13).
 ///
-/// The CLI is read-only, but it must not spawn a `stdio` server the daemon
-/// would refuse: a `stdio` server is listed only when it is confirmed with the
-/// daemon token. If the token cannot be read, no `stdio` server is confirmed
-/// (item 5, fail closed). Never fails: a runtime that cannot start yields an
-/// empty report.
+/// The CLI is read-only, but it must not spawn a `stdio` server or contact an
+/// `http` one that the daemon would refuse: a server is listed only when it
+/// carries the owner's approval, checked by the daemon's own predicate in
+/// [`kernel_mcp::McpServerConfig::is_install_approved`]. A `stdio` server also
+/// needs its launch confirmation. If the daemon token cannot be read, nothing
+/// is approved or confirmed (item 5, fail closed). Never fails: a runtime that
+/// cannot start yields an empty report.
 fn discover(home: &Path, config: &McpConfig) -> McpRuntime {
+    discover_with(home, config, true)
+}
+
+/// [`discover`] with the SSRF guard made explicit so the gate itself can be
+/// driven against a loopback fixture in a unit test. Production always passes
+/// `true`.
+fn discover_with(home: &Path, config: &McpConfig, network_guard: bool) -> McpRuntime {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -87,7 +97,7 @@ fn discover(home: &Path, config: &McpConfig) -> McpRuntime {
     let deny = deny_domain_gate(web);
     let token = read_daemon_token(home);
     let options = kernel_mcp::McpStartOptions {
-        network_guard: true,
+        network_guard,
         // The stdio sandbox is attached by the launch path, not by a flag.
         confirmation_secret: token.clone(),
     };
@@ -95,34 +105,47 @@ fn discover(home: &Path, config: &McpConfig) -> McpRuntime {
         config.clone(),
         &secrets,
         options,
-        &move |server| match server.transport {
-            kernel_mcp::McpTransport::Http => server
-                .url
-                .as_deref()
-                .and_then(&deny)
-                .map_or(Ok(()), |label| {
-                    Err(kernel_mcp::McpServerRefusal::failed(label))
-                }),
-            kernel_mcp::McpTransport::Stdio => {
-                let confirmed = token
-                    .as_deref()
-                    .is_some_and(|token| server.stdio_is_confirmed_with(token));
-                if confirmed {
-                    Ok(())
-                } else {
-                    Err(kernel_mcp::McpServerRefusal::needs_confirmation(
-                        "stdio_confirmation_required",
-                    ))
-                }
-            }
-        },
+        &move |server| server_gate(server, token.as_deref(), &deny),
     ))
+}
+
+/// The daemon's per-server gate, in the daemon's order: the old uncurated
+/// `stdio` confirmation first, then the M6-2 install approval, then the `[web]`
+/// egress gate.
+///
+/// The approval predicate is `kernel_mcp`'s, not a copy, and the catalog pin
+/// comes from the same catalog the daemon uses.
+fn server_gate(
+    server: &kernel_mcp::McpServerConfig,
+    token: Option<&[u8]>,
+    deny: &dyn Fn(&str) -> Option<&'static str>,
+) -> Result<(), kernel_mcp::McpServerRefusal> {
+    use kernel_mcp::{McpServerRefusal, McpTransport};
+    if server.catalog_id.is_none()
+        && server.transport == McpTransport::Stdio
+        && !token.is_some_and(|token| server.stdio_is_confirmed_with(token))
+    {
+        return Err(McpServerRefusal::needs_confirmation(
+            "stdio_confirmation_required",
+        ));
+    }
+    let pin = auxd::mcp::catalog_pin(server);
+    if !server.is_install_approved(token, pin.as_deref()) {
+        return Err(McpServerRefusal::needs_approval("approval_required"));
+    }
+    if server.transport == McpTransport::Http {
+        if let Some(label) = server.url.as_deref().and_then(deny) {
+            return Err(McpServerRefusal::failed(label));
+        }
+    }
+    Ok(())
 }
 
 /// Read the daemon token (`<home>/api.token`) without creating it.
 ///
 /// Any failure (missing, unreadable, oversized, empty) means no confirmation
-/// can be honoured, so every `stdio` server is reported `needs_confirmation`.
+/// or approval can be honoured: an uncatalogued `stdio` server is reported
+/// `needs_confirmation` and every other enabled server `needs_approval`.
 fn read_daemon_token(home: &Path) -> Option<Vec<u8>> {
     use std::io::Read;
     let verified = kernel_core::verified_home_or_verify(home).ok()?;
@@ -250,5 +273,72 @@ mod tests {
             kernel_mcp::McpServerState::NeedsConfirmation
         );
         assert_eq!(runtime.tool_count(), 0);
+    }
+
+    #[test]
+    fn the_cli_gate_contacts_an_http_server_only_after_approval() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let token = "mcp-cli-approval-token-0123456789";
+        std::fs::write(home.join("api.token"), token).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        let mut config = McpConfig::parse(
+            "t",
+            &format!(
+                "[[server]]\nid = \"local\"\ntransport = \"http\"\nurl = \"{url}\"\n\
+                 enabled = true\n[server.agents]\nmain = [\"HTTP_TOOL\"]\n"
+            ),
+        )
+        .unwrap();
+
+        // No approval: the gate refuses before any transport is built.
+        let before = discover_with(home, &config, false);
+        assert_eq!(
+            before.statuses()[0].state,
+            kernel_mcp::McpServerState::NeedsApproval
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        // The same keyed binding the owner's approve writes: the CLI now
+        // reaches the transport (the fake closes the connection, the hit is
+        // the proof it was contacted).
+        config.server[0].approval = Some(
+            config.server[0]
+                .approval_binding(token.as_bytes(), None)
+                .expect("approval binding"),
+        );
+        let after = discover_with(home, &config, false);
+        assert_ne!(
+            after.statuses()[0].state,
+            kernel_mcp::McpServerState::NeedsApproval
+        );
+        let contacted = hits.load(Ordering::SeqCst);
+        assert!(contacted > 0);
+
+        // With the production SSRF guard the approval gate still releases the
+        // server; the loopback address is refused before any connection, as it
+        // always was.
+        let guarded = discover_with(home, &config, true);
+        assert_eq!(
+            guarded.statuses()[0].state,
+            kernel_mcp::McpServerState::Failed
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            contacted,
+            "the SSRF guard refuses the loopback fixture before connecting"
+        );
     }
 }

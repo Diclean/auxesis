@@ -985,33 +985,13 @@ pub(crate) fn server_policy_refusal(
             "stdio_confirmation_required",
         ));
     }
-    if server_is_approved(server, secret) {
+    if server.is_install_approved(secret, catalog_pin(server).as_deref()) {
         None
     } else {
         Some(kernel_mcp::McpServerRefusal::needs_approval(
             "approval_required",
         ))
     }
-}
-
-/// Whether an enabled server carries a valid M6-2 approval.
-///
-/// A pre-M6-2 `stdio` server whose old launch confirmation still matches is
-/// grandfathered (its confirmation was the install approval of its day). A
-/// catalog server and every HTTP server need the new record.
-fn server_is_approved(server: &kernel_mcp::McpServerConfig, secret: Option<&[u8]>) -> bool {
-    let Some(secret) = secret else {
-        return false;
-    };
-    let pin = catalog_pin(server);
-    if server.is_approved_with(secret, pin.as_deref()) {
-        return true;
-    }
-    // A bad or changed approval record never falls back to the old gate.
-    server.approval.is_none()
-        && server.transport == kernel_mcp::McpTransport::Stdio
-        && server.catalog_id.is_none()
-        && server.stdio_is_confirmed_with(secret)
 }
 
 /// The preview shown before a stdio server is confirmed: the exact resolved
@@ -1085,7 +1065,7 @@ fn approval_hash(
 }
 
 /// The curated catalog hash for a server's claimed entry, if it has one.
-fn catalog_pin(server: &kernel_mcp::McpServerConfig) -> Option<String> {
+pub(crate) fn catalog_pin(server: &kernel_mcp::McpServerConfig) -> Option<String> {
     catalog_entry(server.catalog_id.as_deref()).map(|entry| catalog_entry_hash(&entry))
 }
 

@@ -33,10 +33,11 @@ if [ ! -d "$scan_root" ]; then
     exit 1
 fi
 
-# Candidate lines: an import at the start of the line, after optional
+# Candidate lines: an import at the start of the line or after a `;`
+# (`import Foundation; import AppKit` is valid Swift), after optional
 # attributes and access keywords. `// import AppKit` in a comment never
 # matches: `/` is not a word character.
-candidates="$(grep -rnE --include='*.swift' '^[[:space:]]*([@A-Za-z_][A-Za-z0-9_]*[[:space:]]+)*import[[:space:]]' "$scan_root" 2>&1)" && status=0 || status=$?
+candidates="$(grep -rnE --include='*.swift' '(^|;)[[:space:]]*([@A-Za-z_][A-Za-z0-9_]*[[:space:]]+)*import[[:space:]]' "$scan_root" 2>&1)" && status=0 || status=$?
 if [ "$status" -gt 1 ]; then
     echo "check-shared-imports: grep failed (status $status)" >&2
     printf '%s\n' "$candidates" >&2
@@ -47,9 +48,14 @@ fi
 # and the optional declaration kind (`import class Foo.Bar`).
 modules="$(printf '%s\n' "$candidates" | awk '
     {
-        line = $0
+        whole = $0
         # Drop the "<path>:<line>:" prefix, keep the rest of the line.
-        sub(/^[^:]*:[0-9]+:/, "", line)
+        sub(/^[^:]*:[0-9]+:/, "", whole)
+        # Every `;`-separated statement on the line is checked on its own.
+        n = split(whole, parts, ";")
+        for (i = 1; i <= n; i++) check(parts[i])
+    }
+    function check(line) {
         gsub(/^[[:space:]]+/, "", line)
         while (line ~ /^@[A-Za-z_][A-Za-z0-9_]*[[:space:]]+/) {
             sub(/^@[A-Za-z_][A-Za-z0-9_]*[[:space:]]+/, "", line)
@@ -57,6 +63,8 @@ modules="$(printf '%s\n' "$candidates" | awk '
         if (line ~ /^(public|internal|package|fileprivate|private)[[:space:]]+/) {
             sub(/^(public|internal|package|fileprivate|private)[[:space:]]+/, "", line)
         }
+        # A statement that is not an import (`let x = 1; import AppKit`).
+        if (line !~ /^import[[:space:]]/) return
         sub(/^import[[:space:]]+/, "", line)
         if (line ~ /^(typealias|struct|class|enum|protocol|func|var|let)[[:space:]]/) {
             sub(/^(typealias|struct|class|enum|protocol|func|var|let)[[:space:]]+/, "", line)

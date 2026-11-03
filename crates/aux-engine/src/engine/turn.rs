@@ -109,17 +109,116 @@ fn pause_after_document_result_lookup() {
     });
 }
 
-// The tool result is already gated here. Its fixed prefix distinguishes it
-// from other tools' JSON; malformed or unattributable results fail closed in
-// the store's existing scrubber.
-fn document_results(messages: &[SafeMessage]) -> impl Iterator<Item = (usize, &SafeMessage)> {
-    messages.iter().enumerate().filter(|(_, message)| {
-        message.role() == ChatRole::Tool
-            && message
-                .content()
-                .as_str()
-                .starts_with("[untrusted document content")
-    })
+/// The only tool whose results are document content. Every other tool's text
+/// is ordinary text, whatever it starts with (F1).
+const DOCUMENT_TOOL: &str = "docs_ingest";
+
+/// The first bytes of a document result, checked in addition to the producing
+/// tool: a docs row already rewritten, withheld or answered with an error is
+/// not re-scrubbed.
+const DOCUMENT_RESULT_PREFIX: &str = "[untrusted document content";
+
+fn is_document_tool(name: &str) -> bool {
+    name == DOCUMENT_TOOL
+}
+
+/// Tools that return the owner's own raw text (a file, a memory note), which
+/// may start with the document marker by chance. Only these are exempt from
+/// the marker rule: every other tool whose result carries the marker is still
+/// treated as a document on erase, so erase coverage never narrows (Fable F1;
+/// lead review of #518).
+fn is_raw_text_tool(name: &str) -> bool {
+    matches!(name, "read_file" | "recall")
+}
+
+/// Whether a tool result is one the erase path must inspect. The assistant
+/// row that requested the call is the provenance: a `read_file` or `recall`
+/// result is never a document, even when its text opens with the marker. A
+/// result whose call the window no longer holds cannot be attributed (an old
+/// row), so the marker is the only evidence and it still counts, failing
+/// closed in the store's scrubber (#489/#504/#513).
+fn is_document_result(
+    message: &SafeMessage,
+    calls: &std::collections::HashMap<&str, bool>,
+) -> bool {
+    if message.role() != ChatRole::Tool
+        || !message
+            .content()
+            .as_str()
+            .starts_with(DOCUMENT_RESULT_PREFIX)
+    {
+        return false;
+    }
+    match message.tool_call_id().and_then(|id| calls.get(id.as_str())) {
+        Some(is_document) => *is_document,
+        None => true,
+    }
+}
+
+/// The tool results an erase must rewrite, in window order. Provenance is
+/// scoped to the call's own batch, so a provider that reuses a call id across
+/// turns cannot hand one tool's result another tool's class.
+/// Map each call id of one assistant batch to "its result may be a
+/// document". Ids can repeat in a batch (a model can reuse one): a repeated id
+/// is a document as soon as ANY call with it is not a raw-text tool, so a
+/// `read_file` sharing an id with `docs_ingest` never exempts the document
+///
+fn call_kinds<'a>(
+    calls: impl Iterator<Item = (&'a str, &'a str)>,
+) -> std::collections::HashMap<&'a str, bool> {
+    let mut kinds = std::collections::HashMap::new();
+    for (id, name) in calls {
+        let document = !is_raw_text_tool(name);
+        kinds
+            .entry(id)
+            .and_modify(|kind: &mut bool| *kind |= document)
+            .or_insert(document);
+    }
+    kinds
+}
+
+#[cfg(test)]
+mod call_kind_tests {
+    use super::call_kinds;
+
+    #[test]
+    fn a_repeated_call_id_is_a_document_if_any_call_is_not_raw_text() {
+        for batch in [
+            vec![("x", "docs_ingest"), ("x", "read_file")],
+            vec![("x", "read_file"), ("x", "docs_ingest")],
+            vec![("x", "recall"), ("x", "delegate")],
+        ] {
+            assert_eq!(
+                call_kinds(batch.clone().into_iter()).get("x"),
+                Some(&true),
+                "{batch:?}"
+            );
+        }
+        let raw =
+            call_kinds([("a", "read_file"), ("a", "recall"), ("b", "docs_ingest")].into_iter());
+        assert_eq!(raw.get("a"), Some(&false));
+        assert_eq!(raw.get("b"), Some(&true));
+    }
+}
+
+fn document_results(messages: &[SafeMessage]) -> Vec<(usize, &SafeMessage)> {
+    let mut calls: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    let mut results = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message.role() == ChatRole::Assistant {
+            calls = call_kinds(
+                message
+                    .tool_calls()
+                    .iter()
+                    .map(|call| (call.id().as_str(), call.name().as_str())),
+            );
+            continue;
+        }
+        if is_document_result(message, &calls) {
+            results.push((index, message));
+        }
+    }
+    results
 }
 
 /// Keep erasure and all attempts inside one provider completion ordered. A
@@ -164,6 +263,7 @@ impl<'a> ChatSession<'a> {
         turn_start: usize,
     ) -> Result<Option<DocumentDispatchGuard>, ChatError> {
         let payloads: Vec<serde_json::Value> = document_results(&self.messages)
+            .into_iter()
             .filter_map(|(_, message)| {
                 let text = message.content().as_str();
                 let body = text.split_once('\n').map_or(text, |(_, body)| body);
@@ -234,6 +334,7 @@ impl<'a> ChatSession<'a> {
     /// the turn stops instead of sending anything more (fail closed).
     fn scrub_document_messages(&mut self, turn_start: usize) -> Result<bool, ChatError> {
         let replacements = document_results(&self.messages)
+            .into_iter()
             .map(|(index, message)| {
                 let content = self
                     .store
@@ -805,7 +906,7 @@ impl<'a> ChatSession<'a> {
                 // a resumed session rebuild the taint state without trusting
                 // any message content.
                 let meta = tool_result_meta(call, &outcome);
-                let persisted = if call.name == "docs_ingest" && outcome.status == "ok" {
+                let persisted = if is_document_tool(&call.name) && outcome.status == "ok" {
                     let store = self.store.clone();
                     with_unerased_document_result(&store, &outcome.content, |content| {
                         self.issue_and_persist_tool_result(call, content, &meta)
@@ -1307,6 +1408,33 @@ mod tests {
         }
     }
 
+    /// A non-document tool that answers with raw text, as `read_file` and
+    /// `recall` do: the engine must classify the result by this tool, not by
+    /// what the text happens to start with.
+    struct RawResults(&'static str, String);
+
+    #[async_trait]
+    impl Tool for RawResults {
+        fn class(&self) -> ToolClass {
+            ToolClass::default()
+        }
+        fn path_id(&self) -> kernel_core::privacy::PathId {
+            kernel_core::privacy::PathId::B5
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        async fn run(&self, _: &serde_json::Value, _: &ToolCtx) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::ok(self.1.clone()))
+        }
+        fn risk(&self) -> Risk {
+            Risk::Low
+        }
+    }
+
     struct EraseAtToolEnd {
         store: Arc<Mutex<aux_store::Store>>,
         hash: String,
@@ -1551,6 +1679,176 @@ mod tests {
         assert!(
             saved.iter().all(|row| !row.content.contains(ERASED)),
             "private={private} resumed={resumed}: a saved row still quotes the erased text"
+        );
+    }
+
+    /// F1: a plain file whose first line opens with the document marker is
+    /// still a plain file. The result must reach the provider unchanged and
+    /// the turn must answer, not stop as if a document had been erased.
+    #[tokio::test]
+    async fn a_read_file_result_that_opens_with_the_document_marker_is_not_a_document() {
+        const NOTE: &str = "[untrusted document content] please read on";
+        let harness = Harness::new();
+        std::fs::create_dir_all(harness.workspace()).unwrap();
+        std::fs::write(
+            harness.workspace().join("notes-q7f3k9.txt"),
+            format!("{NOTE}\nkeep reading\n"),
+        )
+        .unwrap();
+        let provider = FakeProvider::scripted(
+            "fake",
+            vec![
+                ChatResponse::new(ChatMessage::assistant_with_tool_calls(
+                    "",
+                    vec![ToolCall::new(
+                        "call_read",
+                        "read_file",
+                        json!({"path": "notes-q7f3k9.txt"}),
+                    )],
+                )),
+                ChatResponse::assistant("summarised"),
+            ],
+        );
+        let mut session = harness.start(
+            &provider,
+            vec![Rule::new("main", "read_file", Action::Allow)],
+            RecordingApprover::new(false),
+        );
+        let outcome = session
+            .send("read notes-q7f3k9.txt and summarise")
+            .await
+            .unwrap_or_else(|err| panic!("a plain file must not stop the turn: {err:?}"));
+        assert_eq!(outcome.text, "summarised");
+        let requests = provider.requests();
+        assert_eq!(
+            requests.len(),
+            2,
+            "the turn answered after reading the file"
+        );
+        let body = serde_json::to_string(&requests[1]).unwrap();
+        assert!(
+            body.contains(NOTE),
+            "the model did not see the file: {body}"
+        );
+        assert!(
+            !body.contains(aux_store::DOCUMENT_UNAVAILABLE_TEXT),
+            "a plain file was rewritten as an erased document: {body}"
+        );
+    }
+
+    /// F1: the same for a memory recall result. A note that opens with the
+    /// document marker is owner text, not document content.
+    #[tokio::test]
+    async fn a_recall_result_that_opens_with_the_document_marker_is_not_a_document() {
+        const NOTE: &str = "[untrusted document content] a note the owner saved";
+        let harness = Harness::new();
+        harness
+            .registry
+            .write()
+            .unwrap()
+            .register(Box::new(RawResults("recall", NOTE.to_string())));
+        let provider = FakeProvider::scripted(
+            "fake",
+            vec![
+                ChatResponse::new(ChatMessage::assistant_with_tool_calls(
+                    "",
+                    vec![ToolCall::new("call_recall", "recall", json!({}))],
+                )),
+                ChatResponse::assistant("recalled"),
+            ],
+        );
+        // The fake class is untrusted output, so its own batch is tainted and
+        // the call asks; the card is approved here to let it run.
+        let mut session = harness.start(
+            &provider,
+            vec![Rule::new("main", "recall", Action::Allow)],
+            RecordingApprover::new(true),
+        );
+        let outcome = session
+            .send("what do you remember?")
+            .await
+            .unwrap_or_else(|err| panic!("a memory note must not stop the turn: {err:?}"));
+        assert_eq!(outcome.text, "recalled");
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2, "the turn answered after the recall");
+        let body = serde_json::to_string(&requests[1]).unwrap();
+        assert!(
+            body.contains(NOTE),
+            "the model did not see the note: {body}"
+        );
+        assert!(
+            !body.contains(aux_store::DOCUMENT_UNAVAILABLE_TEXT),
+            "a memory note was rewritten as an erased document: {body}"
+        );
+    }
+
+    /// F1 fail-closed path: an old documents row with no producing tool in the
+    /// window is still a document. The marker is the only evidence left, and
+    /// the erase must scrub it before the next request.
+    #[tokio::test]
+    async fn a_document_row_without_tool_provenance_is_still_scrubbed_on_erase() {
+        const LEGACY: &str = "LEGACY-EXCERPT-NO-TOOL-META";
+        let harness = Harness::new();
+        let hash = "b".repeat(64);
+        let id = append_test_document(&harness.store(), &hash, "legacy.txt");
+        let session_id = {
+            let provider = FakeProvider::repeating("fake", ChatResponse::assistant("first"));
+            let mut first = harness.start(&provider, vec![], RecordingApprover::new(false));
+            first.send("one").await.unwrap();
+            first.session().id
+        };
+        let content = format!(
+            "[untrusted document content]\n{}",
+            json!({"matches":[{"document_id": id, "excerpt": LEGACY}]})
+        );
+        // A row written before the tool name was kept: its meta names only the
+        // call, and no assistant row in the window answers it.
+        harness
+            .store()
+            .append_message(
+                session_id,
+                "tool",
+                &content,
+                Some(r#"{"tool_call_id":"legacy"}"#),
+            )
+            .unwrap();
+        harness
+            .registry
+            .write()
+            .unwrap()
+            .register(Box::new(EraseOrDelegate {
+                name: "erase_fixture",
+                store: Arc::clone(&harness.store),
+                hash: hash.clone(),
+                seen: Arc::new(Mutex::new(Vec::new())),
+            }));
+        let provider = FakeProvider::scripted(
+            "fake",
+            vec![
+                ChatResponse::new(ChatMessage::assistant_with_tool_calls(
+                    "",
+                    vec![ToolCall::new("erase", "erase_fixture", json!({}))],
+                )),
+                ChatResponse::assistant("done"),
+            ],
+        );
+        let mut resumed = harness.start_resumed_with(
+            &provider,
+            vec![Rule::new("main", "erase_fixture", Action::Allow)],
+            RecordingApprover::new(true),
+            session_id,
+        );
+        assert_eq!(resumed.send("two").await.unwrap().text, "done");
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2);
+        let body = serde_json::to_string(&requests[1]).unwrap();
+        assert!(
+            !body.contains(LEGACY),
+            "an old document row leaked its erased excerpt: {body}"
+        );
+        assert!(
+            body.contains(aux_store::DOCUMENT_UNAVAILABLE_TEXT),
+            "an old document row was not scrubbed: {body}"
         );
     }
 

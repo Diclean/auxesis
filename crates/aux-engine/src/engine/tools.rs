@@ -111,6 +111,15 @@ fn skill_call_outcome(outcome: &RunOutcome, tool: &str) -> CallOutcome {
             taint: None,
             error_kind: Some("skill_failed"),
         },
+        // A send whose `DATA` was accepted and whose final reply never came:
+        // the mail may be out, so the result never says "failed" and never
+        // invites a resend.
+        RunOutcome::Uncertain { error } => CallOutcome {
+            content: serde_json::json!({ "outcome": "uncertain", "message": error }).to_string(),
+            status: "uncertain",
+            taint: None,
+            error_kind: Some("skill_uncertain"),
+        },
     }
 }
 
@@ -2249,5 +2258,44 @@ mod follow_up_stamp_tests {
             row(4, "user", "2026-11-02 12:00:00", None),
         ];
         assert_eq!(previous_owner_row(normal, 4).map(|r| r.id), Some(3));
+    }
+}
+
+#[cfg(test)]
+mod send_uncertainty_tests {
+    use super::*;
+
+    #[test]
+    fn an_uncertain_send_is_not_reported_as_failed() {
+        let outcome = RunOutcome::Uncertain {
+            error: aux_runtime::executor::UNCERTAIN_SEND.to_string(),
+        };
+        let call = skill_call_outcome(&outcome, "skill__send-invite");
+        assert_eq!(call.status, "uncertain");
+        assert_eq!(call.error_kind, Some("skill_uncertain"));
+        assert!(
+            call.content.contains(r#""outcome":"uncertain""#),
+            "{}",
+            call.content
+        );
+        assert!(
+            !call.content.contains(r#""outcome":"failed""#),
+            "{}",
+            call.content
+        );
+        assert!(
+            call.content.contains("may have been sent"),
+            "{}",
+            call.content
+        );
+        assert!(
+            call.content.contains("do not send it again"),
+            "{}",
+            call.content
+        );
+        assert!(
+            call.taint.is_none(),
+            "a send result carries no mailbox text"
+        );
     }
 }

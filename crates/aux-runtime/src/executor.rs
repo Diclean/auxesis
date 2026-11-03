@@ -372,6 +372,11 @@ pub struct ConnectorError {
     /// checked no longer hold. The connector wrote nothing, so the owner may
     /// still say yes.
     pub needs_approval: bool,
+    /// True when the action may already have taken effect at the server: a
+    /// mail whose `DATA` was accepted but whose final reply never came. The
+    /// run then ends `uncertain`, never `failed`, and the message says the
+    /// mail may have gone out.
+    pub uncertain: bool,
 }
 
 impl ConnectorError {
@@ -381,6 +386,7 @@ impl ConnectorError {
             message: message.into(),
             ledger: Value::Null,
             needs_approval: false,
+            uncertain: false,
         }
     }
 
@@ -394,6 +400,13 @@ impl ConnectorError {
     /// again (CAL-DEFAULT-ID r1).
     pub fn with_approval(mut self) -> Self {
         self.needs_approval = true;
+        self
+    }
+
+    /// Mark the action as possibly done: the server stopped answering after it
+    /// was handed over, so nothing may be retried or released as unsent.
+    pub fn with_uncertain(mut self) -> Self {
+        self.uncertain = true;
         self
     }
 }
@@ -417,6 +430,13 @@ pub const DRAFT_INPUT: &str = "draft_id";
 /// draft can no longer be sent as it is.
 pub const UNCERTAIN_DRAFT: &str = "This mail may have been sent: check your Sent folder \
     before sending again; to send again, write a new draft.";
+
+/// The one line the model and the owner see when a free-form `mail.send` may
+/// have reached the server: the SMTP `DATA` command was accepted and the final
+/// reply never came. Saying "failed" there invites a duplicate mail.
+pub const UNCERTAIN_SEND: &str = "The server stopped answering after the message was handed \
+    over, so it may have been sent. Check Sent before sending again; do not send it again on \
+    your own.";
 
 /// One stored `mail.draft`, loaded before the send card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -742,6 +762,13 @@ pub enum RunOutcome {
         /// Value-free reason.
         error: String,
     },
+    /// A mail send may have reached the server: the SMTP `DATA` command was
+    /// accepted and the connection or its final reply then failed. The run
+    /// stopped, nothing is released as unsent, and nothing is retried.
+    Uncertain {
+        /// Value-free reason, saying the mail may have been sent.
+        error: String,
+    },
 }
 
 impl RunOutcome {
@@ -752,6 +779,7 @@ impl RunOutcome {
             RunOutcome::Refused { .. } => "refused",
             RunOutcome::Timeout => "timeout",
             RunOutcome::Failed { .. } => "failed",
+            RunOutcome::Uncertain { .. } => "uncertain",
         }
     }
 }
@@ -786,6 +814,8 @@ enum CallFailure {
     Refused(String),
     /// The connector or broker failed.
     Failed(String),
+    /// The action may have happened, and its final confirmation never came.
+    Uncertain(String),
 }
 
 /// The skill executor. Every dependency is borrowed for the duration of one
@@ -950,8 +980,8 @@ impl Executor<'_> {
         if scan.complete {
             if let [one] = senders.as_slice() {
                 // A display name and its address are attacker text: the
-                // mailbox may only pick an address the owner already wrote to
-                // (or, with no Sent folder, one that wrote on two days).
+                // mailbox may only pick an address the owner already wrote to;
+                // with no readable Sent folder it picks nothing.
                 if let Some(reason) = mailbox::trust_refusal(value, one, &scan) {
                     log_rejected_fill(Some(self.sink), skill, run, None, &reason);
                     return Err(self.finish_refused(skill, run, &reason));
@@ -1647,32 +1677,42 @@ impl Executor<'_> {
                     }
                 }
                 Err(err) => {
+                    let uncertain = err.uncertain;
                     self.log_action(
                         state.skill,
                         state.run,
                         &call.tool,
-                        "error",
+                        if uncertain { "uncertain" } else { "error" },
                         Some(&err.message),
                     );
                     if call.logical == "mail.send" {
-                        // A connector that refused before the socket (the B20 gate,
-                        // a leftover token) names its own outcome; everything else
-                        // is the typed error kind.
-                        let outcome = err
-                            .ledger
-                            .get("outcome")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .or_else(|| {
-                                err.ledger
-                                    .get("kind")
-                                    .and_then(Value::as_str)
-                                    .map(|kind| format!("error:{kind}"))
-                            })
-                            .unwrap_or_else(|| "error:connector".to_string());
+                        // A send that may have reached the server is its own
+                        // outcome: never `error:<kind>`, never retried.
+                        let outcome = if uncertain {
+                            "uncertain".to_string()
+                        } else {
+                            // A connector that refused before the socket (the B20
+                            // gate, a leftover token) names its own outcome;
+                            // everything else is the typed error kind.
+                            err.ledger
+                                .get("outcome")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .or_else(|| {
+                                    err.ledger
+                                        .get("kind")
+                                        .and_then(Value::as_str)
+                                        .map(|kind| format!("error:{kind}"))
+                                })
+                                .unwrap_or_else(|| "error:connector".to_string())
+                        };
                         self.log_mail_call(state, &arguments, &outcome, None, Some(&err.ledger));
                     }
-                    return Err(CallFailure::Failed(err.message));
+                    return Err(if uncertain {
+                        CallFailure::Uncertain(err.message)
+                    } else {
+                        CallFailure::Failed(err.message)
+                    });
                 }
             }
         }
@@ -1817,6 +1857,8 @@ impl Executor<'_> {
         let outcome = match failure {
             CallFailure::Refused(_) => "refused",
             CallFailure::Failed(_) => "error:broker",
+            // A pre-socket refusal can never be uncertain; kept exhaustive.
+            CallFailure::Uncertain(_) => "uncertain",
         };
         self.log_mail_call(state, &call.real_arguments, outcome, None, None);
     }
@@ -1855,6 +1897,7 @@ impl Executor<'_> {
         match failure {
             CallFailure::Refused(reason) => self.finish_refused(skill, run, &reason),
             CallFailure::Failed(error) => self.finish_failed(skill, run, &error),
+            CallFailure::Uncertain(error) => self.finish_uncertain(skill, run, &error),
         }
     }
 
@@ -1945,6 +1988,20 @@ impl Executor<'_> {
     fn finish_failed(&self, skill: &LoadedSkill, run: &RunContext<'_>, error: &str) -> RunOutcome {
         self.log_run(skill, run, "failed");
         RunOutcome::Failed {
+            error: error.to_string(),
+        }
+    }
+
+    /// A send may have reached the server: the Ledger says `uncertain`, never
+    /// `failed`, so the owner and the model both read it as "check Sent".
+    fn finish_uncertain(
+        &self,
+        skill: &LoadedSkill,
+        run: &RunContext<'_>,
+        error: &str,
+    ) -> RunOutcome {
+        self.log_run(skill, run, "uncertain");
+        RunOutcome::Uncertain {
             error: error.to_string(),
         }
     }

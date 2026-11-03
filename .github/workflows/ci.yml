@@ -109,6 +109,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Shared package builds for iPhone
+        # packages/AuxesisShared is linked by the coming iPhone app: building
+        # it for the iOS Simulator with the runner's Xcode is the ground truth
+        # that it imports nothing Mac-only (scripts/check-shared-imports.sh is
+        # the fast local check). Runs before the switch to Command Line Tools.
+        working-directory: packages/AuxesisShared
+        run: xcodebuild -scheme AuxesisShared -destination 'generic/platform=iOS Simulator' build -quiet
       - name: Command Line Tools toolchain
         # The package carries its own small XCTest/Testing runner for the
         # Command Line Tools; a full Xcode toolchain would shadow it (see

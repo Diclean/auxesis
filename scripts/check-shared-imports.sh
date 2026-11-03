@@ -19,6 +19,10 @@
 # Only `.swift` sources are allowed in the package: SwiftPM would also compile
 # C, C++, Objective-C and assembly files, which this check does not read.
 #
+# This script is the fast local check. The authoritative one is CI building
+# the package for the iOS Simulator (.github/workflows/ci.yml, job `swift`):
+# a manifest change that adds sources or unsafe flags is caught there.
+#
 # Fail-closed: a missing scan root, a missing compiler, a file the compiler
 # cannot read or an unreadable tree is a failure, never a clean run.
 set -euo pipefail
@@ -53,14 +57,24 @@ if [ -n "$others" ]; then
     fail=1
 fi
 
+# A symlink or a file name with whitespace could hide a source from the scans
+# below (SwiftPM follows symlinks): both are refused outright.
+odd="$(find "$scan_root" \( -type l -o -name '*[[:space:]]*' \) -print)" || {
+    echo "check-shared-imports: find failed under $scan_root — failing closed" >&2
+    exit 1
+}
+if [ -n "$odd" ]; then
+    printf 'FAIL [path] %s — no symlink or whitespace in a shared source path\n' "$odd" >&2
+    fail=1
+fi
+
 # An import guarded by `#if` would be invisible to the macOS compile below.
-guarded="$(grep -rlE --include='*.swift' '^[[:space:]]*#(if|elseif)' "$scan_root" 2>/dev/null || true)"
-for file in $guarded; do
+while IFS= read -r -d '' file; do
     if awk '/^[[:space:]]*#(if|elseif)/{d++} /^[[:space:]]*#endif/{if(d>0)d--} d>0 && /(^|[^A-Za-z0-9_])import[[:space:]]/{found=1} END{exit !found}' "$file"; then
         printf 'FAIL [if-import] %s — no import inside #if in the shared package\n' "$file" >&2
         fail=1
     fi
-done
+done < <(find "$scan_root" -type f -name '*.swift' -print0)
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT

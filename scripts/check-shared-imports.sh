@@ -9,8 +9,18 @@
 #
 # Allowed imports: Foundation, CoreGraphics, CryptoKit. Nothing else.
 #
-# Fail-closed: a missing scan root, an unavailable or broken `grep` or `awk`,
-# or an unreadable tree is a failure, never a clean run.
+# The imports are read by the Swift compiler itself
+# (`swiftc -frontend -emit-imported-modules`), not by a text pattern: comments,
+# attributes (`@testable`, `@_spi(...)`, `@_implementationOnly`), `;`, line
+# breaks inside a declaration and `import struct M.X` cannot hide a module.
+# The compiler sees the macOS build: an import inside an `#if` branch that is
+# inactive on macOS is not listed, so `#if` around an import is refused too.
+#
+# Only `.swift` sources are allowed in the package: SwiftPM would also compile
+# C, C++, Objective-C and assembly files, which this check does not read.
+#
+# Fail-closed: a missing scan root, a missing compiler, a file the compiler
+# cannot read or an unreadable tree is a failure, never a clean run.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
@@ -20,82 +30,73 @@ cd "$(git rev-parse --show-toplevel)"
 scan_root="packages/AuxesisShared/Sources"
 allowed="Foundation CoreGraphics CryptoKit"
 
-if ! command -v grep >/dev/null 2>&1; then
-    echo "check-shared-imports: grep is unavailable — refusing to report a clean scan" >&2
-    exit 1
-fi
-if ! command -v awk >/dev/null 2>&1; then
-    echo "check-shared-imports: awk is unavailable — refusing to report a clean scan" >&2
-    exit 1
-fi
 if [ ! -d "$scan_root" ]; then
     echo "check-shared-imports: scan root '$scan_root' is missing — failing closed" >&2
     exit 1
 fi
-
-# Candidate lines: an import at the start of the line or after a `;`
-# (`import Foundation; import AppKit` is valid Swift), after optional
-# attributes and access keywords. `// import AppKit` in a comment never
-# matches: `/` is not a word character.
-candidates="$(grep -rnE --include='*.swift' '(^|;)[[:space:]]*([@A-Za-z_][A-Za-z0-9_]*[[:space:]]+)*import[[:space:]]' "$scan_root" 2>&1)" && status=0 || status=$?
-if [ "$status" -gt 1 ]; then
-    echo "check-shared-imports: grep failed (status $status)" >&2
-    printf '%s\n' "$candidates" >&2
+if ! xcrun --find swiftc >/dev/null 2>&1; then
+    echo "check-shared-imports: swiftc is unavailable — refusing to report a clean scan" >&2
     exit 1
 fi
 
-# The module each candidate imports: strip the attributes, the `import` keyword
-# and the optional declaration kind (`import class Foo.Bar`).
-modules="$(printf '%s\n' "$candidates" | awk '
-    {
-        whole = $0
-        # Drop the "<path>:<line>:" prefix, keep the rest of the line.
-        sub(/^[^:]*:[0-9]+:/, "", whole)
-        # Every `;`-separated statement on the line is checked on its own.
-        n = split(whole, parts, ";")
-        for (i = 1; i <= n; i++) check(parts[i])
-    }
-    function check(line) {
-        gsub(/^[[:space:]]+/, "", line)
-        while (line ~ /^@[A-Za-z_][A-Za-z0-9_]*[[:space:]]+/) {
-            sub(/^@[A-Za-z_][A-Za-z0-9_]*[[:space:]]+/, "", line)
-        }
-        if (line ~ /^(public|internal|package|fileprivate|private)[[:space:]]+/) {
-            sub(/^(public|internal|package|fileprivate|private)[[:space:]]+/, "", line)
-        }
-        # A statement that is not an import (`let x = 1; import AppKit`).
-        if (line !~ /^import[[:space:]]/) return
-        sub(/^import[[:space:]]+/, "", line)
-        if (line ~ /^(typealias|struct|class|enum|protocol|func|var|let)[[:space:]]/) {
-            sub(/^(typealias|struct|class|enum|protocol|func|var|let)[[:space:]]+/, "", line)
-        }
-        if (match(line, /^[A-Za-z_][A-Za-z0-9_]*/)) {
-            print substr(line, 1, RLENGTH)
-        }
-    }
-')" || {
-    echo "check-shared-imports: awk failed to read the imports — failing closed" >&2
+fail=0
+
+# Anything SwiftPM compiles that is not Swift is refused outright.
+others="$(find "$scan_root" -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
+    -o -name '*.m' -o -name '*.mm' -o -name '*.s' -o -name '*.S' -o -name '*.h' -o -name '*.hpp' \
+    -o -name '*.modulemap' \) -print)" || {
+    echo "check-shared-imports: find failed under $scan_root — failing closed" >&2
     exit 1
 }
+if [ -n "$others" ]; then
+    printf 'FAIL [source] %s — the shared package holds Swift sources only\n' $others >&2
+    fail=1
+fi
 
-fail=0
-while IFS= read -r module; do
-    [ -n "$module" ] || continue
-    ok=0
-    for name in $allowed; do
-        case "$module" in
-            "$name"|"$name".*) ok=1 ;;
-        esac
-    done
-    if [ "$ok" -ne 1 ]; then
-        printf 'FAIL [import] %s — a shared file may import only %s\n' \
-            "$module" "$(printf '%s, ' $allowed | sed 's/, $//')" >&2
+# An import guarded by `#if` would be invisible to the macOS compile below.
+guarded="$(grep -rlE --include='*.swift' '^[[:space:]]*#(if|elseif)' "$scan_root" 2>/dev/null || true)"
+for file in $guarded; do
+    if awk '/^[[:space:]]*#(if|elseif)/{d++} /^[[:space:]]*#endif/{if(d>0)d--} d>0 && /(^|[^A-Za-z0-9_])import[[:space:]]/{found=1} END{exit !found}' "$file"; then
+        printf 'FAIL [if-import] %s — no import inside #if in the shared package\n' "$file" >&2
         fail=1
     fi
-done <<<"$modules"
+done
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+swift_files=()
+while IFS= read -r -d '' file; do
+    swift_files+=("$file")
+done < <(find "$scan_root" -type f -name '*.swift' -print0)
+if [ "${#swift_files[@]}" -eq 0 ]; then
+    echo "check-shared-imports: no Swift file under $scan_root — failing closed" >&2
+    exit 1
+fi
+
+for file in "${swift_files[@]}"; do
+    out="$scratch/imports.txt"
+    if ! xcrun swiftc -frontend -emit-imported-modules -module-name AuxesisShared \
+        "$file" -o "$out" >"$scratch/err.txt" 2>&1; then
+        echo "check-shared-imports: the compiler could not read $file — failing closed" >&2
+        cat "$scratch/err.txt" >&2
+        exit 1
+    fi
+    while IFS= read -r module; do
+        [ -n "$module" ] || continue
+        ok=0
+        for name in $allowed; do
+            [ "$module" = "$name" ] && ok=1
+        done
+        if [ "$ok" -ne 1 ]; then
+            printf 'FAIL [import] %s imports %s — a shared file may import only %s\n' \
+                "$file" "$module" "$(printf '%s, ' $allowed | sed 's/, $//')" >&2
+            fail=1
+        fi
+    done <"$out"
+done
 
 if [ "$fail" -ne 0 ]; then
-    echo "check-shared-imports: FAIL — a shared file imports a Mac-only framework" >&2
+    echo "check-shared-imports: FAIL — the shared package must stay portable" >&2
     exit 1
 fi
 echo "check-shared-imports: OK — $scan_root imports only Foundation, CoreGraphics and CryptoKit"

@@ -1,0 +1,6 @@
+{"servers":[
+ {"id":"weather","enabled":true,"state":"ready","transport":"http","auth":"none","data_class":"public","tools":[{"name":"forecast","risk":"low"}],"agents":{"main":["forecast"]}},
+ {"id":"notes","enabled":true,"state":"needs_approval","reason":"approval_required","transport":"stdio","auth":"none","data_class":"sensitive","tools":[],"agents":{"main":["LOOKUP","WRITE_NOTE"]}},
+ {"id":"old","enabled":false,"state":"disabled","transport":"http","auth":"none","data_class":"public","tools":[],"agents":{}},
+ {"id":"broken","enabled":false,"state":"quarantined","reason":"catalog_mismatch","transport":"unknown","auth":"none","data_class":"sensitive","tools":[],"agents":{}}
+]}

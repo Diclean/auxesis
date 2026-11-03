@@ -1,0 +1,5 @@
+{"servers":[
+ {"id":"public-data","name":"Public data search","region":"eu","category":"gov-data","status":"official","tier":"recommended","auth":"none","access":"read-only","data_class":"public","transport":"http","endpoint":"https://mcp.data.example/mcp","repo_url":"https://example.org/public-data","notes":"Searches open public datasets with no key. Experimental."},
+ {"id":"notes-local","name":"Local notes","region":"eu","category":"files","status":"community","tier":"recommended","auth":"none","access":"read-write","data_class":"sensitive","transport":"stdio","notes":"Reads and writes plain notes."},
+ {"id":"law-reader","name":"Law reader","region":"fr","category":"law","status":"community","tier":"candidate","auth":"api-key","access":"read-only","data_class":"sensitive","transport":"unverified","endpoint":"unverified"}
+]}

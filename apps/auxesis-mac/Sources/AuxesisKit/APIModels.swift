@@ -150,9 +150,18 @@ public struct McpAck: Decodable { public let ok: Bool }
 public struct McpConnectionTest: Decodable, Equatable { public struct Tool: Decodable, Equatable, Identifiable { public let name: String; public let risk: String; public var id: String { name } }; public let name: String; public let tools: [Tool]; public let digest: String }
 public struct McpUrlBody: Encodable { let id: String; let url: String; let dataClass: String; let testDigest: String; enum CodingKeys: String, CodingKey { case id, url; case dataClass = "data_class"; case testDigest = "test_digest" } }
 public struct McpTestBody: Encodable { let url: String }
-public struct McpAddBody: Encodable { let id: String; let catalogID: String; enum CodingKeys: String, CodingKey { case id; case catalogID = "catalog_id" } }
+public struct McpAddBody: Encodable { let id: String; let catalogID: String; let agent: String; enum CodingKeys: String, CodingKey { case id, agent; case catalogID = "catalog_id" } }
 public struct McpEnabledBody: Encodable { let enabled: Bool }
 public struct McpToolsBody: Encodable { let tools: [String] }
+// M6-2 (#527): the install preview from `POST /servers` (flat, beside `ok`) or `GET /servers/{id}/approval`.
+public struct McpApprovalPreview: Decodable, Equatable, Identifiable {
+    public struct Tool: Decodable, Equatable, Identifiable { public let name: String; public let risk: String; public let access: String; public var id: String { name } }
+    public let id: String; public let transport: String; public let enabled: Bool; public let network: Bool
+    public let env: [String]; public let dataClass: String; public let endpoint: String?; public let command: String?
+    public let args: [String]; public let tools: [Tool]; public let catalogPin: String?; public let hash: String
+    enum CodingKeys: String, CodingKey { case id, transport, enabled, network, env, endpoint, command, args, tools, hash; case dataClass = "data_class"; case catalogPin = "catalog_pin" }
+}
+public struct McpApproveBody: Encodable { let hash: String; let agent: String }
 // Item 12: the confirmation preview and the confirm request. NOTE: these
 // Swift sources are NOT compiled by the Rust gates; kept deliberately simple.
 public struct McpConfirmationDetails: Decodable, Equatable {

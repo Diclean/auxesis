@@ -909,7 +909,17 @@ impl McpServerConfig {
     /// SHA-256 of the binary at the canonical path. No secret → no binding
     /// (fail closed, item 5): there is no unkeyed/plain-hash acceptance.
     pub fn confirmation_binding(&self, secret: &[u8]) -> Option<String> {
-        confirmation_digest(secret, self)
+        confirmation_digest(secret, self, None)
+    }
+
+    /// The same binding, but over a binary SHA-256 the caller already
+    /// verified (a catalog pin) instead of re-reading the file. Re-reading
+    /// would let a file swapped between the check and the binding get the
+    /// swapped binary approved; with the published hash bound in, the spawn
+    /// re-check (which hashes the file it is about to run) only passes for
+    /// exactly the catalog's binary.
+    pub fn confirmation_binding_for_sha(&self, secret: &[u8], sha256: &str) -> Option<String> {
+        confirmation_digest(secret, self, Some(sha256))
     }
 
     /// Whether the owner's confirmation is present **and** still matches this
@@ -940,7 +950,11 @@ impl McpServerConfig {
 /// the digest, so the value cannot be reproduced from the config file alone.
 /// The binary's SHA-256 is recomputed here, so a swapped binary invalidates the
 /// confirmation at spawn time too.
-fn confirmation_digest(secret: &[u8], server: &McpServerConfig) -> Option<String> {
+fn confirmation_digest(
+    secret: &[u8],
+    server: &McpServerConfig,
+    verified_sha: Option<&str>,
+) -> Option<String> {
     if secret.is_empty() {
         // Item 5: no daemon key, no confirmation — never fall back to an
         // unkeyed digest a hand edit could reproduce.
@@ -988,7 +1002,11 @@ fn confirmation_digest(secret: &[u8], server: &McpServerConfig) -> Option<String
         hasher.update(&[1u8]);
     }
     hasher.update(&[4u8]);
-    hasher.update(binary_sha256(Path::new(&canonical)).as_bytes());
+    let sha = match verified_sha {
+        Some(sha) => sha.to_ascii_lowercase(),
+        None => binary_sha256(Path::new(&canonical)),
+    };
+    hasher.update(sha.as_bytes());
     Some(hasher.finalize().to_hex().to_string())
 }
 
@@ -2294,6 +2312,25 @@ mod tests {
         assert!(
             !file_confirmed.stdio_is_confirmed_with(secret),
             "a binary swapped after confirmation must be refused at spawn"
+        );
+
+        // A binding built from a verified (catalog) checksum equals the
+        // file-read binding when the file matches, and a swap after the
+        // check is still refused at spawn.
+        std::fs::write(&bin, b"pinned").unwrap();
+        let pinned_sha = binary_sha256(&bin);
+        assert_eq!(
+            file_server.confirmation_binding_for_sha(secret, &pinned_sha.to_ascii_uppercase()),
+            file_server.confirmation_binding(secret)
+        );
+        let mut sha_confirmed = file_server.clone();
+        sha_confirmed.stdio_confirmation =
+            file_server.confirmation_binding_for_sha(secret, &pinned_sha);
+        assert!(sha_confirmed.stdio_is_confirmed_with(secret));
+        std::fs::write(&bin, b"replacement").unwrap();
+        assert!(
+            !sha_confirmed.stdio_is_confirmed_with(secret),
+            "a binary swapped after the catalog check must be refused at spawn"
         );
     }
 

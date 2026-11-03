@@ -14,8 +14,29 @@ use std::time::Duration;
 const CATALOG: &str = include_str!("../../../../catalog/mcp-servers.toml");
 const PACKS: &str = include_str!("../../../../catalog/mcp-packs.toml");
 
+/// The compiled catalog, or — in a `test-util` build only — the absolute
+/// fixture path in `AUXESIS_MCP_CATALOG`. A release daemon has no such seam.
+fn catalog_text() -> std::borrow::Cow<'static, str> {
+    #[cfg(feature = "test-util")]
+    if let Some(path) = std::env::var("AUXESIS_MCP_CATALOG")
+        .ok()
+        .filter(|path| Path::new(path).is_absolute())
+    {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return text.into();
+        }
+    }
+    CATALOG.into()
+}
+
+fn parsed_catalog() -> Option<CatalogFile> {
+    toml::from_str(&catalog_text()).ok()
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct CatalogFile {
+    /// Stale half of the HTTP pin; bumped whenever any entry changes.
+    catalog_version: String,
     server: Vec<CatalogEntry>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -37,35 +58,98 @@ struct CatalogEntry {
     repo_url: Option<String>,
     #[serde(default)]
     notes: Option<String>,
-    /// A curated `stdio` install command, when one is published. No catalog
-    /// entry carries one today, so a stdio server that claims a catalog id is
-    /// quarantined until it matches exactly (item 7).
+    /// Published release; absent means the entry is display-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    /// SHA-256 of the exact binary at `command`; re-checked at spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
+    /// Curated `stdio` command; required for the entry to be installable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     command: Option<String>,
     /// Curated `stdio` args paired with `command`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     args: Vec<String>,
+    /// Applied at install; the confirmation binding locks it at spawn too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    permissions: Option<CatalogPermissions>,
+    /// Derived: this entry's pin identity, so an approval can bind to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    catalog_hash: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogPermissions {
+    /// The tool-identity set the entry publishes.
+    #[serde(default)]
+    tools: Vec<String>,
+    #[serde(default)]
+    network: bool,
+    /// Env **names** (values come from the protected `.env` only).
+    #[serde(default)]
+    env: Vec<String>,
 }
 fn default_catalog_class() -> String {
     "sensitive".to_owned()
 }
 #[derive(Serialize)]
 struct CatalogResponse {
+    catalog_version: String,
     servers: Vec<CatalogEntry>,
 }
 pub(super) async fn catalog() -> Response {
-    let parsed: CatalogFile = match toml::from_str(CATALOG) {
-        Ok(value) => value,
-        Err(_) => return internal("catalog_invalid"),
+    let Some(parsed) = parsed_catalog() else {
+        return internal("catalog_invalid");
     };
+    let servers = parsed
+        .server
+        .into_iter()
+        .filter(|e| e.tier == "recommended" || e.tier == "candidate")
+        .map(|mut entry| {
+            entry.catalog_hash = Some(catalog_entry_hash(&entry));
+            entry
+        })
+        .collect();
     Json(CatalogResponse {
-        servers: parsed
-            .server
-            .into_iter()
-            .filter(|e| e.tier == "recommended" || e.tier == "candidate")
-            .collect(),
+        catalog_version: parsed.catalog_version,
+        servers,
     })
     .into_response()
+}
+
+/// A stable identity for one catalog entry, over every authored field.
+///
+/// HTTP has no binary to checksum, so this hash plus `catalog_version` is the
+/// pin an approval can bind to.
+fn catalog_entry_hash(entry: &CatalogEntry) -> String {
+    blake3::hash(serde_json::to_string(entry).unwrap_or_default().as_bytes())
+        .to_hex()
+        .to_string()
+}
+
+/// The complete `stdio` pin an entry must publish to be installable.
+struct StdioPin<'a> {
+    sha256: &'a str,
+    command: &'a str,
+    args: &'a [String],
+    permissions: &'a CatalogPermissions,
+}
+
+/// A `stdio` entry installs only from a complete pin (version, artefact
+/// SHA-256, absolute command, args, permissions); anything less is display-only.
+fn stdio_pin(entry: &CatalogEntry) -> Option<StdioPin<'_>> {
+    if entry.transport != "stdio" || entry.version.as_deref().is_none_or(str::is_empty) {
+        return None;
+    }
+    Some(StdioPin {
+        sha256: entry.sha256.as_deref().filter(|s| s.len() == 64)?,
+        command: entry
+            .command
+            .as_deref()
+            .filter(|c| Path::new(c).is_absolute())?,
+        args: &entry.args,
+        permissions: entry.permissions.as_ref()?,
+    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -92,10 +176,7 @@ struct PackView {
     key_required: Vec<String>,
 }
 pub(super) async fn packs() -> Response {
-    let (Ok(packs), Ok(catalog)) = (
-        toml::from_str::<PackFile>(PACKS),
-        toml::from_str::<CatalogFile>(CATALOG),
-    ) else {
+    let (Ok(packs), Some(catalog)) = (toml::from_str::<PackFile>(PACKS), parsed_catalog()) else {
         return internal("catalog_invalid");
     };
     Json(serde_json::json!({"packs": packs.pack.into_iter().map(|p| {
@@ -147,7 +228,7 @@ pub(super) async fn enable_pack(
     let Some(pack) = packs.pack.into_iter().find(|p| p.id == pack_id) else {
         return fail(StatusCode::NOT_FOUND, "pack_not_found");
     };
-    let Ok(catalog) = toml::from_str::<CatalogFile>(CATALOG) else {
+    let Some(catalog) = parsed_catalog() else {
         return internal("catalog_invalid");
     };
     let eligible: Vec<_> = pack
@@ -638,6 +719,19 @@ pub(super) async fn servers(State(state): State<std::sync::Arc<ApiState>>) -> Re
         .iter()
         .map(|server| {
             let status = runtime.statuses().iter().find(|s| s.id == server.id);
+            // Installed from a complete pin, still off: the install verified
+            // the SHA-256 and the spawn re-checks the confirmation binding.
+            let pinned = server.transport == kernel_mcp::McpTransport::Stdio
+                && server.stdio_confirmed
+                && catalog_match(server) == CatalogMatch::Exact;
+            let state = if pinned && !server.enabled {
+                "pinned".to_owned()
+            } else {
+                status
+                    .map(|s| s.state.as_str())
+                    .unwrap_or(if server.enabled { "error" } else { "disabled" })
+                    .to_owned()
+            };
             let descriptors = runtime.descriptors_for(&server.id);
             let tools = descriptors
                 .iter()
@@ -658,10 +752,7 @@ pub(super) async fn servers(State(state): State<std::sync::Arc<ApiState>>) -> Re
             ServerView {
                 id: server.id.clone(),
                 enabled: server.enabled,
-                state: status
-                    .map(|s| s.state.as_str())
-                    .unwrap_or(if server.enabled { "error" } else { "disabled" })
-                    .to_owned(),
+                state,
                 reason: status.and_then(|s| s.reason),
                 transport: server.transport.as_str().to_owned(),
                 auth,
@@ -705,8 +796,7 @@ pub(super) async fn servers(State(state): State<std::sync::Arc<ApiState>>) -> Re
     Json(ServerList { servers: views }).into_response()
 }
 fn catalog_entry(id: Option<&str>) -> Option<CatalogEntry> {
-    toml::from_str::<CatalogFile>(CATALOG)
-        .ok()?
+    parsed_catalog()?
         .server
         .into_iter()
         .find(|e| Some(e.id.as_str()) == id && (e.tier == "recommended" || e.tier == "candidate"))
@@ -725,22 +815,19 @@ fn count_pack_tools(names: &[String], existing_allowlist: Option<&[String]>) -> 
     }
 }
 fn is_catalog_id(id: &str) -> bool {
-    toml::from_str::<CatalogFile>(CATALOG)
-        .ok()
-        .is_some_and(|catalog| catalog.server.iter().any(|entry| entry.id == id))
+    parsed_catalog().is_some_and(|catalog| catalog.server.iter().any(|entry| entry.id == id))
 }
 
 /// How a config entry's `catalog_id` relates to the curated catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CatalogMatch {
-    /// Exact transport + endpoint (http) match: the curated command, no
-    /// per-server confirmation needed.
+    /// Exact match: the http endpoint or the published `stdio` launch. A
+    /// curated server needs no per-server confirmation.
     Exact,
-    /// The catalog entry exists but publishes no exact command (a `stdio`
-    /// entry, or an endpoint left `unverified`): the server is not curated in
-    /// a verifiable way and still needs the owner's confirmation.
+    /// The catalog entry exists but publishes no full `stdio` pin (or an
+    /// endpoint left `unverified`).
     Unverifiable,
-    /// The entry names a catalog id whose transport or endpoint differs.
+    /// The entry names a catalog id whose transport, endpoint or launch differs.
     Mismatch,
     /// No catalog entry carries that id.
     Unknown,
@@ -751,7 +838,7 @@ pub(crate) fn catalog_match(server: &kernel_mcp::McpServerConfig) -> CatalogMatc
     let Some(id) = server.catalog_id.as_deref() else {
         return CatalogMatch::Unknown;
     };
-    let Ok(catalog) = toml::from_str::<CatalogFile>(CATALOG) else {
+    let Some(catalog) = parsed_catalog() else {
         return CatalogMatch::Unknown;
     };
     let Some(entry) = catalog.server.iter().find(|entry| entry.id == id) else {
@@ -771,14 +858,15 @@ pub(crate) fn catalog_match(server: &kernel_mcp::McpServerConfig) -> CatalogMatc
                 _ => CatalogMatch::Mismatch,
             }
         }
-        // Item 7: a `stdio` server that claims a catalog id must match that
-        // entry's exact command and args. The catalog publishes no stdio
-        // command today, so a stdio catalog claim is `Unverifiable` and is
-        // quarantined; its tools are never registered under the catalog
-        // toolkit name.
-        kernel_mcp::McpTransport::Stdio => match entry.command.as_deref() {
-            Some(command)
-                if Some(command) == server.command.as_deref() && entry.args == server.args =>
+        // Item 7: a `stdio` server that claims a catalog id must match the
+        // entry's command and args, and the entry must carry a full pin. The
+        // kernel's confirmation binding, minted at install, locks the rest of
+        // the launch (env names, network, data class, binary SHA-256) and is
+        // re-checked at spawn, so a hand-widened config never spawns.
+        kernel_mcp::McpTransport::Stdio => match stdio_pin(entry) {
+            Some(pin)
+                if Some(pin.command) == server.command.as_deref()
+                    && pin.args == server.args.as_slice() =>
             {
                 CatalogMatch::Exact
             }
@@ -1000,28 +1088,93 @@ pub(super) async fn add_server(
         let Some(entry) = catalog_entry(Some(&cid)) else {
             return fail(StatusCode::BAD_REQUEST, "unknown_catalog_entry");
         };
-        let url = entry.endpoint.filter(|_| entry.transport == "http");
-        let Some(url) = url else {
-            return fail(StatusCode::BAD_REQUEST, "catalog_transport_unavailable");
+        let entry_class = if entry.data_class == "public" {
+            kernel_mcp::McpDataClass::Public
+        } else {
+            kernel_mcp::McpDataClass::Sensitive
         };
-        kernel_mcp::McpServerConfig {
-            id: req.id,
-            catalog_id: Some(cid),
-            data_class: if entry.data_class == "public" {
-                kernel_mcp::McpDataClass::Public
-            } else {
-                kernel_mcp::McpDataClass::Sensitive
-            },
-            stdio_confirmed: false,
-            stdio_confirmation: None,
-            network: false,
-            transport: kernel_mcp::McpTransport::Http,
-            url: Some(url),
-            command: None,
-            args: vec![],
-            env: vec![],
-            enabled: false,
-            agents: Default::default(),
+        if entry.transport == "http" {
+            let url = entry.endpoint.filter(|_| entry.transport == "http");
+            let Some(url) = url else {
+                return fail(StatusCode::BAD_REQUEST, "catalog_transport_unavailable");
+            };
+            kernel_mcp::McpServerConfig {
+                id: req.id,
+                catalog_id: Some(cid),
+                data_class: entry_class,
+                stdio_confirmed: false,
+                stdio_confirmation: None,
+                network: false,
+                transport: kernel_mcp::McpTransport::Http,
+                url: Some(url),
+                command: None,
+                args: vec![],
+                env: vec![],
+                enabled: false,
+                agents: Default::default(),
+            }
+        } else if let Some(pin) = stdio_pin(&entry) {
+            // Installed from the pin only: request overrides are refused.
+            let overrides = req.url.is_some()
+                || req
+                    .command
+                    .as_deref()
+                    .is_some_and(|c| Some(c) != entry.command.as_deref())
+                || (!req.args.is_empty() && req.args != entry.args)
+                || req
+                    .transport
+                    .is_some_and(|t| t != kernel_mcp::McpTransport::Stdio)
+                || (!req.env.is_empty() && req.env != pin.permissions.env);
+            if overrides {
+                return fail(StatusCode::BAD_REQUEST, "catalog_mismatch");
+            }
+            if let Err(refusal) = kernel_mcp::evaluate_stdio_policy(
+                &req.id,
+                pin.command,
+                pin.args,
+                pin.permissions.network,
+            ) {
+                return fail(StatusCode::BAD_REQUEST, refusal_static_code(refusal.label));
+            }
+            // Verify the artefact before any write: a mismatch writes no
+            // `mcp.toml` and starts no child.
+            if catalog_binary_is_mutable(Path::new(pin.command)) {
+                return fail(StatusCode::BAD_REQUEST, "binary_path_mutable");
+            }
+            if !kernel_mcp::binary_sha256(Path::new(pin.command)).eq_ignore_ascii_case(pin.sha256) {
+                return fail(StatusCode::BAD_REQUEST, "checksum_mismatch");
+            }
+            let mut server = kernel_mcp::McpServerConfig {
+                id: req.id,
+                catalog_id: Some(cid),
+                data_class: entry_class,
+                // Never from the request; the catalog pin is the confirmation.
+                stdio_confirmed: false,
+                stdio_confirmation: None,
+                network: pin.permissions.network,
+                transport: kernel_mcp::McpTransport::Stdio,
+                url: None,
+                command: Some(pin.command.to_owned()),
+                args: pin.args.to_vec(),
+                env: pin.permissions.env.clone(),
+                enabled: false,
+                agents: Default::default(),
+            };
+            // Reuse the kernel's one stdio pin: it covers the whole launch and
+            // `runtime.rs` re-checks it (binary SHA-256 included) at spawn.
+            // Bind the PUBLISHED hash, never a second read of the file: a swap
+            // between the check above and this line then fails at spawn,
+            // where the kernel hashes the file it is about to run.
+            let Some(hash) =
+                server.confirmation_binding_for_sha(state.token.confirmation_key(), pin.sha256)
+            else {
+                return internal("confirmation_unavailable");
+            };
+            server.stdio_confirmation = Some(hash);
+            server.stdio_confirmed = true;
+            server
+        } else {
+            return fail(StatusCode::BAD_REQUEST, "catalog_transport_unavailable");
         }
     } else {
         kernel_mcp::McpServerConfig {
@@ -1338,6 +1491,23 @@ fn internal(code: &'static str) -> Response {
 #[derive(Serialize)]
 struct Ack {
     ok: bool,
+}
+
+/// A catalog binary another user could replace: a symlink anywhere we can see,
+/// or a file / parent directory writable by group or others. Unreadable paths
+/// count as mutable (fail closed).
+fn catalog_binary_is_mutable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return true;
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() || meta.permissions().mode() & 0o022 != 0 {
+        return true;
+    }
+    match path.parent().map(std::fs::metadata) {
+        Some(Ok(dir)) => dir.permissions().mode() & 0o022 != 0,
+        _ => true,
+    }
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 //! produced (`{ "slots": { … }, "calls": [ … ] }`); forcing the
 //! `skill__<name>` tool inside a provider turn lands with the engine wiring.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -37,15 +37,19 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 /// `aux skill <list|test|run>`.
 #[derive(Debug, Args)]
 pub struct SkillArgs {
-    /// Agent whose skills are read (default: `main`).
-    #[arg(long, value_name = "AGENT", default_value = "main")]
-    pub agent: String,
+    /// Agent (imports default to the configured agent; other commands to `main`).
+    #[arg(long, value_name = "AGENT")]
+    pub agent: Option<String>,
     #[command(subcommand)]
     pub action: SkillAction,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum SkillAction {
+    /// Import a local markdown skill for owner review.
+    Import { path: std::path::PathBuf },
+    /// Approve the pending skill for this agent.
+    Approve { name: String },
     /// List the agent's loaded skills.
     List,
     /// Render one skill's definition and fill schema; execute nothing.
@@ -68,7 +72,28 @@ pub enum SkillAction {
 /// Run `aux skill`.
 pub fn run(args: SkillArgs) -> ExitCode {
     let home = kernel_core::auxesis_home();
-    let agent_dir = aux_engine::agent_dir(&home, &args.agent);
+    if matches!(
+        args.action,
+        SkillAction::Import { .. } | SkillAction::Approve { .. }
+    ) {
+        let agent = args.agent.or_else(|| {
+            kernel_core::verified_home_or_verify(&home)
+                .ok()
+                .and_then(|home| Config::load_or_create_verified(&home).ok())
+                .map(|config| config.default_agent)
+        });
+        let Some(agent) = agent else {
+            eprintln!("aux skill: cannot read default agent");
+            return ExitCode::FAILURE;
+        };
+        return match args.action {
+            SkillAction::Import { path } => import_or_approve(&agent, Some(&path), None),
+            SkillAction::Approve { name } => import_or_approve(&agent, None, Some(&name)),
+            _ => unreachable!(),
+        };
+    }
+    let agent_name = args.agent.unwrap_or_else(|| "main".into());
+    let agent_dir = aux_engine::agent_dir(&home, &agent_name);
     let agent = match aux_runtime::skills::load_agent(&agent_dir) {
         Ok(agent) => agent,
         Err(err) => {
@@ -80,8 +105,8 @@ pub fn run(args: SkillArgs) -> ExitCode {
     for err in &load.errors {
         eprintln!("aux skill: {err}");
     }
-    let agent_name = args.agent.clone();
     match args.action {
+        SkillAction::Import { .. } | SkillAction::Approve { .. } => unreachable!(),
         SkillAction::List => {
             list(&load);
             ExitCode::SUCCESS
@@ -91,6 +116,177 @@ pub fn run(args: SkillArgs) -> ExitCode {
             run_skill(&home, &agent_dir, &load, &agent, &agent_name, &name, &text)
         }
     }
+}
+
+fn import_or_approve(agent: &str, path: Option<&Path>, name: Option<&str>) -> ExitCode {
+    let perform = || -> Result<(), String> {
+        let valid = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 40
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        };
+        aux_engine::validate_agent(agent).map_err(|e| e.to_string())?;
+        if name.is_some_and(|name| !valid(name)) {
+            return Err("invalid agent or skill name".into());
+        }
+        let lang = kernel_core::Lang::En;
+        let (url, token) = crate::brief::daemon_target(lang).map_err(|e| e.to_string())?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let call = |method, route: &str, body: Option<String>| {
+            runtime
+                .block_on(crate::brief::call_daemon_with_body(
+                    method, &url, route, &token, lang, body,
+                ))
+                .map_err(|e| e.to_string())
+        };
+        let value: serde_json::Value = if let Some(path) = path {
+            let (filename, text) = read_import(path)?;
+            let body =
+                serde_json::json!({"agent":agent,"filename":filename,"text":text}).to_string();
+            serde_json::from_str(&call(
+                reqwest::Method::POST,
+                "/v1/skills/import",
+                Some(body),
+            )?)
+            .map_err(|e| e.to_string())?
+        } else {
+            let name = name.ok_or("missing skill name")?;
+            let shown: serde_json::Value = serde_json::from_str(&call(
+                reqwest::Method::GET,
+                &format!("/v1/skills/{name}/pending?agent={agent}"),
+                None,
+            )?)
+            .map_err(|e| e.to_string())?;
+            show_import(&shown);
+            let body = serde_json::json!({"agent":agent,"hash":shown["hash"]}).to_string();
+            serde_json::from_str(&call(
+                reqwest::Method::POST,
+                &format!("/v1/skills/{name}/approve"),
+                Some(body),
+            )?)
+            .map_err(|e| e.to_string())?
+        };
+        if path.is_some() {
+            show_import(&value);
+        } else {
+            println!(
+                "{}: {}",
+                value["name"].as_str().unwrap_or("skill"),
+                value["status"].as_str().unwrap_or("active")
+            );
+        }
+        Ok(())
+    };
+    match perform() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("aux skill: {}", visible(&err));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn read_import(path: &Path) -> Result<(&str, String), String> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Component;
+
+    let filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("invalid file name")?;
+    let open_at = |dir: &std::fs::File, name: &std::ffi::OsStr, flags| {
+        let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| "invalid file path")?;
+        // Each component is opened relative to its pinned parent and cannot be a symlink.
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err("cannot open skill file");
+        }
+        // openat returned a new owned descriptor.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    };
+    let mut dir = std::fs::File::open(if path.is_absolute() { "/" } else { "." })
+        .map_err(|_| "cannot open skill directory")?;
+    for component in path.parent().ok_or("invalid file path")?.components() {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(name) => {
+                dir = open_at(&dir, name, libc::O_RDONLY | libc::O_DIRECTORY)?
+            }
+            Component::ParentDir => {
+                dir = open_at(
+                    &dir,
+                    std::ffi::OsStr::new(".."),
+                    libc::O_RDONLY | libc::O_DIRECTORY,
+                )?
+            }
+            Component::Prefix(_) => return Err("invalid file path".into()),
+        }
+    }
+    let file = open_at(
+        &dir,
+        std::ffi::OsStr::new(filename),
+        libc::O_RDONLY | libc::O_NONBLOCK,
+    )?;
+    let metadata = file.metadata().map_err(|_| "cannot inspect skill file")?;
+    if !metadata.is_file() {
+        return Err("skill must be a regular file".into());
+    }
+    let max = aux_runtime::skills::MAX_SKILL_BYTES;
+    if metadata.len() > max {
+        return Err("skill exceeds 64 KiB".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "cannot read skill file")?;
+    if bytes.len() as u64 > max {
+        return Err("skill exceeds 64 KiB".into());
+    }
+    let text = String::from_utf8(bytes).map_err(|_| "skill is not UTF-8")?;
+    Ok((filename, text))
+}
+
+fn visible(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c != '\n'
+                && (c.is_control()
+                    || matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+            {
+                format!("\\u{{{:x}}}", u32::from(c))
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
+fn show_import(value: &serde_json::Value) {
+    println!(
+        "name: {}\ndescription: {}",
+        value["name"].as_str().unwrap_or(""),
+        visible(value["description"].as_str().unwrap_or(""))
+    );
+    for field in [
+        "agent", "tools", "read", "write", "contact", "model", "hash", "status",
+    ] {
+        println!("{field}: {}", value[field]);
+    }
+    println!(
+        "--- full skill text ---\n{}",
+        visible(value["text"].as_str().unwrap_or(""))
+    );
 }
 
 fn list(load: &aux_runtime::skills::SkillLoad) {
@@ -622,6 +818,48 @@ impl SkillConnector for CliConnector {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_text_cannot_issue_terminal_controls() {
+        assert_eq!(
+            super::visible("hello\x1b[31m\u{202e}\n"),
+            "hello\\u{1b}[31m\\u{202e}\n"
+        );
+    }
+
+    #[test]
+    fn imported_file_must_be_regular_bounded_utf8_and_not_a_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let file = root.join("parcel.md");
+        std::fs::write(&file, "hello").unwrap();
+        assert_eq!(
+            super::read_import(&file).unwrap(),
+            ("parcel.md", "hello".into())
+        );
+        let link = root.join("link.md");
+        symlink(&file, &link).unwrap();
+        assert!(super::read_import(&link).is_err());
+        let dir_link = root.join("parent-link");
+        symlink(&root, &dir_link).unwrap();
+        assert!(super::read_import(&dir_link.join("parcel.md")).is_err());
+        assert!(super::read_import(&root).is_err());
+        std::fs::write(&file, vec![0xff, 0xfe]).unwrap();
+        assert!(super::read_import(&file).is_err());
+        std::fs::write(
+            &file,
+            vec![b'x'; aux_runtime::skills::MAX_SKILL_BYTES as usize],
+        )
+        .unwrap();
+        assert!(super::read_import(&file).is_ok());
+        std::fs::write(
+            &file,
+            vec![b'x'; aux_runtime::skills::MAX_SKILL_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(super::read_import(&file).is_err());
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;

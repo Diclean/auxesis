@@ -14,7 +14,7 @@ Auxesis is, and [`CONTRIBUTING`](../CONTRIBUTING.md) lists the gates to run befo
 | macOS | 14 (Sonoma) or later, on Apple Silicon | the app and the daemon |
 | Rust | 1.99.0, pinned in `rust-toolchain.toml` | the daemon, the CLI, the privacy kernel |
 | Swift | 5.9 or later (`swift-tools-version: 5.9` in `apps/auxesis-mac/Package.swift`) | the app |
-| Xcode Command Line Tools | any recent version | `swift build`; the full Xcode app is not needed |
+| Xcode Command Line Tools | with Swift 6.2 or later | `swift build`; the full Xcode app is not needed |
 
 Linux and Windows are not supported.
 

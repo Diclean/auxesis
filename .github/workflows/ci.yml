@@ -92,7 +92,8 @@ jobs:
 
   swift:
     # The SwiftUI app in apps/auxesis-mac: swift build, then swift test.
-    runs-on: macos-15
+    # macos-26: the app needs Swift 6.2 or later (macos-15 ships 6.1).
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

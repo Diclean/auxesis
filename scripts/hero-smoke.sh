@@ -10,19 +10,22 @@
 # the client, whose card shows the client's own start and whose .ics carries that
 # converted hour; a repeat yes sends nothing more. M5: `aux skill run collect-receipts`
 # collects a mailed PDF receipt, a fake bridge reads it, `aux docs list` shows it
-# linked to its client, `aux docs export` writes the CSV and the original. Prints
-# one GREEN or RED line; exit 0 only when GREEN.
+# linked to its client, `aux docs export` writes the CSV and the original. M6: a
+# fixture stdio MCP server installs disabled, one approval starts it, a chat call
+# sends an IBAN token and never the raw value, and a widened tool list waits for
+# a second yes. Prints one GREEN or RED line; exit 0 only when GREEN.
 #
 #   scripts/hero-smoke.sh                        # build auxd, aux, aux-fakemail, then run
 #   AUXD=<bin> AUX=<bin> AUXFAKEMAIL=<bin> scripts/hero-smoke.sh   # reuse binaries, no build
 #   scripts/hero-smoke.sh --no-build             # reuse the last build
 #
-# Every auxd, aux and aux-fakemail call runs with a literal sandbox env (HOME and
-# AUXESIS_HOME under a fresh mktemp dir, AUXESIS_SANDBOX=1, AUXESIS_API_PORT=0).
-# The one CLI call that reaches auxd uses the loopback port auxd announced; the
-# sandbox guard needs a real port for a client. A trap stops auxd, aux-fakemail,
-# the provider recorder, the fake app and any open turn, and deletes the temp dir.
-# The real home and the real daemon port are never used.
+# Every auxd, aux and aux-fakemail call runs with a literal sandbox env (HOME,
+# AUXESIS_HOME and TMPDIR under a fresh mktemp dir, AUXESIS_SANDBOX=1,
+# AUXESIS_API_PORT=0). The one CLI call that reaches auxd uses the loopback port
+# auxd announced; the sandbox guard needs a real port for a client. A trap stops
+# auxd, aux-fakemail, the provider recorder, the fake app, any open turn and the
+# M6 stdio child, and deletes the temp dir. The real home and the real daemon
+# port are never used.
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -56,13 +59,22 @@ ALREADY_TODAY="Today's brief already exists."
 # M4: a demo-world client (aux-fakemail world.json, Blueharbor) the owner invites.
 INVITEE="Lea Blueharbor"
 INVITEE_EMAIL="lea@blueharbor.example"
+# M6: a fictional IBAN, the MCP server's id, and its two tools. The fake provider
+# only ever sees the kernel's token for the IBAN; the fixture logs what it gets.
+M6_IBAN="FR76 3000 6000 0112 3456 7890 189"
+M6_IBAN_DIGITS="FR7630006000011234567890189"
+M6_SERVER="m6notes"
+M6_AGENT="clients"
+M6_READ="READ_NOTE"
+M6_WRITE="WRITE_NOTE"
+M6_MESSAGE="Lis la note pour l'IBAN $M6_IBAN. /mcp"
 
 BUILD=1
 for arg in "$@"; do
   case "$arg" in
     --no-build) BUILD=0 ;;
     -h | --help)
-      sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -88,6 +100,8 @@ CA_FILE=""
 HTTP_CODE=""
 REPLY=""
 CLIENT_ID=""
+M6_HASH=""
+M6_HASH2=""
 red() {
   echo "RED $STEP: $*"
   exit 1
@@ -95,8 +109,23 @@ red() {
 on_error() {
   red "unexpected failure (exit $1)"
 }
+# The M6 stdio child is auxd's, but the trap stops it explicitly too: its pid is
+# in the private temp dir the sandbox gave it, before "$WORK" is deleted.
+cleanup_m6_child() {
+  local file pid
+  [ -n "$WORK" ] || return 0
+  for file in "$WORK"/m6/tmp/aux-mcp-*/m6-pid; do
+    [ -s "$file" ] || continue
+    pid="$(cat "$file")"
+    case "$pid" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    kill "$pid" 2>/dev/null || true
+  done
+}
 cleanup() {
   local pid
+  cleanup_m6_child
   for pid in "$TURN_PID" "$APP_PID" "$AUXD_PID" "$FAKEMAIL_PID" "$RECORDER_PID"; do
     if [ -n "$pid" ]; then
       kill "$pid" 2>/dev/null || true
@@ -154,7 +183,7 @@ step_sandbox() {
   if guard_under "$WORK" "$(guard_real_home)"; then
     red "refusing: sandbox $WORK resolves into the real home"
   fi
-  mkdir -p "$WORK/home/.auxesis"
+  mkdir -p "$WORK/home/.auxesis" "$WORK/m6/tmp"
   # The provider is a loopback recorder: it keeps every request body (what left
   # auxd) and echoes the last user text, as the fake provider did.
   cat >"$WORK/recorder.py" <<'PY'
@@ -172,6 +201,19 @@ class H(http.server.BaseHTTPRequestHandler):
         usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
         offered = [t["function"]["name"] for t in req.get("tools") or []]
         msg, finish = {"role": "assistant", "content": text}, "stop"
+        if "mcp__m6notes__READ_NOTE" in offered and "/mcp" in user:
+            if any(m["role"] == "tool" for m in msgs[last + 1:]):
+                msg["content"] = "M6 read done."
+            else:
+                # The provider only ever saw the kernel's IBAN token; pass that
+                # token, never a value, so the child's log proves the gate.
+                start = user.find("⟦IBAN_")
+                end = user.find("⟧", start) + 1 if start >= 0 else 0
+                token = user[start:end] if start >= 0 and end > start else "missing-token"
+                call = {"id": "call-m6", "type": "function",
+                        "function": {"name": "mcp__m6notes__READ_NOTE",
+                                     "arguments": json.dumps({"query": token})}}
+                msg, finish = {"role": "assistant", "content": "", "tool_calls": [call]}, "tool_calls"
         if "skill__send-invite" in offered and "/invite" in user:
             if any(m["role"] == "tool" for m in msgs[last + 1:]):
                 msg["content"] = "Invitation sent."
@@ -247,8 +289,11 @@ PY
 
 step_start() {
   STEP="start"
+  # TMPDIR under the run: the M6 stdio child's mandatory sandbox gives it a
+  # private aux-mcp-* temp dir below this, where the fixture writes its log.
   env -i HOME="$WORK/home" AUXESIS_HOME="$WORK/home/.auxesis" \
-    AUXESIS_SANDBOX=1 AUXESIS_API_PORT=0 "$AUXD" >"$WORK/auxd.log" 2>&1 &
+    AUXESIS_SANDBOX=1 AUXESIS_API_PORT=0 TMPDIR="$WORK/m6/tmp" \
+    "$AUXD" >"$WORK/auxd.log" 2>&1 &
   AUXD_PID=$!
   local i
   for i in $(seq 1 150); do
@@ -805,6 +850,138 @@ step_m5_export() {
   [ ! -e "$WORK/export/auxesis-receipts-2001-01-01-2001-01-31" ] || red "an empty period wrote a folder"
 }
 
+# M6 starts from the open mode M2 set. Private mode is what tokenises MCP
+# arguments (B14), so switch back and wait for the one watch rebuild before the
+# server is approved. The added (disabled) server keeps the runtime non-empty,
+# so the rebuild logs "MCP runtime started"; an empty runtime logs nothing.
+step_m6_setup() {
+  STEP="m6-setup"
+  local config="$WORK/home/.auxesis/config.toml"
+  local agent_dir="$WORK/home/.auxesis/agents/$M6_AGENT"
+  local before now i
+  before="$(grep -c 'MCP runtime started' "$WORK/auxd.log" || true)"
+  sed 's/^mode = "open"$/mode = "private"/' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
+  grep -q '^mode = "private"$' "$config" || red "could not switch privacy to private for M6"
+  for i in $(seq 1 100); do
+    now="$(grep -c 'MCP runtime started' "$WORK/auxd.log" || true)"
+    [ "$now" -gt "$before" ] && break
+    kill -0 "$AUXD_PID" 2>/dev/null || red "auxd exited while switching to private"
+    sleep 0.1
+  done
+  [ "$now" -gt "$before" ] || red "the MCP runtime did not rebuild for private mode"
+  # The seeded `clients` agent carries the chat turn: an ad-hoc `main` has no
+  # registry grants, and the grant ceiling refuses the mcp scope before the
+  # broker sees the owner's exact allow rule. The overlay grants only mcp; the
+  # rule is exact (MCP tools never ride a wildcard).
+  mkdir -p "$agent_dir"
+  printf '[[do]]\nskill = "mcp"\nlevel = "auto"\n' >"$agent_dir/grants.toml"
+  printf '\n[[rules]]\nagent = "%s"\ntool = "mcp__%s__%s"\naction = "allow"\n' \
+    "$M6_AGENT" "$M6_SERVER" "$M6_READ" >>"$config"
+}
+
+step_m6_add() {
+  STEP="m6-add"
+  local body state
+  body="$(jq -cn --arg cmd "$REPO_ROOT/scripts/fixtures/m6/mcp-fixture.sh" \
+    --arg read "$M6_READ" --arg agent "$M6_AGENT" '{id: "m6notes", transport: "stdio", command: $cmd, agent: $agent, tools: [$read], data_class: "public"}')"
+  api POST /v1/mcp/servers "$body"
+  [ "$HTTP_CODE" = 200 ] || red "POST /v1/mcp/servers returned HTTP $HTTP_CODE: $(head -c 300 "$WORK/resp.json")"
+  M6_HASH="$(jq -r '.hash // empty' "$WORK/resp.json")"
+  [ "${#M6_HASH}" = 64 ] || red "the install preview returned no 64-character hash"
+  [ "$(jq -r '.enabled' "$WORK/resp.json")" = false ] || red "the added server is enabled before any approval"
+  [ "$(find "$WORK/m6/tmp" -type f \( -name 'm6-pid' -o -name 'm6-calls.log' \) | wc -l | tr -d ' ')" = 0 ] ||
+    red "an MCP child spawned before approval"
+  api GET /v1/mcp/servers
+  [ "$HTTP_CODE" = 200 ] || red "GET /v1/mcp/servers returned HTTP $HTTP_CODE"
+  state="$(jq -r --arg id "$M6_SERVER" '.servers[] | select(.id == $id) | .state' "$WORK/resp.json")"
+  [ "$state" = "disabled" ] || red "the added server is $state, expected disabled"
+  echo "m6: installed disabled, hash ${M6_HASH:0:12}…, 0 children"
+}
+
+m6_wait_ready() {
+  local i state
+  for i in $(seq 1 150); do
+    api GET /v1/mcp/servers
+    [ "$HTTP_CODE" = 200 ] || red "GET /v1/mcp/servers returned HTTP $HTTP_CODE"
+    state="$(jq -r --arg id "$M6_SERVER" '.servers[] | select(.id == $id) | .state' "$WORK/resp.json")"
+    [ "$state" = "ready" ] && return 0
+    kill -0 "$AUXD_PID" 2>/dev/null || red "auxd exited while waiting for $M6_SERVER"
+    sleep 0.1
+  done
+  red "MCP server $M6_SERVER stayed $state, expected ready"
+}
+
+step_m6_approve() {
+  STEP="m6-approve"
+  api POST "/v1/mcp/servers/$M6_SERVER/approve" "$(jq -cn --arg h "$M6_HASH" --arg a "$M6_AGENT" '{hash: $h, agent: $a}')"
+  [ "$HTTP_CODE" = 200 ] || red "approve returned HTTP $HTTP_CODE: $(head -c 300 "$WORK/resp.json")"
+  m6_wait_ready
+  api GET /v1/mcp/servers
+  # `tools` is the server's discovery list (both tools exist in the child);
+  # `agents[$M6_AGENT]` is the allowlist that decides what the chat may mount.
+  jq -e --arg id "$M6_SERVER" --arg agent "$M6_AGENT" --arg read "$M6_READ" \
+    '(.servers[] | select(.id == $id)) as $s | $s.enabled and $s.state == "ready" and ($s.agents[$agent] == [$read])' \
+    "$WORK/resp.json" >/dev/null || red "the approved server did not allow only $M6_READ: $(head -c 300 "$WORK/resp.json")"
+  echo "m6: one yes started the child, $M6_READ only for $M6_AGENT"
+}
+
+step_m6_call() {
+  STEP="m6-call"
+  local log i
+  api POST /v1/threads/$M6_AGENT/messages "$(jq -cn --arg c "$M6_MESSAGE" '{content: $c}')"
+  [ "$HTTP_CODE" = 200 ] || red "the M6 chat turn returned HTTP $HTTP_CODE: $(head -c 300 "$WORK/resp.json")"
+  for i in $(seq 1 100); do
+    log="$(find "$WORK/m6/tmp" -name m6-calls.log -type f | head -1)"
+    [ -n "$log" ] && break
+    sleep 0.1
+  done
+  [ -n "$log" ] || red "the MCP child saw no tools/call"
+  grep -qF "READ_NOTE" "$log" || red "the child's call log does not name $M6_READ: $(head -c 300 "$log")"
+  grep -qF "⟦IBAN_" "$log" || red "the child did not receive the IBAN token: $(head -c 300 "$log")"
+  if grep -qF "$M6_IBAN" "$log" || grep -qF "$M6_IBAN_DIGITS" "$log"; then
+    red "the raw IBAN reached the MCP child: $(head -c 300 "$log")"
+  fi
+  if grep -qF "$M6_IBAN" "$WORK/provider-bodies.jsonl" || grep -qF "$M6_IBAN_DIGITS" "$WORK/provider-bodies.jsonl"; then
+    red "the raw IBAN reached the provider"
+  fi
+  grep -qF "⟦IBAN_" "$WORK/provider-bodies.jsonl" || red "the provider saw no IBAN token"
+  echo "m6: child saw ⟦IBAN_…⟧, raw IBAN absent from child log and provider"
+}
+
+step_m6_widen() {
+  STEP="m6-widen"
+  local state
+  api PUT "/v1/mcp/servers/$M6_SERVER/agents/$M6_AGENT" \
+    "$(jq -cn --arg read "$M6_READ" --arg write "$M6_WRITE" '{tools: [$read, $write]}')"
+  [ "$HTTP_CODE" = 409 ] || red "widening returned HTTP $HTTP_CODE, expected 409: $(head -c 300 "$WORK/resp.json")"
+  grep -qF "approval_required" "$WORK/resp.json" || red "widening did not return approval_required: $(head -c 300 "$WORK/resp.json")"
+  api GET /v1/mcp/servers
+  state="$(jq -r --arg id "$M6_SERVER" '.servers[] | select(.id == $id) | .state' "$WORK/resp.json")"
+  [ "$state" = "needs_approval" ] || red "the widened server is $state, expected needs_approval"
+  jq -e --arg id "$M6_SERVER" --arg agent "$M6_AGENT" --arg read "$M6_READ" --arg write "$M6_WRITE" \
+    '(.servers[] | select(.id == $id)) as $s | ($s.reason == "approval_required") and (($s.tools | length) == 0) and (($s.agents[$agent] | sort) == [$read, $write])' \
+    "$WORK/resp.json" >/dev/null || red "a widened tool mounted before the second yes: $(head -c 300 "$WORK/resp.json")"
+  api GET "/v1/mcp/servers/$M6_SERVER/approval"
+  [ "$HTTP_CODE" = 200 ] || red "GET the new approval preview returned HTTP $HTTP_CODE"
+  M6_HASH2="$(jq -r '.hash // empty' "$WORK/resp.json")"
+  [ "${#M6_HASH2}" = 64 ] || red "the widened preview returned no 64-character hash"
+  jq -e --arg read "$M6_READ" --arg write "$M6_WRITE" '(.tools | map(.name) | sort) == [$read, $write]' \
+    "$WORK/resp.json" >/dev/null || red "the widened preview does not list both tools: $(head -c 300 "$WORK/resp.json")"
+  echo "m6: growth refused 409 approval_required, $M6_WRITE not mounted, new hash ${M6_HASH2:0:12}…"
+}
+
+step_m6_reapprove() {
+  STEP="m6-reapprove"
+  api POST "/v1/mcp/servers/$M6_SERVER/approve" "$(jq -cn --arg h "$M6_HASH2" --arg a "$M6_AGENT" '{hash: $h, agent: $a}')"
+  [ "$HTTP_CODE" = 200 ] || red "the second approve returned HTTP $HTTP_CODE: $(head -c 300 "$WORK/resp.json")"
+  m6_wait_ready
+  api GET /v1/mcp/servers
+  jq -e --arg id "$M6_SERVER" --arg agent "$M6_AGENT" --arg read "$M6_READ" --arg write "$M6_WRITE" \
+    '(.servers[] | select(.id == $id)) as $s | $s.enabled and $s.state == "ready" and (($s.tools | map(.name) | sort) == [$read, $write]) and (($s.agents[$agent] | sort) == [$read, $write])' \
+    "$WORK/resp.json" >/dev/null || red "the second yes did not mount both tools: $(head -c 300 "$WORK/resp.json")"
+  echo "m6: second yes mounted $M6_READ and $M6_WRITE"
+}
+
 step_build
 # The 5 minute budget is the run, not the compile.
 SECONDS=0
@@ -834,7 +1011,15 @@ step_m5_read
 step_m5_list
 step_m5_export
 M5_TIME=$((SECONDS - M5_START))
+M6_START=$SECONDS
+step_m6_add
+step_m6_setup
+step_m6_approve
+step_m6_call
+step_m6_widen
+step_m6_reapprove
+M6_TIME=$((SECONDS - M6_START))
 
 ELAPSED=$SECONDS
 [ "$ELAPSED" -lt 300 ] || red "over the 5 minute budget (${ELAPSED}s)"
-echo "GREEN hero-smoke in ${ELAPSED}s: turn answered, receipt recorded, e-mail tokenised before the provider, name as written; brief built from $EXPECT_MEETINGS meetings and $EXPECT_UNREAD unread mails, already_today on the second run. M3 OK: client card shows 1 mail and 1 meeting on its timeline, 1 interaction logged through log-interaction. M4 OK in ${M4_TIME}s: 1 approval before the yes, 0 sent on no, 1 .ics REQUEST to the client on yes, none on a repeat yes, the card showed the client's own start (America/New_York) for a Paris invite; /followup sent the card's mail after 1 no and 1 yes; /availability sent the card's free times after 1 no and 1 yes. M5 OK in ${M5_TIME}s: 1 mailed receipt collected (twice, 1 row), read, linked to $INVITEE, exported to CSV + original"
+echo "GREEN hero-smoke in ${ELAPSED}s: turn answered, receipt recorded, e-mail tokenised before the provider, name as written; brief built from $EXPECT_MEETINGS meetings and $EXPECT_UNREAD unread mails, already_today on the second run. M3 OK: client card shows 1 mail and 1 meeting on its timeline, 1 interaction logged through log-interaction. M4 OK in ${M4_TIME}s: 1 approval before the yes, 0 sent on no, 1 .ics REQUEST to the client on yes, none on a repeat yes, the card showed the client's own start (America/New_York) for a Paris invite; /followup sent the card's mail after 1 no and 1 yes; /availability sent the card's free times after 1 no and 1 yes. M5 OK in ${M5_TIME}s: 1 mailed receipt collected (twice, 1 row), read, linked to $INVITEE, exported to CSV + original. M6 OK in ${M6_TIME}s: fixture MCP installed disabled, one approval started it, the child saw ⟦IBAN_…⟧ and never the raw IBAN, a widened tool list returned 409 approval_required with no tool mounted, the second yes mounted $M6_READ and $M6_WRITE"

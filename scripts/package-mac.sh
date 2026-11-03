@@ -324,10 +324,11 @@ if [ -n "$AUX_BIN" ]; then
   chmod 755 "$APP/Contents/Resources/bin/aux"
 fi
 
-# The licence notices travel with the app: the project's own Apache-2.0 text,
-# the NOTICE for the components that keep their own licence, and the list of
-# the third-party crates the build links. The list is generated from the
-# locked graph at package time, so it always matches what is shipped.
+# The licence notices travel with the app: the project's own PolyForm
+# Noncommercial 1.0.0 text, the NOTICE for the components that keep their own
+# licence, the commercial-use terms, and the list of the third-party crates
+# the build links. The list is generated from the locked graph at package
+# time, so it always matches what is shipped.
 # The brand of the app travels with it: the icon the Dock and the Finder
 # show, and the agent marks the sidebar and the team map draw.
 # The icns is built from the approved 1024 px artwork in Resources by
@@ -339,6 +340,7 @@ cp "$APP_BUILD_DIR/Resources/Auxesis.icns" "$APP/Contents/Resources/Auxesis.icns
 
 cp "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$REPO_ROOT/NOTICE" "$APP/Contents/Resources/NOTICE"
+cp "$REPO_ROOT/COMMERCIAL.md" "$APP/Contents/Resources/COMMERCIAL.md"
 python3 -I "$SCRIPT_DIR/third-party-licenses.py" "$APP/Contents/Resources" \
   || die "could not write the third-party licence list"
 

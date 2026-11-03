@@ -158,12 +158,15 @@ check "stale older-version sha removed" "[ ! -e '$STALE_SHA' ]"
 check "current-version dmg kept"       "[ -f '$DMG' ]"
 
 echo "== 3c. licence notices in the bundle"
-# The app ships its own licence (Apache-2.0), the NOTICE for the components
-# that keep their own, and the generated list of the third-party crates.
+# The app ships its own licence (PolyForm Noncommercial 1.0.0), the NOTICE for
+# the components that keep their own, the commercial-use terms, and the
+# generated list of the third-party crates.
 check "LICENSE in Resources"            "[ -f '$APP/Contents/Resources/LICENSE' ]"
-check "LICENSE is the Apache-2.0 text"  "grep -q 'Apache License' '$APP/Contents/Resources/LICENSE'"
+check "LICENSE is the PolyForm text"    "grep -q 'PolyForm Noncommercial License' '$APP/Contents/Resources/LICENSE'"
 check "NOTICE in Resources"             "[ -f '$APP/Contents/Resources/NOTICE' ]"
 check "NOTICE is not empty"             "[ -s '$APP/Contents/Resources/NOTICE' ]"
+check "NOTICE carries the required notice" "grep -q '^Required Notice: Copyright 2026 Diclean (https://github.com/Diclean)' '$APP/Contents/Resources/NOTICE'"
+check "COMMERCIAL.md in Resources"      "[ -f '$APP/Contents/Resources/COMMERCIAL.md' ]"
 check "third-party list in Resources"   "[ -s '$APP/Contents/Resources/THIRD-PARTY-LICENSES.txt' ]"
 check "third-party list names crates"   "grep -qE '^serde ' '$APP/Contents/Resources/THIRD-PARTY-LICENSES.txt'"
 # The list at the repository root is published and tracked, so a reader sees

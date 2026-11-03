@@ -9,4 +9,4 @@ Pure invoice parsing and totals checks for [Auxesis](https://github.com/Diclean/
 - Stores nothing: the evidence registry (originals, deduplication, provenance) lives in the Auxesis app.
 - Build and test with `cargo test`.
 
-Licensed under Apache-2.0 (see `LICENSE`).
+Licensed under Apache-2.0 (see the `LICENSE` in this directory).

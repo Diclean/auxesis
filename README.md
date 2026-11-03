@@ -241,6 +241,8 @@ security report. Only `main` is supported, and there are no releases yet.
 
 ## Licence
 
-**Apache License 2.0.** The full text is in [`LICENSE`](LICENSE). Third-party
-components keep their own licences; see [`NOTICE`](NOTICE) and
+**PolyForm Noncommercial 1.0.0.** Free for noncommercial use. Any commercial
+use needs a paid licence from the copyright holder — see
+[`COMMERCIAL.md`](COMMERCIAL.md). The full text is in [`LICENSE`](LICENSE);
+third-party components keep their own licences, see [`NOTICE`](NOTICE) and
 [`THIRD-PARTY-LICENSES.txt`](THIRD-PARTY-LICENSES.txt).

@@ -8,11 +8,11 @@ version and its licence expression — built from `cargo metadata --format-versi
 1 --locked --offline`: no new dependency and no network. It names the
 components of NOTICE first, then the crates that come from a registry. The
 crates of this workspace are Auxesis itself, not third-party, so they are not
-in this list: they are covered by the Apache-2.0 text of LICENSE, which the
-app bundle carries next to this file. The app bundle carries its own copy
-(scripts/package-mac.sh writes it into the bundle at package time), and a copy
-is published at the repository root, so a reader can see the licences before
-the first release. Refresh that copy with
+in this list: they are covered by the PolyForm Noncommercial 1.0.0 text of
+LICENSE, which the app bundle carries next to this file. The app bundle carries
+its own copy (scripts/package-mac.sh writes it into the bundle at package
+time), and a copy is published at the repository root, so a reader can see the
+licences before the first release. Refresh that copy with
 
     python3 -I scripts/third-party-licenses.py .
 
@@ -48,9 +48,9 @@ HEADER = """\
 # tree and in its upstream repository.
 #
 # The crates of this workspace are Auxesis itself, so they are not in this
-# list: they are under the Apache-2.0 text in LICENSE. The components named
-# in NOTICE are not Rust crates; they keep their own licences, and the list
-# starts with them:
+# list: they are under the PolyForm Noncommercial 1.0.0 text in LICENSE. The
+# components named in NOTICE are not Rust crates; they keep their own
+# licences, and the list starts with them:
 #
 #   <name>: <licence>
 #

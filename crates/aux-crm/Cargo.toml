@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "The owner's clients: parties, relationships, timeline and the contacts-index sync"
-# Never published until the owner gives the go. The licence is Apache-2.0;
-# `deny.toml` `[licenses.private]` skips unpublishable members.
+# Never published until the owner gives the go. The licence is
+# PolyForm-Noncommercial-1.0.0; `deny.toml` allows it for this crate by name.
 publish = false
 
 [lib]

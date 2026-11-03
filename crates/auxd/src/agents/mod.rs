@@ -366,6 +366,17 @@ const SHIPPED_FILES: [(&str, &str, &str); 9] = [
     ),
 ];
 
+/// True when `name` is a skill shipped inside `agent`'s directory.
+pub(crate) fn is_shipped_skill(agent: &str, name: &str) -> bool {
+    SHIPPED_FILES.iter().any(|(shipped_agent, file, _)| {
+        *shipped_agent == agent
+            && file
+                .strip_prefix("skills/")
+                .and_then(|file| file.strip_suffix(".md"))
+                == Some(name)
+    })
+}
+
 /// The versions of a shipped file that were shipped before the current one:
 /// `(agent, file, hash)` per older version.
 ///

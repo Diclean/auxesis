@@ -21,7 +21,7 @@ use aux_mail::{
 };
 use aux_runtime::executor::{
     default_approval_timeout, Executor, NeverStopped, RealClock, RecipientDirectory, RunDecision,
-    RunOutcome, SkillApprover, SkillConnector, SkillContext, UNCERTAIN_DRAFT,
+    RunOutcome, SkillApprover, SkillConnector, SkillContext, UNCERTAIN_DRAFT, UNCERTAIN_SEND,
 };
 use aux_runtime::skills::agent::{AgentMode, AgentSource, Brain, LoadedAgent};
 use aux_runtime::skills::skill::parse_skill;
@@ -142,6 +142,16 @@ fn connector(mail: Arc<dyn MailApi>, bridge: Arc<Bridge>) -> MailSkillConnector 
         "me@example.org",
         open_mode(),
     )
+}
+
+/// A free-form `mail.send`: no calendar bridge, no draft store.
+fn free_send_connector(mail: Arc<RecordingMail>) -> Arc<dyn SkillConnector> {
+    Arc::new(MailSkillConnector::new(
+        MailToolset::new(mail as Arc<dyn MailApi>, None),
+        None,
+        "me@example.org",
+        open_mode(),
+    ))
 }
 
 fn context() -> SkillContext {
@@ -873,6 +883,72 @@ async fn private_known_contact_reaches_smtp_with_real_values() {
     assert_eq!(sink.rows("mail.call")[0]["account"], "personal");
 }
 
+/// SEND-AFTER-DATA: a failure once the server accepted `DATA` is uncertain,
+/// not failed. The model reads that the mail may have gone out and the Ledger
+/// records `uncertain`; a second attempt would have succeeded, proving the one
+/// attempt is never retried.
+#[tokio::test]
+async fn a_failure_after_data_says_the_mail_may_have_been_sent() {
+    let mail = Arc::new(RecordingMail::default());
+    *mail.next_error.lock().unwrap() = Some(MailError::Uncertain);
+    let directory: Arc<dyn RecipientDirectory> = Arc::new(Known(vec!["camille@exemple.fr"]));
+    let (outcome, sink) = run_executor(free_send_connector(Arc::clone(&mail)), directory).await;
+
+    let RunOutcome::Uncertain { error } = &outcome else {
+        panic!("not uncertain: {outcome:?}");
+    };
+    assert_eq!(error, UNCERTAIN_SEND);
+    assert!(error.contains("may have been sent"), "{error}");
+    assert!(error.contains("do not send it again"), "{error}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("skill.action")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("mail.call")[0]["reply_class"], "none");
+    assert!(
+        mail.sent.lock().unwrap().is_empty(),
+        "the uncertain send was retried"
+    );
+}
+
+/// SEND-BEFORE-DATA: a connect refusal is a plain failure, exactly as before,
+/// and the one attempt is never retried.
+#[tokio::test]
+async fn a_failure_before_data_still_says_failed() {
+    let mail = Arc::new(RecordingMail::default());
+    *mail.next_error.lock().unwrap() = Some(MailError::Connect {
+        host: "smtp.exemple.test".to_string(),
+        port: 465,
+    });
+    let directory: Arc<dyn RecipientDirectory> = Arc::new(Known(vec!["camille@exemple.fr"]));
+    let (outcome, sink) = run_executor(free_send_connector(Arc::clone(&mail)), directory).await;
+
+    let RunOutcome::Failed { error } = &outcome else {
+        panic!("not failed: {outcome:?}");
+    };
+    assert_eq!(error, "The server didn't answer");
+    assert!(!error.contains("may have been sent"), "{error}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "failed");
+    assert_eq!(sink.rows("skill.action")[0]["outcome"], "error");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "error:connect");
+    assert!(
+        mail.sent.lock().unwrap().is_empty(),
+        "the failed send was retried"
+    );
+}
+
+/// SEND-SUCCESS: the success path keeps its words and its rows.
+#[tokio::test]
+async fn a_successful_send_is_unchanged() {
+    let mail = Arc::new(RecordingMail::default());
+    let directory: Arc<dyn RecipientDirectory> = Arc::new(Known(vec!["camille@exemple.fr"]));
+    let (outcome, sink) = run_executor(free_send_connector(Arc::clone(&mail)), directory).await;
+
+    assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "done");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "sent");
+    assert_eq!(mail.sent.lock().unwrap().len(), 1);
+}
+
 /// The owner's answer on the daemon's channel: an edit of the run card.
 struct EditsTo(Value);
 
@@ -1125,6 +1201,77 @@ async fn a_stored_client_zone_wins_over_the_models_zone() {
     assert!(!ics.contains("attendee_time_zone_source"), "{ics}");
 }
 
+/// CLIENT-TZ-FIELD acceptance: a client imported from a vCard carrying
+/// `TZ:America/New_York`, then an invite whose model guessed `Europe/Paris`.
+/// The card's zone wins before the approval card, and the `.ics` carries the
+/// instant that is 10:00 in Paris and 05:00 in New York. A `TZ:` that is not an
+/// IANA name (`Mars/Base`) is ignored on import, never guessed, and the import
+/// report says so.
+#[tokio::test]
+async fn an_imported_vcard_zone_reaches_the_invite_and_beats_the_models_guess() {
+    let dir = tempfile::tempdir().expect("a temp store");
+    let store = Store::open(&dir.path().join("store.db")).expect("a store");
+    let file = dir.path().join("contacts.vcf");
+    std::fs::write(
+        &file,
+        "BEGIN:VCARD\nVERSION:4.0\nFN:Camille Exemple\nEMAIL:camille@exemple.fr\n\
+         TZ:America/New_York\nEND:VCARD\n\
+         BEGIN:VCARD\nVERSION:4.0\nFN:Jonas Weber\nEMAIL:jonas@exemple.fr\n\
+         TZ:Mars/Base\nEND:VCARD\n",
+    )
+    .expect("a vCard");
+    let summary = aux_runtime::contacts_import::import_file(&store, &file, None, Some("client"))
+        .expect("an import");
+    assert_eq!(summary.time_zone_ignored, 1, "Mars/Base is not a zone");
+    assert!(
+        summary.to_string().contains("not an IANA name"),
+        "the report must say the invalid zone was ignored: {summary}"
+    );
+    let parties = aux_crm::Crm::new(&store).list().expect("the cards");
+    let zone_of = |email: &str| {
+        parties
+            .iter()
+            .find(|party| party.emails.iter().any(|known| known == email))
+            .and_then(|party| party.time_zone.as_deref())
+    };
+    assert_eq!(zone_of("camille@exemple.fr"), Some("America/New_York"));
+    assert_eq!(
+        zone_of("jonas@exemple.fr"),
+        None,
+        "an invalid zone is ignored"
+    );
+
+    let index = aux_runtime::known_names::contacts_index(&store.contacts().expect("contacts"));
+    let directory = ContactsWithZones::from_store(Arc::new(index), &store);
+    let (outcome, cards, sent) = run_invite_with(
+        json!({
+            "title": "Meeting with Camille Exemple",
+            "start": "2026-10-26T10:00:00",
+            "end": "2026-10-26T10:30:00",
+            "time_zone": "Europe/Paris",
+            // The model's guess: the card's New York zone replaces it.
+            "attendee_time_zone": "Europe/Paris",
+        }),
+        &directory,
+    )
+    .await;
+    assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
+    let shown = &cards[0]["calls"][0]["real"];
+    assert_eq!(shown["attendee_time_zone"], "America/New_York");
+    // 10:00 in Paris is 09:00 UTC, 05:00 in New York.
+    assert_eq!(shown["attendee_start"], "2026-10-26T05:00:00-04:00");
+    let source = shown["attendee_time_zone_source"]
+        .as_str()
+        .expect("the card says where the zone came from");
+    assert!(
+        source.contains("client card") && source.contains("Europe/Paris"),
+        "{source}"
+    );
+    assert_eq!(sent.len(), 1, "one invite");
+    let ics = sent[0].ics.as_deref().expect("an .ics");
+    assert!(ics.contains("DTSTART:20261026T090000Z"), "{ics}");
+}
+
 /// Refused before any card, nothing sent, no zone assumed: today's `+02:00` on
 /// a `+01:00` day, an unknown zone, a time the clocks skip.
 #[tokio::test]
@@ -1314,6 +1461,16 @@ fn sent_to(recipient: &str) -> EnvelopeItem {
     }
 }
 
+/// One mail of the owner's Sent folder, Cc'ing `recipient`.
+fn sent_cc(recipient: &str) -> EnvelopeItem {
+    EnvelopeItem {
+        from: "me@example.org".to_string(),
+        to: Vec::new(),
+        cc: vec![recipient.to_string()],
+        ..envelope("me@example.org", "20 Sep")
+    }
+}
+
 /// Records each card and approves it.
 #[derive(Default)]
 struct RecordsCards(Mutex<Vec<aux_runtime::executor::ApprovalCard>>);
@@ -1348,6 +1505,18 @@ async fn reply_to_lea(inbox: Vec<EnvelopeItem>) -> Ran {
         "Lea",
         "réponds au dernier mail de lea, dis lui que c'est ok pour jeudi",
         inbox,
+    )
+    .await
+}
+
+async fn reply_to_lea_with_sent(inbox: Vec<EnvelopeItem>, sent_mail: Vec<EnvelopeItem>) -> Ran {
+    reply_to_named_full(
+        "Lea",
+        "réponds au dernier mail de lea, dis lui que c'est ok pour jeudi",
+        inbox,
+        Some(sent_mail),
+        Vec::new(),
+        Arc::new(Known(vec![])),
     )
     .await
 }
@@ -1435,8 +1604,8 @@ async fn reply_to_named_full(
 #[tokio::test]
 async fn reply_to_lea_only_in_the_mailbox_shows_her_from_address_on_the_card() {
     let lea = envelope("Lea Sample <lea@blueharbor.example>", "26 Sep");
-    let again = envelope("Lea Sample <lea@blueharbor.example>", "3 Oct");
-    let (outcome, cards, sent) = reply_to_lea(vec![forwarded(), lea, again]).await;
+    let sent_mail = vec![sent_to("Lea Sample <lea@blueharbor.example>")];
+    let (outcome, cards, sent) = reply_to_lea_with_sent(vec![forwarded(), lea], sent_mail).await;
     assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
     assert_eq!(cards.len(), 1, "the card is still asked");
     assert_eq!(
@@ -1513,8 +1682,9 @@ async fn a_capped_scan_never_picks_a_lone_match() {
 #[tokio::test]
 async fn a_long_sender_name_is_capped_on_the_card_and_the_address_stays_whole() {
     let display = format!("Lea {} <lea@blueharbor.example>", "é".repeat(80));
-    let again = envelope(&display, "3 Oct");
-    let (outcome, cards, _sent) = reply_to_lea(vec![envelope(&display, "26 Sep"), again]).await;
+    let sent_mail = vec![sent_to("lea@blueharbor.example")];
+    let (outcome, cards, _sent) =
+        reply_to_lea_with_sent(vec![envelope(&display, "26 Sep")], sent_mail).await;
     assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
     let source = &aux_runtime::executor::card_arguments(&cards[0])["recipient_source"];
     let label = source["label"].as_str().expect("a card label");
@@ -1549,7 +1719,7 @@ async fn a_one_day_lookalike_sender_from_the_mailbox_is_refused_without_a_card()
     };
     assert!(!tainted, "the refusal quotes no mailbox name: {reason}");
     assert!(
-        reason.contains("Clients") && reason.contains("type the address"),
+        reason.contains("Clients") && reason.contains("let Aux read the Sent folder"),
         "{reason}"
     );
     assert!(cards.is_empty() && sent.is_empty());
@@ -1610,9 +1780,10 @@ async fn a_dotted_display_name_cannot_imitate_an_address_on_the_card() {
     );
 }
 
-/// No readable Sent folder: two different arrival days are the bar.
+/// MAILBOX-2DAY-FALLBACK: with no readable Sent folder there is no evidence
+/// the owner knows the address: two arrival days are not enough.
 #[tokio::test]
-async fn two_arrival_days_are_enough_when_no_sent_folder_is_readable() {
+async fn two_arrival_days_are_not_enough_when_no_sent_folder_is_readable() {
     let first = envelope("Camille Northwind <camille@northwind.example>", "26 Sep");
     let second = envelope("Camille Northwind <camille@northwind.example>", "3 Oct");
     let (outcome, cards, sent) = reply_to_named_full(
@@ -1620,6 +1791,59 @@ async fn two_arrival_days_are_enough_when_no_sent_folder_is_readable() {
         "send Camille Northwind the new IBAN",
         vec![first, second],
         None,
+        Vec::new(),
+        Arc::new(Known(vec![])),
+    )
+    .await;
+    let RunOutcome::Refused { reason, tainted } = &outcome else {
+        panic!("two days must not clear the bar without a Sent folder: {outcome:?}")
+    };
+    assert!(!tainted, "the refusal quotes no mailbox name: {reason}");
+    assert!(
+        reason.contains("Clients")
+            && reason.contains("let Aux read the Sent folder")
+            && !reason.contains('@'),
+        "{reason}"
+    );
+    assert!(cards.is_empty() && sent.is_empty());
+}
+
+/// MAILBOX-2DAY-FALLBACK: a Clients entry is the owner's own trust, so it
+/// passes with no readable Sent folder even beside a lookalike in the INBOX.
+#[tokio::test]
+async fn a_clients_entry_passes_with_no_sent_folder() {
+    let first = envelope("Camille <q7f3k9@evil.example>", "26 Sep");
+    let second = envelope("Camille <q7f3k9@evil.example>", "3 Oct");
+    let directory = Arc::new(NamedKnown("Camille", "camille@northwind.example"));
+    let (outcome, cards, sent) = reply_to_named_full(
+        "Camille",
+        "send Camille the new IBAN",
+        vec![first, second],
+        None,
+        Vec::new(),
+        directory,
+    )
+    .await;
+    assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
+    assert_eq!(cards.len(), 1);
+    assert_eq!(
+        cards[0].calls[0].real_arguments["to"],
+        json!(["camille@northwind.example"])
+    );
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, ["camille@northwind.example"]);
+}
+
+/// A Sent Cc match is the same evidence as a Sent To match.
+#[tokio::test]
+async fn a_sent_cc_match_still_passes() {
+    let camille = envelope("Camille Northwind <camille@northwind.example>", "26 Sep");
+    let sent_mail = vec![sent_cc("Camille Northwind <camille@northwind.example>")];
+    let (outcome, cards, sent) = reply_to_named_full(
+        "Camille Northwind",
+        "send Camille Northwind the new IBAN",
+        vec![camille],
+        Some(sent_mail),
         Vec::new(),
         Arc::new(Known(vec![])),
     )
@@ -1727,9 +1951,16 @@ async fn generic_role_local_parts_do_not_resolve_by_local_part_alone() {
 
     // A whole display name still identifies the sender.
     let sender = envelope("Support <support@vendor.example>", "26 Sep");
-    let again = envelope("Support <support@vendor.example>", "3 Oct");
     let owner_input = "réponds à support, dis lui que c'est ok pour jeudi";
-    let (outcome, cards, sent) = reply_to_named("support", owner_input, vec![sender, again]).await;
+    let (outcome, cards, sent) = reply_to_named_full(
+        "support",
+        owner_input,
+        vec![sender],
+        Some(vec![sent_to("support@vendor.example")]),
+        Vec::new(),
+        Arc::new(Known(vec![])),
+    )
+    .await;
     assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
     assert_eq!(cards.len(), 1);
     assert_eq!(sent.len(), 1);
@@ -2026,19 +2257,20 @@ async fn an_error_after_data_marks_the_draft_uncertain_and_blocks_a_retry() {
     let mail = Arc::new(RecordingMail::default());
     *mail.next_error.lock().unwrap() = Some(MailError::Uncertain);
     let cards = RecordsCards::default();
-    let first = run_executor_fill(
+    let (first, sink) = run_executor_fill(
         &send_draft_skill(),
         send_draft_fill(id, json!({})),
         draft_connector(Arc::clone(&store), Arc::clone(&mail)),
         known_draft(),
         &cards,
     )
-    .await
-    .0;
-    let RunOutcome::Failed { error } = &first else {
-        panic!("not failed: {first:?}")
+    .await;
+    let RunOutcome::Uncertain { error } = &first else {
+        panic!("not uncertain: {first:?}")
     };
     assert!(error.contains(UNCERTAIN_DRAFT), "{error}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "uncertain");
     assert_eq!(
         store
             .lock()

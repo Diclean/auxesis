@@ -170,6 +170,17 @@ pub fn router(state: Arc<ApiState>) -> Router {
         )
         .route("/v1/skills", get(super::skills::list))
         .route(
+            "/v1/skills/import",
+            post(super::skills::import).layer(DefaultBodyLimit::max(
+                aux_runtime::skills::MAX_SKILL_BYTES as usize * 6 + 4096,
+            )),
+        )
+        .route(
+            "/v1/skills/{name}/pending",
+            get(super::skills::show_pending),
+        )
+        .route("/v1/skills/{name}/approve", post(super::skills::approve))
+        .route(
             "/v1/extensions/{id}/oauth/start",
             post(super::extensions::start),
         )

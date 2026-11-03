@@ -462,6 +462,12 @@ import Testing
         XCTAssertEqual(LedgerText.what(entry, language: .fr), "Relance exécutée · échec")
     }
 
+    func testSkillJSONSummarySaysAMaybeSentMailInEnglishAndFrench() {
+        let entry = LedgerEntry(at: "", kind: "skill.run", agent: "mail", summary: #"{"skill_name":"send-invite","outcome":"uncertain"}"#)
+        XCTAssertEqual(LedgerText.what(entry, language: .en), "Meeting invite ran · maybe sent")
+        XCTAssertEqual(LedgerText.what(entry, language: .fr), "Invitation exécutée · peut-être envoyé")
+    }
+
     func testAgentResultKeyValuesBecomeHumanCopy() {
         let summary = "unread_count=5 total=5 (counts of the 5 messages listed below)"
         XCTAssertEqual(what("tool.result", summary, agent: "mail"), "Mail listed 5 unread messages")

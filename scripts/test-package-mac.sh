@@ -8,6 +8,8 @@
 #   3. asserts the .app structure, the ad-hoc signature, the embedded daemon,
 #      and that both shipped binaries are Mach-O (`file(1)`);
 #   3b. a version bump removes older Auxesis-*.dmg/.sha256 from --out;
+#   3c. the licence notices and the licence texts (licenses/) are in the
+#      bundle, every file of the repository's licences/ folder among them;
 #   3d. the build number is an integer (--build, else the commit count) and the
 #      app reads it out of the packaged Info.plist;
 #   4. mounts the DMG read-only in a temp mountpoint and checks Auxesis.app +
@@ -174,6 +176,24 @@ check "third-party list names crates"   "grep -qE '^serde ' '$APP/Contents/Resou
 # at package time from the same locked graph, so the two must be identical.
 check "third-party list is tracked"     "git -C '$REPO_ROOT' ls-files --error-unmatch THIRD-PARTY-LICENSES.txt"
 check "published list matches the bundle" "cmp -s '$REPO_ROOT/THIRD-PARTY-LICENSES.txt' '$APP/Contents/Resources/THIRD-PARTY-LICENSES.txt'"
+
+# The full text of every third-party licence ships with the app: NOTICE says
+# the text of each licence it names is shipped with the release, and MIT, BSD
+# and Apache require it. The texts live in licenses/ (one file per SPDX id,
+# verbatim from the SPDX licence-list-data repository) and travel with the
+# bundle, next to the notices that name them.
+check "licences folder in Resources"    "[ -d '$APP/Contents/Resources/licenses' ]"
+for text in "$REPO_ROOT"/licenses/*; do
+  [ -e "$text" ] || { bad "the repository has a licences folder"; break; }
+  name="$(basename "$text")"
+  check "licence $name ships in the bundle"  "[ -f '$APP/Contents/Resources/licenses/$name' ]"
+  check "licence $name is the shipped text"  "cmp -s '$REPO_ROOT/licenses/$name' '$APP/Contents/Resources/licenses/$name'"
+done
+# The licences of the components NOTICE names are among them: a licence
+# named in NOTICE whose text is not in the bundle is a broken promise.
+for id in Apache-2.0 MIT BSD-3-Clause BSD-2-Clause OFL-1.1; do
+  check "NOTICE licence $id ships in the bundle" "[ -f '$APP/Contents/Resources/licenses/$id.txt' ]"
+done
 
 echo "== 3d. the app reads the packaged build number"
 # The app's own reading of the plist it ships with: AppVersion must return

@@ -2,6 +2,7 @@
 """Write the third-party licence list of the locked dependency graph.
 
 Usage: python3 -I scripts/third-party-licenses.py <destination-directory>
+       python3 -I scripts/third-party-licenses.py --check
 
 The list has the `cargo about list` shape — one line per crate, with its
 version and its licence expression — built from `cargo metadata --format-version
@@ -17,11 +18,21 @@ licences before the first release. Refresh that copy with
     python3 -I scripts/third-party-licenses.py .
 
 whenever Cargo.lock changes.
+
+The full text of every licence named here lives in the `licenses/` folder of
+the repository, one file per SPDX id, taken verbatim from the SPDX
+licence-list-data repository. This script refuses to write the list when one
+of the ids it read has no text there: a dependency that arrives with a new
+licence cannot ship before its text is added, so the app always carries the
+licence it is under. `--check` runs that same audit without writing anything,
+and also proves that the published copy at the repository root still matches
+the locked graph.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,9 +40,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FILENAME = "THIRD-PARTY-LICENSES.txt"
 NOTICE = ROOT / "NOTICE"
+# The folder of the licence texts: one file per SPDX id, verbatim from the
+# SPDX licence-list-data repository.
+LICENCES = ROOT / "licenses"
 # The one command that reads the graph: offline, so a package build never
 # needs the network, and --locked, so the list matches Cargo.lock.
 METADATA = ["cargo", "metadata", "--format-version", "1", "--locked", "--offline"]
+
+# The SPDX id of the licence each component of NOTICE keeps. NOTICE names
+# that licence in words; this maps those words to the id whose text lives in
+# licenses/. A component whose licence is not listed here stops the build: the
+# text has to be added and the id declared, never guessed.
+NOTICE_LICENCE_IDS = {
+    "Apache License 2.0": "Apache-2.0",
+    "MIT License": "MIT",
+    "BSD 3-Clause License": "BSD-3-Clause",
+    "BSD 2-Clause License": "BSD-2-Clause",
+    "SIL Open Font License 1.1": "OFL-1.1",
+}
+
+# An SPDX id names a file: letters, digits, '-', '.' and the '+' of the old
+# "or later" spelling. Anything else is refused rather than turned into a
+# path, so a strange licence string can never read a file outside licenses/.
+ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
+
+# The marker of a crate that declares no licence at all.
+NOASSERTION = "NOASSERTION"
 
 HEADER = """\
 # Third-party licences
@@ -78,7 +112,7 @@ def metadata() -> dict:
 
 def lines(packages: list[dict]) -> list[str]:
     """One line per crate: name, version, licence expression."""
-    rows = sorted((p["name"], p["version"], p.get("license") or "NOASSERTION") for p in packages)
+    rows = sorted((p["name"], p["version"], p.get("license") or NOASSERTION) for p in packages)
     return [f"{name} {version} ({licence})" for name, version, licence in rows]
 
 
@@ -87,6 +121,15 @@ def components() -> list[str]:
 
     NOTICE lists them as `- <name>: <licence>`; this keeps that line
     verbatim, so the two files can never drift apart.
+    """
+    return [f"{name}: {licence}" for name, licence in component_pairs()]
+
+
+def component_pairs() -> list[tuple[str, str]]:
+    """The components NOTICE names, as (name, licence) pairs.
+
+    NOTICE lists them as `- <name>: <licence>`; the split is on the first
+    ': ', so the name of a component may itself carry a colon.
     """
     try:
         text = NOTICE.read_text(encoding="utf-8")
@@ -99,21 +142,72 @@ def components() -> list[str]:
             continue
         name, separator, licence = line[2:].partition(": ")
         if separator:
-            rows.append(f"{name}: {licence}")
+            rows.append((name, licence))
     return rows
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: third-party-licenses.py <destination-directory>", file=sys.stderr)
-        return 2
-    destination = Path(argv[1])
-    destination.mkdir(parents=True, exist_ok=True)
-    packages = metadata()["packages"]
-    # A crate from a registry has a source; the crates of this workspace have
-    # none, and they are not third-party, so they stay out of this list.
-    registry = [p for p in packages if p.get("source")]
-    named = components()
+def licence_ids(expression: str) -> set[str]:
+    """The SPDX ids one licence expression names.
+
+    The grammar is small: `A`, `A OR B`, `A AND B`, `A WITH exception`, with
+    parentheses; the old `MIT/Apache-2.0` spelling is an OR, and a trailing
+    '+' is the old "or later" suffix. Every id it names needs its own text,
+    and so does every exception: an exception is part of the licence.
+    """
+    tokens = re.split(r"[\s/]+", expression.replace("(", " ").replace(")", " ").strip())
+    ids = set()
+    for token in tokens:
+        if not token or token in ("AND", "OR", "WITH"):
+            continue
+        ids.add(token[:-1] if token.endswith("+") else token)
+    return ids
+
+
+def graph_ids(packages: list[dict]) -> tuple[set[str], list[str]]:
+    """The ids the licence expressions of the graph name.
+
+    The second value names the crates that declare no licence at all: they
+    have no text to ship, so the build stops on them.
+    """
+    ids: set[str] = set()
+    silent: list[str] = []
+    for package in packages:
+        expression = package.get("license")
+        if not expression:
+            silent.append(f"{package['name']} {package['version']}")
+            continue
+        ids |= licence_ids(expression)
+    return ids, sorted(silent)
+
+
+def notice_ids() -> tuple[set[str], list[str]]:
+    """The ids of the licences the components of NOTICE keep.
+
+    The second value names the components whose licence is not mapped to an
+    SPDX id: their text is unknown, so the build stops on them.
+    """
+    ids: set[str] = set()
+    unmapped: list[str] = []
+    for name, licence in component_pairs():
+        identifier = NOTICE_LICENCE_IDS.get(licence)
+        if identifier is None:
+            unmapped.append(f"{name} ({licence})")
+            continue
+        ids.add(identifier)
+    return ids, unmapped
+
+
+def missing_texts(ids: set[str]) -> list[str]:
+    """The ids whose text is not in the licences/ folder, sorted."""
+    return sorted(
+        identifier
+        for identifier in ids
+        if not (LICENCES / f"{identifier}.txt").is_file()
+    )
+
+
+def render(named: list[str], registry: list[dict]) -> str:
+    """The text of the licence list, header and body."""
     body = "\n".join(
         [
             "# The components named in NOTICE (not Rust crates)",
@@ -123,8 +217,97 @@ def main(argv: list[str]) -> int:
             *lines(registry),
         ]
     )
+    return HEADER + body + "\n"
+
+
+def usage() -> int:
+    """Print how to call the script and stop."""
+    print(
+        "usage: third-party-licenses.py <destination-directory>\n"
+        "       third-party-licenses.py --check",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def main(argv: list[str]) -> int:
+    check_only = False
+    destination: Path | None = None
+    for argument in argv[1:]:
+        if argument == "--check":
+            check_only = True
+        elif destination is None:
+            destination = Path(argument)
+        else:
+            return usage()
+    # --check writes nothing, so it takes no destination; the write mode
+    # needs one, and the two never mix.
+    if check_only == (destination is not None):
+        return usage()
+
+    packages = metadata()["packages"]
+    # A crate from a registry has a source; the crates of this workspace have
+    # none, and they are not third-party, so they stay out of this list.
+    registry = [p for p in packages if p.get("source")]
+    named = components()
+
+    # The audit: every licence this build ships under must have its text.
+    ids, silent = graph_ids(registry)
+    component_ids, unmapped = notice_ids()
+    ids |= component_ids
+    problems = []
+    if silent:
+        problems.append(
+            "these crates declare no licence expression, so no licence text can be "
+            "shipped for them: " + ", ".join(silent)
+        )
+    if unmapped:
+        problems.append(
+            "the licence of these components of NOTICE is not mapped to an SPDX id, "
+            "so their text is unknown: " + ", ".join(unmapped)
+        )
+    unknown = sorted(identifier for identifier in ids if not ID.match(identifier))
+    if unknown:
+        problems.append(
+            "these licence ids are not plain SPDX ids, so their text cannot be "
+            "shipped: " + ", ".join(unknown)
+        )
+    missing = missing_texts(ids - set(unknown))
+    if missing:
+        problems.append(
+            "no licence text in licenses/ for: "
+            + ", ".join(missing)
+            + " — fetch the official SPDX text into licenses/<id>.txt "
+            "(see licenses/README.md) before shipping them"
+        )
+    if problems:
+        for problem in problems:
+            sys.stderr.write(f"third-party-licenses: {problem}\n")
+        return 1
+
+    text = render(named, registry)
+    if check_only:
+        published = ROOT / FILENAME
+        try:
+            current = published.read_text(encoding="utf-8")
+        except OSError:
+            current = ""
+        if current != text:
+            sys.stderr.write(
+                f"third-party-licenses: the published {FILENAME} does not match the "
+                "locked graph: refresh it with "
+                f"python3 -I scripts/third-party-licenses.py .\n"
+            )
+            return 1
+        print(
+            f"third-party-licenses: {len(ids)} licence texts checked "
+            f"({len(named)} components, {len(registry)} crates); {FILENAME} is current"
+        )
+        return 0
+
+    destination.mkdir(parents=True, exist_ok=True)
     output = destination / FILENAME
-    output.write_text(HEADER + body + "\n", encoding="utf-8")
+    output.write_text(text, encoding="utf-8")
     print(
         f"third-party-licenses: wrote {len(named)} components and "
         f"{len(registry)} crates to {output}"

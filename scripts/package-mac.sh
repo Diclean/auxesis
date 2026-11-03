@@ -14,7 +14,8 @@
 #   2. builds the SwiftUI app (release, -j 2) with an optional scratch path;
 #   3. assembles Auxesis.app: Contents/MacOS/AuxesisMac + the daemon in
 #      Contents/Resources/bin/auxd (+ a LaunchAgent template the app can use)
-#      and the licence notices (LICENSE, NOTICE, THIRD-PARTY-LICENSES.txt) in
+#      and the licence notices (LICENSE, NOTICE, COMMERCIAL.md,
+#      THIRD-PARTY-LICENSES.txt) with the licence texts (licenses/) in
 #      Contents/Resources;
 #   4. ad-hoc signs the bundle (`codesign --force --deep -s -`) — no identity,
 #      no keychain, no prompt;
@@ -251,7 +252,7 @@ plan() {
   echo "  daemon bin  ${DAEMON_BIN:-<build> $CARGO_TARGET/release/auxd}"
   echo "  bundle      Auxesis.app (Contents/MacOS/AuxesisMac + Contents/Resources/bin/auxd)"
   echo "  icon        Contents/Resources/Auxesis.icns"
-  echo "  notices     Contents/Resources/{LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}"
+  echo "  notices     Contents/Resources/{LICENSE,NOTICE,COMMERCIAL.md,THIRD-PARTY-LICENSES.txt,licenses/*}"
   echo "  app out     $OUT/Auxesis.app"
   echo "  sign        codesign --force --deep -s -"
   echo "  dmg         $DMG (UDZO, Auxesis.app + Applications -> /Applications)"
@@ -326,9 +327,13 @@ fi
 
 # The licence notices travel with the app: the project's own PolyForm
 # Noncommercial 1.0.0 text, the NOTICE for the components that keep their own
-# licence, the commercial-use terms, and the list of the third-party crates
-# the build links. The list is generated from the locked graph at package
-# time, so it always matches what is shipped.
+# licence, the commercial-use terms, the list of the third-party crates the
+# build links, and the full text of every licence the app ships under. The
+# list is generated from the locked graph at package time, so it always
+# matches what is shipped; the texts live in licenses/ (one file per SPDX id,
+# verbatim from the SPDX licence-list-data repository) and the generator
+# refuses to write the list when one of them is missing, so an app can never
+# ship without the licence it is under.
 # The brand of the app travels with it: the icon the Dock and the Finder
 # show, and the agent marks the sidebar and the team map draw.
 # The icns is built from the approved 1024 px artwork in Resources by
@@ -341,8 +346,15 @@ cp "$APP_BUILD_DIR/Resources/Auxesis.icns" "$APP/Contents/Resources/Auxesis.icns
 cp "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$REPO_ROOT/NOTICE" "$APP/Contents/Resources/NOTICE"
 cp "$REPO_ROOT/COMMERCIAL.md" "$APP/Contents/Resources/COMMERCIAL.md"
+# The licence texts: one file per SPDX id, next to the notices that name
+# them. NOTICE promises the text of every licence it names is shipped with
+# the release, so the texts have to be in the bundle, not only in the
+# repository.
+[ -d "$REPO_ROOT/licenses" ] \
+  || die "the licence texts are missing: $REPO_ROOT/licenses (see licenses/README.md)"
+cp -R "$REPO_ROOT/licenses" "$APP/Contents/Resources/licenses"
 python3 -I "$SCRIPT_DIR/third-party-licenses.py" "$APP/Contents/Resources" \
-  || die "could not write the third-party licence list"
+  || die "could not write the third-party licence list (see the errors above: a licence text is missing)"
 
 # The daemon the app supervises is the one embedded here; the plist is a
 # template the app fills in on first run (see docs/INSTALL.fr.md, open item).

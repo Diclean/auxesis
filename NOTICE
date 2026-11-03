@@ -17,7 +17,8 @@ and the licence named here applies to that component only.
 - Oniguruma: BSD 2-Clause License
 - Geist (font): SIL Open Font License 1.1
 
-The full text of each licence named above is shipped with the published release.
+The full text of each licence named above ships in the `licenses/` folder of
+the release and of this repository.
 The third-party crates of the Rust dependency graph keep their own licences;
 they are listed with their versions and licence expressions in
 THIRD-PARTY-LICENSES.txt, which the app bundle carries next to this file.

@@ -98,6 +98,7 @@ public enum LedgerText {
         switch outcome?.lowercased() {
         case "success", "succeeded", "ok", "done": readableOutcome = language == .fr ? "terminé" : "completed"
         case "failed", "failure", "error": readableOutcome = language == .fr ? "échec" : "failed"
+        case "uncertain": readableOutcome = language == .fr ? "peut-être envoyé" : "maybe sent"
         case "skipped": readableOutcome = language == .fr ? "ignoré" : "skipped"
         default: readableOutcome = outcome
         }

@@ -129,6 +129,7 @@ else
     step clippy run_cargo clippy "${scope[@]}" --all-targets --locked -- -D warnings
 fi
 step egress scripts/check-egress.sh
+step mcp-catalog scripts/check-mcp-catalog.sh
 step keychain check_keychain
 step secrets scripts/check-no-secrets.sh
 step gitleaks-config scripts/test-gitleaks-config.sh

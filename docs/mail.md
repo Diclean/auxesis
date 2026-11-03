@@ -59,6 +59,11 @@ stores references, not bodies.
 The executor rehydrates, checks recipients per value, and calls `MailService::send` once. No retry,
 ever. One Ledger `skill.action` row; `mail.call` row without content or recipients.
 
+A failure **after** the server accepted `DATA` is not a failure: the connection or its final reply
+failed, so the mail may be out. The run, `skill.action` and `mail.call` rows say `uncertain`, the
+result tells the model the mail may have been sent and must not be resent, and a draft caught this
+way can never be sent again. Failures before `DATA` still say `failed` and are never retried.
+
 **Invite.** `send-invite` runs two calls: `calendar.create_event` (EventKit, through the Mac bridge,
 `docs/phase1.md` §3) and `mail.send` with `ics: "event"`. The runtime builds the `.ics` from the
 **rehydrated** event arguments after approval:

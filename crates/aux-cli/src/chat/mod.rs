@@ -805,6 +805,7 @@ mod tests {
             arguments: serde_json::Value::Null,
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         }

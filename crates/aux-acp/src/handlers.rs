@@ -404,6 +404,7 @@ impl BrokerHandlers {
                 .state
                 .is_tainted()
                 .then(|| "acp agent output".to_string()),
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };
@@ -486,6 +487,7 @@ impl BrokerHandlers {
             }),
             tainted: true,
             taint_source: Some("acp agent request".to_string()),
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };

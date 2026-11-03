@@ -13,6 +13,7 @@
 //! browser redirect cannot carry the local bearer token.
 
 use std::collections::BTreeSet;
+use std::path::Path as FsPath;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Path, State};
@@ -21,7 +22,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-use aux_runtime::extensions::install::load_installed;
+use aux_runtime::extensions::install::{load_installed, InstalledExtension};
+use aux_runtime::extensions::mount::require_approval;
 use aux_runtime::extensions::oauth::{loopback_endpoints_allowed, oauth_endpoints, FileTokenStore};
 use aux_runtime::extensions::{TokenStore, OAUTH_TIMEOUT};
 
@@ -32,6 +34,27 @@ use super::ApiState;
 fn active_flows() -> &'static Mutex<BTreeSet<String>> {
     static SLOT: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Per-extension disconnect count. A flow saves its token only if no
+/// disconnect happened since it started; the check and the save run under
+/// this lock, as does the disconnect, so a revoke is never undone.
+fn generations() -> &'static Mutex<std::collections::BTreeMap<String, u64>> {
+    static SLOT: OnceLock<Mutex<std::collections::BTreeMap<String, u64>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+fn generation(map: &std::collections::BTreeMap<String, u64>, id: &str) -> u64 {
+    map.get(id).copied().unwrap_or(0)
+}
+
+/// The install the flow started from is still the approved one: same
+/// version and same entry (endpoints included), and its pin still holds.
+fn same_approved_install(home: &FsPath, id: &str, started: &InstalledExtension) -> bool {
+    let Ok(now) = approved_install(home, id) else {
+        return false;
+    };
+    now.version == started.version && now.entry == started.entry
 }
 
 fn release_flow(id: &str) {
@@ -48,23 +71,37 @@ struct OAuthStatus {
     connected: bool,
 }
 
+// Check before resolving OAuth secrets or starting a flow (the route that goes
+// out to the network). A missing pin is a refusal too. Status and disconnect stay
+// open: they are local, and the owner must always be able to revoke a token.
+fn approved_install(home: &FsPath, id: &str) -> Result<InstalledExtension, Box<Response>> {
+    let installed = aux_runtime::extensions::valid_name(id)
+        .then(|| load_installed(home, id))
+        .flatten()
+        .ok_or_else(|| {
+            Box::new(error::error_response(
+                StatusCode::NOT_FOUND,
+                "extension_not_found",
+                "unknown extension",
+                None,
+            ))
+        })?;
+    require_approval(home, &installed).map_err(|_| {
+        Box::new(error::error_response(
+            StatusCode::CONFLICT,
+            "approval_required",
+            "the installed extension must be approved before using OAuth",
+            Some("reinstall or run aux ext verify --accept for this extension"),
+        ))
+    })?;
+    Ok(installed)
+}
+
 /// `POST /v1/extensions/{id}/oauth/start`.
 pub async fn start(State(state): State<Arc<ApiState>>, Path(id): Path<String>) -> Response {
-    if !aux_runtime::extensions::valid_name(&id) {
-        return error::error_response(
-            StatusCode::NOT_FOUND,
-            "extension_not_found",
-            "unknown extension",
-            None,
-        );
-    }
-    let Some(installed) = load_installed(&state.home, &id) else {
-        return error::error_response(
-            StatusCode::NOT_FOUND,
-            "extension_not_found",
-            "unknown extension",
-            None,
-        );
+    let installed = match approved_install(&state.home, &id) {
+        Ok(installed) => installed,
+        Err(response) => return *response,
     };
     let Some(config) = installed.entry.oauth.as_ref() else {
         return error::error_response(
@@ -116,12 +153,36 @@ pub async fn start(State(state): State<Arc<ApiState>>, Path(id): Path<String>) -
     let authorize_url = flow.authorize_url().to_string();
     let home = state.home.clone();
     let name = id.clone();
+    let started_gen = {
+        let map = generations().lock().unwrap_or_else(|p| p.into_inner());
+        generation(&map, &id)
+    };
     tokio::spawn(async move {
         let store = FileTokenStore::new(&home);
-        match flow.complete().await {
+        // An upgrade or a disconnect while the browser is open ends the
+        // flow before the code exchange and before any save.
+        let unchanged = || {
+            let map = generations().lock().unwrap_or_else(|p| p.into_inner());
+            generation(&map, &name) == started_gen
+                && same_approved_install(&home, &name, &installed)
+        };
+        match flow.complete_if(OAUTH_TIMEOUT, unchanged).await {
             Ok(tokens) => {
-                if store.save(&name, &tokens).is_err() {
+                let map = generations().lock().unwrap_or_else(|p| p.into_inner());
+                let still_ok = generation(&map, &name) == started_gen
+                    && same_approved_install(&home, &name, &installed);
+                if !still_ok {
+                    tracing::warn!(extension = %name, "extension OAuth dropped: changed during the flow");
+                } else if store.save(&name, &tokens).is_err() {
                     tracing::warn!(extension = %name, "extension OAuth token could not be stored");
+                } else if !same_approved_install(&home, &name, &installed) {
+                    // `aux ext install` runs in another process and does not take
+                    // this lock, so an install can land
+                    // between the check and the save. Check again after the
+                    // save and take the token back: a kept token was saved
+                    // while the approved install was still in place.
+                    let _ = store.clear(&name);
+                    tracing::warn!(extension = %name, "extension OAuth dropped: changed during the save");
                 } else {
                     tracing::info!(extension = %name, "extension OAuth connected");
                 }
@@ -150,7 +211,12 @@ pub async fn status(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
 /// `DELETE /v1/extensions/{id}/oauth`.
 pub async fn disconnect(State(state): State<Arc<ApiState>>, Path(id): Path<String>) -> Response {
     let store = FileTokenStore::new(&state.home);
-    if store.clear(&id).is_err() {
+    let mut map = generations().lock().unwrap_or_else(|p| p.into_inner());
+    let next = generation(&map, &id).wrapping_add(1);
+    map.insert(id.clone(), next);
+    let cleared = store.clear(&id);
+    drop(map);
+    if cleared.is_err() {
         return error::error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "oauth_disconnect_failed",

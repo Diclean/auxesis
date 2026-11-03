@@ -11,6 +11,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use aux_runtime::extensions::install::{install, load_installed, InstallOptions};
+use aux_runtime::extensions::mount::{network_pins, store_state, ExtensionState};
+use aux_runtime::extensions::session::accept_current;
 use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions};
 use common::{http, HttpResponse};
@@ -52,6 +55,20 @@ impl TestApi {
         let _ = Store::open(&store_path(&home)).unwrap();
         std::fs::write(api::token_path(&home), TEST_TOKEN).unwrap();
         install_oauth_entry(&home, server);
+        let installed = load_installed(&home, EXTENSION).unwrap();
+        store_state(
+            &home,
+            &ExtensionState {
+                name: EXTENSION.to_string(),
+                version: installed.version.clone(),
+                kind: "mcp".to_string(),
+                frozen: false,
+                tools: Default::default(),
+                network: network_pins(&installed.entry),
+                secrets: installed.entry.secret_names(),
+            },
+        )
+        .unwrap();
         let options = ApiOptions {
             port: 0,
             event_poll: Duration::from_millis(25),
@@ -312,5 +329,253 @@ async fn an_extension_without_oauth_is_refused() {
     )
     .await;
     assert_eq!(response.status, 404, "body: {}", response.body);
+    api.stop();
+}
+
+// A file-backed MCP fixture: real install, pin and accept, with no external service.
+const MCP_FIXTURE: &str = r##"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=${line#*\"id\":}; id=${id%%,*}
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1.0.0"}}}\n' "$id" ;;
+    *'"method":"tools/list"'*)
+      id=${line#*\"id\":}; id=${id%%,*}
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+  esac
+done
+"##;
+const MCP_FIXTURE_SHA256: &str = "5dcd732bf0b64d496b06b941cce72a2c077b5a95fb1d88633ec163dbc8077b66";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oauth_refuses_unapproved_upgrades_before_reading_tokens_or_starting_a_flow() {
+    const NAME: &str = "upgrade";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": ACCESS_CANARY, "token_type": "Bearer"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut api = TestApi::start(&server);
+    let artifact = api.home.join("fixture-server");
+    std::fs::write(&artifact, MCP_FIXTURE).unwrap();
+    let mut entry = load_installed(&api.home, EXTENSION).unwrap().entry;
+    entry.name = NAME.to_string();
+    entry.source.package = artifact.to_string_lossy().into_owned();
+    entry.source.sha256 = MCP_FIXTURE_SHA256.to_string();
+    install(
+        &api.home,
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: true,
+        },
+    )
+    .await
+    .expect("v1 installs and pins its MCP identity");
+    let v1_pin = aux_runtime::extensions::mount::load_state(&api.home, NAME).unwrap();
+    assert_eq!(v1_pin.version, "1.0.0");
+    assert!(v1_pin.network.is_empty());
+
+    entry.version = "2.0.0".to_string();
+    entry.tools[0].network.push("new.example:443".to_string());
+    install(
+        &api.home,
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: false,
+        },
+    )
+    .await
+    .expect("v2 installs without changing the v1 pin");
+    let start_path = format!("/v1/extensions/{NAME}/oauth/start");
+    let status_path = format!("/v1/extensions/{NAME}/oauth/status");
+    let disconnect_path = format!("/v1/extensions/{NAME}/oauth");
+    // Revoking stays open for an unapproved upgrade; only the flow is gated.
+    let revoked = call(api.addr, "DELETE", &disconnect_path, Some(&api.token), None).await;
+    assert_eq!(
+        revoked.status, 200,
+        "revoke must stay open: {}",
+        revoked.body
+    );
+    let local = call(api.addr, "GET", &status_path, Some(&api.token), None).await;
+    assert_eq!(local.json()["connected"], json!(false), "{}", local.body);
+    for (method, path) in [("POST", &start_path)] {
+        let response = call(api.addr, method, path, Some(&api.token), None).await;
+        // On old code, complete the returned flow so the fake records the unwanted request.
+        if method == "POST" && response.status == 200 {
+            let url = Url::parse(response.json()["authorize_url"].as_str().unwrap()).unwrap();
+            let state = url
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .unwrap()
+                .1
+                .into_owned();
+            hit_callback(&url, &state).await;
+        }
+        assert_eq!(response.status, 409, "{method}: {}", response.body);
+        assert_eq!(response.json()["error"]["code"], "approval_required");
+    }
+
+    // Isolate version, host, and secret mismatches from one another.
+    let mut pin = v1_pin.clone();
+    pin.network = network_pins(&entry);
+    store_state(&api.home, &pin).unwrap();
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    assert_eq!(response.status, 409, "new version alone: {}", response.body);
+    assert_eq!(response.json()["error"]["code"], "approval_required");
+    pin.network.clear();
+    pin.version = entry.version.clone();
+    store_state(&api.home, &pin).unwrap();
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    assert_eq!(response.status, 409, "new host alone: {}", response.body);
+    assert_eq!(response.json()["error"]["code"], "approval_required");
+    pin.network = network_pins(&entry);
+    store_state(&api.home, &pin).unwrap();
+    entry.tools[0].secrets.push("EXT_UPGRADE__NEW".to_string());
+    let entry_path = api.home.join("extensions/upgrade@2.0.0/entry.toml");
+    std::fs::write(&entry_path, toml::to_string(&entry).unwrap()).unwrap();
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    assert_eq!(response.status, 409, "new secret alone: {}", response.body);
+    assert_eq!(response.json()["error"]["code"], "approval_required");
+
+    let state_path = api.home.join("extensions/state/upgrade.json");
+    std::fs::remove_file(&state_path).unwrap();
+    {
+        let (method, path) = ("POST", &start_path);
+        let response = call(api.addr, method, path, Some(&api.token), None).await;
+        assert_eq!(
+            response.status, 409,
+            "missing pin {method}: {}",
+            response.body
+        );
+        assert_eq!(response.json()["error"]["code"], "approval_required");
+    }
+    std::fs::write(&state_path, "invalid state").unwrap();
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    assert_eq!(response.status, 409, "unreadable pin: {}", response.body);
+    assert_eq!(response.json()["error"]["code"], "approval_required");
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "unapproved flow reached the fake endpoint"
+    );
+    assert!(
+        !api.home.join(".env").exists(),
+        "unapproved flow wrote a token"
+    );
+
+    // The real owner-accept path re-pins the installed v2 before OAuth proceeds.
+    store_state(&api.home, &v1_pin).unwrap();
+    accept_current(&api.home, NAME, true)
+        .await
+        .expect("accept v2");
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    assert_eq!(response.status, 200, "accepted flow: {}", response.body);
+    let url = Url::parse(response.json()["authorize_url"].as_str().unwrap()).unwrap();
+    let state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    assert!(hit_callback(&url, &state).await.contains("200 OK"));
+    // Status observes completion, ensuring the background flow finishes before teardown.
+    let connected = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let status = call(api.addr, "GET", &status_path, Some(&api.token), None).await;
+            if status.json()["connected"] == json!(true) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(connected.is_ok(), "accepted flow did not store its token");
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    api.stop();
+}
+
+fn flow_state(response: &HttpResponse) -> (Url, String) {
+    let url = Url::parse(response.json()["authorize_url"].as_str().unwrap()).unwrap();
+    let state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    (url, state)
+}
+
+// A flow started while approved must not exchange its code or save a
+// token when the extension is upgraded, or disconnected, before the browser
+// comes back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pending_flow_dies_on_upgrade_or_disconnect() {
+    const NAME: &str = "racer";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": ACCESS_CANARY, "token_type": "Bearer"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let mut api = TestApi::start(&server);
+
+    let artifact = api.home.join("fixture-server");
+    std::fs::write(&artifact, MCP_FIXTURE).unwrap();
+    let mut entry = load_installed(&api.home, EXTENSION).unwrap().entry;
+    entry.name = NAME.to_string();
+    entry.source.package = artifact.to_string_lossy().into_owned();
+    entry.source.sha256 = MCP_FIXTURE_SHA256.to_string();
+    let opts = |pin| InstallOptions {
+        allow_loopback: true,
+        pin,
+    };
+    install(&api.home, &entry, &opts(true))
+        .await
+        .expect("v1 pinned");
+    // Disconnect while the browser is open: the revoke is never undone.
+    let start = format!("/v1/extensions/{NAME}/oauth/start");
+    let started = call(api.addr, "POST", &start, Some(&api.token), None).await;
+    assert_eq!(started.status, 200, "{}", started.body);
+    let (url, state) = flow_state(&started);
+    let gone = call(
+        api.addr,
+        "DELETE",
+        &format!("/v1/extensions/{NAME}/oauth"),
+        Some(&api.token),
+        None,
+    )
+    .await;
+    assert_eq!(gone.status, 200, "{}", gone.body);
+    hit_callback(&url, &state).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Upgrade while the browser is open: no exchange, no token.
+    let start = format!("/v1/extensions/{NAME}/oauth/start");
+    let started = call(api.addr, "POST", &start, Some(&api.token), None).await;
+    assert_eq!(started.status, 200, "{}", started.body);
+    let (url, state) = flow_state(&started);
+    entry.version = "2.0.0".to_string();
+    entry.tools[0].network.push("new.example:443".to_string());
+    install(&api.home, &entry, &opts(false))
+        .await
+        .expect("v2 unpinned");
+    hit_callback(&url, &state).await;
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "a changed flow reached the token endpoint"
+    );
+    let status_path = format!("/v1/extensions/{NAME}/oauth/status");
+    let status = call(api.addr, "GET", &status_path, Some(&api.token), None).await;
+    assert_eq!(status.json()["connected"], json!(false), "{}", status.body);
     api.stop();
 }

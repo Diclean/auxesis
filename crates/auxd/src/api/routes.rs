@@ -216,6 +216,14 @@ pub fn router(state: Arc<ApiState>) -> Router {
             "/v1/mcp/servers/{id}/confirm",
             post(super::mcp_plugins::confirm_server),
         )
+        .route(
+            "/v1/mcp/servers/{id}/approval",
+            get(super::mcp_plugins::server_approval),
+        )
+        .route(
+            "/v1/mcp/servers/{id}/approve",
+            post(super::mcp_plugins::approve_server),
+        )
         .route("/v1/workspaces/trust", post(trust_workspace))
         .route(
             "/v1/stop",

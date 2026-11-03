@@ -190,6 +190,7 @@ pub enum Message {
     McpStateDisabled,
     McpStateFailed,
     McpStateNeedsConfirmation,
+    McpStateNeedsApproval,
     McpStateQuarantined,
     McpToolCount,
     /// A data path refused in private mode (`{0}` is the path id and label).
@@ -351,6 +352,7 @@ pub fn text(msg: Message, lang: Lang) -> &'static str {
         Message::McpStateDisabled => ("disabled", "désactivé"),
         Message::McpStateFailed => ("failed", "en échec"),
         Message::McpStateNeedsConfirmation => ("needs confirmation", "à confirmer"),
+        Message::McpStateNeedsApproval => ("needs approval", "à approuver"),
         Message::McpStateQuarantined => ("quarantined", "mis de côté"),
         Message::McpToolCount => ("{0} tool(s)", "{0} outil(s)"),
         Message::PrivacyDisabled => (

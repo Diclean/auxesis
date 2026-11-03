@@ -110,7 +110,7 @@ Build from source. There is no notarised `.dmg` and no published release yet.
 [`docs/INSTALL.fr.md`](docs/INSTALL.fr.md).
 
 You need macOS 14 (Sonoma) or later on Apple Silicon, Rust 1.99.0 (pinned in
-`rust-toolchain.toml`; install it with [rustup](https://rustup.rs)), Swift 5.9 or
+`rust-toolchain.toml`; install it with [rustup](https://rustup.rs)), Swift 6.2 or
 later, and the Xcode Command Line Tools.
 
 ```sh

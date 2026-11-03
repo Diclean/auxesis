@@ -189,7 +189,20 @@ fn changed_oauth_fields(
     if pinned.client_secret_env != now.client_secret_env {
         changed.push("client_secret_env");
     }
+    // `OAuthConfig` derives `PartialEq`: a field added after this list is
+    // still caught here, so it can never be silently unpinned.
+    unlisted_oauth_change(&mut changed, pinned == now);
     changed
+}
+
+/// The whole-struct fallback in [`changed_oauth_fields`].
+///
+/// Split out so the branch is testable without adding a field to
+/// `OAuthConfig` just for a test. It never overwrites a named field.
+fn unlisted_oauth_change(changed: &mut Vec<&'static str>, equal: bool) {
+    if changed.is_empty() && !equal {
+        changed.push("other");
+    }
 }
 
 /// Refuse an installed build the owner did not approve.
@@ -197,8 +210,9 @@ fn changed_oauth_fields(
 /// It must carry the pinned version, and its network hosts and secret names
 /// must each be in the pinned sets. A narrower or equal set passes. Its
 /// `[oauth]` table must equal the pinned one: a changed authorize/token URL,
-/// client id, client secret name or scopes is refused, and an extension that
-/// gained `[oauth]` after a pin written without one fails closed.
+/// client id, client secret name, scopes or any other table field is refused,
+/// and an extension that gained `[oauth]` after a pin written without one
+/// fails closed.
 pub fn check_approval(
     state: &ExtensionState,
     installed: &InstalledExtension,
@@ -760,6 +774,23 @@ mod tests {
         // An extension without `[oauth]` is unaffected.
         entry.entry.oauth = None;
         check_approval(&pinned, &entry).unwrap();
+    }
+
+    #[test]
+    fn an_unlisted_oauth_field_change_is_refused_as_other() {
+        // `OAuthConfig` has five fields today and the named list covers them
+        // all, so no real value can reach the whole-struct fallback. Test the
+        // branch through its helper: an unlisted difference becomes `other`,
+        // an equal struct adds nothing, and a named change keeps its name.
+        let mut changed = Vec::new();
+        unlisted_oauth_change(&mut changed, false);
+        assert_eq!(changed, vec!["other"]);
+        changed.clear();
+        unlisted_oauth_change(&mut changed, true);
+        assert!(changed.is_empty());
+        changed.push("token_url");
+        unlisted_oauth_change(&mut changed, false);
+        assert_eq!(changed, vec!["token_url"]);
     }
 
     #[test]

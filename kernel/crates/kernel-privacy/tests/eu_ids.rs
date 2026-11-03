@@ -597,7 +597,8 @@ fn a_rule_reads_nothing_in_a_value_whose_check_fails() {
 
 /// The rules scan in linear time: ten times the input costs ten times the
 /// work, not a hundred. The bound and the floor are the ones of the H14
-/// test.
+/// test. The runs read 10 KB and 100 KB, so even the small one sits well
+/// above timer noise on a shared runner.
 #[test]
 fn the_rules_scan_in_linear_time() {
     for unit in [
@@ -621,7 +622,7 @@ fn the_rules_scan_in_linear_time() {
         "8507091237 ",
     ] {
         let flood = |size: usize| unit.repeat(size / unit.len());
-        let (small, big) = (fastest(&flood(1_000)), fastest(&flood(10_000)));
+        let (small, big) = (fastest(&flood(10_000)), fastest(&flood(100_000)));
         println!(
             "{unit:?}: {small:?} -> {big:?} ({:.1}x)",
             big.as_secs_f64() / small.as_secs_f64().max(1e-9)

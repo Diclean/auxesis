@@ -22,7 +22,7 @@ use aux_docs::{run_collect_receipts, CollectReport, StoreEvidence};
 use aux_engine::ChatSession;
 use aux_runtime::executor::{
     ConnectorError, FoundEvent, FoundEventFacts, MailboxScan, MailboxSender, RecipientDirectory,
-    SkillConnector, SkillContext, StoredDraft, SENDER_SCAN_LIMIT, UNCERTAIN_DRAFT,
+    SkillConnector, SkillContext, StoredDraft, SENDER_SCAN_LIMIT, UNCERTAIN_DRAFT, UNCERTAIN_SEND,
 };
 #[cfg(feature = "google")]
 use aux_runtime::skills::tool_map;
@@ -840,15 +840,26 @@ impl MailSkillConnector {
                     };
                 }
                 let detail = if uncertain {
-                    UNCERTAIN_DRAFT.to_string()
+                    // A draft says a fresh draft is the way back; a free-form
+                    // send says plainly that it may already be out.
+                    if claimed.is_some() {
+                        UNCERTAIN_DRAFT
+                    } else {
+                        UNCERTAIN_SEND
+                    }
+                    .to_string()
                 } else {
                     error.to_string()
                 };
-                Err(ConnectorError::new(detail).with_ledger(json!({
+                let mut failure = ConnectorError::new(detail).with_ledger(json!({
                     "kind": error.kind(),
                     "reply_class": error.reply_class(),
                     "account": account,
-                })))
+                }));
+                if uncertain {
+                    failure = failure.with_uncertain();
+                }
+                Err(failure)
             }
         }
     }

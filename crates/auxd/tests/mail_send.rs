@@ -21,7 +21,7 @@ use aux_mail::{
 };
 use aux_runtime::executor::{
     default_approval_timeout, Executor, NeverStopped, RealClock, RecipientDirectory, RunDecision,
-    RunOutcome, SkillApprover, SkillConnector, SkillContext, UNCERTAIN_DRAFT,
+    RunOutcome, SkillApprover, SkillConnector, SkillContext, UNCERTAIN_DRAFT, UNCERTAIN_SEND,
 };
 use aux_runtime::skills::agent::{AgentMode, AgentSource, Brain, LoadedAgent};
 use aux_runtime::skills::skill::parse_skill;
@@ -142,6 +142,16 @@ fn connector(mail: Arc<dyn MailApi>, bridge: Arc<Bridge>) -> MailSkillConnector 
         "me@example.org",
         open_mode(),
     )
+}
+
+/// A free-form `mail.send`: no calendar bridge, no draft store.
+fn free_send_connector(mail: Arc<RecordingMail>) -> Arc<dyn SkillConnector> {
+    Arc::new(MailSkillConnector::new(
+        MailToolset::new(mail as Arc<dyn MailApi>, None),
+        None,
+        "me@example.org",
+        open_mode(),
+    ))
 }
 
 fn context() -> SkillContext {
@@ -871,6 +881,72 @@ async fn private_known_contact_reaches_smtp_with_real_values() {
     );
     assert_eq!(sink.rows("mail.call")[0]["outcome"], "sent");
     assert_eq!(sink.rows("mail.call")[0]["account"], "personal");
+}
+
+/// SEND-AFTER-DATA: a failure once the server accepted `DATA` is uncertain,
+/// not failed. The model reads that the mail may have gone out and the Ledger
+/// records `uncertain`; a second attempt would have succeeded, proving the one
+/// attempt is never retried.
+#[tokio::test]
+async fn a_failure_after_data_says_the_mail_may_have_been_sent() {
+    let mail = Arc::new(RecordingMail::default());
+    *mail.next_error.lock().unwrap() = Some(MailError::Uncertain);
+    let directory: Arc<dyn RecipientDirectory> = Arc::new(Known(vec!["camille@exemple.fr"]));
+    let (outcome, sink) = run_executor(free_send_connector(Arc::clone(&mail)), directory).await;
+
+    let RunOutcome::Uncertain { error } = &outcome else {
+        panic!("not uncertain: {outcome:?}");
+    };
+    assert_eq!(error, UNCERTAIN_SEND);
+    assert!(error.contains("may have been sent"), "{error}");
+    assert!(error.contains("do not send it again"), "{error}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("skill.action")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("mail.call")[0]["reply_class"], "none");
+    assert!(
+        mail.sent.lock().unwrap().is_empty(),
+        "the uncertain send was retried"
+    );
+}
+
+/// SEND-BEFORE-DATA: a connect refusal is a plain failure, exactly as before,
+/// and the one attempt is never retried.
+#[tokio::test]
+async fn a_failure_before_data_still_says_failed() {
+    let mail = Arc::new(RecordingMail::default());
+    *mail.next_error.lock().unwrap() = Some(MailError::Connect {
+        host: "smtp.exemple.test".to_string(),
+        port: 465,
+    });
+    let directory: Arc<dyn RecipientDirectory> = Arc::new(Known(vec!["camille@exemple.fr"]));
+    let (outcome, sink) = run_executor(free_send_connector(Arc::clone(&mail)), directory).await;
+
+    let RunOutcome::Failed { error } = &outcome else {
+        panic!("not failed: {outcome:?}");
+    };
+    assert_eq!(error, "The server didn't answer");
+    assert!(!error.contains("may have been sent"), "{error}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "failed");
+    assert_eq!(sink.rows("skill.action")[0]["outcome"], "error");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "error:connect");
+    assert!(
+        mail.sent.lock().unwrap().is_empty(),
+        "the failed send was retried"
+    );
+}
+
+/// SEND-SUCCESS: the success path keeps its words and its rows.
+#[tokio::test]
+async fn a_successful_send_is_unchanged() {
+    let mail = Arc::new(RecordingMail::default());
+    let directory: Arc<dyn RecipientDirectory> = Arc::new(Known(vec!["camille@exemple.fr"]));
+    let (outcome, sink) = run_executor(free_send_connector(Arc::clone(&mail)), directory).await;
+
+    assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "done");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "sent");
+    assert_eq!(mail.sent.lock().unwrap().len(), 1);
 }
 
 /// The owner's answer on the daemon's channel: an edit of the run card.
@@ -2026,19 +2102,20 @@ async fn an_error_after_data_marks_the_draft_uncertain_and_blocks_a_retry() {
     let mail = Arc::new(RecordingMail::default());
     *mail.next_error.lock().unwrap() = Some(MailError::Uncertain);
     let cards = RecordsCards::default();
-    let first = run_executor_fill(
+    let (first, sink) = run_executor_fill(
         &send_draft_skill(),
         send_draft_fill(id, json!({})),
         draft_connector(Arc::clone(&store), Arc::clone(&mail)),
         known_draft(),
         &cards,
     )
-    .await
-    .0;
-    let RunOutcome::Failed { error } = &first else {
-        panic!("not failed: {first:?}")
+    .await;
+    let RunOutcome::Uncertain { error } = &first else {
+        panic!("not uncertain: {first:?}")
     };
     assert!(error.contains(UNCERTAIN_DRAFT), "{error}");
+    assert_eq!(sink.rows("skill.run")[0]["outcome"], "uncertain");
+    assert_eq!(sink.rows("mail.call")[0]["outcome"], "uncertain");
     assert_eq!(
         store
             .lock()

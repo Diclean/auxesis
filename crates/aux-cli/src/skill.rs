@@ -614,6 +614,10 @@ fn run_skill(
             eprintln!("skill `{name}` failed: {error}");
             ExitCode::FAILURE
         }
+        Ok(RunOutcome::Uncertain { error }) => {
+            eprintln!("skill `{name}` may have sent mail: {error}");
+            ExitCode::FAILURE
+        }
         Err(err) => {
             eprintln!("aux skill run: {err}");
             ExitCode::FAILURE

@@ -1064,9 +1064,44 @@ fn approval_hash(
     Some((hash, pin))
 }
 
-/// The curated catalog hash for a server's claimed entry, if it has one.
+/// The curated catalog pin for a server's claimed entry, if it has one: one
+/// digest over the `catalog_version` and the entry hash (which covers its
+/// published SHA-256). M6-3: a new catalog release or a changed entry is a
+/// changed pin, so the approval no longer matches until the owner re-approves.
 pub(crate) fn catalog_pin(server: &kernel_mcp::McpServerConfig) -> Option<String> {
-    catalog_entry(server.catalog_id.as_deref()).map(|entry| catalog_entry_hash(&entry))
+    let entry = catalog_entry(server.catalog_id.as_deref())?;
+    let version = parsed_catalog()?.catalog_version;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"mcp-catalog-pin-v1\0");
+    hasher.update(version.as_bytes());
+    hasher.update(&[0u8]);
+    hasher.update(catalog_entry_hash(&entry).as_bytes());
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+/// The launch confirmation for a `stdio` server. A catalog server binds the
+/// PUBLISHED SHA-256 (never a re-read of the file, #524 P3), so the kernel's
+/// spawn-time re-hash only passes for exactly the curated binary.
+fn stdio_launch_binding(
+    server: &kernel_mcp::McpServerConfig,
+    secret: &[u8],
+) -> Result<String, &'static str> {
+    let binding = match catalog_entry(server.catalog_id.as_deref()) {
+        Some(entry) => {
+            let pin = stdio_pin(&entry).ok_or("catalog_stdio_unverifiable")?;
+            server.confirmation_binding_for_sha(secret, pin.sha256)
+        }
+        None if server.catalog_id.is_some() => return Err("unknown_catalog_id"),
+        None => server.confirmation_binding(secret),
+    };
+    binding.ok_or("invalid_server")
+}
+
+/// The permission set the approval covers grew: a tool the agent did not
+/// have, or a new agent. Removing tools (or the agent) is a shrink.
+fn tools_grow(old: Option<&Vec<String>>, new: &[String]) -> bool {
+    new.iter()
+        .any(|tool| !old.is_some_and(|old| old.contains(tool)))
 }
 
 /// The install preview for one configured server.
@@ -1269,8 +1304,10 @@ pub(super) async fn confirmation_preview(
         return fail(StatusCode::BAD_REQUEST, "invalid_server");
     };
     let high_risk = kernel_mcp::stdio_risk_label(&command, &server.args);
-    let Some(hash) = server.confirmation_binding(state.token.confirmation_key()) else {
-        return internal("confirmation_unavailable");
+    let hash = match stdio_launch_binding(server, state.token.confirmation_key()) {
+        Ok(hash) => hash,
+        Err("invalid_server") => return internal("confirmation_unavailable"),
+        Err(code) => return fail(StatusCode::BAD_REQUEST, code),
     };
     let binary_hash = kernel_mcp::binary_sha256(Path::new(&command));
     Json(ConfirmationPreview {
@@ -1333,9 +1370,7 @@ pub(super) async fn confirm_server(
         if server.catalog_id.is_some() {
             return Err("use_approve");
         }
-        let Some(hash) = server.confirmation_binding(&secret) else {
-            return Err("invalid_server");
-        };
+        let hash = stdio_launch_binding(server, &secret)?;
         if hash != req.hash {
             return Err("stale_confirmation");
         }
@@ -1765,21 +1800,51 @@ pub(super) async fn set_agent_tools(
     if req.tools.iter().any(|n| !discovered.contains(n)) {
         return fail(StatusCode::BAD_REQUEST, "tool_not_discovered");
     }
-    mutate(&state, move |c| {
+    let secret = state.token.confirmation_key().to_vec();
+    let grew = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let grew_in = std::sync::Arc::clone(&grew);
+    let response = mutate(&state, move |c| {
         let Some(s) = c.server.iter_mut().find(|s| s.id == id) else {
             return Err("server_not_found");
         };
+        // M6-3: the approval digest covers every agent's allowlist. Read what
+        // was valid before the edit, so a shrink can keep it and a growth
+        // cannot.
+        let approved = s.is_install_approved(Some(secret.as_slice()), catalog_pin(s).as_deref());
+        let confirmed =
+            s.transport == kernel_mcp::McpTransport::Stdio && s.stdio_is_confirmed_with(&secret);
+        let growth = tools_grow(s.agents.get(&agent), &req.tools);
         if req.tools.is_empty() {
             s.agents.remove(&agent);
         } else {
             s.agents.insert(agent, req.tools);
         }
-        // The allowlist is part of the approval digest: an edit leaves the
-        // server `needs_approval` until the owner approves the new preview.
-        // M6-3 adds the permission-growth card on top.
+        if growth {
+            // The edit is staged; the stored approval no longer matches, so
+            // the runtime reports `needs_approval` and mounts none of the
+            // server's tools until the owner approves the new preview.
+            grew_in.store(true, std::sync::atomic::Ordering::SeqCst);
+            return Ok(());
+        }
+        // A shrink re-mints only what was valid before; it never turns an
+        // unapproved server into an approved one.
+        if confirmed {
+            let hash = stdio_launch_binding(s, &secret)?;
+            s.stdio_confirmation = Some(hash);
+        }
+        if approved && s.approval.is_some() {
+            let Some((hash, _pin)) = approval_hash(s, &secret) else {
+                return Err("approval_unavailable");
+            };
+            s.approval = Some(hash);
+        }
         Ok(())
     })
-    .await
+    .await;
+    if response.status() == StatusCode::OK && grew.load(std::sync::atomic::Ordering::SeqCst) {
+        return fail(StatusCode::CONFLICT, "approval_required");
+    }
+    response
 }
 pub(super) async fn delete_server(
     State(state): State<std::sync::Arc<ApiState>>,

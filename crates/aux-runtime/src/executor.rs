@@ -949,8 +949,8 @@ impl Executor<'_> {
         if scan.complete {
             if let [one] = senders.as_slice() {
                 // A display name and its address are attacker text: the
-                // mailbox may only pick an address the owner already wrote to
-                // (or, with no Sent folder, one that wrote on two days).
+                // mailbox may only pick an address the owner already wrote to;
+                // with no readable Sent folder it picks nothing.
                 if let Some(reason) = mailbox::trust_refusal(value, one, &scan) {
                     log_rejected_fill(Some(self.sink), skill, run, None, &reason);
                     return Err(self.finish_refused(skill, run, &reason));

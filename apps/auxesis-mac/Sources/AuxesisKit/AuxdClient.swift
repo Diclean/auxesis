@@ -207,7 +207,10 @@ public protocol PluginsClient: AnyObject {
     func mcpPacks() async throws -> [McpPack]
     func enableMcpPack(id: String, agent: String) async throws
     func mcpServers() async throws -> [McpServerView]
-    func addMcpServer(id: String, catalogID: String) async throws
+    /// `agent` is the agent the staged allowlist (and so the preview hash) is for.
+    func addMcpServer(id: String, catalogID: String, agent: String) async throws -> McpApprovalPreview
+    func mcpApproval(id: String) async throws -> McpApprovalPreview
+    func approveMcpServer(id: String, hash: String, agent: String) async throws
     func testMcpServer(url: String) async throws -> McpConnectionTest
     func addMcpUrlServer(id: String, url: String, dataClass: String, testDigest: String) async throws
     func setMcpServer(id: String, enabled: Bool) async throws
@@ -661,7 +664,9 @@ public final class AuxdClient: AuxdTransport, FirstRunClient, PackClient, Skills
     public func mcpPacks() async throws -> [McpPack] { try await perform(request("GET", "/v1/mcp/packs"), as: McpPacksResponse.self).packs }
     public func enableMcpPack(id: String, agent: String) async throws { _ = try await perform(request("POST", "/v1/mcp/packs/\(id)/enable", body: JSONEncoder().encode(McpPackEnableBody(agent: agent))), as: McpAck.self) }
     public func mcpServers() async throws -> [McpServerView] { try await perform(request("GET", "/v1/mcp/servers"), as: McpServersResponse.self).servers }
-    public func addMcpServer(id: String, catalogID: String) async throws { _ = try await perform(request("POST", "/v1/mcp/servers", body: JSONEncoder().encode(McpAddBody(id: id, catalogID: catalogID))), as: McpAck.self) }
+    public func addMcpServer(id: String, catalogID: String, agent: String) async throws -> McpApprovalPreview { try await perform(request("POST", "/v1/mcp/servers", body: JSONEncoder().encode(McpAddBody(id: id, catalogID: catalogID, agent: agent))), as: McpApprovalPreview.self) }
+    public func mcpApproval(id: String) async throws -> McpApprovalPreview { try await perform(request("GET", "/v1/mcp/servers/\(id)/approval"), as: McpApprovalPreview.self) }
+    public func approveMcpServer(id: String, hash: String, agent: String) async throws { _ = try await perform(request("POST", "/v1/mcp/servers/\(id)/approve", body: JSONEncoder().encode(McpApproveBody(hash: hash, agent: agent))), as: McpAck.self) }
     public func testMcpServer(url: String) async throws -> McpConnectionTest { try await perform(request("POST", "/v1/mcp/servers/test", body: JSONEncoder().encode(McpTestBody(url: url))), as: McpConnectionTest.self) }
     public func addMcpUrlServer(id: String, url: String, dataClass: String, testDigest: String) async throws { _ = try await perform(request("POST", "/v1/mcp/servers", body: JSONEncoder().encode(McpUrlBody(id: id, url: url, dataClass: dataClass, testDigest: testDigest))), as: McpAck.self) }
     public func setMcpServer(id: String, enabled: Bool) async throws { _ = try await perform(request("PUT", "/v1/mcp/servers/\(id)", body: JSONEncoder().encode(McpEnabledBody(enabled: enabled))), as: McpAck.self) }

@@ -709,3 +709,99 @@ fn sandbox_allows_only_the_proxy_port_and_proxy_refuses_other_hosts() {
         "a direct connection must be denied even when the proxy port is allowed"
     );
 }
+
+/// Install `entry` from `script` without re-pinning (an upgrade on disk).
+async fn install_unpinned(home: &Path, mut entry: Entry, script: &str) {
+    let scratch = tempfile::tempdir().unwrap();
+    let path = write_script(scratch.path(), "server", script);
+    entry.source.package = path.to_string_lossy().into_owned();
+    install(
+        home,
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: false,
+        },
+    )
+    .await
+    .expect("upgrade installs");
+}
+
+#[tokio::test]
+async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    let scratch = tempfile::tempdir().unwrap();
+    let path = write_script(scratch.path(), "server", &script);
+    let mut v1 = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Public);
+    v1.tools[0].network = vec!["a.example:443".to_owned()];
+    v1.source.package = path.to_string_lossy().into_owned();
+    install(
+        home.path(),
+        &v1,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: true,
+        },
+    )
+    .await
+    .expect("v1 installs and pins");
+    mount(home.path(), "demo", "alice").unwrap();
+    assert_eq!(
+        load_state(home.path(), "demo").unwrap().network,
+        vec!["a.example:443"]
+    );
+
+    // v2 widens the allowlist; it is installed without a new approval.
+    let mut v2 = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
+    v2.tools[0].network = vec!["a.example:443".to_owned(), "b.example:443".to_owned()];
+    install_unpinned(home.path(), v2, &script).await;
+    assert_eq!(
+        load_installed(home.path(), "demo").unwrap().version,
+        "2.0.0"
+    );
+
+    let err = mount(home.path(), "demo", "bob").unwrap_err();
+    assert!(err.to_string().starts_with("approval_required"), "{err}");
+    assert!(!is_mounted(home.path(), "demo", "bob"));
+    let Err(err) =
+        super::session::discover_session(home.path(), "demo", &SessionOptions::default()).await
+    else {
+        panic!("an unapproved build must not start");
+    };
+    assert!(err.to_string().contains("approval_required"), "{err}");
+    let host = ExtensionHost::start(home.path()).await;
+    assert!(
+        host.running().is_empty(),
+        "an unapproved upgrade must not be spawned"
+    );
+    let mut registry = ToolRegistry::new();
+    assert_eq!(host.register_for_agent("alice", &mut registry), 0);
+    host.stop().await;
+
+    // The owner's yes pins v2's version and hosts; the next start passes.
+    let state = super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap();
+    assert_eq!(state.version, "2.0.0");
+    assert_eq!(state.network, vec!["a.example:443", "b.example:443"]);
+    mount(home.path(), "demo", "bob").unwrap();
+    let host = ExtensionHost::start(home.path()).await;
+    assert_eq!(host.running(), vec!["demo"]);
+    host.stop().await;
+
+    // v3 keeps the version string of v2 but declares a new secret name; it
+    // replaces the v2 tree in place.
+    let mut v3 = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
+    v3.tools[0].network = vec!["a.example:443".to_owned()];
+    v3.tools[0].secrets = vec!["EXT_DEMO__EXTRA".to_owned()];
+    install_unpinned(home.path(), v3, &script).await;
+    let err = mount(home.path(), "demo", "carol").unwrap_err();
+    assert!(err.to_string().contains("EXT_DEMO__EXTRA"), "{err}");
+    let host = ExtensionHost::start(home.path()).await;
+    assert!(
+        host.running().is_empty(),
+        "a new secret name must not start"
+    );
+    host.stop().await;
+}

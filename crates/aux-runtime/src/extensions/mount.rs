@@ -19,7 +19,7 @@ use kernel_mcp::{McpTool, McpTransport};
 use serde::{Deserialize, Serialize};
 
 use super::extensions_dir;
-use super::install::load_installed;
+use super::install::{load_installed, InstalledExtension};
 use super::ledger;
 use super::session::{session_for, verify_identity, ExtensionSession, SessionOptions};
 
@@ -61,6 +61,15 @@ pub enum MountError {
     /// A sensitive extension is not mountable in Private mode.
     #[error("extension `{0}` is sensitive and cannot be mounted in Private mode")]
     PrivateMode(String),
+    /// The installed version, network allowlist or secret names differ from
+    /// what the owner approved; only `aux ext verify --accept` clears it.
+    #[error("approval_required: extension `{name}` changed since approval ({reason}); run `aux ext verify --accept {name}`")]
+    ApprovalRequired {
+        /// Extension name.
+        name: String,
+        /// Content-free reason: what changed.
+        reason: String,
+    },
     /// The agent name is empty.
     #[error("agent name is empty")]
     InvalidAgent,
@@ -143,6 +152,66 @@ fn store_mounts(home: &Path, mounts: &MountTable) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The `host:port` allowlist of an entry, in the form the state pins.
+pub fn network_pins(entry: &super::catalog::Entry) -> Vec<String> {
+    entry
+        .network_allowlist()
+        .into_iter()
+        .map(|(host, port)| format!("{host}:{port}"))
+        .collect()
+}
+
+/// Refuse an installed build the owner did not approve.
+///
+/// It must carry the pinned version, and its network hosts and secret names
+/// must each be in the pinned sets. A narrower or equal set passes.
+pub fn check_approval(
+    state: &ExtensionState,
+    installed: &InstalledExtension,
+) -> Result<(), MountError> {
+    let refuse = |reason: String| {
+        Err(MountError::ApprovalRequired {
+            name: installed.name.clone(),
+            reason,
+        })
+    };
+    if installed.version != state.version || installed.entry.version != state.version {
+        return refuse(format!(
+            "version {} is not the approved {}",
+            installed.version, state.version
+        ));
+    }
+    let wider: Vec<String> = network_pins(&installed.entry)
+        .into_iter()
+        .filter(|host| !state.network.contains(host))
+        .collect();
+    if !wider.is_empty() {
+        return refuse(format!("new network hosts: {}", wider.join(", ")));
+    }
+    let new_secrets: Vec<String> = installed
+        .entry
+        .secret_names()
+        .into_iter()
+        .filter(|name| !state.secrets.contains(name))
+        .collect();
+    if !new_secrets.is_empty() {
+        return refuse(format!("new secret names: {}", new_secrets.join(", ")));
+    }
+    Ok(())
+}
+
+/// Load the pinned state of `installed` and check it covers this build.
+/// A missing or unreadable state is [`MountError::MissingState`].
+pub fn require_approval(
+    home: &Path,
+    installed: &InstalledExtension,
+) -> Result<ExtensionState, MountError> {
+    let state = load_state(home, &installed.name)
+        .ok_or_else(|| MountError::MissingState(installed.name.clone()))?;
+    check_approval(&state, installed)?;
+    Ok(state)
+}
+
 /// Mount `name` for `agent`.
 ///
 /// The extension must be installed **and** carry a pinned identity row; a
@@ -157,6 +226,7 @@ pub fn mount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
     if state.frozen {
         return Err(MountError::Frozen(name.to_owned()));
     }
+    check_approval(&state, &installed)?;
     if !may_mount_in_mode(&installed.entry, current_mode(home)) {
         return Err(MountError::PrivateMode(name.to_owned()));
     }
@@ -328,6 +398,12 @@ impl ExtensionHost {
             if !may_mount_in_mode(&installed.entry, current_mode(home)) {
                 continue;
             }
+            // An upgraded build with a new version, host or secret name never
+            // starts before the owner's new yes; a missing state never starts.
+            if let Err(err) = require_approval(home, &installed) {
+                tracing::warn!(extension = %name, reason = %err, "extension did not start");
+                continue;
+            }
             match session_for(home, &installed, &SessionOptions::default()).await {
                 Ok(session) => {
                     let session = Arc::new(session);
@@ -378,6 +454,9 @@ impl ExtensionHost {
                 continue;
             };
             if !may_mount_in_mode(&installed.entry, mode) {
+                continue;
+            }
+            if check_approval(&state, &installed).is_err() {
                 continue;
             }
             let Some(session) = self.sessions.get(&name) else {
@@ -498,7 +577,17 @@ mod tests {
     }
 
     fn install_entry(home: &Path, name: &str, sensitivity: super::super::catalog::Sensitivity) {
-        let entry = super::super::catalog::Entry {
+        let entry = test_entry(name, sensitivity);
+        let dir = super::super::install_dir(home, name, "1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("entry.toml"), toml::to_string(&entry).unwrap()).unwrap();
+    }
+
+    fn test_entry(
+        name: &str,
+        sensitivity: super::super::catalog::Sensitivity,
+    ) -> super::super::catalog::Entry {
+        super::super::catalog::Entry {
             name: name.to_owned(),
             kind: super::super::catalog::EntryKind::Mcp,
             version: "1.0.0".to_owned(),
@@ -520,10 +609,74 @@ mod tests {
             tools: Vec::new(),
             oauth: None,
             meta: None,
+        }
+    }
+
+    fn installed(version: &str, network: &[&str], secrets: &[&str]) -> InstalledExtension {
+        let tool = |network: Vec<String>, secrets: Vec<String>| super::super::catalog::EntryTool {
+            name: "ping".to_owned(),
+            description: String::new(),
+            network,
+            secrets,
+            auth: "none".to_owned(),
+            fs: Vec::new(),
         };
-        let dir = super::super::install_dir(home, name, "1.0.0");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("entry.toml"), toml::to_string(&entry).unwrap()).unwrap();
+        let mut entry = test_entry("demo", super::super::catalog::Sensitivity::Public);
+        entry.version = version.to_owned();
+        entry.tools = vec![tool(
+            network.iter().map(|s| (*s).to_owned()).collect(),
+            secrets.iter().map(|s| (*s).to_owned()).collect(),
+        )];
+        InstalledExtension {
+            name: "demo".to_owned(),
+            version: version.to_owned(),
+            dir: PathBuf::from("/nonexistent"),
+            entry,
+        }
+    }
+
+    #[test]
+    fn approval_refuses_a_new_version_host_or_secret_and_passes_a_narrower_set() {
+        let mut pinned = state("demo");
+        pinned.network = vec!["a.example:443".to_owned(), "c.example:443".to_owned()];
+        pinned.secrets = vec!["EXT_DEMO__TOKEN".to_owned()];
+        let label = |result: Result<(), MountError>| {
+            let err = result.expect_err("must be refused");
+            assert!(matches!(err, MountError::ApprovalRequired { .. }), "{err}");
+            assert!(err.to_string().starts_with("approval_required"), "{err}");
+        };
+        label(check_approval(
+            &pinned,
+            &installed("2.0.0", &["a.example:443"], &[]),
+        ));
+        label(check_approval(
+            &pinned,
+            &installed("1.0.0", &["a.example:443", "b.example:443"], &[]),
+        ));
+        label(check_approval(
+            &pinned,
+            &installed("1.0.0", &[], &["EXT_DEMO__TOKEN", "EXT_DEMO__OTHER"]),
+        ));
+        // Equal and narrower sets with the same version pass.
+        check_approval(
+            &pinned,
+            &installed(
+                "1.0.0",
+                &["a.example:443", "c.example:443"],
+                &["EXT_DEMO__TOKEN"],
+            ),
+        )
+        .unwrap();
+        check_approval(&pinned, &installed("1.0.0", &["a.example:443"], &[])).unwrap();
+    }
+
+    #[test]
+    fn approval_without_a_state_fails_closed() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            require_approval(home.path(), &installed("1.0.0", &[], &[])),
+            Err(MountError::MissingState(_))
+        ));
     }
 
     fn set_mode(home: &Path, mode: &str) {

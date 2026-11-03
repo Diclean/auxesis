@@ -265,6 +265,13 @@ fn verify(home: &Path, name: Option<&str>, accept: bool) -> ExitCode {
         }
         match extensions::verify_installed(home, &name) {
             Ok(installed) => {
+                // An upgraded build the owner did not approve is never started
+                // to be checked: only `--accept` may run it.
+                if let Err(err) = extensions::mount::require_approval(home, &installed) {
+                    let _ = writeln!(std::io::stderr(), "aux ext verify: {err}");
+                    failed = true;
+                    continue;
+                }
                 let drift = runtime.block_on(async {
                     match extensions::session::session_for(
                         home,

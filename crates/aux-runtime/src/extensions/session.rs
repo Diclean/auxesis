@@ -706,6 +706,7 @@ pub async fn discover_session(
             name: name.to_owned(),
             message: "not installed".to_owned(),
         })?;
+    super::mount::require_approval(home, &installed)?;
     session_for(home, &installed, options).await
 }
 
@@ -749,12 +750,7 @@ pub async fn pin_extension(
             .into_iter()
             .map(|pin| (pin.name, pin.identity))
             .collect(),
-        network: installed
-            .entry
-            .network_allowlist()
-            .into_iter()
-            .map(|(host, port)| format!("{host}:{port}"))
-            .collect(),
+        network: super::mount::network_pins(&installed.entry),
         secrets: installed.entry.secret_names(),
     };
     store_state(home, &state)?;
@@ -785,6 +781,11 @@ pub async fn accept_current(
         .into_iter()
         .map(|pin| (pin.name, pin.identity))
         .collect();
+    // The owner's yes covers this build: its version, hosts and secret names
+    // are pinned with its tools, so the next start passes the approval check.
+    state.version = installed.version.clone();
+    state.network = super::mount::network_pins(&installed.entry);
+    state.secrets = installed.entry.secret_names();
     state.frozen = false;
     store_state(home, &state)?;
     session.stop().await;

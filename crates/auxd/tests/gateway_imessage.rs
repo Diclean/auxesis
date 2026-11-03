@@ -695,6 +695,16 @@ async fn ws_text(ws: &mut Ws) -> Option<String> {
     }
 }
 
+/// The first frame of a fresh socket, waiting up to 10 s for it (empty if none).
+async fn first_frame(ws: &mut Ws) -> String {
+    use futures_util::StreamExt;
+    let wait = std::time::Duration::from_secs(10);
+    match tokio::time::timeout(wait, ws.next()).await {
+        Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => text.to_string(),
+        _ => String::new(),
+    }
+}
+
 async fn ws_frames(ws: &mut Ws) -> String {
     let mut all = String::new();
     while let Some(frame) = ws_text(ws).await {
@@ -806,7 +816,10 @@ impl MidTurnReader {
                 let bearer = format!("Bearer {token}").parse().unwrap();
                 request.headers_mut().insert("authorization", bearer);
                 let mut ws = tokio_tungstenite::connect_async(request).await.unwrap().0;
-                ws_frames(&mut ws).await
+                // The daemon sends its snapshot on connect; a loaded CI runner
+                // can take longer than one 500 ms frame wait to deliver it.
+                let first = first_frame(&mut ws).await;
+                first + &ws_frames(&mut ws).await
             }));
             read
         })

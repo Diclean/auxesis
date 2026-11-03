@@ -162,40 +162,6 @@ public struct McpApprovalPreview: Decodable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey { case id, transport, enabled, network, env, endpoint, command, args, tools, hash; case dataClass = "data_class"; case catalogPin = "catalog_pin" }
 }
 public struct McpApproveBody: Encodable { let hash: String; let agent: String }
-// Item 12: the confirmation preview and the confirm request. NOTE: these
-// Swift sources are NOT compiled by the Rust gates; kept deliberately simple.
-public struct McpConfirmationDetails: Decodable, Equatable {
-    public let id: String; public let command: String; public let args: [String]; public let env: [String]
-    public let network: Bool; public let dataClass: String; public let binaryHash: String
-    public let highRisk: String?; public let hash: String; public let warning: String
-    /// Item 2: `stdio_unverified_program` for every non-catalog stdio server,
-    /// whatever `high_risk` says, so a missing heuristic label is never
-    /// reassuring. `nil` only for a catalog server.
-    public let unverifiedProgram: String?
-    enum CodingKeys: String, CodingKey {
-        case id, command, args, env, network, hash, warning
-        case dataClass = "data_class"; case binaryHash = "binary_hash"; case highRisk = "high_risk"
-        case unverifiedProgram = "unverified_program"
-    }
-
-    /// Item 6: the daemon sends a warning **code**, never English copy. Translate
-    /// it here, following the app language; an unknown code falls back to the
-    /// generic confirmation warning rather than showing a raw key.
-    public func warningText(_ language: Language) -> String {
-        switch warning {
-        case "mcp_stdio_confirmation": return L10n.t(.pluginsConfirmWarning, language)
-        default: return L10n.t(.pluginsConfirmWarning, language)
-        }
-    }
-
-    /// Item 2: the generic "unverified program" copy, shown in addition to the
-    /// heuristic warnings. `nil` when the daemon did not send the code.
-    public func unverifiedProgramText(_ language: Language) -> String? {
-        guard unverifiedProgram == "stdio_unverified_program" else { return nil }
-        return L10n.t(.pluginsUnverifiedProgram, language)
-    }
-}
-public struct McpConfirmBody: Encodable { public let hash: String }
 
 public struct TelegramPairingCode: Decodable, Equatable {
     public let code: String

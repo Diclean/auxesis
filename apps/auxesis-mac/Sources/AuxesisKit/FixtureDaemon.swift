@@ -845,12 +845,10 @@ extension FixtureDaemon: PluginsClient {
         Self.decode(#"{"id":"\#(id)","transport":"http","enabled":false,"network":true,"env":[],"data_class":"public","endpoint":"https://mcp.data.example/mcp","args":[],"tools":[{"name":"search","risk":"low","access":"read"}],"hash":"fixture"}"#)
     }
     public func testMcpServer(url: String) async throws -> McpConnectionTest { throw AuxdError.transport("fixture") }
-    public func mcpConfirmation(id: String) async throws -> McpConfirmationDetails { throw AuxdError.transport("fixture") }
     public func enableMcpPack(id: String, agent: String) async throws {}
     public func approveMcpServer(id: String, hash: String, agent: String) async throws {}
     public func addMcpUrlServer(id: String, url: String, dataClass: String, testDigest: String) async throws {}
     public func setMcpServer(id: String, enabled: Bool) async throws {}
     public func setMcpTools(id: String, agent: String, tools: [String]) async throws {}
     public func deleteMcpServer(id: String) async throws {}
-    public func confirmMcpServer(id: String, hash: String) async throws {}
 }

@@ -216,9 +216,6 @@ public protocol PluginsClient: AnyObject {
     func setMcpServer(id: String, enabled: Bool) async throws
     func setMcpTools(id: String, agent: String, tools: [String]) async throws
     func deleteMcpServer(id: String) async throws
-    /// Item 12: the exact launch preview and the owner's confirmation.
-    func mcpConfirmation(id: String) async throws -> McpConfirmationDetails
-    func confirmMcpServer(id: String, hash: String) async throws
 }
 
 /// A client that can pick up the local access token written *after* it was
@@ -672,9 +669,6 @@ public final class AuxdClient: AuxdTransport, FirstRunClient, PackClient, Skills
     public func setMcpServer(id: String, enabled: Bool) async throws { _ = try await perform(request("PUT", "/v1/mcp/servers/\(id)", body: JSONEncoder().encode(McpEnabledBody(enabled: enabled))), as: McpAck.self) }
     public func setMcpTools(id: String, agent: String, tools: [String]) async throws { _ = try await perform(request("PUT", "/v1/mcp/servers/\(id)/agents/\(agent)", body: JSONEncoder().encode(McpToolsBody(tools: tools))), as: McpAck.self) }
     public func deleteMcpServer(id: String) async throws { _ = try await perform(request("DELETE", "/v1/mcp/servers/\(id)"), as: McpAck.self) }
-    // Item 12: the confirmation preview / confirm calls. NOTE: not compiled.
-    public func mcpConfirmation(id: String) async throws -> McpConfirmationDetails { try await perform(request("GET", "/v1/mcp/servers/\(id)/confirmation"), as: McpConfirmationDetails.self) }
-    public func confirmMcpServer(id: String, hash: String) async throws { _ = try await perform(request("POST", "/v1/mcp/servers/\(id)/confirm", body: JSONEncoder().encode(McpConfirmBody(hash: hash))), as: McpAck.self) }
 
     public func setTelegramEnabled(_ enabled: Bool) async throws -> TelegramSettings {
         struct Body: Encodable { let enabled: Bool }

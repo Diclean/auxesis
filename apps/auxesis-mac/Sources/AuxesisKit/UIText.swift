@@ -161,7 +161,7 @@ public enum UIKey: String, CaseIterable {
     // Plugins (M6-4)
     case tabPlugins, pluginsLede, pluginsInstalled, pluginsAvailable, pluginsEmpty, pluginOn, pluginOff, pluginNeedsYou, pluginError, pluginRead, pluginReadWrite, pluginNotChecked
     case pluginOnThisMac, pluginAccess, pluginConnects, pluginAuth, pluginNone, pluginAuthKey, pluginData, pluginDataPublic, pluginDataPrivate, pluginTools, pluginToolsLater, pluginNetwork
-    case pluginNetworkAny, pluginNoNetwork, pluginEnv, pluginInstall, pluginReview, pluginTurnOff, pluginRemove, pluginPreviewTitle, pluginPreviewLede, pluginApprove, pluginGivesTo
+    case pluginNetworkAny, pluginNoNetwork, pluginEnv, pluginInstall, pluginReview, pluginTurnOff, pluginRemove, pluginPreviewTitle, pluginPreviewLede, pluginChangedReview, pluginApprove, pluginGivesTo
 
     // Menu bar
     case menuWorkingOne, menuWorkingMany, menuIdle, menuWaiting, menuOpen, menuQuit, menuOffline
@@ -608,6 +608,7 @@ public extension L10n {
         .pluginRemove: "Remove",
         .pluginPreviewTitle: "Install %@?",
         .pluginPreviewLede: "Your one yes approves everything below. If it later asks for more, Auxesis asks you again.",
+        .pluginChangedReview: "This plugin changed since you last looked. Review it again, then approve.",
         .pluginApprove: "Approve and turn on",
         .pluginGivesTo: "Gives these tools to %@",
         .generalLede: "How Auxesis reaches you, and what it may read on this Mac.",
@@ -909,6 +910,7 @@ public extension L10n {
         .pluginRemove: "Retirer",
         .pluginPreviewTitle: "Installer %@ ?",
         .pluginPreviewLede: "Votre seul oui approuve tout ce qui suit. S'il demande plus ensuite, Auxesis vous redemande.",
+        .pluginChangedReview: "Ce plugin a changé depuis votre dernier examen. Vérifiez-le à nouveau, puis approuvez.",
         .pluginApprove: "Approuver et activer",
         .pluginGivesTo: "Donne ces outils à %@",
         .mascotMenu: "Mascotte…",

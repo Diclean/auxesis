@@ -544,6 +544,9 @@ public final class Store: ObservableObject {
     @Published public private(set) var pluginPreviewAgent: String?
     /// The catalog entry the preview can be staged again from; `nil` keeps the agent fixed.
     @Published public private(set) var pluginPreviewCatalogID: String?
+    /// The last approve met a 409 `stale_confirmation`: the sheet now shows the fresh
+    /// preview and says so; Approve waits for a new yes, never an automatic one.
+    @Published public private(set) var pluginPreviewChanged = false
     private var pluginStage = 0
     @Published public private(set) var createdAgentName: String?
     @Published public var selectedProviderID: String?
@@ -1331,15 +1334,16 @@ public final class Store: ObservableObject {
             return try await client.addMcpServer(id: id, catalogID: catalogID, agent: agent)
         }
     }
-    private func showPluginPreview(agent: String?, _ fetch: (PluginsClient) async throws -> McpApprovalPreview) async {
+    private func showPluginPreview(agent: String?, changed: Bool = false, _ fetch: (PluginsClient) async throws -> McpApprovalPreview) async {
         guard let client = transport as? PluginsClient else { return }
         pluginStage += 1
         let stage = pluginStage
         pluginPreviewAgent = nil
+        pluginPreviewChanged = false
         do {
             let preview = try await fetch(client)
             guard stage == pluginStage else { return }
-            pluginPreview = preview; pluginPreviewAgent = agent; mcpFailureCode = nil
+            pluginPreview = preview; pluginPreviewAgent = agent; pluginPreviewChanged = changed; mcpFailureCode = nil
         } catch {
             guard stage == pluginStage else { return }
             mcpFailed = true; mcpFailureCode = mcpCode(error)
@@ -1348,13 +1352,18 @@ public final class Store: ObservableObject {
     /// The owner's one yes: approves exactly the shown preview (its hash) for exactly the shown agent.
     public func approvePluginPreview() async {
         guard let client = transport as? PluginsClient, let preview = pluginPreview, let agent = pluginPreviewAgent, agent == pluginAgent else { return }
-        do { try await client.approveMcpServer(id: preview.id, hash: preview.hash, agent: agent); cancelPluginPreview(); mcpFailureCode = nil } catch let error where Self.wantsApprove(mcpCode(error)) {
-            // The shown preview went stale: fetch the current one; the owner says yes again.
-            await showPluginPreview(agent: agent) { try await $0.mcpApproval(id: preview.id) }
-        } catch { mcpFailed = true; mcpFailureCode = mcpCode(error) }
+        do { try await client.approveMcpServer(id: preview.id, hash: preview.hash, agent: agent); cancelPluginPreview(); mcpFailureCode = nil } catch {
+            let code = mcpCode(error)
+            if Self.wantsApprove(code) {
+                // The shown preview went stale: fetch the current one; the owner says yes again.
+                await showPluginPreview(agent: agent, changed: code == "stale_confirmation") { try await $0.mcpApproval(id: preview.id) }
+            } else {
+                mcpFailed = true; mcpFailureCode = code
+            }
+        }
         await loadPlugins()
     }
-    public func cancelPluginPreview() { pluginStage += 1; pluginPreview = nil; pluginPreviewAgent = nil; pluginPreviewCatalogID = nil }
+    public func cancelPluginPreview() { pluginStage += 1; pluginPreview = nil; pluginPreviewAgent = nil; pluginPreviewCatalogID = nil; pluginPreviewChanged = false }
     public func clearPluginTest() { mcpTestResult = nil; mcpTestedURL = nil }
     public static func pluginAddReady(url: String, id: String, testedURL: String?) -> Bool {
         !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && testedURL == url
@@ -1381,8 +1390,9 @@ public final class Store: ObservableObject {
         do { try await call(client) } catch let error where Self.wantsApprove(mcpCode(error)) { await reviewPlugin(server) } catch { mcpFailed = true }
         await loadPlugins()
     }
-    /// 409 `use_approve` (legacy confirm gone) or `approval_required`: show the preview instead.
-    static func wantsApprove(_ code: String?) -> Bool { code == "use_approve" || code == "approval_required" }
+    /// 409 `use_approve` (legacy confirm gone), `approval_required` or `stale_confirmation`:
+    /// show the current preview instead of an error.
+    static func wantsApprove(_ code: String?) -> Bool { ["use_approve", "approval_required", "stale_confirmation"].contains(code) }
     public func deletePlugin(_ server: McpServerView) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.deleteMcpServer(id: server.id); self.refreshPlugins() } catch { self.mcpFailed = true } } }
 
     public func skills() async throws -> [LocalSkill] {

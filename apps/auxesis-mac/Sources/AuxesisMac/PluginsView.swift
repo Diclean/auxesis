@@ -79,7 +79,10 @@ struct PluginsTab: View {
         let entry = store.mcpCatalog.first { $0.id == server.id }
         let tools = server.tools.map { (name: $0.name, access: $0.risk == "low" ? PluginAccess.read : .readWrite) }
         return DisclosureRow(first: first, open: $open, key: "s:" + server.id, title: entry?.name ?? server.id, detail: entry.map(PluginText.purpose)) {
-            stateLabel(state)
+            if state.isAmber { // "Needs you" opens the preview and its one yes.
+                Button { Task { await store.reviewPlugin(server) } } label: { stateLabel(state) }
+                    .buttonStyle(.plain).accessibilityLabel(copy(.pluginReview)).accessibilityIdentifier("plugin-needs-you-\(server.id)")
+            } else { stateLabel(state) }
         } details: {
             if let entry { Fact(copy(.pluginConnects), PluginText.connects(entry, language)) }
             Fact(copy(.pluginAuth), PluginText.auth(server.auth, language))
@@ -89,7 +92,7 @@ struct PluginsTab: View {
                 Spacer()
                 action(copy(.pluginRemove), "plugin-remove-\(server.id)") { store.deletePlugin(server) }
                 if state == .on {
-                    action(copy(.pluginTurnOff), "plugin-off-\(server.id)") { store.setPlugin(server, enabled: false) }
+                    action(copy(.pluginTurnOff), "plugin-off-\(server.id)") { Task { await store.setPlugin(server, enabled: false) } }
                 } else { // Turning on always goes through the preview and the one yes.
                     action(copy(.pluginReview), "plugin-review-\(server.id)", primary: true) { Task { await store.reviewPlugin(server) } }
                 }

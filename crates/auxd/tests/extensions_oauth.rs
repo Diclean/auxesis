@@ -66,6 +66,7 @@ impl TestApi {
                 tools: Default::default(),
                 network: network_pins(&installed.entry),
                 secrets: installed.entry.secret_names(),
+                oauth: installed.entry.oauth.clone(),
             },
         )
         .unwrap();
@@ -577,5 +578,92 @@ async fn a_pending_flow_dies_on_upgrade_or_disconnect() {
     let status_path = format!("/v1/extensions/{NAME}/oauth/status");
     let status = call(api.addr, "GET", &status_path, Some(&api.token), None).await;
     assert_eq!(status.json()["connected"], json!(false), "{}", status.body);
+    api.stop();
+}
+
+// WO EXT-OAUTH-ENDPOINT-PIN (#528): the pin covered the version, the tool
+// network hosts and the secret names, but not `[oauth]`. A same-version
+// reinstall that moves only the token URL must be refused before the
+// authorization code (and a possible client secret) reaches the moved endpoint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_same_version_oauth_endpoint_change_needs_approval_before_any_code_is_sent() {
+    const NAME: &str = "moved";
+    let approved = MockServer::start().await;
+    let moved = MockServer::start().await;
+    // The moved token endpoint must see nothing while the install is unapproved.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": ACCESS_CANARY, "token_type": "Bearer"
+        })))
+        .expect(0)
+        .mount(&moved)
+        .await;
+    let mut api = TestApi::start(&approved);
+
+    let artifact = api.home.join("fixture-server");
+    std::fs::write(&artifact, MCP_FIXTURE).unwrap();
+    let mut entry = load_installed(&api.home, EXTENSION).unwrap().entry;
+    entry.name = NAME.to_string();
+    entry.source.package = artifact.to_string_lossy().into_owned();
+    entry.source.sha256 = MCP_FIXTURE_SHA256.to_string();
+    let opts = |pin| InstallOptions {
+        allow_loopback: true,
+        pin,
+    };
+    install(&api.home, &entry, &opts(true))
+        .await
+        .expect("v1 installs and pins its OAuth table");
+    let v1_pin = aux_runtime::extensions::mount::load_state(&api.home, NAME).unwrap();
+    assert_eq!(
+        v1_pin.oauth.as_ref().map(|oauth| oauth.token_url.clone()),
+        Some(format!("{}/token", approved.uri())),
+        "the install pin records the approved token URL"
+    );
+
+    // The same version and the same artefact: only `[oauth].token_url` moves.
+    entry.oauth.as_mut().unwrap().token_url = format!("{}/token", moved.uri());
+    install(&api.home, &entry, &opts(false))
+        .await
+        .expect("the same version reinstalls without touching the pin");
+
+    let start_path = format!("/v1/extensions/{NAME}/oauth/start");
+    let status_path = format!("/v1/extensions/{NAME}/oauth/status");
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    // On the old code the flow starts: complete it so the moved endpoint sees
+    // the request this test forbids, instead of racing the assertion.
+    if response.status == 200 {
+        let (url, state) = flow_state(&response);
+        hit_callback(&url, &state).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = call(api.addr, "GET", &status_path, Some(&api.token), None).await;
+                if status.json()["connected"] == json!(true) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    }
+    assert_eq!(response.status, 409, "moved token URL: {}", response.body);
+    assert_eq!(response.json()["error"]["code"], "approval_required");
+    assert!(
+        moved.received_requests().await.unwrap().is_empty(),
+        "the authorization code reached the moved token endpoint"
+    );
+
+    // The owner's one-time accept records the current table; then it starts.
+    accept_current(&api.home, NAME, true)
+        .await
+        .expect("accept the moved endpoint");
+    let accepted = aux_runtime::extensions::mount::load_state(&api.home, NAME).unwrap();
+    assert_eq!(
+        accepted.oauth.as_ref().map(|oauth| oauth.token_url.clone()),
+        Some(format!("{}/token", moved.uri()))
+    );
+    let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
+    assert_eq!(response.status, 200, "accepted start: {}", response.body);
+    let _ = flow_state(&response);
     api.stop();
 }

@@ -44,6 +44,11 @@ pub struct ExtensionState {
     /// Declared secret env names.
     #[serde(default)]
     pub secrets: Vec<String>,
+    /// The `[oauth]` table pinned at approval; `None` when the extension has
+    /// none. A state written before this pin existed has no field, so an
+    /// extension that now carries `[oauth]` fails closed until re-approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<super::catalog::OAuthConfig>,
 }
 
 /// Everything that can refuse a mount.
@@ -161,10 +166,39 @@ pub fn network_pins(entry: &super::catalog::Entry) -> Vec<String> {
         .collect()
 }
 
+/// The `[oauth]` fields that differ between the pin and the installed entry.
+///
+/// Field names only, never values: the reason is content-free.
+fn changed_oauth_fields(
+    pinned: &super::catalog::OAuthConfig,
+    now: &super::catalog::OAuthConfig,
+) -> Vec<&'static str> {
+    let mut changed = Vec::new();
+    if pinned.authorization_url != now.authorization_url {
+        changed.push("authorization_url");
+    }
+    if pinned.token_url != now.token_url {
+        changed.push("token_url");
+    }
+    if pinned.client_id != now.client_id {
+        changed.push("client_id");
+    }
+    if pinned.scopes != now.scopes {
+        changed.push("scopes");
+    }
+    if pinned.client_secret_env != now.client_secret_env {
+        changed.push("client_secret_env");
+    }
+    changed
+}
+
 /// Refuse an installed build the owner did not approve.
 ///
 /// It must carry the pinned version, and its network hosts and secret names
-/// must each be in the pinned sets. A narrower or equal set passes.
+/// must each be in the pinned sets. A narrower or equal set passes. Its
+/// `[oauth]` table must equal the pinned one: a changed authorize/token URL,
+/// client id, client secret name or scopes is refused, and an extension that
+/// gained `[oauth]` after a pin written without one fails closed.
 pub fn check_approval(
     state: &ExtensionState,
     installed: &InstalledExtension,
@@ -196,6 +230,21 @@ pub fn check_approval(
         .collect();
     if !new_secrets.is_empty() {
         return refuse(format!("new secret names: {}", new_secrets.join(", ")));
+    }
+    match (&state.oauth, &installed.entry.oauth) {
+        (Some(pinned), Some(now)) => {
+            let changed = changed_oauth_fields(pinned, now);
+            if !changed.is_empty() {
+                return refuse(format!("changed oauth fields: {}", changed.join(", ")));
+            }
+        }
+        (None, None) => {}
+        (None, Some(_)) => {
+            return refuse("the oauth configuration is not pinned".to_owned());
+        }
+        (Some(_), None) => {
+            return refuse("the pinned oauth configuration was removed".to_owned());
+        }
     }
     Ok(())
 }
@@ -509,6 +558,7 @@ mod tests {
             tools: BTreeMap::new(),
             network: Vec::new(),
             secrets: Vec::new(),
+            oauth: None,
         }
     }
 
@@ -668,6 +718,48 @@ mod tests {
         )
         .unwrap();
         check_approval(&pinned, &installed("1.0.0", &["a.example:443"], &[])).unwrap();
+    }
+
+    #[test]
+    fn approval_refuses_a_changed_oauth_scope_and_fails_closed_without_a_pin() {
+        let oauth = |scopes: &[&str]| super::super::catalog::OAuthConfig {
+            authorization_url: "https://auth.example/authorize".to_owned(),
+            token_url: "https://auth.example/token".to_owned(),
+            client_id: "client".to_owned(),
+            scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+            client_secret_env: None,
+        };
+        // Same version, hosts and secrets: only `[oauth]` moves.
+        let mut pinned = state("demo");
+        pinned.oauth = Some(oauth(&["read"]));
+        let mut entry = installed("1.0.0", &[], &[]);
+        entry.entry.oauth = Some(oauth(&["read"]));
+        check_approval(&pinned, &entry).unwrap();
+
+        entry.entry.oauth = Some(oauth(&["read", "write"]));
+        let err = check_approval(&pinned, &entry).expect_err("wider scopes must be refused");
+        assert!(matches!(err, MountError::ApprovalRequired { .. }), "{err}");
+        assert!(err.to_string().contains("scopes"), "{err}");
+        entry.entry.oauth = Some(oauth(&[]));
+        let err = check_approval(&pinned, &entry).expect_err("narrowed scopes are still a change");
+        assert!(err.to_string().contains("scopes"), "{err}");
+
+        let mut moved = oauth(&["read"]);
+        moved.token_url = "https://relay.example/token".to_owned();
+        entry.entry.oauth = Some(moved);
+        let err = check_approval(&pinned, &entry).expect_err("a moved token URL is refused");
+        assert!(err.to_string().contains("token_url"), "{err}");
+
+        // A pin written before the OAuth pin existed carries no table: a build
+        // that now has `[oauth]` fails closed, and `aux ext verify --accept`
+        // records the table once.
+        pinned.oauth = None;
+        entry.entry.oauth = Some(oauth(&["read"]));
+        let err = check_approval(&pinned, &entry).expect_err("missing pin must fail closed");
+        assert!(matches!(err, MountError::ApprovalRequired { .. }), "{err}");
+        // An extension without `[oauth]` is unaffected.
+        entry.entry.oauth = None;
+        check_approval(&pinned, &entry).unwrap();
     }
 
     #[test]

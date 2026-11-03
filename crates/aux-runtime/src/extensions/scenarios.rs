@@ -349,6 +349,7 @@ async fn sensitive_extension_is_mountable_in_private_because_b14_is_covered() {
         tools: Default::default(),
         network: Vec::new(),
         secrets: Vec::new(),
+        oauth: None,
     };
     state.tools.insert("ping".to_owned(), "00".to_owned());
     store_state(home.path(), &state).unwrap();
@@ -504,6 +505,7 @@ async fn accept_refuses_a_tampered_binary_and_stays_frozen() {
         tools: Default::default(),
         network: Vec::new(),
         secrets: Vec::new(),
+        oauth: None,
     };
     store_state(home.path(), &state).unwrap();
     // Tamper with the installed bytes: `accept` must re-hash before re-pinning.
@@ -552,6 +554,7 @@ fn remove_never_touches_another_extensions_secret_keys() {
         // The colliding name is planted in `foo`'s row: the filter must refuse
         // it because it belongs to `foo-bar`.
         secrets: vec!["EXT_FOO__TOKEN".to_owned(), "EXT_FOO_BAR__TOKEN".to_owned()],
+        oauth: None,
     };
     foo.tools.insert("ping".to_owned(), "00".to_owned());
     store_state(home.path(), &foo).unwrap();
@@ -563,6 +566,7 @@ fn remove_never_touches_another_extensions_secret_keys() {
         tools: Default::default(),
         network: Vec::new(),
         secrets: vec!["EXT_FOO_BAR__TOKEN".to_owned()],
+        oauth: None,
     };
     store_state(home.path(), &bar).unwrap();
     std::fs::write(

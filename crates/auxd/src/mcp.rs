@@ -403,12 +403,24 @@ main = ["X"]
         assert_eq!(mcp.tool_count(), 0);
     }
 
+    /// A real, readable program file that is not an MCP server.
+    ///
+    /// The confirmation binds the program's SHA-256, so the file must exist
+    /// and be readable: a program that cannot be hashed gets no binding at
+    /// all (and is never confirmed).
+    fn broken_program() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("mcp-server-does-not-speak-mcp");
+        std::fs::write(&program, b"not an mcp server\n").unwrap();
+        (dir, program.to_string_lossy().into_owned())
+    }
+
     #[test]
     fn a_confirmed_but_broken_server_is_failed_and_isolated() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         kernel_core::ensure_home(home).unwrap();
-        let command = "/nonexistent/mcp-server-does-not-exist";
+        let (_program_dir, command) = broken_program();
         // A confirmation is keyed by the daemon token, so the test must mint
         // the same binding the confirm endpoint would (now covering the whole
         // launch spec).
@@ -499,7 +511,7 @@ main = ["X"]
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         kernel_core::ensure_home(home).unwrap();
-        let command = "/bin/true";
+        let (_program_dir, command) = broken_program();
         let token = "mcp-unit-token-0123456789";
         std::fs::write(crate::api::token_path(home), token).unwrap();
         // Even a fully confirmed stdio server that claims a catalog id is

@@ -1,0 +1,14 @@
+name = "two-turn-followup"
+mode = "open"
+turns = [
+  "Which clients wrote to me about the kickoff notes?",
+  "And which of them is still waiting for an answer?",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = ["Camille Example", "Jonas Sample", "Mira Fictive"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

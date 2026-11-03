@@ -1,0 +1,13 @@
+name = "quote-request"
+mode = "open"
+turns = [
+  "A prospect asked me for a quote. Which one, and what did they ask for?",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = ["Ines Fictive", "brand site"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

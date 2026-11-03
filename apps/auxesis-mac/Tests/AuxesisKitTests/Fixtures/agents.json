@@ -1,0 +1,57 @@
+[
+  {
+    "name": "scout",
+    "enabled": true,
+    "jobs_total": 1,
+    "jobs_enabled": 1,
+    "running_job": null,
+    "stop": false,
+    "paused": false,
+    "killed": false,
+    "usage_today": { "tokens_in": 41000, "tokens_out": 1200, "usd_cents": 12 },
+    "last_activity": {
+      "at": "2026-10-05 09:12:00",
+      "kind": "message.assistant",
+      "agent": "scout",
+      "summary": "researching Lightpanda"
+    },
+    "thread_id": "7"
+  },
+  {
+    "name": "mail",
+    "enabled": false,
+    "jobs_total": 0,
+    "jobs_enabled": 0,
+    "running_job": "triage",
+    "stop": false,
+    "paused": false,
+    "killed": false,
+    "usage_today": { "tokens_in": 0, "tokens_out": 0, "usd_cents": 0 },
+    "last_activity": null,
+    "thread_id": null
+  },
+  {
+    "name": "ledger",
+    "enabled": false,
+    "jobs_total": 2,
+    "jobs_enabled": 0,
+    "running_job": null,
+    "stop": true,
+    "paused": false,
+    "killed": false,
+    "usage_today": { "tokens_in": 0, "tokens_out": 0, "usd_cents": 50 },
+    "thread_id": "9"
+  },
+  {
+    "name": "coach",
+    "enabled": true,
+    "jobs_total": 1,
+    "jobs_enabled": 1,
+    "running_job": null,
+    "stop": false,
+    "paused": true,
+    "killed": false,
+    "usage_today": { "tokens_in": 10, "tokens_out": 20, "usd_cents": 0 },
+    "thread_id": "3"
+  }
+]

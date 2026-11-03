@@ -1,0 +1,62 @@
+{
+  "fetched": "2026-10-11",
+  "source": "https://models.dev/api.json (saved offline for scripts/import-models.py; the app never fetches it)",
+  "providers": {
+    "anthropic": {
+      "models": {
+        "claude-opus-5-5": {
+          "tool_call": true,
+          "structured_output": true,
+          "limit": { "context": 1000000, "output": 128000 },
+          "cost": { "input": 4.0, "output": 20.0 }
+        },
+        "claude-sonnet-5-5": {
+          "tool_call": true,
+          "structured_output": true,
+          "limit": { "context": 1000000, "output": 128000 },
+          "cost": { "input": 3.0, "output": 15.0 }
+        },
+        "claude-haiku-5-5": {
+          "tool_call": true,
+          "structured_output": true,
+          "limit": { "context": 200000, "output": 64000 },
+          "cost": { "input": 0.8, "output": 4.0 }
+        }
+      }
+    },
+    "deepseek": {
+      "models": {
+        "deepseek-chat": {
+          "tool_call": true,
+          "structured_output": true,
+          "limit": { "context": 128000, "output": 8192 },
+          "cost": { "input": 0.27, "output": 1.1 }
+        },
+        "deepseek-flash": {
+          "tool_call": true,
+          "structured_output": true,
+          "limit": { "context": 128000, "output": 8192 }
+        }
+      }
+    },
+    "ollama-cloud": {
+      "models": {
+        "deepseek-v3.1:671b-cloud": {
+          "tool_call": true,
+          "structured_output": false,
+          "limit": { "context": 128000, "output": 8192 }
+        },
+        "qwen3-coder:480b-cloud": {
+          "tool_call": true,
+          "structured_output": false,
+          "limit": { "context": 256000, "output": 32768 }
+        },
+        "gpt-oss:120b-cloud": {
+          "tool_call": true,
+          "structured_output": false,
+          "limit": { "context": 128000, "output": 32768 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+name = "calendar-count-no-guess"
+# Live shape: chief -> Calendar agent on a thread holding an earlier answer; the count (2 today + 1 tomorrow) is read again.
+# "today and tomorrow", not "this week": the count holds on every weekday, Sunday included.
+mode = "open"
+agent = "aux"
+turns = [
+  "Ask the Calendar agent: what is on my calendar today and tomorrow?",
+  "Ask the Calendar agent: how many events do I have today and tomorrow? Reply with only the number",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank"]
+
+[checks]
+must_contain = []
+last_turn_must_contain = ["3"]
+must_not_contain = ["can't say"]
+max_replies_per_turn = 1
+no_send_without_approval = false

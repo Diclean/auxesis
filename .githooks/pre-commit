@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Versioned pre-commit hook.
+#
+# Do not copy this file into .git/hooks: run `scripts/install-hooks.sh` once
+# per clone; it points core.hooksPath at .githooks/ so this hook is tracked
+# and updated with the repo.
+#
+# The scanner runs on the whole tree, so no per-file argument is needed.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+exec scripts/check-no-secrets.sh

@@ -1,0 +1,33 @@
+[package]
+name = "aux-crm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The owner's clients: parties, relationships, timeline and the contacts-index sync"
+# Never published until the owner gives the go. The licence is Apache-2.0;
+# `deny.toml` `[licenses.private]` skips unpublishable members.
+publish = false
+
+[lib]
+name = "aux_crm"
+path = "src/lib.rs"
+
+[dependencies]
+aux-store = { path = "../aux-store" }
+# B3: the timeline summary is minted through the kernel's SafeText gate (a
+# local destination: the detectors run, nothing is masked) and capped with the
+# same sanitiser the mail connector uses.
+kernel-core.workspace = true
+kernel-privacy.workspace = true
+kernel-broker.workspace = true
+# Exact `YYYY-MM-DD` / RFC 3339 validation for a follow-up due date.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# WO CLIENT-TZ-FIELD: a client's zone is an IANA name, validated before it is
+# stored. Already in the lock (`aux-runtime` reads event zones with it).
+chrono-tz = "0.10"
+serde_json = "1"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,13 @@
+name = "french-question-english-answer"
+mode = "open"
+turns = [
+  "Quel est le dernier message recu dans ma boite mail ? Reponds en anglais.",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank"]
+
+[checks]
+lang = "en"
+must_contain = ["Meeting invite: kickoff 1"]
+must_not_contain = ["Bonjour", "Recu en anglais", "boite mail"]
+max_replies_per_turn = 1
+no_send_without_approval = false

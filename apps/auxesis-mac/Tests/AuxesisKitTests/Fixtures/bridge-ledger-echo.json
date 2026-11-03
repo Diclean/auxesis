@@ -1,0 +1,8 @@
+{
+  "type": "bridge.request",
+  "payload": {
+    "op": "eventkit.create_event",
+    "id": "8f14e45f-ea0b-4a3c-9a1e-2b7c5d6e0f11"
+  },
+  "ts": 1730000000
+}

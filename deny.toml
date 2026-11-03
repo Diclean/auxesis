@@ -1,0 +1,85 @@
+# cargo-deny configuration — dependency licences, advisories, bans, sources.
+#
+# Written by REPO-HYGIENE-1 from the supply-chain audit (advisories and
+# licences).
+#
+# The public CI runs `cargo deny check` as a blocking `lint` step (see
+# .github/public-workflows/ci.yml, shipped as .github/workflows/ci.yml): an
+# advisory, licence, ban or source violation fails the job. The private
+# repository's `fast` lane keeps its own copy informational while that policy
+# settles; that workflow does not ship. Locally, `cargo deny check` needs the
+# cargo-deny binary, which is NOT installed as part of this repo's toolchain.
+#
+# cargo-deny version in CI: 0.20.2 (EmbarkStudios/cargo-deny-action v2.1.1).
+#
+# Since the egui front-end removal, every licence atom in the graph resolves
+# against the owner's enumerated allow-list; the private lane's informational
+# setting is a policy decision, not a licence gap.
+
+[advisories]
+# All vulnerability advisories are errors (cargo-deny 0.20 removed the
+# `vulnerability` level field). The glib/proc-macro-error hits recorded here
+# left the graph with egui. RustSec does NOT track the bundled SQLite CVEs
+# (audit B-03) — those need the rusqlite bump, not this file.
+unmaintained = "workspace" # fail only for direct workspace deps; transitive stays a warning
+yanked = "deny"
+# `paste` 1.0.15 is unmaintained (RUSTSEC-2024-0436) and has no fixed release.
+# It reaches the graph only through `tokenizers 0.21.4`, itself a transitive
+# dependency of the optional `ner-gliner` feature. Updating tokenizers beyond
+# 0.21.4 is a separate dependency decision, so record the reason here instead
+# of leaving an unfixable advisory in the report.
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained and has no fixed release; reached only via tokenizers 0.21.4 (gliner2-rs, optional ner-gliner feature), and a tokenizers major update is a separate decision" },
+]
+
+[licenses]
+# Allow-list agreed in the audit decision. Every atom in every licence
+# expression of a non-ignored crate must resolve through this list.
+#
+# NOTE (rh-1-2, updated by the egui removal): the list below is the owner's
+# enumerated permissive set. As of the SwiftUI-only tree, every licence atom
+# in the graph resolves against it — the egui font licences
+# (`epaint_default_fonts`: OFL-1.1 + Ubuntu-font-1.0) and the BSL-1.0
+# Windows-only pair (`clipboard-win`/`error-code`) all left the graph with
+# `crates/aux-app`. The public CI runs the check blocking; the private lane's
+# `continue-on-error` is a policy call, not a licence gap.
+# Adding a licence is a legal decision: only atoms the owner explicitly
+# approves may be added (as a per-crate exception where that is narrower).
+# A new licence still needs that call: the blocking public check reports it,
+# it does not approve it.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",                # file-level copyleft; no crate of the graph uses it today
+    "CDLA-Permissive-2.0",    # webpki-root-certs 1.0.9 (prod, Mozilla CA bundle)
+    "0BSD",
+    "CC0-1.0",
+]
+# `OpenSSL` is deliberately NOT allowed: Cargo.lock contains no `openssl-sys`
+# (only `openssl-probe`, which is MIT OR Apache-2.0), so no crate needs it.
+confidence-threshold = 0.9
+
+[licenses.private]
+# Every workspace member is `publish = false`, so the members' own licence
+# fields are not checked here. The owner has chosen Apache-2.0: the crates
+# declare it and the `LICENSE` file at the repository root carries the full
+# text. cargo-deny does not decide that.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+
+[sources]
+# crates.io only. The kernel (`kernel/`) and the invoices library
+# (`crates/aux-invoices`) are in-tree path dependencies, so no git source is
+# allowed. Nothing broader.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

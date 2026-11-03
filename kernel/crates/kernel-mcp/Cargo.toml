@@ -1,0 +1,63 @@
+[package]
+name = "kernel-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+exclude = ["tests/support/fake_mcp_server.rs"]
+
+[features]
+test-fixture = []
+# Exposes `StdioTransport::new_for_tests`, the only public unsandboxed
+# constructor. It is enabled solely by kernel-mcp's own `[dev-dependencies]` below;
+# no production crate (the app's daemon and CLI) enables it, so their builds can construct a
+# stdio transport only through the sandbox-mandatory `StdioTransport::new`.
+test-util = []
+
+[dependencies]
+async-trait = "0.1"
+# S2 reuses the shared untrusted-text sanitiser and the `Risk` enum rather than
+# growing a second copy of either.
+# The privacy rows an MCP transport maps to (`kernel_core::privacy`, B13/B14).
+kernel-core = { path = "../kernel-core" }
+kernel-broker = { path = "../kernel-broker" }
+# Item 5: the arguments of a `tools/call` are built from the grant-bound
+# `SafeValue`, so a raw `serde_json::Value` cannot reach an HTTP server.
+kernel-privacy = { path = "../kernel-privacy" }
+# Runtime HTTP MCP connections reuse the exact SSRF guard `test_server` uses,
+# including IP pinning (redesign item 6).
+kernel-net = { path = "../kernel-net" }
+# The 6-char disambiguator for over-long wire names.
+blake3 = "1"
+# Item 4: the confirmation digest pins the SHA-256 of the binary at the
+# canonical path, computed at confirm time and re-checked at spawn.
+sha2 = "0.10"
+libc = "0.2"
+reqwest = { workspace = true }
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "process", "io-util"] }
+# P2 reads `~/.auxesis/mcp.toml`; serde owns the shape, this owns the parse.
+toml.workspace = true
+# A rewrite edits the parsed document so comments, formatting and quarantined
+# entries are preserved (never the old line-based span scanner).
+toml_edit.workspace = true
+# Startup discovery and per-agent mounting log by id and kind only.
+tracing.workspace = true
+
+[dev-dependencies]
+kernel-mcp = { path = ".", features = ["test-fixture", "test-util"] }
+kernel-broker = { path = "../kernel-broker" }
+axum = "=0.8.9"
+futures-util = "0.3"
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "process", "io-util"] }
+
+# Test-only MCP stdio fixture. The self dev-dependency enables this feature for
+# tests only; package exclusion prevents its source from entering cargo package.
+[[bin]]
+name = "fake_mcp_server"
+path = "tests/support/fake_mcp_server.rs"
+required-features = ["test-fixture"]

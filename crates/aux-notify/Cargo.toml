@@ -1,0 +1,23 @@
+[package]
+name = "aux-notify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+# Explicit, non-default test seam: only a debug build with this feature
+# compiles it (a release build fails, see lib.rs), and then
+# `AUXESIS_NOTIFY_OSASCRIPT` may point the transport at a stand-in program so
+# integration tests never run the real `/usr/bin/osascript`. Production builds
+# never enable it; `cargo tree -e features` shows it is off by default, and a
+# default-build test asserts the override is ignored.
+test-notify = []
+
+[dependencies]
+kernel-broker.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

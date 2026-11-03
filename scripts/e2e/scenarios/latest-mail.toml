@@ -1,0 +1,13 @@
+name = "latest-mail"
+mode = "open"
+turns = [
+  "What is the most recent message in my inbox?",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = ["Meeting invite: kickoff 1"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

@@ -1,0 +1,29 @@
+[package]
+name = "aux-imessage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "aux_imessage"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aux-imessage"
+path = "src/bin/aux-imessage.rs"
+
+[dependencies]
+clap.workspace = true
+kernel-core.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true

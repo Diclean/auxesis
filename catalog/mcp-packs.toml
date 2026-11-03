@@ -1,0 +1,55 @@
+[[pack]]
+id = "freelance-fr"
+title_en = "French freelance"
+title_fr = "Freelance en France"
+description_en = "Company, law and public-service lookups for French independent workers."
+description_fr = "Vérifier entreprises, textes et services publics utiles aux indépendants en France."
+servers = ["datagouv-mcp", "mcp-eu-finance", "nl-eli-mcp", "microsoft-learn-mcp", "france-travail-mcp"]
+
+[[pack]]
+id = "freelance-eu"
+title_en = "EU freelance"
+title_fr = "Freelance en Europe"
+description_en = "European company, law and reference-rate lookups."
+description_fr = "Consulter entreprises, textes et taux de référence européens."
+servers = ["worldbank-data360-mcp", "nl-eli-mcp", "france-travail-mcp", "datos-gob-es-mcp", "ecb-mcp"]
+
+[[pack]]
+id = "travel"
+title_en = "Travel"
+title_fr = "Voyage"
+description_en = "Places, routing, public transport, flights and weather information."
+description_fr = "Trouver des lieux, itinéraires, transports publics, vols et météo."
+servers = ["tomtom-maps-mcp", "mapbox-mcp-server", "openstreetmap-mcp", "transitland-mcp", "idfm-paris-transit-mcp", "db-timetable-mcp", "kiwi-flights-mcp"]
+
+[[pack]]
+id = "research"
+title_en = "Research"
+title_fr = "Recherche"
+description_en = "Scientific literature, general knowledge and public research data."
+description_fr = "Explorer la littérature scientifique, le savoir général et les données publiques."
+servers = ["openalex-mcp-server", "arxiv-mcp-server", "crossref-mcp-server", "pubmed-mcp-server", "nasa-earthdata-cmr-mcp", "wikidata-mcp-server", "wikipedia-mcp-rudra"]
+
+[[pack]]
+id = "productivity"
+title_en = "Productivity"
+title_fr = "Productivité"
+description_en = "Translation, web search and first-party documentation for daily work."
+description_fr = "Traduction, recherche web et documentation officielle pour le travail quotidien."
+servers = ["wikipedia-mcp-rudra", "brave-search-mcp", "exa-mcp", "tavily-mcp", "google-developer-knowledge-mcp", "microsoft-learn-mcp"]
+
+[[pack]]
+id = "public-data"
+title_en = "Public data"
+title_fr = "Données publiques"
+description_en = "Official public datasets, statistics and company registries."
+description_fr = "Données publiques officielles, statistiques et registres d’entreprises."
+servers = ["datagouv-mcp", "esankhyiki-mcp", "gsa-usgs-national-map-mcp", "gsa-per-diem-mcp", "gsa-nist-nvd-mcp", "worldbank-data360-mcp"]
+
+[[pack]]
+id = "finance"
+title_en = "Finance"
+title_fr = "Finance"
+description_en = "VIES VAT checks and reference rates; no commercial VAT intermediary."
+description_fr = "Validation TVA par VIES et taux de référence, sans intermédiaire commercial."
+servers = ["worldbank-data360-mcp", "ecb-mcp", "ecb-fx-rates-mcp", "frankfurter-mcp", "mcp-eu-finance"]

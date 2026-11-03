@@ -1,0 +1,7 @@
+{"id": "c1", "lang": "en", "text": "Email a@example.com or call +33 6 12 34 56 78.", "spans": [{"type": "EMAIL", "start": 6, "end": 19}, {"type": "PHONE", "start": 28, "end": 45}]}
+{"id": "c2", "lang": "fr", "text": "IBAN FR7630006000011234567890189 et tél 06 12 34 56 78", "spans": [{"type": "IBAN", "start": 5, "end": 32}, {"type": "PHONE", "start": 41, "end": 55}]}
+{"id": "c3", "lang": "hu", "text": "TAJ 123456788 and tax 8123456786", "spans": [{"type": "HU_TAJ", "start": 4, "end": 13}, {"type": "HU_TAX_ID", "start": 22, "end": 32}]}
+{"id": "c4", "lang": "en", "text": "card 4111 1111 1111 1111 and ip 192.168.0.1", "spans": [{"type": "CREDIT_CARD", "start": 5, "end": 24}, {"type": "IPV4", "start": 32, "end": 43}]}
+{"id": "c5", "lang": "en", "text": "visit https://example.com/x now", "spans": [{"type": "URL", "start": 6, "end": 27}]}
+{"id": "c6", "lang": "fr", "text": "SIREN 732829320 et TVA FR83404833048", "spans": [{"type": "FR_SIREN", "start": 6, "end": 15}, {"type": "FR_VAT", "start": 23, "end": 36}]}
+{"id": "c7", "lang": "en", "text": "City of Paris and phone 00 00", "spans": []}

@@ -1,0 +1,70 @@
+# Gitleaks configuration for the Auxesis tree.
+#
+#     gitleaks dir . --no-banner
+#
+# `gitleaks dir` finds this file in the tree; `--config .gitleaks.toml` names
+# it explicitly. The default rule set is kept. The allowlist is path-only and
+# names the synthetic fixture files already justified in
+# scripts/secret-scan-allowlist.txt: a real credential must never be added to
+# one of these paths, and a new fixture gets its exact path here, never a
+# value regex.
+#
+# Every path is a full repo-relative regex anchored with ^...$: gitleaks
+# applies these with MatchString, so an unanchored path would also allow a
+# backup (`<path>.bak`) or the same suffix under another directory.
+title = "Auxesis"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secret fixtures reviewed in scripts/secret-scan-allowlist.txt"
+paths = [
+    # The fixture catalogue itself quotes the shapes it explains.
+    '''^scripts/secret-scan-allowlist\.txt$''',
+
+    # The shared redaction canary corpus.
+    '''^test-support/redaction_canaries\.rs$''',
+    '''^kernel/test-support/redaction_canaries\.rs$''',
+
+    # auxd: API and activity unit tests, and their integration fixtures.
+    '''^crates/auxd/src/agent_job\.rs$''',
+    '''^crates/auxd/src/api/approval\.rs$''',
+    '''^crates/auxd/src/api/deltas\.rs$''',
+    '''^crates/auxd/src/api/events\.rs$''',
+    '''^crates/auxd/src/api/providers\.rs$''',
+    '''^crates/auxd/src/api/receipt\.rs$''',
+    '''^crates/auxd/src/api/snapshot\.rs$''',
+    '''^crates/auxd/src/api/wire\.rs$''',
+    '''^crates/auxd/tests/api\.rs$''',
+    '''^crates/auxd/tests/b_api_3\.rs$''',
+    '''^crates/auxd/tests/bapiv2_fix2_regression\.rs$''',
+    '''^crates/auxd/tests/bapiv2_fix_regression\.rs$''',
+    '''^crates/auxd/tests/firstrun_api\.rs$''',
+    '''^crates/auxd/tests/private_turn\.rs$''',
+    '''^crates/auxd/tests/ws_f1_streaming\.rs$''',
+
+    # aux-acp: the fake agent and the scrub tests it feeds.
+    '''^crates/aux-acp/src/bin/acp_fake_agent\.rs$''',
+    '''^crates/aux-acp/src/scrub\.rs$''',
+    '''^crates/aux-acp/src/supervisor\.rs$''',
+    '''^crates/aux-acp/tests/acp_integration\.rs$''',
+
+    # kernel: scrub and secret-recognizer fixtures.
+    '''^kernel/crates/kernel-broker/src/scrub\.rs$''',
+    '''^kernel/crates/kernel-broker/src/text\.rs$''',
+    '''^kernel/crates/kernel-mcp/src/error\.rs$''',
+    '''^kernel/crates/kernel-mcp/tests/mcp_secrets\.rs$''',
+    '''^kernel/crates/kernel-privacy/src/recognizers/secrets\.rs$''',
+    '''^kernel/crates/kernel-privacy/tests/k10_sensitive\.rs$''',
+    '''^kernel/crates/kernel-privacy/tests/k12_secrets_every_mode\.rs$''',
+    '''^kernel/crates/kernel-privacy/tests/prefix_key_glue\.rs$''',
+    # Read verbatim as TOML/YAML text: a same-line marker would change the fixture.
+    '''^kernel/crates/kernel-privacy/tests/k10_gate_config\.rs$''',
+
+    # Labelled privacy-eval corpora (the held-out sets are not in the tree).
+    '''^kernel/qa/privacy-eval/cases/k10-sensitive\.jsonl$''',
+    '''^kernel/qa/privacy-eval/scripts/fixtures/sample-cases\.jsonl$''',
+    # JSONL cannot carry a comment; the value is a synthetic stripe token shape.
+    '''^kernel/qa/privacy-eval/tests/fixtures/tier-c-breakdown\.jsonl$''',
+]

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Privacy eval case",
+  "description": "One labelled FAKE case in cases/<lang>.jsonl. Offsets are Unicode code point indexes into text (Python str indexes); end is exclusive.",
+  "type": "object",
+  "required": ["id", "lang", "kind", "text", "spans", "expect_residue", "triage_label", "notes"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^(fr|en|af|hu|ar|ru|zh)-[a-z]+-[0-9]{2}$"
+    },
+    "lang": {
+      "enum": ["fr", "en", "af", "hu", "ar", "ru", "zh"]
+    },
+    "kind": {
+      "enum": ["short", "thread", "scan_text", "triage", "injection", "public_trap"]
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "start", "end"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "enum": ["person", "org", "address", "phone", "email", "handle", "iban", "passport", "national_id", "card", "health", "religion", "date_of_birth"]
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "expect_residue": {
+      "type": "boolean"
+    },
+    "triage_label": {
+      "enum": ["relevant", "spam", "phishing", "irrelevant"]
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

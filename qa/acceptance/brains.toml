@@ -1,0 +1,23 @@
+# Nightly brain legs (phase1.md §6). One table per leg, read by
+# scripts/nightly-summary.sh and the nightly-brains workflow.
+#
+# required: exactly `true` or `false`. When true, the run fails if a test in
+#           this leg is skipped, or fewer than `expected` tests passed.
+# expected: how many tests the leg runs. Required when `required = true`.
+# key:      the env var that holds the leg's secret. Absent → the leg is
+#           reported as `skipped: <leg>: no key` and is not run.
+
+[fake]
+required = true
+expected = 6
+
+[cloud]
+required = false
+name = "DeepSeek"
+key = "AUXESIS_CLOUD_KEY"
+
+[ollama-cloud]
+required = false
+url = "https://ollama.com/v1"
+model_var = "AUX_HERO_OLLAMA_CLOUD_MODEL"
+key = "AUXESIS_OLLAMA_CLOUD_KEY"

@@ -1,0 +1,10 @@
+{
+  "results": [
+    {"name": "Paris", "latitude": 48.85341, "longitude": 2.3488, "elevation": 42.0, "feature_code": "PPLC", "country_code": "FR", "country": "France", "admin1": "Île-de-France Region", "timezone": "Europe/Paris", "population": 2138551},
+    {"name": "Paris", "latitude": 33.66094, "longitude": -95.55551, "feature_code": "PPLA2", "country_code": "US", "country": "United States", "admin1": "Texas", "timezone": "America/Chicago"},
+    {"name": "Paris", "latitude": 36.30193, "longitude": -88.32672, "feature_code": "PPL", "country_code": "US", "country": "United States", "admin1": "Tennessee", "timezone": "America/Chicago"},
+    {"name": "Paris", "latitude": 38.20979, "longitude": -84.25357, "feature_code": "PPLA2", "country_code": "US", "country": "United States", "admin1": "Kentucky", "timezone": "America/New_York"},
+    {"name": "Paris", "latitude": 43.19583, "longitude": -80.38167, "feature_code": "PPL", "country_code": "CA", "country": "Canada", "admin1": "Ontario", "timezone": "America/Toronto"}
+  ],
+  "generationtime_ms": 0.6
+}

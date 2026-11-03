@@ -1,0 +1,36 @@
+[package]
+name = "aux-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+kernel-core.workspace = true
+kernel-privacy.workspace = true
+kernel-broker.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { workspace = true, features = ["rc"] }
+serde_json = "1"
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The integration tests (tests/providers_layer.rs, tests/ollama_preset.rs,
+# tests/openai_compat_wire.rs) link this crate as an external dependency and
+# need its `test_gate` seam, which is compiled only with the `test-util`
+# feature. A self dev-edge turns it on for this crate alone (`cargo test -p
+# aux-providers`, `cargo clippy -p aux-providers --all-targets`), the way
+# crates/aux-mail and crates/auxd do it; a production build never enables it.
+aux-providers = { path = ".", features = ["test-util"] }
+kernel-privacy = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["time"] }
+wiremock = "0.6"
+
+[features]
+# Test helpers for tokenising gates (`test_gate`), for this crate and its dependents' tests.
+test-util = ["kernel-privacy/test-util"]

@@ -1,0 +1,13 @@
+name = "mail-thread-mira"
+mode = "open"
+turns = [
+  "Summarise the thread with Mira Fictive about the kickoff notes.",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = ["Kickoff notes 3"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

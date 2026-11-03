@@ -1,0 +1,12 @@
+{"type":"message.new","at":"2026-10-05 09:12:00","agent":"scout","message":{"id":"11","thread_id":"7","author":{"kind":"you"},"ts":1791106320000,"blocks":[{"kind":"text","text":"Find out whether Lightpanda works."}],"streaming":false,"pending":false}}
+{"type":"message.new","at":"2026-10-05 09:12:05","agent":"scout","message":{"id":"12","thread_id":"7","author":{"kind":"agent","id":"scout"},"ts":1791106325000,"blocks":[{"kind":"text","text":"On it."}],"streaming":false,"pending":false}}
+{"type":"message.delta","at":"2026-10-05 09:13:00","agent":"scout","thread_id":"7","message_id":"13","text":"Working"}
+{"type":"message.delta","at":"2026-10-05 09:13:01","agent":"scout","thread_id":"7","message_id":"13","text":" on it."}
+{"type":"message.done","at":"2026-10-05 09:13:02","agent":"scout","thread_id":"7","message_id":"13"}
+{"type":"tool.start","at":"2026-10-05 09:13:10","agent":"scout","thread_id":"7","message_id":"13","call":{"tool":"web_search","args":"{\"q\":\"lightpanda cdp\"}","ok":null,"result_preview":null}}
+{"type":"tool.end","at":"2026-10-05 09:13:11","agent":"scout","thread_id":"7","message_id":"13","index":0,"call":{"tool":"web_search","args":"{\"q\":\"lightpanda cdp\"}","ok":true,"result_preview":"3 results"},"tokens":0,"cost_cents":0.0}
+{"type":"approval.new","at":"2026-10-05 09:13:20","agent":"scout","approval":{"id":"ap-1-1","audit_id":4809,"agent":"scout","thread_id":"7","ts":1791106400000,"action":"run shell","headline":"SHELL · scout · {\"command\":\"ls\"}","preview":"ls","detail":[],"why":"no matching rule: this tool always asks","unsandboxed":false,"clean_note":"arguments were sanitized and redacted by auxd","scope_tool":"shell","scope_rule":"ask (no matching allow rule)","destructive":true,"state":{"state":"pending"}}}
+{"type":"approval.resolved","at":"2026-10-05 09:13:30","agent":"scout","id":"ap-1-1","state":{"state":"allowed","by":"you","always":false}}
+{"type":"agent.state","at":"2026-10-05 09:14:00","agent":"scout","state":"working"}
+{"type":"agent.state","at":"2026-10-05 09:14:01","agent":"scout","state":{"name":"scout","enabled":true,"jobs_total":0,"jobs_enabled":0,"running_job":null,"stop":false,"paused":false,"killed":false,"usage_today":{"tokens_in":100,"tokens_out":200,"usd_cents":3},"thread_id":"7"}}
+{"type":"provider.upsert","provider":{"id":"p1","name":"DeepSeek"}}

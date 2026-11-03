@@ -1,0 +1,150 @@
+[package]
+name = "auxd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "auxd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "auxd"
+path = "src/main.rs"
+
+[features]
+# The level-1 fetch is on: it is built on kernel-net's pinned client. A4
+# graduates `acp` into the default build (OpenCode as an ACP brain); MA3
+# keeps `mail` on by default.
+default = ["l1-fetch", "mail", "acp", "ner-gliner"]
+ner-gliner = ["kernel-privacy/ner-gliner", "aux-engine/ner-gliner"]
+# WO-04: frozen integrations. Every switch below is OFF in the default build,
+# which links, starts and exposes none of them. Each crate stays a workspace
+# member, so `--workspace` still compiles it as a library.
+acp = ["dep:aux-acp"]
+# The level-1 fetch (`http_fetch`, weather); parked until the kernel exposes its client factory.
+l1-fetch = ["aux-runtime/l1-fetch", "aux-engine/l1-fetch"]
+# MA3: the native mail read tools (B19/B22). On by default; it only mounts
+# tools for an agent that grants one, and only while `[connectors.mail]` names
+# an account.
+mail = ["dep:aux-mail"]
+# MA4: frozen Google integrations, off by default so the default binary links
+# no Google code (`google_` symbols absent). `--features google` restores every
+# old path.
+google = ["dep:aux-google"]
+# Forwards aux-notify's explicit, non-default test seam so the daemon
+# integration tests can observe a stand-in notifier instead of the real
+# `/usr/bin/osascript`. Never enabled by default (CI and release builds do
+# not pass it); a release build with it fails to compile (aux-notify).
+# `cargo tree -e features` shows it stays off.
+test-notify = ["aux-notify/test-notify"]
+# The in-process turn seams (the tool-registry hook and its origin
+# override). Never enabled by default: a release daemon does not compile
+# them, so a runtime replacement can never inherit a builtin origin.
+test-util = []
+
+[dependencies]
+blake3 = "1.8"
+anyhow.workspace = true
+async-trait = "0.1"
+aux-acp = { path = "../aux-acp", optional = true }
+aux-brief = { path = "../aux-brief" }
+# B3: the CRM API, timeline builders and the skill-only follow-up tool.
+# E3: the Clients routes edit parties through the CRM (`api/clients.rs`).
+aux-crm = { path = "../aux-crm" }
+kernel-core.workspace = true
+aux-runtime = { path = "../aux-runtime" }
+aux-engine = { path = "../aux-engine" }
+kernel-net.workspace = true
+aux-google = { path = "../aux-google", optional = true }
+# MA3: the native mail connector (IMAP read + attachment download).
+aux-mail = { path = "../aux-mail", optional = true }
+kernel-mcp.workspace = true
+aux-notify = { path = "../aux-notify" }
+kernel-privacy = { workspace = true, features = ["ner-gliner"] }
+aux-providers = { path = "../aux-providers" }
+aux-store = { path = "../aux-store" }
+# C1: the deterministic receipts collector and the shared evidence sink.
+aux-docs = { path = "../aux-docs" }
+# D34/G2: the Messages (iMessage) transport behind the Gateway trait.
+aux-imessage = { path = "../aux-imessage" }
+kernel-broker.workspace = true
+axum = { version = "=0.8.9", features = ["ws"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap.workspace = true
+libc = "0.2"
+rusqlite.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time", "net", "sync"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# The integration tests (`tests/agents.rs`, `tests/api.rs`) drive the turn-hook
+# and tool-origin seams, which are compiled only with `test-util`. A self
+# dev-edge enables it for `cargo test -p auxd`, as aux-cli does for the
+# workspace build; a production build never enables it.
+auxd = { path = ".", features = ["test-util"] }
+# B1: the property test writes a CRM party through the crate API and proves the
+# next fake-provider body is tokenised, so the test links `aux-crm`.
+aux-crm = { path = "../aux-crm" }
+# E5: the extension OAuth integration test drives the real routes against a
+# loopback fake authorization server. Only this dev edge enables the
+# aux-runtime `testing` loopback seam; a production `auxd` build never does.
+aux-runtime = { path = "../aux-runtime", features = ["testing"] }
+# The B1 acceptance test is a property test. Already a workspace
+# dev-dependency, so this is a new edge, not a new version.
+proptest.workspace = true
+# Approved new dev edge; chrono-tz 0.10 is already used by aux-runtime and kernel-core.
+chrono-tz = "0.10"
+# PRIV-CRM-LEAK: the property oracle matches names after NFKC, as the kernel
+# does. Already a kernel dependency at this version, so a new edge only.
+unicode-normalization = "0.1"
+aux-providers = { path = "../aux-providers", features = ["test-util"] }
+aux-engine = { path = "../aux-engine", features = ["test-util"] }
+# The hero test (`tests/skill_hero.rs`) drives the Google skill writes against a
+# loopback wiremock server, which needs the aux-google `test-util` seam.
+aux-google = { path = "../aux-google", features = ["test-util"] }
+wiremock = "0.6"
+base64 = "=0.23.1"
+# The daemon integration test `mcp_reload_concurrency.rs` spawns an offline
+# stdio MCP fixture. On a host with no OS sandbox that spawn is refused unless
+# aux-mcp is built with `test-util`, which only dev-dependencies enable: the
+# bare `[dependencies]` entry above stays feature-free, so a production
+# `cargo check -p auxd` never sets it (and could not spawn unsandboxed anyway).
+kernel-mcp = { workspace = true, features = ["test-util"] }
+futures-util = "=0.3.34"
+tempfile.workspace = true
+tokio-tungstenite = "=0.30.0"
+# M2: the local-brief acceptance test points a configured account at the
+# in-process loopback mailbox simulator. Dev-only, as for aux-mail.
+aux-fakemail = { path = "../aux-fakemail" }
+
+# The hero acceptance test lives in qa/acceptance.
+[[test]]
+name = "hero_send_invite"
+path = "../../qa/acceptance/hero_send_invite.rs"
+
+# AGENT-REAL-1: the owner's questions against the real model; skips without the
+# AUX_HERO_CLOUD_* env.
+[[test]]
+name = "agent_real"
+path = "../../qa/acceptance/agent_real.rs"
+
+# DOC-COLLECT-2: the demo receipt is a real PDF, and the owner's receipt
+# question against the real model.
+[[test]]
+name = "receipt"
+path = "../../qa/acceptance/receipt.rs"
+
+# The hero test simulates the 600 s approval silence on paused tokio time
+# (`tokio::time::pause`), which needs `test-util`. A target table keeps this
+# apart from the `[dev-dependencies]` block above.
+[target.'cfg(all())'.dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,0 +1,711 @@
+//! The extension scenarios, end to end on this host.
+//!
+//! These live as unit tests (not `tests/`) so they can use the crate's regular
+//! dependencies to build a signed test catalog and a fixture stdio server.
+//! The real `sandbox-exec` checks are `#[ignore]` and macOS-only; the Linux CI
+//! gate runs the rest.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use base64::Engine as _;
+use ed25519_dalek::{Signer, SigningKey};
+use kernel_broker::{
+    ApprovalRequest, Approver, ApproverError, AuthorizeRequest, Broker, ExecutionMode,
+    MemoryAuditSink, Taint, ToolRegistry,
+};
+use sha2::{Digest, Sha256};
+
+use super::catalog::{Entry, EntryKind, Run, Sensitivity, Source, SourceType, Transport};
+use super::install::{install, load_installed, remove, InstallOptions};
+use super::mount::{
+    accept, freeze, is_frozen, is_mounted, load_state, mount, mounted_extensions, store_state,
+    unmount, ExtensionHost, ExtensionState,
+};
+use super::session::{session_for, verify_identity, SessionOptions};
+use super::{extensions_dir, hex};
+
+const TEST_SEED: [u8; 32] = [13u8; 32];
+
+fn key() -> SigningKey {
+    SigningKey::from_bytes(&TEST_SEED)
+}
+
+/// A minimal stdio MCP server in POSIX shell. `description` is what the
+/// `ping` tool advertises, so a variant changes the pinned identity.
+fn fixture_script(description: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=${{line#*\"id\":}}; id=${{id%%,*}}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2025-11-25","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"fixture","version":"1.0.0"}}}}}}\n' "$id"
+      ;;
+    *'"method":"tools/list"'*)
+      id=${{line#*\"id\":}}; id=${{id%%,*}}
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"ping","description":"{description}","inputSchema":{{"type":"object","properties":{{}},"additionalProperties":false}}}},{{"name":"leak","description":"Print a secret","inputSchema":{{"type":"object","properties":{{}},"additionalProperties":false}}}}]}}}}\n' "$id"
+      ;;
+    *'"method":"tools/call"'*)
+      id=${{line#*\"id\":}}; id=${{id%%,*}}
+      text="pong"
+      case "$line" in *'"name":"leak"'*) text="token=$EXT_DEMO__TOKEN";; esac
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"%s"}}],"isError":false}}}}\n' "$id" "$text"
+      ;;
+    *) ;;
+  esac
+done
+"#
+    )
+}
+
+fn fixture_entry(name: &str, script: &[u8], version: &str, sensitivity: Sensitivity) -> Entry {
+    Entry {
+        name: name.to_owned(),
+        kind: EntryKind::Mcp,
+        version: version.to_owned(),
+        licence: "MIT".to_owned(),
+        reviewed: true,
+        sensitivity,
+        summary_en: "fixture".to_owned(),
+        summary_fr: "fixture".to_owned(),
+        source: Source {
+            kind: SourceType::Binary,
+            package: "server".to_owned(),
+            sha256: hex(&Sha256::digest(script)),
+        },
+        run: Run {
+            transport: Transport::Stdio,
+            command: "server".to_owned(),
+            args: Vec::new(),
+        },
+        tools: vec![
+            super::catalog::EntryTool {
+                name: "ping".to_owned(),
+                description: "Ping the fixture".to_owned(),
+                network: Vec::new(),
+                secrets: Vec::new(),
+                auth: "none".to_owned(),
+                fs: Vec::new(),
+            },
+            super::catalog::EntryTool {
+                name: "leak".to_owned(),
+                description: "Print a secret".to_owned(),
+                network: Vec::new(),
+                secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
+                auth: "none".to_owned(),
+                fs: Vec::new(),
+            },
+        ],
+        oauth: None,
+        meta: None,
+    }
+}
+
+/// Write a signed catalog tree for `entries` and return the public key.
+fn signed_catalog(dir: &Path, entries: &[Entry]) -> ed25519_dalek::VerifyingKey {
+    std::fs::create_dir_all(dir.join("entries")).unwrap();
+    let mut index = String::from("format = 1\ncatalog_version = \"2026.10.09-1\"\n");
+    for entry in entries {
+        let text = toml::to_string(entry).unwrap();
+        std::fs::write(
+            dir.join("entries").join(format!("{}.toml", entry.name)),
+            &text,
+        )
+        .unwrap();
+        index.push_str(&format!(
+            "[[entry]]\nname = \"{}\"\nfile = \"entries/{}.toml\"\nsha256 = \"{}\"\n",
+            entry.name,
+            entry.name,
+            hex(&Sha256::digest(text.as_bytes()))
+        ));
+    }
+    let bytes = index.into_bytes();
+    std::fs::write(dir.join("index.toml"), &bytes).unwrap();
+    let signature = base64::engine::general_purpose::STANDARD.encode(key().sign(&bytes).to_bytes());
+    std::fs::write(dir.join("index.toml.sig"), signature).unwrap();
+    key().verifying_key()
+}
+
+/// Write the fixture script to a temp file and return (path, bytes).
+fn write_script(dir: &Path, name: &str, script: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, script).unwrap();
+    path
+}
+
+/// Install the fixture entry end to end and return the home/name.
+async fn install_fixture(home: &Path, name: &str, script: &str) -> Entry {
+    let scratch = tempfile::tempdir().unwrap();
+    let path = write_script(scratch.path(), "server", script);
+    let mut entry = fixture_entry(name, script.as_bytes(), "1.0.0", Sensitivity::Public);
+    entry.source.package = path.to_string_lossy().into_owned();
+    install(
+        home,
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: true,
+        },
+    )
+    .await
+    .expect("fixture installs");
+    entry
+}
+
+#[tokio::test]
+async fn catalog_refuses_a_tampered_index_and_keeps_the_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    let entry = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Public);
+    let key = signed_catalog(dir.path(), &[entry]);
+    let home = tempfile::tempdir().unwrap();
+    let cache = super::CatalogCache::new(home.path());
+    let catalog = super::Catalog::load_dir(dir.path(), &key).unwrap();
+    let index_bytes = std::fs::read(dir.path().join("index.toml")).unwrap();
+    let signature = std::fs::read_to_string(dir.path().join("index.toml.sig")).unwrap();
+    cache.store(&catalog, &index_bytes, &signature).unwrap();
+    assert_eq!(cache.cached_version().as_deref(), Some("2026.10.09-1"));
+    // A tampered index no longer verifies, and the cache is untouched.
+    let mut tampered = index_bytes.clone();
+    tampered.push(b'\n');
+    assert!(super::verify_index(&tampered, &signature, &key).is_err());
+    assert_eq!(cache.cached_version().as_deref(), Some("2026.10.09-1"));
+}
+
+#[test]
+fn entry_hash_mismatch_and_version_rollback_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    let entry = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Public);
+    let key = signed_catalog(dir.path(), &[entry]);
+    // Corrupt the entry file: its sha256 no longer matches the index line.
+    std::fs::write(dir.path().join("entries/demo.toml"), "name = \"demo\"\n").unwrap();
+    assert!(super::Catalog::load_dir(dir.path(), &key).is_err());
+    // A lower version than the cache is refused.
+    let home = tempfile::tempdir().unwrap();
+    let cache = super::CatalogCache::new(home.path());
+    std::fs::create_dir_all(cache.dir()).unwrap();
+    std::fs::write(cache.dir().join("catalog_version"), "2026.10.10-0\n").unwrap();
+    assert!(cache.check_monotonic("2026.10.09-9").is_err());
+    assert_eq!(cache.cached_version().as_deref(), Some("2026.10.10-0"));
+}
+
+#[tokio::test]
+async fn sha256_mismatch_refuses_the_install_and_leaves_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let path = write_script(scratch.path(), "server", "#!/bin/sh\necho real\n");
+    let mut entry = fixture_entry("demo", b"expected-bytes", "1.0.0", Sensitivity::Public);
+    entry.source.package = path.to_string_lossy().into_owned();
+    assert!(install(
+        home.path(),
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: false,
+        },
+    )
+    .await
+    .is_err());
+    assert!(!extensions_dir(home.path()).join("demo@1.0.0").exists());
+}
+
+#[tokio::test]
+async fn identity_drift_freezes_and_unmounts() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    assert!(is_mounted(home.path(), "demo", "alice"));
+    // Swap the installed server for one whose `ping` description changed.
+    let installed = load_installed(home.path(), "demo").unwrap();
+    std::fs::write(
+        installed.dir.join("server"),
+        fixture_script("Ping the fixture v2"),
+    )
+    .unwrap();
+    let session = session_for(home.path(), &installed, &SessionOptions::default())
+        .await
+        .unwrap();
+    let drift = verify_identity(home.path(), "demo", &session.tools);
+    assert!(drift.is_err());
+    session.stop().await;
+    assert!(is_frozen(home.path(), "demo"));
+    assert!(!is_mounted(home.path(), "demo", "alice"));
+    // The owner can re-approve.
+    accept(home.path(), "demo").unwrap();
+    assert!(!is_frozen(home.path(), "demo"));
+}
+
+#[tokio::test]
+async fn a_printed_secret_is_scrubbed_from_the_tool_output() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    let canary = "CANARY-WO13B-SECRET-9f2c1d4a";
+    std::fs::write(
+        home.path().join(".env"),
+        format!("EXT_DEMO__TOKEN={canary}\n"),
+    )
+    .unwrap();
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let session = session_for(home.path(), &installed, &SessionOptions::default())
+        .await
+        .unwrap();
+    let value = session
+        .call_tool_raw("leak", serde_json::json!({}))
+        .await
+        .unwrap();
+    session.stop().await;
+    let rendered = value.to_string();
+    assert!(!rendered.contains(canary), "{rendered}");
+    assert!(rendered.contains("token="), "{rendered}");
+}
+
+#[tokio::test]
+async fn remove_leaves_no_file_no_secret_and_no_mount() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    let canary = "CANARY-WO13B-REMOVE-1234";
+    std::fs::write(
+        home.path().join(".env"),
+        format!("KEEP=1\nEXT_DEMO__TOKEN={canary}\n"),
+    )
+    .unwrap();
+    let removed = remove(home.path(), "demo").unwrap();
+    assert_eq!(removed, 1);
+    assert!(!extensions_dir(home.path()).join("demo@1.0.0").exists());
+    assert!(!is_mounted(home.path(), "demo", "alice"));
+    assert!(load_state(home.path(), "demo").is_none());
+    let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
+    assert!(env.contains("KEEP=1"));
+    assert!(!env.contains("EXT_DEMO__TOKEN"));
+    assert!(!env.contains(canary));
+}
+
+#[tokio::test]
+async fn a_real_entry_installs_and_its_tool_is_mcp_name_tool_default_ask() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    assert_eq!(mounted_extensions(home.path(), "alice"), vec!["demo"]);
+
+    let host = ExtensionHost::start(home.path()).await;
+    let mut registry = ToolRegistry::new();
+    let mounted = host.register_for_agent("alice", &mut registry);
+    assert_eq!(mounted, 2);
+
+    let wire = kernel_mcp::wire_name("demo", "ping");
+    assert_eq!(wire, "mcp__demo__ping");
+    assert_eq!(kernel_mcp::display_name("demo", "ping"), "mcp.demo.ping");
+    let tool = registry.get(&wire).expect("registered");
+    assert!(
+        tool.class().requires_explicit_rule,
+        "an MCP tool must require an exact-name rule"
+    );
+
+    // Broker default: with no rule, the approver is consulted.
+    let approver = Arc::new(RecordingApprover::default());
+    let broker = Broker::new(
+        Arc::new(MemoryAuditSink::new()),
+        Vec::new(),
+        approver.clone(),
+        Arc::new(registry),
+    );
+    let taint = Taint::Clean;
+    let authorization = broker
+        .authorize(AuthorizeRequest {
+            agent: "alice",
+            tool: &wire,
+            risk: kernel_broker::Risk::High,
+            arguments: serde_json::json!({}),
+            taint: &taint,
+            read_only: false,
+            mode: ExecutionMode::Sandboxed,
+            requires_explicit_rule: true,
+            skill: None,
+            skill_only: false,
+        })
+        .await
+        .unwrap();
+    assert!(authorization.is_allowed());
+    assert!(approver.asked.load(Ordering::SeqCst), "broker must ask");
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn sensitive_extension_is_mountable_in_private_because_b14_is_covered() {
+    let home = tempfile::tempdir().unwrap();
+    let mut state = ExtensionState {
+        name: "secret-ext".to_owned(),
+        version: "1.0.0".to_owned(),
+        kind: "mcp".to_owned(),
+        frozen: false,
+        tools: Default::default(),
+        network: Vec::new(),
+        secrets: Vec::new(),
+    };
+    state.tools.insert("ping".to_owned(), "00".to_owned());
+    store_state(home.path(), &state).unwrap();
+    let entry = fixture_entry(
+        "secret-ext",
+        fixture_script("Ping").as_bytes(),
+        "1.0.0",
+        Sensitivity::Sensitive,
+    );
+    assert!(super::mount::may_mount_in_mode(
+        &entry,
+        kernel_core::privacy::PrivacyMode::Private
+    ));
+    assert!(super::mount::may_mount_in_mode(
+        &entry,
+        kernel_core::privacy::PrivacyMode::Open
+    ));
+    // A frozen extension refuses a mount regardless of mode.
+    freeze(home.path(), "secret-ext", "test").unwrap();
+    assert!(mount(home.path(), "secret-ext", "alice").is_err());
+    let _ = unmount(home.path(), "secret-ext", "alice");
+}
+
+/// Write `[privacy] mode` into the home's `config.toml`.
+fn set_mode(home: &Path, mode: &str) {
+    std::fs::write(
+        home.join("config.toml"),
+        format!("[privacy]\nmode = \"{mode}\"\n"),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_sensitive_extension_is_offered_in_private_mode_too() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    let scratch = tempfile::tempdir().unwrap();
+    let path = write_script(scratch.path(), "server", &script);
+    let mut entry = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Sensitive);
+    entry.source.package = path.to_string_lossy().into_owned();
+    install(
+        home.path(),
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: true,
+        },
+    )
+    .await
+    .unwrap();
+    set_mode(home.path(), "open");
+    mount(home.path(), "demo", "alice").unwrap();
+    let host = ExtensionHost::start(home.path()).await;
+    let mut registry = ToolRegistry::new();
+    assert_eq!(host.register_for_agent("alice", &mut registry), 2);
+    // Private (TOK-7): B14 is covered, so the next turn still offers the tools.
+    set_mode(home.path(), "private");
+    let mut registry = ToolRegistry::new();
+    assert_eq!(host.register_for_agent("alice", &mut registry), 2);
+    assert!(registry
+        .get(&kernel_mcp::wire_name("demo", "ping"))
+        .is_some());
+    host.stop().await;
+}
+
+#[tokio::test]
+async fn reinstall_keeps_a_freeze_until_accept() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    freeze(home.path(), "demo", "drift").unwrap();
+    assert!(is_frozen(home.path(), "demo"));
+    // A reinstall re-pins the tools but must not clear the freeze.
+    install_fixture(home.path(), "demo", &script).await;
+    assert!(
+        is_frozen(home.path(), "demo"),
+        "reinstall must keep the freeze until `verify --accept`"
+    );
+    accept(home.path(), "demo").unwrap();
+    assert!(!is_frozen(home.path(), "demo"));
+}
+
+#[tokio::test]
+async fn accept_repins_the_current_identity() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    // The owner installs a new build (its own pinned sha256) without re-pinning
+    // its tools, so the changed description freezes it on the next start.
+    let v2 = fixture_script("Ping the fixture v2");
+    let scratch = tempfile::tempdir().unwrap();
+    let path = write_script(scratch.path(), "server", &v2);
+    let mut entry = fixture_entry("demo", v2.as_bytes(), "1.0.0", Sensitivity::Public);
+    entry.source.package = path.to_string_lossy().into_owned();
+    install(
+        home.path(),
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: false,
+        },
+    )
+    .await
+    .unwrap();
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let session = session_for(home.path(), &installed, &SessionOptions::default())
+        .await
+        .unwrap();
+    assert!(verify_identity(home.path(), "demo", &session.tools).is_err());
+    session.stop().await;
+    assert!(is_frozen(home.path(), "demo"));
+    // `verify --accept` re-pins the live identity.
+    super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap();
+    assert!(!is_frozen(home.path(), "demo"));
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let session = session_for(home.path(), &installed, &SessionOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        verify_identity(home.path(), "demo", &session.tools).is_ok(),
+        "the accepted identity must not refreeze on the next start"
+    );
+    session.stop().await;
+}
+
+#[tokio::test]
+async fn accept_refuses_a_tampered_binary_and_stays_frozen() {
+    let home = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    let path = write_script(scratch.path(), "server", &script);
+    let mut entry = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Public);
+    entry.source.package = path.to_string_lossy().into_owned();
+    install(
+        home.path(),
+        &entry,
+        &InstallOptions {
+            allow_loopback: true,
+            pin: false,
+        },
+    )
+    .await
+    .unwrap();
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let state = ExtensionState {
+        name: "demo".to_owned(),
+        version: "1.0.0".to_owned(),
+        kind: "mcp".to_owned(),
+        frozen: true,
+        tools: Default::default(),
+        network: Vec::new(),
+        secrets: Vec::new(),
+    };
+    store_state(home.path(), &state).unwrap();
+    // Tamper with the installed bytes: `accept` must re-hash before re-pinning.
+    std::fs::write(
+        installed.dir.join("server"),
+        fixture_script("Ping the fixture v2"),
+    )
+    .unwrap();
+    let err = super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("sha256 mismatch"), "{err}");
+    assert!(
+        is_frozen(home.path(), "demo"),
+        "a tampered binary must not clear the freeze"
+    );
+}
+
+#[tokio::test]
+async fn remove_deletes_only_this_extensions_secrets() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    std::fs::write(
+        home.path().join(".env"),
+        "AUX_KEY_DEEPSEEK=keep\n\
+         EXT_DEMO__TOKEN=drop\n",
+    )
+    .unwrap();
+    remove(home.path(), "demo").unwrap();
+    let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
+    assert!(env.contains("AUX_KEY_DEEPSEEK=keep"));
+    assert!(!env.contains("EXT_DEMO__TOKEN"));
+}
+
+#[test]
+fn remove_never_touches_another_extensions_secret_keys() {
+    let home = tempfile::tempdir().unwrap();
+    let mut foo = ExtensionState {
+        name: "foo".to_owned(),
+        version: "1.0.0".to_owned(),
+        kind: "mcp".to_owned(),
+        frozen: false,
+        tools: Default::default(),
+        network: Vec::new(),
+        // The colliding name is planted in `foo`'s row: the filter must refuse
+        // it because it belongs to `foo-bar`.
+        secrets: vec!["EXT_FOO__TOKEN".to_owned(), "EXT_FOO_BAR__TOKEN".to_owned()],
+    };
+    foo.tools.insert("ping".to_owned(), "00".to_owned());
+    store_state(home.path(), &foo).unwrap();
+    let bar = ExtensionState {
+        name: "foo-bar".to_owned(),
+        version: "1.0.0".to_owned(),
+        kind: "mcp".to_owned(),
+        frozen: false,
+        tools: Default::default(),
+        network: Vec::new(),
+        secrets: vec!["EXT_FOO_BAR__TOKEN".to_owned()],
+    };
+    store_state(home.path(), &bar).unwrap();
+    std::fs::write(
+        home.path().join(".env"),
+        "EXT_FOO__TOKEN=a\nEXT_FOO_BAR__TOKEN=b\n",
+    )
+    .unwrap();
+    remove(home.path(), "foo").unwrap();
+    let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
+    assert!(!env.contains("EXT_FOO__TOKEN"), "{env}");
+    assert!(env.contains("EXT_FOO_BAR__TOKEN"), "{env}");
+}
+
+/// A recording approver: proves the broker consulted it.
+#[derive(Default)]
+struct RecordingApprover {
+    asked: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl Approver for RecordingApprover {
+    async fn approve(&self, _request: &ApprovalRequest) -> Result<bool, ApproverError> {
+        self.asked.store(true, Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
+// ---- Test 5: the egress proxy's allowlist, fully offline -------------------
+
+async fn proxy_reply(allow: Vec<(String, u16)>, target: &str) -> String {
+    let proxy = kernel_net::spawn_egress_proxy(allow).await.unwrap();
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", proxy.port()))
+        .await
+        .unwrap();
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let request = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut body = Vec::new();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_end(&mut body),
+    )
+    .await;
+    proxy.shutdown().await;
+    String::from_utf8_lossy(&body).into_owned()
+}
+
+#[tokio::test]
+async fn proxy_allows_only_the_listed_host_and_port() {
+    let allow = vec![("allowed.invalid".to_owned(), 443u16)];
+    // The allowlisted host passes authorization; DNS then fails, which is the
+    // proof it was not refused by the allowlist.
+    let allowed = proxy_reply(allow.clone(), "allowed.invalid:443").await;
+    assert!(allowed.contains("dns_failure"), "{allowed}");
+    assert!(!allowed.contains("host_not_allowed"), "{allowed}");
+    // Another host is refused by the allowlist.
+    let other = proxy_reply(allow.clone(), "other.invalid:443").await;
+    assert!(other.contains("host_not_allowed"), "{other}");
+    // The right host on the wrong port is refused too.
+    let wrong_port = proxy_reply(allow, "allowed.invalid:80").await;
+    assert!(wrong_port.contains("port_not_allowed"), "{wrong_port}");
+}
+
+// ---- Tests 4 and 5: the real macOS sandbox --------------------------------
+//
+// The seatbelt profile currently aborts every child on macOS 27 (kernel WO
+// K08 fixes it), so these stay `#[ignore]`d. Each test runs a **positive
+// control** first — `/usr/bin/true` under the same profile must exit 0, and in
+// the proxy case a child must reach the allowed loopback port. If the profile
+// aborts everything, the control fails and the test cannot pass vacuously.
+
+#[cfg(target_os = "macos")]
+fn sandbox_run(profile: &str, program: &str, args: &[&str]) -> std::process::ExitStatus {
+    std::process::Command::new("/usr/bin/sandbox-exec")
+        .arg("-p")
+        .arg(profile)
+        .arg(program)
+        .args(args)
+        .status()
+        .expect("run sandbox-exec")
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_with_no_proxy_port_denies_network() {
+    let work = tempfile::tempdir().unwrap();
+    let spec = kernel_mcp::SandboxSpec {
+        install_dir: PathBuf::from("/usr"),
+        work_dir: work.path().to_path_buf(),
+        runtime_read_paths: vec![PathBuf::from("/usr/bin")],
+        proxy_port: None,
+    };
+    let profile = kernel_mcp::seatbelt_profile(&spec);
+    // Positive control: the profile must be able to run a child at all.
+    assert!(
+        sandbox_run(&profile, "/usr/bin/true", &[]).success(),
+        "positive control: the profile must run /usr/bin/true"
+    );
+    let status = sandbox_run(
+        &profile,
+        "/usr/bin/nc",
+        &["-z", "-w", "2", "1.1.1.1", "443"],
+    );
+    assert!(!status.success(), "the sandbox must deny the connection");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_allows_only_the_proxy_port_and_proxy_refuses_other_hosts() {
+    let work = tempfile::tempdir().unwrap();
+    // A live loopback listener stands in for the egress proxy port.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let port_arg = port.to_string();
+    let spec = kernel_mcp::SandboxSpec {
+        install_dir: PathBuf::from("/usr"),
+        work_dir: work.path().to_path_buf(),
+        runtime_read_paths: vec![PathBuf::from("/usr/bin")],
+        proxy_port: Some(port),
+    };
+    let profile = kernel_mcp::seatbelt_profile(&spec);
+    // Positive controls: a child runs, and it can reach the allowed port.
+    assert!(
+        sandbox_run(&profile, "/usr/bin/true", &[]).success(),
+        "positive control: the profile must run /usr/bin/true"
+    );
+    assert!(
+        sandbox_run(
+            &profile,
+            "/usr/bin/nc",
+            &["-z", "-w", "2", "127.0.0.1", port_arg.as_str()],
+        )
+        .success(),
+        "positive control: a child must reach the allowed loopback port"
+    );
+    // Negative: a direct connection off the machine is denied.
+    let status = sandbox_run(
+        &profile,
+        "/usr/bin/nc",
+        &["-z", "-w", "2", "1.1.1.1", "443"],
+    );
+    assert!(
+        !status.success(),
+        "a direct connection must be denied even when the proxy port is allowed"
+    );
+}

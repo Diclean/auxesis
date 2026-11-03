@@ -1,0 +1,21 @@
+[package]
+name = "aux-invoices"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["The Auxesis Authors"]
+description = "Invoice e-invoice XML parsing and deterministic totals checks for Auxesis. Pure: no I/O, no network."
+publish = false
+
+[dependencies]
+# Content identity: callers name a document by its SHA-256 (`sha256_hex`).
+sha2 = "0.10"
+quick-xml = "=0.41.0"
+# Exact decimal arithmetic only: the default features pull serde, rkyv, borsh,
+# bitvec and uuid, none of which this crate uses (C2b supply-chain review). The
+# app converts a `Decimal` through `Display`; nothing serialises it.
+rust_decimal = { version = "=1.39.0", default-features = false, features = ["std"] }
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"

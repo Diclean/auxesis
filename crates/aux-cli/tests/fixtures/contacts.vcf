@@ -1,0 +1,31 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Camille Exemple
+N:Exemple;Camille;;;
+NICKNAME:Cam,Milla
+EMAIL;TYPE=INTERNET:camille.exemple@example.invalid
+TEL;TYPE=CELL:+33 6 12 34 56 78
+TEL;TYPE=HOME:06 98 76 54 32
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Kovács Anna
+N:Kovács;Anna;;;
+EMAIL:anna.kovacs@example.invalid
+TEL;VALUE=uri;TYPE=CELL:tel:+36-20-123-4567
+TEL;TYPE=CELL:+386 40 123 456
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Pieter van der Merwe
+N:van der Merwe;Pieter;;;
+EMAIL:pieter.vandermerwe@example.invalid
+TEL;TYPE=CELL:+27 82 123 4567
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:王小明
+N:王;小明;;;
+EMAIL:wang.xiaoming@example.invalid
+TEL:+86 138 0013 8000
+END:VCARD

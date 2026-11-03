@@ -1,0 +1,40 @@
+[package]
+name = "aux-google"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Native Google OAuth connector for Auxesis"
+publish = false
+
+[features]
+# Loopback Google hosts and a fixed-token auth for wiremock tests in other crates.
+test-util = []
+
+[dependencies]
+kernel-core.workspace = true
+aux-runtime = { path = "../aux-runtime" }
+kernel-net.workspace = true
+aux-store = { path = "../aux-store" }
+kernel-broker.workspace = true
+aux-providers = { path = "../aux-providers" }
+async-trait = "0.1"
+base64 = "=0.23.1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+getrandom = "0.2"
+reqwest = { workspace = true, features = ["form", "json", "stream"] }
+serde.workspace = true
+serde_json = "1"
+sha2 = "=0.10.9"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
+url = "2"
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+wiremock = "0.6"

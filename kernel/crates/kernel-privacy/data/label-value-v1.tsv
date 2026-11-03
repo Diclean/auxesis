@@ -1,0 +1,240 @@
+# LABEL-VALUE-1 lexicon: a sensitive label whose next value is masked.
+# Columns: lang <TAB> class <TAB> link <TAB> label.
+#   class  SECRET (Secret), COOKIE (Secret, the rest of the line holding `=`),
+#          ID (NATIONAL_ID), HEALTH (HEALTH, a record or plan number), BLOOD (HEALTH, a blood group),
+#          MEMBER (HEALTH, a number after a label that is health only near a health word).
+#   link   any = the value may follow with no link (`MRN 448812`, `the pin, 7198`);
+#          punct = only after `:`, `=`, `#` or a number word (`pwd`, `tin`, `health plan no.`);
+#          number = only when a number word comes first (`licence number`, `licence no.`, `Nr`, `n°`).
+# Labels are written folded: lower case, no accents, `_` and `-` read as a space.
+# A number word after a label (`no.`, `Nr`, `n°`, `number`) is a link, so `passport` covers
+# `passport no.`; a number word glued to its value is read with it (`n°12AB34567`,
+# ID-LABEL-2). List a longer label only when its words differ. Left out on purpose:
+# `id number` (payment_ids owns it, with its business exclusions). `licence`/`license` alone is no label: it is a word before a
+# fee, a date or a version (`licence: 2024-10-01`), and the number behind it is read by
+# its structure under the licence rule of id_label.rs instead. Followed by a number word
+# it is one (`licence number 12AB34567`, `Licence No. …`, ID-LABEL-1; a business
+# certificate's number is masked with it), so it is listed with the `number` link.
+#
+# --- English (complete first) ---
+en	SECRET	any	password
+en	SECRET	any	passwords
+en	SECRET	any	passphrase
+en	SECRET	any	passcode
+en	SECRET	punct	passwd
+en	SECRET	punct	pwd
+en	SECRET	any	pin
+en	SECRET	any	pin code
+en	SECRET	any	pin number
+en	SECRET	any	door code
+en	SECRET	any	gate code
+en	SECRET	any	alarm code
+en	SECRET	any	access code
+en	SECRET	any	entry code
+en	SECRET	any	safe code
+en	SECRET	any	lock code
+en	SECRET	any	unlock code
+en	SECRET	any	wifi password
+en	SECRET	any	wi fi password
+en	SECRET	any	api key
+en	SECRET	any	apikey
+en	SECRET	any	api token
+en	SECRET	any	api secret
+en	SECRET	any	access key
+en	SECRET	any	access token
+en	SECRET	any	auth token
+en	SECRET	any	bearer token
+en	SECRET	any	refresh token
+en	SECRET	any	secret key
+en	SECRET	any	client secret
+en	SECRET	any	private key
+en	SECRET	any	signing key
+en	SECRET	any	session token
+en	SECRET	any	session key
+en	SECRET	punct	session
+en	SECRET	punct	sessionid
+en	SECRET	punct	session id
+en	SECRET	punct	sid
+en	SECRET	punct	token
+en	SECRET	punct	secret
+en	SECRET	any	recovery code
+en	SECRET	any	backup code
+en	SECRET	any	seed phrase
+en	SECRET	any	recovery phrase
+en	COOKIE	punct	cookie
+en	COOKIE	punct	set cookie
+en	ID	any	national id
+en	ID	any	national identity number
+en	ID	any	national insurance number
+en	ID	any	id card
+en	ID	any	identity card
+en	ID	any	identity card number
+en	ID	any	passport
+en	ID	any	passport number
+en	ID	any	driving licence
+en	ID	any	driving license
+en	ID	any	driver licence
+en	ID	any	driver license
+en	ID	any	drivers licence
+en	ID	any	drivers license
+en	ID	any	driver's license
+en	ID	any	driver's licence
+en	ID	any	driver license number
+en	ID	any	driver licence number
+en	ID	any	driving license number
+en	ID	any	driving licence number
+en	ID	any	tax id
+en	ID	any	tax number
+en	ID	any	taxpayer id
+en	ID	any	tax identification number
+en	ID	punct	tin
+en	ID	any	social security number
+en	ID	any	residence permit
+en	ID	any	visa number
+en	ID	any	ssn
+en	ID	any	driver number
+en	ID	any	driverlicense
+en	ID	any	driverslicense
+en	ID	any	driverlicensenumber
+en	ID	any	driverslicensenumber
+en	ID	any	drivinglicence
+en	ID	any	drivinglicense
+en	ID	any	passportnumber
+en	ID	any	passportno
+en	ID	any	nationalid
+en	ID	any	taxid
+en	ID	number	licence
+en	ID	number	license
+en	HEALTH	any	mrn
+en	HEALTH	punct	medical record
+en	HEALTH	any	medical record number
+en	HEALTH	any	patient id
+en	HEALTH	any	patient number
+en	HEALTH	punct	health plan
+en	HEALTH	any	health plan number
+en	HEALTH	any	health plan beneficiary number
+en	HEALTH	any	beneficiary number
+en	HEALTH	any	health insurance number
+en	HEALTH	any	health insurance id
+en	HEALTH	any	insurance member id
+en	HEALTH	any	nhs number
+en	HEALTH	any	medicare number
+en	HEALTH	any	medicaid number
+en	HEALTH	any	medicaid id
+en	HEALTH	any	medical record numbers
+en	HEALTH	any	health plan beneficiary numbers
+en	HEALTH	any	health plan (beneficiary) number
+en	HEALTH	any	health plan (beneficiary) numbers
+en	HEALTH	any	health plan id
+en	HEALTH	punct	nhs
+en	MEMBER	any	member id
+en	MEMBER	any	member number
+en	MEMBER	any	subscriber id
+en	BLOOD	any	blood type
+en	BLOOD	any	blood group
+en	BLOOD	punct	rh
+#
+# --- French ---
+fr	SECRET	any	mot de passe
+fr	SECRET	any	mdp
+fr	SECRET	any	code pin
+fr	SECRET	any	code d'acces
+fr	SECRET	any	code de la porte
+fr	SECRET	any	digicode
+fr	SECRET	any	cle api
+fr	SECRET	any	cle secrete
+fr	ID	any	cni
+fr	ID	any	carte nationale d'identite
+fr	ID	any	carte d'identite
+fr	ID	any	piece d'identite
+fr	ID	any	permis de conduire
+fr	ID	any	numero de permis de conduire
+fr	ID	any	n° de permis de conduire
+fr	ID	any	no de permis de conduire
+fr	ID	any	numero de permis
+fr	ID	any	n° de permis
+fr	ID	any	no de permis
+fr	ID	any	permis
+fr	ID	any	passeport
+fr	ID	any	numero de passeport
+fr	ID	any	titre de sejour
+fr	ID	any	numero fiscal
+fr	ID	any	numero de securite sociale
+fr	ID	any	n° de securite sociale
+fr	ID	any	no de securite sociale
+fr	ID	punct	securite sociale
+fr	HEALTH	punct	dossier medical
+fr	HEALTH	any	numero de dossier patient
+fr	HEALTH	any	numero de patient
+fr	HEALTH	any	numero de dossier medical
+fr	HEALTH	any	n° de dossier medical
+fr	HEALTH	any	numero patient
+fr	HEALTH	any	identifiant patient
+fr	HEALTH	any	carte vitale
+fr	HEALTH	punct	mutuelle
+fr	BLOOD	any	groupe sanguin
+#
+# --- German (audit repro) ---
+de	SECRET	any	passwort
+de	SECRET	any	kennwort
+de	ID	any	personalausweis
+de	ID	any	personalausweisnummer
+de	ID	any	ausweisnummer
+de	ID	punct	ausweis
+de	ID	any	dokumentennummer
+de	ID	any	reisepass
+de	ID	any	reisepassnummer
+de	ID	any	fuhrerschein
+de	ID	any	steuer id
+de	ID	any	steueridentifikationsnummer
+de	BLOOD	any	blutgruppe
+#
+# --- Afrikaans ---
+af	SECRET	any	wagwoord
+af	ID	any	id nommer
+af	ID	any	identiteitsnommer
+af	ID	any	paspoort
+af	ID	any	paspoortnommer
+af	ID	any	rybewys
+af	ID	any	belastingnommer
+af	HEALTH	any	mediese fonds
+af	BLOOD	any	bloedgroep
+#
+# --- Hungarian ---
+hu	SECRET	any	jelszo
+hu	SECRET	any	pin kod
+hu	ID	any	szemelyi igazolvany
+hu	ID	any	szemelyi igazolvany szama
+hu	ID	any	szemelyi szam
+hu	ID	any	utlevel
+hu	ID	any	utlevelszam
+hu	ID	any	adoazonosito
+hu	ID	any	adoazonosito jel
+hu	ID	any	jogositvany
+hu	BLOOD	any	vercsoport
+#
+# --- Slovene ---
+sl	SECRET	any	geslo
+sl	ID	any	osebna izkaznica
+sl	ID	any	potni list
+sl	ID	any	stevilka potnega lista
+sl	ID	any	vozniske dovoljenje
+sl	ID	any	davcna stevilka
+sl	ID	any	emso
+sl	BLOOD	any	krvna skupina
+#
+# --- Chinese ---
+zh	SECRET	any	密码
+zh	SECRET	any	口令
+zh	ID	any	身份证
+zh	ID	any	身份证号
+zh	ID	any	身份证号码
+zh	ID	any	护照
+zh	ID	any	护照号
+zh	ID	any	护照号码
+zh	ID	any	驾驶证
+zh	ID	any	驾照
+zh	ID	any	税号
+zh	HEALTH	any	病历号
+zh	HEALTH	any	医保卡号
+zh	BLOOD	any	血型

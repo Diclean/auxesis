@@ -1,0 +1,74 @@
+# Generated offline from catalog/models.dev.json (fetched 2026-10-11).
+# Run: python3 -I scripts/import-models.py. Do not edit by hand.
+
+[[model]]
+provider = "anthropic"
+id = "claude-haiku-5-5"
+tools = true
+structured_output = true
+context = 200000
+output = 64000
+input_usd_mtok = 0.8
+output_usd_mtok = 4.0
+
+[[model]]
+provider = "anthropic"
+id = "claude-opus-5-5"
+tools = true
+structured_output = true
+context = 1000000
+output = 128000
+input_usd_mtok = 4.0
+output_usd_mtok = 20.0
+
+[[model]]
+provider = "anthropic"
+id = "claude-sonnet-5-5"
+tools = true
+structured_output = true
+context = 1000000
+output = 128000
+input_usd_mtok = 3.0
+output_usd_mtok = 15.0
+
+[[model]]
+provider = "deepseek"
+id = "deepseek-chat"
+tools = true
+structured_output = true
+context = 128000
+output = 8192
+input_usd_mtok = 0.27
+output_usd_mtok = 1.1
+
+[[model]]
+provider = "deepseek"
+id = "deepseek-flash"
+tools = true
+structured_output = true
+context = 128000
+output = 8192
+
+[[model]]
+provider = "ollama-cloud"
+id = "deepseek-v3.1:671b-cloud"
+tools = true
+structured_output = false
+context = 128000
+output = 8192
+
+[[model]]
+provider = "ollama-cloud"
+id = "gpt-oss:120b-cloud"
+tools = true
+structured_output = false
+context = 128000
+output = 32768
+
+[[model]]
+provider = "ollama-cloud"
+id = "qwen3-coder:480b-cloud"
+tools = true
+structured_output = false
+context = 256000
+output = 32768

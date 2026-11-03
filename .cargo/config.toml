@@ -1,0 +1,17 @@
+# Disk hygiene (owner 2026-10-04): debug builds were 8-15 GB per workspace copy.
+# line-tables-only keeps backtraces and shrinks target/ ~3-4x; no incremental for
+# throwaway worktrees/archives (they are mostly built once).
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+# Supply chain (slice 1d, `kernel-privacy` feature `ner-gliner`): `gline-rs`
+# depends on `ort` with its default features on, and `ort`'s defaults include
+# `download-binaries`. Setting `ORT_LIB_LOCATION` makes the `ort-sys` build
+# script take its explicit-local-path branch instead of fetching a prebuilt
+# ONNX Runtime; with `load-dynamic` it needs no library at build time at all.
+# The real shared library is resolved from a user-configured path at runtime
+# through `ORT_DYLIB_PATH` (or `GlinerConfig::ort_dylib`). `force = false` keeps
+# an explicit environment variable or a real `ORT_LIB_LOCATION` winning.
+[env]
+ORT_LIB_LOCATION = { value = "vendor/onnxruntime", relative = true, force = false }

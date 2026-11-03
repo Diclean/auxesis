@@ -1,0 +1,59 @@
+[package]
+name = "aux-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Auxesis runtime: the built-in tools and the level-1 fetch, on top of the kernel."
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# M4-2: an event's wall time in its IANA zone. Already in the lock (kernel-core).
+chrono-tz = "0.10"
+libc = "0.2"
+aux-crm = { path = "../aux-crm" }
+aux-store = { path = "../aux-store" }
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+flate2 = "1"
+html5ever = "0.39"
+kernel-broker.workspace = true
+kernel-core.workspace = true
+kernel-mcp.workspace = true
+kernel-net.workspace = true
+kernel-privacy.workspace = true
+markup5ever_rcdom = "0.39"
+reqwest = { workspace = true, features = ["form"] }
+serde.workspace = true
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "process", "time", "io-util", "net", "sync"] }
+toml.workspace = true
+unicode-normalization = "0.1"
+tracing.workspace = true
+
+[features]
+# The level-1 fetch: `Fetcher`, `http_fetch` and the weather tools. Built on
+# kernel-net's pinned client (`build_client`, `resolve_checked`): private,
+# loopback and link-local answers are refused, DNS is pinned, and every redirect
+# hop is checked again.
+l1-fetch = []
+# The loopback fetcher constructors for other crates' tests. Enable only from a
+# `[dev-dependencies]` edge: loopback bypasses the address guard.
+testing = ["kernel-net/testing"]
+
+[dev-dependencies]
+kernel-broker = { workspace = true, features = ["test-util"] }
+kernel-net = { workspace = true, features = ["testing"] }
+log = "0.4"
+proptest.workspace = true
+rusqlite.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tracing-subscriber.workspace = true
+wiremock = "0.6"

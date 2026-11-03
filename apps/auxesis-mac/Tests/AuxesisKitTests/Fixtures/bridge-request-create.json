@@ -1,0 +1,14 @@
+{
+  "type": "bridge.request",
+  "id": "8f14e45f-ea0b-4a3c-9a1e-2b7c5d6e0f11",
+  "op": "eventkit.create_event",
+  "args": {
+    "calendar": "Travail",
+    "title": "Déjeuner avec Camille Exemple",
+    "start": "2030-03-04T09:00:00Z",
+    "end": "2030-03-04T09:30:00Z",
+    "location": "Café de la Gare",
+    "notes": "Rappeler Camille au +33612345678",
+    "url": "https://example.test/visit"
+  }
+}

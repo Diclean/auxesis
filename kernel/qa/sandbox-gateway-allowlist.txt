@@ -1,0 +1,8 @@
+# Kernel J-02 round 4 sandbox-gateway allowlist.
+# Format: relative/path.rs | api-pattern | justification
+# Every entry is reviewed debt: the call is either outside the Auxesis home,
+# a test fixture, an OS primitive, or a helper whose home paths route through
+# the kernel-core gateway first.
+
+crates/kernel-broker/src/sandbox.rs | "HOME" | shell-sandbox child environment and profile construction (the real home is read only through the kernel-core gateway), not a daemon home write
+crates/kernel-mcp/src/stdio.rs | "HOME" | static denylist of env names a config may never declare, plus the sandboxed stdio child's private HOME; never a home read

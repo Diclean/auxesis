@@ -1,0 +1,82 @@
+[package]
+name = "aux-mail"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Native IMAP/SMTP mailbox Connector: bounded reads, drafts-only sends, rustls only"
+# Never published until the owner gives the go. The licence is Apache-2.0;
+# `deny.toml` `[licenses.private]` skips unpublishable members (see audit I-05).
+publish = false
+
+[lib]
+name = "aux_mail"
+path = "src/lib.rs"
+
+[features]
+# Test-only seam (`Dialer::with_client_config`). Never enabled by a production
+# dependency edge: only this crate's own `[dev-dependencies]` self-reference
+# turns it on, which is what the integration tests link against. No non-test
+# crate may enable it (checked by scripts/check-egress.sh).
+test-support = []
+
+[dependencies]
+# Exactly one TLS stack (owner rule): `async-imap` itself has no TLS, and
+# `lettre` is configured in the workspace without `native-tls`/OpenSSL.
+async-imap.workspace = true
+async-trait = "0.1"
+# The Phase 1 contract replaces the `aux-fetch` extractor with the
+# runtime's readability one (`aux_runtime::fetch::extract_readable`). No cycle:
+# nothing in the workspace depends on `aux-mail`.
+aux-runtime = { path = "../aux-runtime" }
+# Collecting an `async-imap` response stream needs a `StreamExt`; `aux-mail` is
+# the workspace's only user of `async-imap`.
+futures-util = "0.3"
+imap-proto.workspace = true
+# The two kernel sanitisers the contract names, applied to every returned text.
+kernel-broker.workspace = true
+kernel-core.workspace = true
+lettre.workspace = true
+mail-parser.workspace = true
+serde.workspace = true
+# The attachment registry keys blobs by SHA-256 (`docs/mail.md` §6); the mail
+# tools' arguments and results are JSON. Both crates are already in
+# `Cargo.lock`; these are new edges, not new versions.
+sha2 = "0.10"
+serde_json = "1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync"] }
+# Exactly one TLS stack (owner rule). `async-imap` ships no TLS, so the dialer
+# wraps its `TcpStream` in `tokio-rustls`. The `ring` provider is selected
+# explicitly because `lettre` unifies in `tokio-rustls`' default `aws-lc-rs`
+# provider, and an ambiguous process default would otherwise make rustls panic.
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "ring",
+    "tls12",
+    "logging",
+] }
+toml.workspace = true
+tracing.workspace = true
+# The root store the one production `ClientConfig` is built from (webpki-roots
+# 1.x; already in `Cargo.lock` through the TLS stack).
+webpki-roots = "1"
+
+[dev-dependencies]
+# The self-reference is the only edge that turns on `test-support`, so the
+# integration tests (which link this crate as an external dependency) see
+# `Dialer::with_client_config` while the default library build does not.
+aux-mail = { path = ".", features = ["test-support"] }
+# `#[tokio::test]` and the multi-threaded test runtime are test-only; the
+# library itself needs neither feature.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# The offline IMAP/SMTP doubles and their self-signed certificates moved to
+# `aux-fakemail`; this crate's tests link them as a dev-dependency only.
+aux-fakemail = { path = "../aux-fakemail" }
+# The C1 acceptance drives the receipts collector against the fake IMAP from
+# this crate's own test suite (the only place the TLS seam may be named).
+aux-docs = { path = "../aux-docs" }
+# The B3 acceptance drives the CRM timeline builders from a fake mailbox. The
+# same reason: the fake TLS seam is nameable only here.
+aux-crm = { path = "../aux-crm" }
+aux-store = { path = "../aux-store" }
+tempfile.workspace = true

@@ -1,0 +1,1 @@
+# Prompt-injection attack corpus. One attack per file; replayed in CI and by every security-review run.

@@ -1,0 +1,47 @@
+[package]
+name = "aux-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+kernel-core.workspace = true
+aux-runtime = { path = "../aux-runtime" }
+kernel-net.workspace = true
+aux-notify = { path = "../aux-notify" }
+kernel-privacy.workspace = true
+aux-providers = { path = "../aux-providers" }
+aux-store = { path = "../aux-store" }
+kernel-broker.workspace = true
+futures-util = "0.3"
+ring = "0.17"
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+toml.workspace = true
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+aux-providers = { path = "../aux-providers", features = ["test-util"] }
+kernel-broker = { workspace = true, features = ["test-util"] }
+rusqlite.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+# Canary harness: records the provider HTTP body the engine really sends.
+wiremock = "0.6"
+kernel-privacy = { workspace = true, features = ["test-util"] }
+
+[features]
+ner-gliner = ["kernel-privacy/ner-gliner"]
+# The level-1 fetch tools; see aux-runtime. Parked until the kernel exposes its client factory.
+l1-fetch = ["aux-runtime/l1-fetch"]
+# Test seam for the outbound gate (`test_seam`): lets another crate's tests refuse
+# one thread's text. Never on in a production build.
+test-util = ["kernel-privacy/test-util"]

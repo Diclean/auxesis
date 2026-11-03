@@ -1,0 +1,38 @@
+[package]
+name = "aux-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+aes-gcm = "0.10"
+kernel-core.workspace = true
+kernel-broker.workspace = true
+blake3 = "1"
+getrandom = "0.3"
+# WO-06c: one master.key, HKDF-SHA256-derived store and vault keys. `hkdf` is
+# the RustCrypto construction already in the lock file (0.12.4); `sha2` is its
+# hash (0.10.9, already used elsewhere in the workspace).
+hkdf = "0.12"
+sha2 = "0.10"
+libc = "0.2"
+rusqlite.workspace = true
+zeroize = "1"
+# B4-01/H-11/SB6-06: `arbitrary_precision` (every number keeps its exact
+# source lexeme) and `preserve_order` (keys keep input order) are load-bearing
+# for the byte-faithful scrub layer. They are declared here as well as in
+# `kernel-broker` and `aux-runtime` so this crate cannot silently lose them if that edge ever drops
+# its features (Cargo unifies the features workspace-wide today, so this is a
+# no-op).
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
+thiserror.workspace = true
+
+# SQLCipher's crypto provider is CommonCrypto on macOS (no extra library).
+# Other targets use vendored OpenSSL so builds need no system libssl.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+rusqlite = { workspace = true, features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[dev-dependencies]
+tempfile.workspace = true

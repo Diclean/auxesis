@@ -1,0 +1,15 @@
+name = "invite-approval"
+mode = "open"
+agent = "calendar"
+turns = [
+  "/invite Lea Sample tomorrow 10:00",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en", "approval_asked"]
+
+[checks]
+lang = "en"
+must_contain = []
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = true
+approval_asked = true

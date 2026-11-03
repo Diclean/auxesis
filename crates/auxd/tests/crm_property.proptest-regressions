@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6f4394fb3cb06e32262934c96687a5e25be28166df7b55d84a0c92e4f4bfbfe1 # PRIV-CRM-LEAK: a 3-letter name "Sav" reported as leaked

@@ -1,0 +1,59 @@
+[
+  {
+    "uid": 1,
+    "message_id": "<m2-1@mailsim.test>",
+    "subject": "Kickoff agenda for Thursday",
+    "from": "Camille Exemple <camille@exemple.test>",
+    "to": ["Owner <owner@mailsim.test>"],
+    "cc": [],
+    "date": "@TODAY@",
+    "body": "From: Camille Exemple <camille@exemple.test>\r\nTo: Owner <owner@mailsim.test>\r\nSubject: Kickoff agenda for Thursday\r\nDate: @TODAY@\r\nMessage-ID: <m2-1@mailsim.test>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nFictional body: the agenda is attached.\r\n",
+    "flags": []
+  },
+  {
+    "uid": 2,
+    "message_id": "<m2-2@mailsim.test>",
+    "subject": "Signed quote attached",
+    "from": "Jonas Sample <jonas@brightpath.test>",
+    "to": ["Owner <owner@mailsim.test>"],
+    "cc": [],
+    "date": "@TODAY@",
+    "body": "From: Jonas Sample <jonas@brightpath.test>\r\nTo: Owner <owner@mailsim.test>\r\nSubject: Signed quote attached\r\nDate: @TODAY@\r\nMessage-ID: <m2-2@mailsim.test>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nFictional body: the signed quote is attached.\r\n",
+    "flags": []
+  },
+  {
+    "uid": 3,
+    "message_id": "<m2-3@mailsim.test>",
+    "subject": "Weekly digest",
+    "from": "Mira Fictive <mira@lumenworks.test>",
+    "to": ["Owner <owner@mailsim.test>"],
+    "cc": [],
+    "date": "@TODAY@",
+    "body": "From: Mira Fictive <mira@lumenworks.test>\r\nTo: Owner <owner@mailsim.test>\r\nSubject: Weekly digest\r\nDate: @TODAY@\r\nMessage-ID: <m2-3@mailsim.test>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nFictional body: nothing new this week.\r\n",
+    "flags": ["\\Seen"]
+  },
+  {
+    "uid": 4,
+    "message_id": "<m2-4@mailsim.test>",
+    "subject": "Invoice for the October workshop",
+    "from": "Owen Placeholder <owen@quaystone.test>",
+    "to": ["Owner <owner@mailsim.test>"],
+    "cc": [],
+    "date": "@TODAY@",
+    "body": "From: Owen Placeholder <owen@quaystone.test>\r\nTo: Owner <owner@mailsim.test>\r\nSubject: Invoice for the October workshop\r\nDate: @TODAY@\r\nMessage-ID: <m2-4@mailsim.test>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nFictional body: the invoice is attached.\r\n",
+    "flags": []
+  },
+  {
+    "uid": 5,
+    "message_id": "<m5-1@mailsim.test>",
+    "subject": "Receipt BH-2026-0017",
+    "from": "Lea Blueharbor <lea@blueharbor.example>",
+    "to": ["Owner <owner@mailsim.test>"],
+    "cc": [],
+    "date": "@TODAY@",
+    "body": "From: Lea Blueharbor <lea@blueharbor.example>\r\nTo: Owner <owner@mailsim.test>\r\nSubject: Receipt BH-2026-0017\r\nDate: @TODAY@\r\nMessage-ID: <m5-1@mailsim.test>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"m5-receipt\"\r\n\r\n--m5-receipt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nHello, the receipt for the October session is attached.\r\n--m5-receipt\r\nContent-Type: application/pdf; name=\"receipt-BH-2026-0017.pdf\"\r\nContent-Disposition: attachment; filename=\"receipt-BH-2026-0017.pdf\"\r\nContent-Transfer-Encoding: 7bit\r\n\r\n%PDF-1.4 fictional receipt BH-2026-0017\r\n--m5-receipt--\r\n",
+    "flags": ["\\Seen"],
+    "bodystructure": "((\"TEXT\" \"PLAIN\" (\"CHARSET\" \"UTF-8\") NIL NIL \"7BIT\" 57 1)(\"APPLICATION\" \"PDF\" (\"NAME\" \"receipt-BH-2026-0017.pdf\") NIL NIL \"7BIT\" 41 NIL (\"ATTACHMENT\" (\"FILENAME\" \"receipt-BH-2026-0017.pdf\")) NIL) \"MIXED\" (\"BOUNDARY\" \"m5-receipt\") NIL NIL)",
+    "parts": [["1", "Hello, the receipt for the October session is attached.\r\n"], ["2", "%PDF-1.4 fictional receipt BH-2026-0017\r\n"]]
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "type": "bridge.request",
+  "id": "3c2a7b91-0d4e-4f6a-8b2c-5e9d1a7f3b44",
+  "op": "eventkit.update_event",
+  "args": {
+    "event_id": "evt-42",
+    "title": "Déjeuner déplacé avec Camille Exemple",
+    "start": "2030-03-04T10:00:00Z",
+    "end": "2030-03-04T10:30:00Z",
+    "notes": "Rappeler Camille au +33612345678"
+  }
+}

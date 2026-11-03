@@ -1,0 +1,2441 @@
+[
+  {
+    "uid": 1,
+    "days_ago": 59,
+    "from": "Verdant <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 19",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-1@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 2,
+    "days_ago": 59,
+    "from": "Blueharbor <lea@blueharbor.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 39",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-2@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 3,
+    "days_ago": 58,
+    "from": "Quaystone <owen@quaystone.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 18",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-3@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 4,
+    "days_ago": 58,
+    "from": "Oakridge <sam@oakridge.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 38",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-4@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 5,
+    "days_ago": 57,
+    "from": "Lumenworks <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 17",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-5@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 6,
+    "days_ago": 57,
+    "from": "Silvermere <nora@silvermere.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 37",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-6@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 7,
+    "days_ago": 55,
+    "from": "Brightpath Studio <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 16",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-7@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 8,
+    "days_ago": 55,
+    "from": "Redwharf <tomas@redwharf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 36",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-8@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 9,
+    "days_ago": 54,
+    "from": "Lena Sample <lena@harborline.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Invoice 101 overdue",
+    "text": "Hello, invoice is now 30 days overdue. Please pay.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "late-payment"
+    ],
+    "attachments": [],
+    "message_id": "<world-9@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 10,
+    "days_ago": 54,
+    "from": "Northwind Design <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 15",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-10@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 11,
+    "days_ago": 54,
+    "from": "Copperleaf <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 35",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-11@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 12,
+    "days_ago": 53,
+    "from": "Quill & Co <will@quillco.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 14",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-12@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 13,
+    "days_ago": 53,
+    "from": "Verdant <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 34",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-13@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 14,
+    "days_ago": 53,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Blueharbor <lea@blueharbor.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 39",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-14@mailsim.test>",
+    "in_reply_to": "<world-2@mailsim.test>"
+  },
+  {
+    "uid": 15,
+    "days_ago": 52,
+    "from": "Marlowe Studio <vera@marlowe.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 13",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-15@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 16,
+    "days_ago": 52,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Quaystone <owen@quaystone.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 18",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-16@mailsim.test>",
+    "in_reply_to": "<world-3@mailsim.test>"
+  },
+  {
+    "uid": 17,
+    "days_ago": 52,
+    "from": "Quaystone <owen@quaystone.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 33",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-17@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 18,
+    "days_ago": 51,
+    "from": "Pinewood <uma@pinewood.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 12",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-18@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 19,
+    "days_ago": 51,
+    "from": "Lumenworks <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 32",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-19@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 20,
+    "days_ago": 49,
+    "from": "Cedar Mill <theo@cedarmill.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 11",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-20@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 21,
+    "days_ago": 49,
+    "from": "Brightpath Studio <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 31",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-21@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 22,
+    "days_ago": 49,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Redwharf <tomas@redwharf.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 36",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-22@mailsim.test>",
+    "in_reply_to": "<world-8@mailsim.test>"
+  },
+  {
+    "uid": 23,
+    "days_ago": 49,
+    "from": "Redwharf <tomas@redwharf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 51",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-23@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 24,
+    "days_ago": 48,
+    "from": "Lea Sample <lea@blueharbor.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Invoice 100 overdue",
+    "text": "Hello, invoice is now 30 days overdue. Please pay.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "late-payment"
+    ],
+    "attachments": [],
+    "message_id": "<world-24@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 25,
+    "days_ago": 48,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Lena Sample <lena@harborline.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Invoice 101 overdue",
+    "text": "Hi, sorry for the delay, paying this week.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "late-payment"
+    ],
+    "attachments": [],
+    "message_id": "<world-25@mailsim.test>",
+    "in_reply_to": "<world-9@mailsim.test>"
+  },
+  {
+    "uid": 26,
+    "days_ago": 48,
+    "from": "Harborline <lena@harborline.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 10",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-26@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 27,
+    "days_ago": 48,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Northwind Design <camille@northwind.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 15",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-27@mailsim.test>",
+    "in_reply_to": "<world-10@mailsim.test>"
+  },
+  {
+    "uid": 28,
+    "days_ago": 48,
+    "from": "Northwind Design <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 30",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-28@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 29,
+    "days_ago": 48,
+    "from": "Copperleaf <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 50",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-29@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 30,
+    "days_ago": 47,
+    "from": "Blueharbor <lea@blueharbor.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 9",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-30@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 31,
+    "days_ago": 47,
+    "from": "Quill & Co <will@quillco.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 29",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-31@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 32,
+    "days_ago": 47,
+    "from": "Verdant <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 49",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-32@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 33,
+    "days_ago": 46,
+    "from": "Oakridge <sam@oakridge.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 8",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-33@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 34,
+    "days_ago": 46,
+    "from": "Marlowe Studio <vera@marlowe.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 28",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-34@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 35,
+    "days_ago": 46,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Quaystone <owen@quaystone.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 33",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-35@mailsim.test>",
+    "in_reply_to": "<world-17@mailsim.test>"
+  },
+  {
+    "uid": 36,
+    "days_ago": 46,
+    "from": "Quaystone <owen@quaystone.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 48",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-36@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 37,
+    "days_ago": 45,
+    "from": "Silvermere <nora@silvermere.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 7",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-37@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 38,
+    "days_ago": 45,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Pinewood <uma@pinewood.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 12",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-38@mailsim.test>",
+    "in_reply_to": "<world-18@mailsim.test>"
+  },
+  {
+    "uid": 39,
+    "days_ago": 45,
+    "from": "Pinewood <uma@pinewood.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 27",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-39@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 40,
+    "days_ago": 45,
+    "from": "Lumenworks <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 47",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-40@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 41,
+    "days_ago": 43,
+    "from": "Redwharf <tomas@redwharf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 6",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-41@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 42,
+    "days_ago": 43,
+    "from": "Cedar Mill <theo@cedarmill.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 26",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-42@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 43,
+    "days_ago": 43,
+    "from": "Brightpath Studio <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 46",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-43@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 44,
+    "days_ago": 43,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Redwharf <tomas@redwharf.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 51",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-44@mailsim.test>",
+    "in_reply_to": "<world-23@mailsim.test>"
+  },
+  {
+    "uid": 45,
+    "days_ago": 42,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Lea Sample <lea@blueharbor.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Invoice 100 overdue",
+    "text": "Hi, sorry for the delay, paying this week.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "late-payment"
+    ],
+    "attachments": [],
+    "message_id": "<world-45@mailsim.test>",
+    "in_reply_to": "<world-24@mailsim.test>"
+  },
+  {
+    "uid": 46,
+    "days_ago": 42,
+    "from": "Copperleaf <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 5",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-46@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 47,
+    "days_ago": 42,
+    "from": "Harborline <lena@harborline.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 25",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-47@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 48,
+    "days_ago": 42,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Northwind Design <camille@northwind.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 30",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-48@mailsim.test>",
+    "in_reply_to": "<world-28@mailsim.test>"
+  },
+  {
+    "uid": 49,
+    "days_ago": 42,
+    "from": "Northwind Design <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 45",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-49@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 50,
+    "days_ago": 41,
+    "from": "Verdant <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 4",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-50@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 51,
+    "days_ago": 41,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Blueharbor <lea@blueharbor.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 9",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-51@mailsim.test>",
+    "in_reply_to": "<world-30@mailsim.test>"
+  },
+  {
+    "uid": 52,
+    "days_ago": 41,
+    "from": "Blueharbor <lea@blueharbor.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 24",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-52@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 53,
+    "days_ago": 41,
+    "from": "Quill & Co <will@quillco.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 44",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-53@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 54,
+    "days_ago": 40,
+    "from": "Lena Sample <lena@harborline.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Invoice 101 overdue",
+    "text": "Still waiting on payment, please advise.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "late-payment"
+    ],
+    "attachments": [],
+    "message_id": "<world-54@mailsim.test>",
+    "in_reply_to": "<world-25@mailsim.test>"
+  },
+  {
+    "uid": 55,
+    "days_ago": 40,
+    "from": "Quaystone <owen@quaystone.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 3",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-55@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 56,
+    "days_ago": 40,
+    "from": "Oakridge <sam@oakridge.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 23",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-56@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 57,
+    "days_ago": 40,
+    "from": "Marlowe Studio <vera@marlowe.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 43",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-57@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 58,
+    "days_ago": 40,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Quaystone <owen@quaystone.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 48",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-58@mailsim.test>",
+    "in_reply_to": "<world-36@mailsim.test>"
+  },
+  {
+    "uid": 59,
+    "days_ago": 39,
+    "from": "Lumenworks <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 2",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-59@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 60,
+    "days_ago": 39,
+    "from": "Silvermere <nora@silvermere.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 22",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-60@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 61,
+    "days_ago": 39,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Pinewood <uma@pinewood.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 27",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-61@mailsim.test>",
+    "in_reply_to": "<world-39@mailsim.test>"
+  },
+  {
+    "uid": 62,
+    "days_ago": 39,
+    "from": "Pinewood <uma@pinewood.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 42",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-62@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 63,
+    "days_ago": 37,
+    "from": "Brightpath Studio <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 1",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-63@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 64,
+    "days_ago": 37,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Redwharf <tomas@redwharf.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 6",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-64@mailsim.test>",
+    "in_reply_to": "<world-41@mailsim.test>"
+  },
+  {
+    "uid": 65,
+    "days_ago": 37,
+    "from": "Redwharf <tomas@redwharf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 21",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-65@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 66,
+    "days_ago": 37,
+    "from": "Cedar Mill <theo@cedarmill.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 41",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-66@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 67,
+    "days_ago": 37,
+    "from": "Legal Partner <legal@partner2.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Partnership 2",
+    "text": "Hello, let's discuss a referral partnership.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "partner"
+    ],
+    "attachments": [],
+    "message_id": "<world-67@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 68,
+    "days_ago": 36,
+    "from": "Northwind Design <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 0",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-68@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 69,
+    "days_ago": 36,
+    "from": "Copperleaf <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 20",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-69@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 70,
+    "days_ago": 36,
+    "from": "Harborline <lena@harborline.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "General update 40",
+    "text": "Hello, a quick general update on our work.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-70@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 71,
+    "days_ago": 36,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Northwind Design <camille@northwind.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 45",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-71@mailsim.test>",
+    "in_reply_to": "<world-49@mailsim.test>"
+  },
+  {
+    "uid": 72,
+    "days_ago": 35,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Blueharbor <lea@blueharbor.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 24",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-72@mailsim.test>",
+    "in_reply_to": "<world-52@mailsim.test>"
+  },
+  {
+    "uid": 73,
+    "days_ago": 34,
+    "from": "Lea Sample <lea@blueharbor.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Invoice 100 overdue",
+    "text": "Still waiting on payment, please advise.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "late-payment"
+    ],
+    "attachments": [],
+    "message_id": "<world-73@mailsim.test>",
+    "in_reply_to": "<world-45@mailsim.test>"
+  },
+  {
+    "uid": 74,
+    "days_ago": 34,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Quaystone <owen@quaystone.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 3",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-74@mailsim.test>",
+    "in_reply_to": "<world-55@mailsim.test>"
+  },
+  {
+    "uid": 75,
+    "days_ago": 33,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Pinewood <uma@pinewood.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 42",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-75@mailsim.test>",
+    "in_reply_to": "<world-62@mailsim.test>"
+  },
+  {
+    "uid": 76,
+    "days_ago": 31,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Redwharf <tomas@redwharf.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 21",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-76@mailsim.test>",
+    "in_reply_to": "<world-65@mailsim.test>"
+  },
+  {
+    "uid": 77,
+    "days_ago": 31,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Legal Partner <legal@partner2.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Partnership 2",
+    "text": "Sounds good, here is a draft agreement.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "partner"
+    ],
+    "attachments": [],
+    "message_id": "<world-77@mailsim.test>",
+    "in_reply_to": "<world-67@mailsim.test>"
+  },
+  {
+    "uid": 78,
+    "days_ago": 30,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Northwind Design <camille@northwind.example>"
+    ],
+    "cc": [],
+    "subject": "Re: General update 0",
+    "text": "Thanks, noted.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-78@mailsim.test>",
+    "in_reply_to": "<world-68@mailsim.test>"
+  },
+  {
+    "uid": 79,
+    "days_ago": 30,
+    "from": "Dev Partner <dev@partner1.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Partnership 1",
+    "text": "Hello, let's discuss a referral partnership.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "partner"
+    ],
+    "attachments": [],
+    "message_id": "<world-79@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 80,
+    "days_ago": 26,
+    "from": "Ines Fictive <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote follow-up 3",
+    "text": "Hello, could you send the revised quote?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-80@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 81,
+    "days_ago": 26,
+    "from": "Uma Sample <uma@pinewood.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Project status 2",
+    "text": "Hello, how is the project going?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-81@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 82,
+    "days_ago": 25,
+    "from": "Priya Testman <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote follow-up 2",
+    "text": "Hello, could you send the revised quote?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-82@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 83,
+    "days_ago": 24,
+    "from": "Owen Placeholder <owen@quaystone.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote follow-up 1",
+    "text": "Hello, could you send the revised quote?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-83@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 84,
+    "days_ago": 24,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Dev Partner <dev@partner1.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Partnership 1",
+    "text": "Sounds good, here is a draft agreement.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "partner"
+    ],
+    "attachments": [],
+    "message_id": "<world-84@mailsim.test>",
+    "in_reply_to": "<world-79@mailsim.test>"
+  },
+  {
+    "uid": 85,
+    "days_ago": 22,
+    "from": "Theo Example <theo@cedarmill.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Project status 1",
+    "text": "Hello, how is the project going?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-85@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 86,
+    "days_ago": 22,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Uma Sample <uma@pinewood.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Project status 2",
+    "text": "On track, delivering Friday.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-86@mailsim.test>",
+    "in_reply_to": "<world-81@mailsim.test>"
+  },
+  {
+    "uid": 87,
+    "days_ago": 22,
+    "from": "Cara Prospect <cara@prospect3.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Intro 3",
+    "text": "Hello, I was referred to you. Could we chat?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "prospect"
+    ],
+    "attachments": [],
+    "message_id": "<world-87@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 88,
+    "days_ago": 20,
+    "from": "Mira Fictive <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Kickoff notes 3",
+    "text": "Hello, here are the kickoff notes from our call.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-88@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 89,
+    "days_ago": 19,
+    "from": "Jonas Sample <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Kickoff notes 2",
+    "text": "Hello, here are the kickoff notes from our call.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-89@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 90,
+    "days_ago": 18,
+    "from": "Camille Example <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Kickoff notes 1",
+    "text": "Hello, here are the kickoff notes from our call.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-90@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 91,
+    "days_ago": 17,
+    "from": "Mira Fictive <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: project update 3",
+    "text": "Hello, following up on the latest draft. Could you confirm the delivery window?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "waiting-on-you"
+    ],
+    "attachments": [],
+    "message_id": "<world-91@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 92,
+    "days_ago": 17,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Ines Fictive <ines@copperleaf.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 3",
+    "text": "Hi, here is the revised quote attached. Let me know.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-92@mailsim.test>",
+    "in_reply_to": "<world-80@mailsim.test>"
+  },
+  {
+    "uid": 93,
+    "days_ago": 17,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Theo Example <theo@cedarmill.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Project status 1",
+    "text": "On track, delivering Friday.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-93@mailsim.test>",
+    "in_reply_to": "<world-85@mailsim.test>"
+  },
+  {
+    "uid": 94,
+    "days_ago": 17,
+    "from": "Ben Prospect <ben@prospect2.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Intro 2",
+    "text": "Hello, I was referred to you. Could we chat?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "prospect"
+    ],
+    "attachments": [],
+    "message_id": "<world-94@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 95,
+    "days_ago": 16,
+    "from": "Jonas Sample <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: project update 2",
+    "text": "Hello, following up on the latest draft. Could you confirm the delivery window?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "waiting-on-you"
+    ],
+    "attachments": [],
+    "message_id": "<world-95@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 96,
+    "days_ago": 16,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Priya Testman <priya@verdant.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 2",
+    "text": "Hi, here is the revised quote attached. Let me know.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-96@mailsim.test>",
+    "in_reply_to": "<world-82@mailsim.test>"
+  },
+  {
+    "uid": 97,
+    "days_ago": 16,
+    "from": "Ben Prospect <ben@prospect2.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote request: brand site 4",
+    "text": "Hello, I need a quote for a 5-page brand site. Scope: design + dev, 3 rounds of revisions. Budget hint: around 4000 EUR. Deadline: end of next month. Could you send a proposal?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "quote-request"
+    ],
+    "attachments": [],
+    "message_id": "<world-97@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 98,
+    "days_ago": 16,
+    "from": "Uma Sample <uma@pinewood.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Project status 2",
+    "text": "Could you also add a dark mode and export to PDF? Small change.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "scope-creep"
+    ],
+    "attachments": [],
+    "message_id": "<world-98@mailsim.test>",
+    "in_reply_to": "<world-86@mailsim.test>"
+  },
+  {
+    "uid": 99,
+    "days_ago": 14,
+    "from": "Camille Example <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: project update 1",
+    "text": "Hello, following up on the latest draft. Could you confirm the delivery window?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "waiting-on-you"
+    ],
+    "attachments": [],
+    "message_id": "<world-99@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 100,
+    "days_ago": 14,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Mira Fictive <mira@lumenworks.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Kickoff notes 3",
+    "text": "Thanks, notes look good. I'll start next week.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-100@mailsim.test>",
+    "in_reply_to": "<world-88@mailsim.test>"
+  },
+  {
+    "uid": 101,
+    "days_ago": 14,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Owen Placeholder <owen@quaystone.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 1",
+    "text": "Hi, here is the revised quote attached. Let me know.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-101@mailsim.test>",
+    "in_reply_to": "<world-83@mailsim.test>"
+  },
+  {
+    "uid": 102,
+    "days_ago": 13,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Jonas Sample <jonas@brightpath.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Kickoff notes 2",
+    "text": "Thanks, notes look good. I'll start next week.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-102@mailsim.test>",
+    "in_reply_to": "<world-89@mailsim.test>"
+  },
+  {
+    "uid": 103,
+    "days_ago": 12,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Camille Example <camille@northwind.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Kickoff notes 1",
+    "text": "Thanks, notes look good. I'll start next week.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-103@mailsim.test>",
+    "in_reply_to": "<world-90@mailsim.test>"
+  },
+  {
+    "uid": 104,
+    "days_ago": 12,
+    "from": "Ines Fictive <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 3",
+    "text": "Thanks, reviewing it.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-104@mailsim.test>",
+    "in_reply_to": "<world-92@mailsim.test>"
+  },
+  {
+    "uid": 105,
+    "days_ago": 12,
+    "from": "Aria Prospect <aria@prospect1.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote request: brand site 3",
+    "text": "Hello, I need a quote for a 5-page brand site. Scope: design + dev, 3 rounds of revisions. Budget hint: around 4000 EUR. Deadline: end of next month. Could you send a proposal?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "quote-request"
+    ],
+    "attachments": [],
+    "message_id": "<world-105@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 106,
+    "days_ago": 12,
+    "from": "Aria Prospect <aria@prospect1.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Intro 1",
+    "text": "Hello, I was referred to you. Could we chat?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "prospect"
+    ],
+    "attachments": [],
+    "message_id": "<world-106@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 107,
+    "days_ago": 11,
+    "from": "Priya Testman <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 2",
+    "text": "Thanks, reviewing it.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-107@mailsim.test>",
+    "in_reply_to": "<world-96@mailsim.test>"
+  },
+  {
+    "uid": 108,
+    "days_ago": 11,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Ines Fictive <ines@copperleaf.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 3",
+    "text": "Hello, just checking in on the quote. Waiting on your decision.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "waiting-on-them"
+    ],
+    "attachments": [],
+    "message_id": "<world-108@mailsim.test>",
+    "in_reply_to": "<world-104@mailsim.test>"
+  },
+  {
+    "uid": 109,
+    "days_ago": 11,
+    "from": "Studio Weekly <news@studioweekly.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Studio Weekly: issue 2",
+    "text": "<html><body><p>Studio Weekly issue 2</p><img src=\"https://list-manage.com/track/open.php?u=abc1\" width=\"1\" height=\"1\"><a href=\"https://sendgrid.net/ls/click?upn=xyz1\">Read more</a></body></html>",
+    "extra": "List-Id: <weekly.studioweekly.example>\r\nList-Unsubscribe: <mailto:unsubscribe@studioweekly.example>\r\nContent-Type: text/html; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "newsletter"
+    ],
+    "attachments": [],
+    "message_id": "<world-109@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 110,
+    "days_ago": 11,
+    "from": "Theo Example <theo@cedarmill.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Project status 1",
+    "text": "Could you also add a dark mode and export to PDF? Small change.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "scope-creep"
+    ],
+    "attachments": [],
+    "message_id": "<world-110@mailsim.test>",
+    "in_reply_to": "<world-93@mailsim.test>"
+  },
+  {
+    "uid": 111,
+    "days_ago": 10,
+    "from": "Mira Fictive <mira@lumenworks.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Kickoff notes 3",
+    "text": "Hello, any update on the start date? We are waiting on you.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "waiting-on-you"
+    ],
+    "attachments": [],
+    "message_id": "<world-111@mailsim.test>",
+    "in_reply_to": "<world-100@mailsim.test>"
+  },
+  {
+    "uid": 112,
+    "days_ago": 10,
+    "from": "Owen Placeholder <owen@quaystone.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 1",
+    "text": "Thanks, reviewing it.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "thread"
+    ],
+    "attachments": [],
+    "message_id": "<world-112@mailsim.test>",
+    "in_reply_to": "<world-101@mailsim.test>"
+  },
+  {
+    "uid": 113,
+    "days_ago": 10,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Priya Testman <priya@verdant.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 2",
+    "text": "Hello, just checking in on the quote. Waiting on your decision.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "waiting-on-them"
+    ],
+    "attachments": [],
+    "message_id": "<world-113@mailsim.test>",
+    "in_reply_to": "<world-107@mailsim.test>"
+  },
+  {
+    "uid": 114,
+    "days_ago": 10,
+    "from": "Billing <billing@oakridge.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Invoice 2 for services",
+    "text": "Please find the e-invoice attached.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "invoice",
+      "invoice-wrong-totals"
+    ],
+    "attachments": [
+      {
+        "name": "invoice-2.xml",
+        "mime": "application/xml",
+        "content": "<Invoice xmlns=\"urn:oasis:names:specification:ubl:schema:xsd:Invoice-2\" xmlns:cbc=\"urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2\" xmlns:cac=\"urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2\"><cbc:ID>UBL-2026-01</cbc:ID><cbc:IssueDate>2026-10-02</cbc:IssueDate><cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode><cac:AccountingSupplierParty><cac:Party><cac:PartyName><cbc:Name>Fiction GmbH</cbc:Name></cac:PartyName><cac:PartyTaxScheme><cbc:CompanyID>DE000000000</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme></cac:Party></cac:AccountingSupplierParty><cac:AccountingCustomerParty><cac:Party><cac:PartyName><cbc:Name>Example BV</cbc:Name></cac:PartyName></cac:Party></cac:AccountingCustomerParty><cac:TaxTotal><cac:TaxSubtotal><cbc:TaxableAmount>100.00</cbc:TaxableAmount><cbc:TaxAmount>21.00</cbc:TaxAmount><cbc:Percent>21</cbc:Percent></cac:TaxSubtotal></cac:TaxTotal><cac:LegalMonetaryTotal><cbc:LineExtensionAmount>100.00</cbc:LineExtensionAmount><cbc:TaxExclusiveAmount>100.00</cbc:TaxExclusiveAmount><cbc:TaxInclusiveAmount>122.00</cbc:TaxInclusiveAmount><cbc:PayableAmount>122.00</cbc:PayableAmount></cac:LegalMonetaryTotal><cac:InvoiceLine><cbc:ID>1</cbc:ID><cbc:InvoicedQuantity>2</cbc:InvoicedQuantity><cbc:LineExtensionAmount>100.00</cbc:LineExtensionAmount><cac:Item><cbc:Description>Fictitious goods</cbc:Description><cac:ClassifiedTaxCategory><cbc:Percent>21</cbc:Percent></cac:ClassifiedTaxCategory></cac:Item><cac:Price><cbc:PriceAmount>50.00</cbc:PriceAmount></cac:Price></cac:InvoiceLine></Invoice>"
+      }
+    ],
+    "message_id": "<world-114@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 115,
+    "days_ago": 8,
+    "from": "Jonas Sample <jonas@brightpath.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Kickoff notes 2",
+    "text": "Hello, any update on the start date? We are waiting on you.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "waiting-on-you"
+    ],
+    "attachments": [],
+    "message_id": "<world-115@mailsim.test>",
+    "in_reply_to": "<world-102@mailsim.test>"
+  },
+  {
+    "uid": 116,
+    "days_ago": 8,
+    "from": "Owner <owner@mailsim.test>",
+    "to": [
+      "Owen Placeholder <owen@quaystone.example>"
+    ],
+    "cc": [],
+    "subject": "Re: Quote follow-up 1",
+    "text": "Hello, just checking in on the quote. Waiting on your decision.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "waiting-on-them"
+    ],
+    "attachments": [],
+    "message_id": "<world-116@mailsim.test>",
+    "in_reply_to": "<world-112@mailsim.test>"
+  },
+  {
+    "uid": 117,
+    "days_ago": 8,
+    "from": "Tomas Placeholder <tomas@redwharf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote request: brand site 2",
+    "text": "Hello, I need a quote for a 5-page brand site. Scope: design + dev, 3 rounds of revisions. Budget hint: around 4000 EUR. Deadline: end of next month. Could you send a proposal?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "quote-request"
+    ],
+    "attachments": [],
+    "message_id": "<world-117@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 118,
+    "days_ago": 8,
+    "from": "Admin Test <admin@testadmin.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "ID check",
+    "text": "My ID number is 123456789012 for verification.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "sensitive-bait"
+    ],
+    "attachments": [],
+    "message_id": "<world-118@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 119,
+    "days_ago": 7,
+    "from": "Camille Example <camille@northwind.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Re: Kickoff notes 1",
+    "text": "Hello, any update on the start date? We are waiting on you.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "waiting-on-you"
+    ],
+    "attachments": [],
+    "message_id": "<world-119@mailsim.test>",
+    "in_reply_to": "<world-103@mailsim.test>"
+  },
+  {
+    "uid": 120,
+    "days_ago": 7,
+    "from": "Clinic Test <clinic@testclinic.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Contact update",
+    "text": "Call me at +33639981234 for the appointment.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "sensitive-bait"
+    ],
+    "attachments": [],
+    "message_id": "<world-120@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 121,
+    "days_ago": 6,
+    "from": "Bank Test <bank@testbank.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Payment details (fictional)",
+    "text": "Please use this test IBAN: DE89370400440532013000 for the transfer.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "sensitive-bait"
+    ],
+    "attachments": [],
+    "message_id": "<world-121@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 122,
+    "days_ago": 5,
+    "from": "Ines Fictive <ines@copperleaf.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Quote request: brand site 1",
+    "text": "Hello, I need a quote for a 5-page brand site. Scope: design + dev, 3 rounds of revisions. Budget hint: around 4000 EUR. Deadline: end of next month. Could you send a proposal?",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "quote-request"
+    ],
+    "attachments": [],
+    "message_id": "<world-122@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 123,
+    "days_ago": 4,
+    "from": "Billing <billing@silvermere.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Invoice 1 for services",
+    "text": "Please find the e-invoice attached.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "invoice",
+      "invoice-correct-totals"
+    ],
+    "attachments": [
+      {
+        "name": "invoice-1.xml",
+        "mime": "application/xml",
+        "content": "<rsm:CrossIndustryInvoice xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\" xmlns:ram=\"urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100\" xmlns:udt=\"urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100\"><rsm:ExchangedDocument><ram:ID>FX-2026-01</ram:ID><ram:IssueDateTime><udt:DateTimeString>20261001</udt:DateTimeString></ram:IssueDateTime></rsm:ExchangedDocument><rsm:SupplyChainTradeTransaction><ram:IncludedSupplyChainTradeLineItem><ram:SpecifiedTradeProduct><ram:Name>Fictitious service</ram:Name></ram:SpecifiedTradeProduct><ram:SpecifiedLineTradeAgreement><ram:NetPriceProductTradePrice><ram:ChargeAmount>100.00</ram:ChargeAmount></ram:NetPriceProductTradePrice></ram:SpecifiedLineTradeAgreement><ram:SpecifiedLineTradeDelivery><ram:BilledQuantity>1</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery><ram:SpecifiedLineTradeSettlement><ram:ApplicableTradeTax><ram:RateApplicablePercent>20</ram:RateApplicablePercent></ram:ApplicableTradeTax><ram:SpecifiedTradeSettlementLineMonetarySummation><ram:LineTotalAmount>100.00</ram:LineTotalAmount></ram:SpecifiedTradeSettlementLineMonetarySummation></ram:SpecifiedLineTradeSettlement></ram:IncludedSupplyChainTradeLineItem><ram:ApplicableHeaderTradeSettlement><ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode><ram:ApplicableTradeTax><ram:BasisAmount>100.00</ram:BasisAmount><ram:CalculatedAmount>20.00</ram:CalculatedAmount><ram:RateApplicablePercent>20</ram:RateApplicablePercent></ram:ApplicableTradeTax><ram:SpecifiedTradeSettlementHeaderMonetarySummation><ram:TaxBasisTotalAmount>100.00</ram:TaxBasisTotalAmount><ram:GrandTotalAmount>120.00</ram:GrandTotalAmount></ram:SpecifiedTradeSettlementHeaderMonetarySummation></ram:ApplicableHeaderTradeSettlement><ram:ApplicableHeaderTradeAgreement><ram:SellerTradeParty><ram:Name>Fiction SARL</ram:Name><ram:SpecifiedTaxRegistration><ram:ID>FR00000000000</ram:ID></ram:SpecifiedTaxRegistration></ram:SellerTradeParty></ram:ApplicableHeaderTradeAgreement></rsm:SupplyChainTradeTransaction></rsm:CrossIndustryInvoice>"
+      }
+    ],
+    "message_id": "<world-123@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 124,
+    "days_ago": 4,
+    "from": "Calendar <calendar@meetings.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Meeting invite: kickoff 2",
+    "text": "Please find the invite attached.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "meeting-invite"
+    ],
+    "attachments": [
+      {
+        "name": "invite.ics",
+        "mime": "text/calendar",
+        "content": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nPRODID:-//auxesis//demo//EN\r\nBEGIN:VEVENT\r\nUID:invite-1@mailsim.test\r\nDTSTART:20261020T090000Z\r\nDTEND:20261020T093000Z\r\nSUMMARY:Project kickoff\r\nORGANIZER;CN=\"Owner\":mailto:owner@mailsim.test\r\nATTENDEE;CN=\"Camille Example\";ROLE=REQ-PARTICIPANT:mailto:camille@northwind.example\r\nATTENDEE;CN=\"Jonas Sample\";ROLE=REQ-PARTICIPANT:mailto:jonas@brightpath.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    ],
+    "message_id": "<world-124@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 125,
+    "days_ago": 2,
+    "from": "Studio Weekly <news@studioweekly.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Studio Weekly: issue 1",
+    "text": "<html><body><p>Studio Weekly issue 1</p><img src=\"https://list-manage.com/track/open.php?u=abc0\" width=\"1\" height=\"1\"><a href=\"https://sendgrid.net/ls/click?upn=xyz0\">Read more</a></body></html>",
+    "extra": "List-Id: <weekly.studioweekly.example>\r\nList-Unsubscribe: <mailto:unsubscribe@studioweekly.example>\r\nContent-Type: text/html; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "newsletter"
+    ],
+    "attachments": [],
+    "message_id": "<world-125@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 126,
+    "days_ago": 1,
+    "from": "Priya Testman <priya@verdant.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Automatic reply: out of office",
+    "text": "I am away until Monday. This is an automatic reply.",
+    "extra": "Auto-Submitted: auto-replied\r\nContent-Type: text/plain; charset=UTF-8\r\n",
+    "unread": false,
+    "tags": [
+      "auto-reply"
+    ],
+    "attachments": [],
+    "message_id": "<world-126@mailsim.test>",
+    "in_reply_to": null
+  },
+  {
+    "uid": 127,
+    "days_ago": 0,
+    "from": "Calendar <calendar@meetings.example>",
+    "to": [
+      "Owner <owner@mailsim.test>"
+    ],
+    "cc": [],
+    "subject": "Meeting invite: kickoff 1",
+    "text": "Please find the invite attached.",
+    "extra": "Content-Type: text/plain; charset=UTF-8\r\n",
+    "unread": true,
+    "tags": [
+      "meeting-invite"
+    ],
+    "attachments": [
+      {
+        "name": "invite.ics",
+        "mime": "text/calendar",
+        "content": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nPRODID:-//auxesis//demo//EN\r\nBEGIN:VEVENT\r\nUID:invite-1@mailsim.test\r\nDTSTART:20261020T090000Z\r\nDTEND:20261020T093000Z\r\nSUMMARY:Project kickoff\r\nORGANIZER;CN=\"Owner\":mailto:owner@mailsim.test\r\nATTENDEE;CN=\"Camille Example\";ROLE=REQ-PARTICIPANT:mailto:camille@northwind.example\r\nATTENDEE;CN=\"Jonas Sample\";ROLE=REQ-PARTICIPANT:mailto:jonas@brightpath.example\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+      }
+    ],
+    "message_id": "<world-127@mailsim.test>",
+    "in_reply_to": null
+  }
+]

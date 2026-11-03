@@ -1,0 +1,13 @@
+name = "invoice-oakridge"
+mode = "open"
+turns = [
+  "Which invoice came from Oakridge, and what is wrong with it?",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = ["Invoice 2 for services"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

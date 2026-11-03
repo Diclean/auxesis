@@ -1,0 +1,83 @@
+# sandbox-gateway allowlist.
+# Format: relative/path.rs | api-pattern | justification
+# Every entry is reviewed debt: the call is either outside the Auxesis home,
+# a test fixture, an OS primitive, or a legacy helper whose home paths now
+# route through the kernel gateway first.
+
+crates/aux-cli/src/install.rs | "HOME" | launchd plist lives outside the sandbox home; install refuses while the guard is active
+crates/aux-cli/src/install.rs | OpenOptions::new( | launchd plist lives outside the sandbox home; install refuses while the guard is active
+crates/aux-cli/src/install.rs | fs::create_dir_all( | launchd plist lives outside the sandbox home; install refuses while the guard is active
+crates/aux-cli/src/install.rs | fs::remove_file( | launchd plist lives outside the sandbox home; install refuses while the guard is active
+crates/aux-cli/src/install.rs | fs::rename( | launchd plist lives outside the sandbox home; install refuses while the guard is active
+crates/aux-google/src/tests.rs | fs::write( | test-only OAuth fake .env and grant fixture files live in TempDir homes
+crates/aux-google/src/tests.rs | fs::remove_file( | test-only symlink and FIFO refusal fixtures live in TempDir homes
+crates/aux-google/src/tests.rs | fs::hard_link( | test-only hard-link fixture verifies token refusal across two TempDir paths
+crates/aux-google/src/tests.rs | OpenOptions::new( | test-only malformed grant fixtures are written into TempDir homes with mode 0600
+crates/aux-engine/src/config.rs | OpenOptions::new( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
+crates/aux-engine/src/config.rs | fs::remove_file( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
+crates/aux-engine/src/config.rs | fs::rename( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
+crates/aux-engine/src/engine/session.rs | fs::create_dir_all( | legacy engine dot workspace create (path from the caller); tracked for the gateway follow-up
+crates/aux-store/src/lib.rs | OpenOptions::new( | SQLite internals; production opens through Store::open_verified (re-verify + fd real path + inode check), Store::open stays for tests/legacy
+crates/aux-store/src/encryption.rs | OpenOptions::new( | master.key (0600) and the pre-WO-06c key files, beside the store.db that Store::open_verified checks in production
+crates/aux-store/src/encryption.rs | fs::remove_file( | migration scratch, backup and legacy key cleanup, beside the store.db that Store::open_verified checks in production
+crates/aux-store/src/encryption.rs | fs::rename( | atomic replace of the migrated store.db, beside the store.db that Store::open_verified checks in production
+crates/aux-store/src/encryption.rs | fs::hard_link( | keeps the plaintext original alive as the migration backup, beside the store.db that Store::open_verified checks in production
+crates/aux-store/src/encryption.rs | fs::remove_dir( | best-effort removal of the empty legacy keys/ directory after the rekey, beside the store.db that Store::open_verified checks in production
+crates/aux-runtime/src/tools/read_file.rs | OpenOptions::new( | product file tool: reads an approval-scoped user path, not the home gateway
+crates/aux-runtime/src/contacts_import.rs | OpenOptions::new( | read-only O_NOFOLLOW|O_NONBLOCK open of the owner-chosen import file (not the home gateway), size-capped
+crates/aux-runtime/src/tools/read_file.rs | tokio::fs:: | product file tool: reads an approval-scoped user path, not the home gateway
+crates/aux-runtime/src/tools/write_file.rs | OpenOptions::new( | product file tool: writes an approval-scoped user path, not the home gateway
+crates/aux-runtime/src/tools/write_file.rs | fs::create_dir_all( | product file tool: writes an approval-scoped user path, not the home gateway
+crates/aux-runtime/src/tools/write_file.rs | tokio::fs:: | product file tool: writes an approval-scoped user path, not the home gateway
+crates/auxd/src/api/auth.rs | OpenOptions::new( | read-only token open (O_NOFOLLOW) and the cfg(test) path-based helper kept to test symlink refusal
+crates/auxd/src/api/turn.rs | fs::create_dir_all( | cfg(test) fake-home fixture
+crates/auxd/src/api/turn.rs | fs::write( | cfg(test) fake-home fixture
+crates/auxd/src/delegation/source_tests.rs | fs::create_dir_all( | cfg(test) fake-home fixture
+crates/auxd/src/delegation/source_tests.rs | fs::write( | cfg(test) fake-home config fixture in a TempDir
+crates/auxd/src/delegation/where_tests.rs | fs::create_dir_all( | cfg(test) fake-home fixture
+crates/auxd/src/delegation/where_tests.rs | fs::write( | cfg(test) fake-home fixture
+crates/auxd/src/lock.rs | OpenOptions::new( | flock instance lock; an OS primitive that must be path-based
+crates/aux-engine/src/config.rs | fs::copy( | legacy engine config backup (caller-supplied path); the daemon uses Config::load_or_create_verified
+
+# ACP-A0 (#28) — merge delta. The home-level paths route through the verified
+# home gateway (workspace creation in the auxd hook, real home via
+# aux_core::real_user_home); the rest are the test-only stdio fixture, static
+# env-name lists, and workspace-relative helpers whose paths are canonicalised
+# and confined to the verified scratch workspace.
+crates/aux-acp/src/bin/acp_fake_agent.rs | OpenOptions::new( | test-only ACP stdio fixture writing canary pid files in test temp dirs; exempted from the bin guard by exact package+path
+crates/aux-acp/src/bin/acp_fake_agent.rs | fs::write( | test-only ACP stdio fixture writing canary files/pid files in test temp dirs
+crates/aux-acp/src/bin/acp_fake_agent.rs | fs::remove_file( | test-only ACP stdio fixture simulating the write-TOCTOU swap in a test temp dir
+crates/aux-acp/src/bin/acp_fake_agent.rs | HOME | test-only fixture reads its own env to prove the supervisor scrub; never the real home
+crates/aux-acp/src/config.rs | "HOME" | static denylist of env names that may never be forwarded; never a home read
+crates/aux-acp/src/handlers.rs | fs::create_dir_all( | broker fs/write parent creation inside the agent scratch workspace; path is canonicalised and workspace-confined, write goes through openat(O_NOFOLLOW)
+crates/aux-acp/src/supervisor.rs | fs::create_dir_all( | private .acp-home/.acp-tmp under the agent scratch workspace, created before the sandboxed child starts
+crates/aux-acp/src/supervisor.rs | "HOME" | sets the sandboxed child's private HOME env var; not a home read
+crates/aux-engine/src/layout.rs | fs::rename( | WO-07 one-time move of the legacy dots/ folder to agents/: both names are direct children of the verified home, the destination is checked absent before the rename, and SandboxHome has no rename API (kernel untouched).
+
+# WO-13b — extensions slice 1. Every write is inside the Auxesis home
+# (~/.auxesis/extensions/ and ~/.auxesis/catalog/), 0600/0700, and is the
+# reviewed debt for the SandboxHome gateway follow-up.
+crates/aux-runtime/src/extensions/catalog.rs | fs::create_dir_all( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/catalog.rs | fs::write( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/install.rs | fs::create_dir_all( | extension install tree under ~/.auxesis/extensions, 0700; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/install.rs | fs::remove_dir_all( | removing the extension install tree on remove/reinstall; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/install.rs | fs::remove_file( | removing the per-extension state file on remove; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/install.rs | fs::write( | sha256-verified extension bytes and its entry.toml under ~/.auxesis/extensions, 0700; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/mount.rs | fs::create_dir_all( | extension state/ and mounts.json under ~/.auxesis/extensions, 0700; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/mount.rs | fs::write( | extension state and mount table under ~/.auxesis/extensions, 0600; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/scenarios.rs | fs::create_dir_all( | test-only fixture catalog and installs live in TempDir homes
+crates/aux-runtime/src/extensions/scenarios.rs | fs::write( | test-only fixture catalog, scripts and .env canaries live in TempDir homes
+crates/aux-runtime/src/extensions/session.rs | "HOME" | sets the sandboxed child's private HOME to its own work dir; not a home read
+
+crates/aux-fakemail/src/serve.rs | fs::create_dir_all( | dev-only mail simulator (not shipped, not a dep of auxd/aux-cli): creates its own --dir and outbox/, never the Auxesis home
+crates/aux-fakemail/src/serve.rs | fs::write( | dev-only mail simulator (not shipped): writes its self-signed cert/key (key 0600) and outbox .eml files inside its own --dir
+# WO-M2-OWNERSETUP-1 (#38) — the simulator's pid file, inside its own --dir
+# (scripts/brief-setup.sh points --dir at $AUXESIS_HOME/fakemail, a 0700 dir it creates).
+crates/aux-fakemail/src/bin/aux-fakemail.rs | fs::write( | dev-only mail simulator (not shipped): writes its own pid into <--dir>/pid after bind so brief-setup.sh can tell the port is ours
+crates/aux-fakemail/src/bin/aux-fakemail.rs | fs::remove_file( | dev-only mail simulator (not shipped): removes its own <--dir>/pid on exit
+crates/aux-fakemail/src/demo.rs | fs::create_dir_all( | dev-only mail simulator (not shipped): `demo` creates its own --dir, never the Auxesis home
+crates/aux-fakemail/src/demo.rs | fs::write( | dev-only mail simulator (not shipped): `demo` writes <--dir>/mailbox.json.tmp of fictional mails
+crates/aux-fakemail/src/demo.rs | fs::rename( | dev-only mail simulator (not shipped): `demo` renames <--dir>/mailbox.json.tmp over mailbox.json (atomic)
+crates/aux-fakemail/src/world.rs | fs::create_dir_all( | dev-only mail simulator (not shipped): `demo --world` creates its own --dir, never the Auxesis home
+crates/aux-fakemail/src/world.rs | fs::write( | dev-only mail simulator (not shipped): `demo --world` writes <--dir>/mailbox.json.tmp (0600) of fictional mails
+crates/aux-fakemail/src/world.rs | fs::rename( | dev-only mail simulator (not shipped): `demo --world` renames <--dir>/mailbox.json.tmp over mailbox.json (atomic)

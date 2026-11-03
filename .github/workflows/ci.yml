@@ -1,0 +1,111 @@
+name: CI
+
+# The CI of the public Auxesis repository. The public copy ships this file as
+# .github/workflows/ci.yml and no other workflow.
+#
+# Every job runs on a GitHub-hosted machine: a pull request from anyone runs
+# here and never on a maintainer's machine. Rules for this file:
+#   * the runs-on label is ubuntu-latest or macos-15, written literally;
+#   * every action pinned by full commit SHA (tag in the trailing comment);
+#   * no repository secret and no job token in any step, a read-only token,
+#     only the push and pull_request triggers.
+# The export that builds the public copy refuses one that breaks these rules.
+# These files cannot stop a pull request that edits them: the public
+# repository itself must register no runner of its own and must hold outside
+# pull requests for approval (CONTRIBUTING.md, Publishing checklist).
+#
+# Every cargo, script and swift command runs under scripts/ci-sandbox-env.sh
+# (a scratch HOME and AUXESIS_HOME, AUXESIS_SANDBOX=1, AUXESIS_API_PORT=0) or
+# under check-no-keychain.sh, which sandboxes its own run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# One run per ref: a new push cancels the superseded in-flight run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The suite is not parallel-safe at one thread per core; four is the pin.
+  RUST_TEST_THREADS: "4"
+  # Inside the checkout, so the sandbox never writes the machine's ~/Library.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
+jobs:
+  lint:
+    # Format and the egress contract read source only: Linux is enough.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (pinned by rust-toolchain.toml)
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
+            --profile minimal --component rustfmt --component clippy
+          rustup show
+      - name: Format
+        run: scripts/ci-sandbox-env.sh cargo fmt --all -- --check
+      - name: Egress contract
+        # Self-test first: a second HTTP client in an allowlisted file must fail.
+        run: |
+          scripts/ci-sandbox-env.sh scripts/test-check-egress.sh
+          scripts/ci-sandbox-env.sh scripts/check-egress.sh
+      - name: Gitleaks config
+        # The allowlist is path-only and anchored to exact repo-relative
+        # names; the test proves no pattern matches a sibling or backup path.
+        # No gitleaks binary is needed.
+        run: scripts/ci-sandbox-env.sh scripts/test-gitleaks-config.sh
+      - name: Dependency policy
+        # Blocking, and no token: an advisory, licence, ban or source
+        # violation fails this job. The action brings its own pinned
+        # cargo-deny 0.20.2. It runs in its own container: no host HOME, no
+        # Keychain.
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+
+  check:
+    # Auxesis is a Mac product: the workspace holds macOS-only code, so clippy
+    # and the tests run on macOS.
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (pinned by rust-toolchain.toml)
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
+            --profile minimal --component rustfmt --component clippy
+          rustup show
+      - name: Clippy
+        run: scripts/ci-sandbox-env.sh cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests (sandboxed, no Keychain)
+        # The workspace suite under a scratch HOME with a fake `security` on
+        # PATH: a test that reaches the Keychain fails the step.
+        run: scripts/check-no-keychain.sh --locked
+
+  swift:
+    # The SwiftUI app in apps/auxesis-mac: swift build, then swift test.
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Command Line Tools toolchain
+        # The package carries its own small XCTest/Testing runner for the
+        # Command Line Tools; a full Xcode toolchain would shadow it (see
+        # apps/auxesis-mac/Package.swift).
+        run: |
+          clt=/Library/Developer/CommandLineTools
+          [[ -x "$clt/usr/bin/swift" ]] || { echo "swift: no Command Line Tools at $clt" >&2; exit 1; }
+          sudo xcode-select --switch "$clt"
+          swift --version
+      - name: Swift build and test (sandboxed)
+        run: scripts/ci-sandbox-env.sh scripts/swift-gate.sh

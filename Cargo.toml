@@ -1,0 +1,108 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aux-store",
+    "crates/aux-crm",
+    "crates/aux-providers",
+    "crates/aux-runtime",
+    "crates/aux-notify",
+    "crates/aux-brief",
+    "crates/aux-imessage",
+    "crates/aux-engine",
+    "crates/aux-google",
+    "crates/aux-mail",
+    "crates/aux-fakemail",
+    "crates/aux-docs",
+    "crates/aux-acp",
+    "crates/aux-cli",
+    "crates/auxd",
+    "crates/aux-invoices",
+    "kernel/crates/kernel-core",
+    "kernel/crates/gliner2",
+    "kernel/crates/kernel-privacy",
+    "kernel/crates/kernel-broker",
+    "kernel/crates/kernel-net",
+    "kernel/crates/kernel-mcp",
+    "kernel/qa/privacy-eval",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["The Auxesis Authors"]
+license = "Apache-2.0"
+description = "Auxesis — your own always-on agents, in Rust."
+
+[workspace.dependencies]
+# The kernel, vendored in-tree at `kernel/` as a byte-identical export of
+# f3d8915 (K16c: B11/B19/B22 Covered). kernel-0.0.1 = 4608632, kernel-0.0.2 = a53fb23, kernel-0.0.3 = e885340, kernel-0.0.5 = 580640f, kernel-0.0.6 = c811104, kernel-0.0.7 = b81303a. Bump by re-exporting a new rev into `kernel/`. The five crates always move together.
+kernel-core = { path = "kernel/crates/kernel-core" }
+kernel-privacy = { path = "kernel/crates/kernel-privacy" }
+kernel-broker = { path = "kernel/crates/kernel-broker" }
+kernel-net = { path = "kernel/crates/kernel-net" }
+kernel-mcp = { path = "kernel/crates/kernel-mcp" }
+# The e-invoice XML parsers (Factur-X/ZUGFeRD CII and UBL), vendored in-tree at
+# `crates/aux-invoices` as a byte-identical export of f29dc6b (the invoices repo
+# stays separate). It is a **pure** library (no aux-core or aux-store
+# dependency), and `rust_decimal` is built with `std` alone: serde/rkyv/borsh/
+# bitvec/uuid are listed in Cargo.lock as optional deps of rust_decimal but never
+# compiled (`cargo tree` shows only `std`). It does no I/O and no network, and it
+# parses only XML: there is no in-process PDF parser (D25/D26).
+aux-invoices = { path = "crates/aux-invoices" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# Property testing for the parsers that consume third-party input. Dev-only:
+# the default 256 cases keep the test gate fast.
+proptest = "1"
+# The one shared HTTP stack for the connector layer (`aux-mcp` S1+).
+# Pinned here so no crate grows a second reqwest version;
+# existing direct users keep their own feature selection.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher", "fallible_uint"] }
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+toml = "0.9"
+# `mcp.toml` rewrites edit the parsed document in place, so comments,
+# formatting and quarantined entries survive byte-for-byte. `toml` still owns
+# the entry shape; `toml_edit` owns the document. Pinned to the version already
+# in `Cargo.lock` (pulled in by `proc-macro-crate`).
+toml_edit = "=0.25.16"
+tracing = "0.1"
+# Native mailbox connector (`aux-mail`; the mail contract is `docs/mail.md`).
+# The owner rule is **rustls only, one TLS stack**: `async-imap` ships no TLS
+# at all (we wrap its stream in the workspace's `tokio-rustls`), and `lettre`
+# runs `default-features = false` because its default pulls `native-tls`.
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+imap-proto = "0.17"
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1-rustls-tls",
+    "smtp-transport",
+    "builder",
+] }
+mail-parser = { version = "0.11", default-features = false, features = ["full_encoding"] }
+# Self-signed certificates for the offline TLS fake only (dev-dependency).
+rcgen = "0.14"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+# The kernel crates opt in with `[lints] workspace = true`: sensitive kernel
+# crates may not use `unsafe`. kernel-core and kernel-broker are the documented
+# exceptions (libc syscalls) and do not opt in.
+unsafe_code = "forbid"
+
+# Tests (CI-FAST-2): dependencies and the kernel's privacy crate are built
+# optimised even in dev/test builds. The kernel recognizer tests ran 5-10x
+# slower unoptimised (prefix_key_glue: 856 s vs 89 s). Debug assertions and
+# overflow checks stay on: only codegen changes, every test still runs.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.kernel-privacy]
+opt-level = 2
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

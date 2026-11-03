@@ -1,0 +1,7 @@
+Auxesis kernel
+Copyright 2026 the Auxesis authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Dependencies keep their own licences. `deny.toml` checks every licence in the
+dependency graph against the allow-list before a dependency is accepted.

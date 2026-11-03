@@ -1,0 +1,13 @@
+name = "private-mode-greeting"
+mode = "private"
+turns = [
+  "Good morning. What can you do for me today?",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = []
+must_not_contain = ["Disabled in private mode"]
+max_replies_per_turn = 1
+no_send_without_approval = false

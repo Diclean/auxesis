@@ -1,0 +1,13 @@
+name = "cold-first-turn-english"
+mode = "open"
+turns = [
+  "Who wrote to me last?",
+]
+fake_expect = ["reply_count_one", "lang_en", "provider_saw_reply_language"]
+
+[checks]
+lang = "en"
+must_contain = ["calendar"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

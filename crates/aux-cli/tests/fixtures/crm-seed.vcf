@@ -1,0 +1,21 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Camille Exemple
+N:Exemple;Camille;;;
+EMAIL;TYPE=INTERNET:camille.exemple@example.invalid
+TEL;TYPE=CELL:06 12 34 56 78
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Jean Fictif
+N:Fictif;Jean;;;
+EMAIL:jean.fictif@example.invalid
+TEL;TYPE=CELL:+1 (415) 555-0137
+END:VCARD
+BEGIN:VCARD
+VERSION:4.0
+FN:Morgan Fictif
+N:Fictif;Morgan;;;
+EMAIL:morgan.fictif@example.invalid
+TEL;TYPE=WORK:+44 (0)20 7946 0958
+END:VCARD

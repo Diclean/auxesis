@@ -1,0 +1,88 @@
+{"id": "zh-wangwei-1", "dictionary": ["王伟"], "text": "王伟", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "zh-wangwei-2", "dictionary": ["王伟"], "text": "王伟来了", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "zh-wangwei-3", "dictionary": ["王伟"], "text": "我和王伟明天去北京", "spans": [{"type": "PERSON", "start": 6, "end": 12}]}
+{"id": "zh-wangwei-4", "dictionary": ["王伟"], "text": "Call 王伟 tomorrow", "spans": [{"type": "PERSON", "start": 5, "end": 11}]}
+{"id": "zh-lixiaolong", "dictionary": ["李小龙"], "text": "李小龙说你好", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "ja-tanaka-glued", "dictionary": ["田中太郎"], "text": "田中太郎さんが来ました", "spans": [{"type": "PERSON", "start": 0, "end": 12}]}
+{"id": "ja-tanaka-spaced", "dictionary": ["田中 太郎"], "text": "田中さんが来ました", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "ja-sakura", "dictionary": ["さくら"], "text": "さくらさんが来た", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "ko-kim-glued", "dictionary": ["김민수"], "text": "김민수가 왔어요", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "ko-kim-spaced-1", "dictionary": ["김 민수"], "text": "김민수씨가", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "ko-kim-spaced-2", "dictionary": ["김 민수"], "text": "민수야 안녕", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "th-somchai", "dictionary": ["สมชาย ใจดี"], "text": "คุณสมชายโทรมา", "spans": [{"type": "PERSON", "start": 9, "end": 24}]}
+{"id": "latin-cjk-han", "dictionary": ["Camille Exemple"], "text": "明天和Camille开会", "spans": [{"type": "PERSON", "start": 9, "end": 16}]}
+{"id": "latin-cjk-kana", "dictionary": ["Camille Exemple"], "text": "Camilleさんに連絡", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "latin-cjk-hangul", "dictionary": ["Camille Exemple"], "text": "Camille씨가 왔어요", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "latin-cjk-thai", "dictionary": ["Camille Exemple"], "text": "ส่งให้Camilleแล้ว", "spans": [{"type": "PERSON", "start": 18, "end": 25}]}
+{"id": "el-nikou", "dictionary": ["Νίκος Παπαδόπουλος"], "text": "του Νίκου", "spans": [{"type": "PERSON", "start": 7, "end": 17}]}
+{"id": "el-papadopoulou", "dictionary": ["Νίκος Παπαδόπουλος"], "text": "του Παπαδόπουλου", "spans": [{"type": "PERSON", "start": 7, "end": 31}]}
+{"id": "pl-kowalskiego", "dictionary": ["Jan Kowalski"], "text": "u Kowalskiego", "spans": [{"type": "PERSON", "start": 2, "end": 13}]}
+{"id": "pl-kowalskim", "dictionary": ["Jan Kowalski"], "text": "z Kowalskim", "spans": [{"type": "PERSON", "start": 2, "end": 11}]}
+{"id": "pl-janem", "dictionary": ["Jan Kowalski"], "text": "Janem", "spans": [{"type": "PERSON", "start": 0, "end": 5}]}
+{"id": "pl-nowakiem", "dictionary": ["Anna Nowak"], "text": "z Nowakiem", "spans": [{"type": "PERSON", "start": 2, "end": 10}]}
+{"id": "cz-novakovi", "dictionary": ["Petr Novák"], "text": "Novákovi", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "cz-novakova", "dictionary": ["Petr Novák"], "text": "paní Nováková", "spans": [{"type": "PERSON", "start": 6, "end": 16}]}
+{"id": "uk-oleny", "dictionary": ["Олена Шевченко"], "text": "Олени", "spans": [{"type": "PERSON", "start": 0, "end": 10}]}
+{"id": "fi-virtasen", "dictionary": ["Mikko Virtanen"], "text": "Virtasen", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "he-ledavid", "dictionary": ["דוד כהן"], "text": "לדוד", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "he-vdavid", "dictionary": ["דוד כהן"], "text": "ודוד כהן הגיעו", "spans": [{"type": "PERSON", "start": 0, "end": 8}, {"type": "PERSON", "start": 9, "end": 15}]}
+{"id": "he-shedavid", "dictionary": ["דוד כהן"], "text": "שדוד אמר", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "he-medavid", "dictionary": ["דוד כהן"], "text": "מדוד", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "he-bekohen", "dictionary": ["דוד כהן"], "text": "בכהן", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "he-hakohen", "dictionary": ["דוד כהן"], "text": "הכהן", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "he-vledavid", "dictionary": ["דוד כהן"], "text": "ולדוד", "spans": [{"type": "PERSON", "start": 0, "end": 10}]}
+{"id": "he-liyossi", "dictionary": ["יוסי לוי"], "text": "ליוסי", "spans": [{"type": "PERSON", "start": 0, "end": 10}]}
+{"id": "ar-ali-1", "dictionary": ["محمد علي"], "text": "علی آمد", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "ar-mohammad", "dictionary": ["محمد علي"], "text": "محـمد", "spans": [{"type": "PERSON", "start": 0, "end": 10}]}
+{"id": "ar-ali-2", "dictionary": ["علي"], "text": "علی", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "ar-karim", "dictionary": ["كريم"], "text": "کریم", "spans": [{"type": "PERSON", "start": 0, "end": 8}]}
+{"id": "ar-fatima", "dictionary": ["فاطمة الزهراء"], "text": "فاطمه آمد", "spans": [{"type": "PERSON", "start": 0, "end": 10}]}
+{"id": "ar-abdullah", "dictionary": ["عبدالله"], "text": "اتصل عبد الله", "spans": [{"type": "PERSON", "start": 9, "end": 24}]}
+{"id": "de-juergen", "dictionary": ["Jürgen Müller"], "text": "Juergen Mueller", "spans": [{"type": "PERSON", "start": 0, "end": 7}, {"type": "PERSON", "start": 8, "end": 15}]}
+{"id": "de-mueller", "dictionary": ["Jürgen Müller"], "text": "Mueller", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "de-juergen-caps", "dictionary": ["Jürgen Müller"], "text": "JUERGEN", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "da-soeren", "dictionary": ["Søren Kierkegård"], "text": "Soeren", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "da-kierkegaard", "dictionary": ["Søren Kierkegård"], "text": "Kierkegaard", "spans": [{"type": "PERSON", "start": 0, "end": 11}]}
+{"id": "sv-aasa", "dictionary": ["Åsa Ångström"], "text": "Aasa Aangstroem", "spans": [{"type": "PERSON", "start": 0, "end": 4}, {"type": "PERSON", "start": 5, "end": 15}]}
+{"id": "seal-camille-softhyphen", "dictionary": ["Camille Exemple"], "text": "Ca­mille Exem­ple", "spans": [{"type": "PERSON", "start": 0, "end": 19}]}
+{"id": "seal-camille-nbsp", "dictionary": ["Camille Exemple"], "text": "Ca mille", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "seal-camille-lettered", "dictionary": ["Camille Exemple"], "text": "C-a-m-i-l-l-e", "spans": [{"type": "PERSON", "start": 0, "end": 13}]}
+{"id": "seal-camille-emoji", "dictionary": ["Camille Exemple"], "text": "Cam👍ille", "spans": [{"type": "PERSON", "start": 0, "end": 11}]}
+{"id": "seal-camille-break", "dictionary": ["Camille Exemple"], "text": "Exem-\nple", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "seal-cami", "dictionary": ["Camille Exemple"], "text": "Cami", "spans": [{"type": "PERSON", "start": 0, "end": 4}]}
+{"id": "seal-camille-merci", "dictionary": ["Camille Exemple"], "text": "Merci Ca mille Exem ple", "spans": [{"type": "PERSON", "start": 6, "end": 23}]}
+{"id": "seal-camille-merci-nbsp", "dictionary": ["Camille Exemple"], "text": "Merci Ca mille Exem ple", "spans": [{"type": "PERSON", "start": 6, "end": 25}]}
+{"id": "seal-mohammad", "dictionary": ["محمد علي"], "text": "محـمد", "spans": [{"type": "PERSON", "start": 0, "end": 10}]}
+{"id": "seal-rahul", "dictionary": ["राहुल शर्मा"], "text": "राहुलजी", "spans": [{"type": "PERSON", "start": 0, "end": 15}]}
+{"id": "seal-bob", "dictionary": ["Robert Smith"], "text": "Bob Smith", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "seal-annie", "dictionary": ["Anna Nowak"], "text": "Annie", "spans": [{"type": "PERSON", "start": 0, "end": 5}]}
+{"id": "seal-jp", "dictionary": ["Jean-Pierre Dupont"], "text": "JP Dupont", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "seal-mj", "dictionary": ["Mary-Jane Watson"], "text": "MJ Watson", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "seal-sergei", "dictionary": ["Сергей Иванов"], "text": "Sergei Ivanov", "spans": [{"type": "PERSON", "start": 0, "end": 6}, {"type": "PERSON", "start": 7, "end": 13}]}
+{"id": "seal-wangwei", "dictionary": ["Wang Wei"], "text": "王伟来了", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "r6-ewa-lower-dla", "dictionary": ["Ewa Nowak"], "text": "dla ewy", "spans": [{"type": "PERSON", "start": 4, "end": 7}]}
+{"id": "r6-pekka-lower", "dictionary": ["Pekka Mäki"], "text": "pekan", "spans": [{"type": "PERSON", "start": 0, "end": 5}]}
+{"id": "r6-matti-lower", "dictionary": ["Matti Salo"], "text": "matille", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "r6-tanaka-honorific", "dictionary": ["田中 太郎"], "text": "田中さんが来ました", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "r6-taro-kun", "dictionary": ["田中 太郎"], "text": "太郎くんが来た", "spans": [{"type": "PERSON", "start": 0, "end": 6}]}
+{"id": "r6-kofi-open-o", "dictionary": ["Kofi Mensah"], "text": "Kɔfi Mensah a appelé", "spans": [{"type": "PERSON", "start": 0, "end": 12}]}
+{"id": "r6-djordje-dj", "dictionary": ["Đorđe Petrović"], "text": "Djordje Petrović a appelé", "spans": [{"type": "PERSON", "start": 0, "end": 17}]}
+{"id": "r6-will-lower-person", "dictionary": ["Will"], "text": "hi will, merci", "spans": [{"type": "PERSON", "start": 3, "end": 7}]}
+{"id": "fr-chloe-lambert", "dictionary": ["Chloé Lambert"], "text": "Dîner avec Chloé Lambert demain", "spans": [{"type": "PERSON", "start": 12, "end": 26}]}
+{"id": "fr-chloe-lambert-nfd", "dictionary": ["Chloé Lambert"], "text": "Dîner avec Chloé Lambert demain", "spans": [{"type": "PERSON", "start": 12, "end": 27}]}
+{"id": "fr-helene-roux-nfd", "dictionary": ["Hélène Roux"], "text": "rappel pour hélène roux ce soir", "spans": [{"type": "PERSON", "start": 12, "end": 27}]}
+{"id": "fr-francois-lower", "dictionary": ["François Dubreuil"], "text": "françois dubreuil a écrit", "spans": [{"type": "PERSON", "start": 0, "end": 18}]}
+{"id": "hu-kovacs-anna-family-first", "dictionary": ["Kovács Anna"], "text": "Kovács Anna holnap jön", "spans": [{"type": "PERSON", "start": 0, "end": 12}]}
+{"id": "hu-kovacs-anna-given-first", "dictionary": ["Anna Kovács"], "text": "találkozó Anna Kovács-szal", "spans": [{"type": "PERSON", "start": 12, "end": 24}]}
+{"id": "hu-gyozo-lower-nfd", "dictionary": ["Győző"], "text": "győző jön ma", "spans": [{"type": "PERSON", "start": 0, "end": 9}]}
+{"id": "hu-szucs-nfd", "dictionary": ["Szűcs"], "text": "szűcs jön ma", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "sl-mojca-zagar", "dictionary": ["Mojca Žagar"], "text": "Pozdrav od Mojca Žagar", "spans": [{"type": "PERSON", "start": 11, "end": 23}]}
+{"id": "sl-tomaz-kranjc", "dictionary": ["Tomaž Kranjc"], "text": "tomaž kranjc je tukaj", "spans": [{"type": "PERSON", "start": 0, "end": 13}]}
+{"id": "sl-spela-nfd", "dictionary": ["Špela"], "text": "špela pride jutri", "spans": [{"type": "PERSON", "start": 0, "end": 7}]}
+{"id": "af-anel", "dictionary": ["Anél"], "text": "Anél kom môre", "spans": [{"type": "PERSON", "start": 0, "end": 5}]}
+{"id": "af-zoe-botha", "dictionary": ["Zoë Botha"], "text": "Ek het Zoë Botha gesien", "spans": [{"type": "PERSON", "start": 7, "end": 17}]}
+{"id": "af-pieter-van-der-merwe", "dictionary": ["Pieter van der Merwe"], "text": "Pieter van der Merwe kom môre", "spans": [{"type": "PERSON", "start": 0, "end": 20}]}
+{"id": "en-sophie-harrow", "dictionary": ["Sophie Harrow"], "text": "Sophie Harrow is coming", "spans": [{"type": "PERSON", "start": 0, "end": 13}]}
+{"id": "zh-wang-xiaoming-inside", "dictionary": ["王小明"], "text": "明天和王小明开会", "spans": [{"type": "PERSON", "start": 9, "end": 18}]}
+{"id": "zh-wang-xiaoming-mixed", "dictionary": ["王小明"], "text": "meeting with 王小明 tomorrow", "spans": [{"type": "PERSON", "start": 13, "end": 22}]}
+{"id": "zh-wang-xiaoming-pinyin", "dictionary": ["Wang Xiaoming"], "text": "Wang Xiaoming tomorrow", "spans": [{"type": "PERSON", "start": 0, "end": 13}]}

@@ -1,0 +1,25 @@
+[package]
+name = "gliner2-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "GLiNER2 zero-shot span extraction over ONNX Runtime, with byte offsets"
+readme = "README.md"
+
+[dependencies]
+# ONNX Runtime bindings. `load-dynamic` resolves the ONNX Runtime 1.20 shared
+# library at run time (`ORT_DYLIB_PATH` or `Options::ort_dylib`), so the build
+# downloads nothing. The version is the one the lock already held.
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["load-dynamic"] }
+regex = "1"
+# Word offsets and subword ids come from the fast tokenizer the graph was
+# exported with. `onig` is the regex backend the lock already holds.
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

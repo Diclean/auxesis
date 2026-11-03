@@ -1,0 +1,36 @@
+{
+  "authorized": true,
+  "events": [
+    {
+      "id": "m2-call-camille",
+      "title": "Call with Camille Exemple",
+      "start": "@TODAY_0930@",
+      "end": "@TODAY_1000@",
+      "calendar": "Work",
+      "location": null,
+      "attendees": ["mailto:camille@exemple.test"]
+    },
+    {
+      "id": "m2-design-review",
+      "title": "Fictional design review",
+      "start": "@TODAY_1400@",
+      "end": "@TODAY_1500@",
+      "calendar": "Work",
+      "location": null,
+      "attendees": []
+    },
+    {
+      "id": "m2-retro-tomorrow",
+      "title": "Fictional retro tomorrow",
+      "start": "@TOMORROW_1000@",
+      "end": "@TOMORROW_1100@",
+      "calendar": "Work",
+      "location": null,
+      "attendees": []
+    }
+  ],
+  "reminders": [],
+  "captured_at": "@NOW@",
+  "covers_from": "@TODAY_0000@",
+  "covers_to": "@DAY8_0000@"
+}

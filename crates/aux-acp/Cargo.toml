@@ -1,0 +1,38 @@
+[package]
+name = "aux-acp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "ACP (Agent Client Protocol) backend: process supervisor, JSON-RPC client and broker bridge."
+
+[dependencies]
+async-trait = "0.1"
+kernel-core.workspace = true
+aux-engine = { path = "../aux-engine" }
+kernel-privacy.workspace = true
+aux-store = { path = "../aux-store" }
+kernel-broker.workspace = true
+libc = "0.2"
+serde.workspace = true
+serde_json = "1"
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "fs", "rt", "macros"] }
+tracing.workspace = true
+
+[dev-dependencies]
+aux-providers = { path = "../aux-providers", features = ["test-util"] }
+kernel-broker = { workspace = true, features = ["test-util"] }
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "process", "io-util"] }
+
+[[bin]]
+name = "acp-fake-agent"
+path = "src/bin/acp_fake_agent.rs"
+
+[[example]]
+name = "acp-smoke"
+path = "examples/acp_smoke.rs"

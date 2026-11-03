@@ -1,0 +1,120 @@
+Quick update: my specialist confirmed [diabetes]; please keep this off the group chat.
+For tomorrow’s call, please note I’m being treated for [HbA1c: 8.2 %]; I will send the note after the appointment.
+I had to move the appointment because of [breast cancer]; the dose is on my treatment plan.
+The clinic note says I have [endometriosis]; please keep this off the group chat.
+Private message: I’m taking leave for [fibromyalgia]; I will send the note after the appointment.
+Quick update: my specialist confirmed [viral load: 42 copies/mL]; the dose is on my treatment plan.
+For tomorrow’s call, please note I’m being treated for [HIV]; please keep this off the group chat.
+I had to move the appointment because of [HbA1c: 7.4%]; I will send the note after the appointment.
+The clinic note says I have [ADHD]; the dose is on my treatment plan.
+Private message: I’m taking leave for [autism]; please keep this off the group chat.
+Quick update: my specialist confirmed [pregnancy]; I will send the note after the appointment.
+For tomorrow’s call, please note I’m being treated for [pregnant]; the dose is on my treatment plan.
+I had to move the appointment because of [allergy]; please keep this off the group chat.
+The clinic note says I have [allergic]; I will send the note after the appointment.
+Private message: I’m taking leave for [migraine]; the dose is on my treatment plan.
+Quick update: my specialist confirmed [depression]; please keep this off the group chat.
+For tomorrow’s call, please note I’m being treated for [anxiety disorder]; I will send the note after the appointment.
+I had to move the appointment because of [high blood pressure]; the dose is on my treatment plan.
+The clinic note says I have [on sick leave]; please keep this off the group chat.
+Private message: I’m taking leave for [sick leave]; I will send the note after the appointment.
+Quick update: my specialist confirmed [chemotherapy]; the dose is on my treatment plan.
+For tomorrow’s call, please note I’m being treated for [chemo]; please keep this off the group chat.
+I had to move the appointment because of [radiotherapy]; I will send the note after the appointment.
+The clinic note says I have [insulin]; the dose is on my treatment plan.
+Private message: I’m taking leave for [metformin 500 mg]; please keep this off the group chat.
+Quick update: my specialist confirmed [amoxicillin 250 mg]; I will send the note after the appointment.
+For tomorrow’s call, please note I’m being treated for [sertraline 50 mg]; the dose is on my treatment plan.
+I had to move the appointment because of [levothyroxine 75 mcg]; please keep this off the group chat.
+The clinic note says I have [prednisone 20 mg]; I will send the note after the appointment.
+Private message: I’m taking leave for [eczema]; the dose is on my treatment plan.
+Quick update: my specialist confirmed [lupus]; please keep this off the group chat.
+For tomorrow’s call, please note I’m being treated for [psoriasis]; I will send the note after the appointment.
+I had to move the appointment because of [anaemia]; the dose is on my treatment plan.
+The clinic note says I have [hypothyroidism]; please keep this off the group chat.
+Private message: I’m taking leave for [hyperthyroidism]; I will send the note after the appointment.
+Quick update: my specialist confirmed [pancreatitis]; the dose is on my treatment plan.
+For tomorrow’s call, please note I’m being treated for [anaphylaxis]; please keep this off the group chat.
+I had to move the appointment because of [kidney stones]; I will send the note after the appointment.
+The clinic note says I have [infertility]; the dose is on my treatment plan.
+Private message: I’m taking leave for [fertility treatment]; please keep this off the group chat.
+Petit message : mon médecin a confirmé [diabète] ; merci de garder cela dans le fil privé.
+Pour le rendez-vous de demain, je suis suivie pour [charge virale: 18 copies/mL] ; je transmettrai le document après le rendez-vous.
+Je dois déplacer le contrôle à cause de [cancer du sein] ; la posologie figure dans mon dossier.
+Le compte rendu indique [endométriose] ; merci de garder cela dans le fil privé.
+Message privé : je suis en congé pour [fibromyalgie] ; je transmettrai le document après le rendez-vous.
+Petit message : mon médecin a confirmé [bronchite] ; la posologie figure dans mon dossier.
+Pour le rendez-vous de demain, je suis suivie pour [HIV] ; merci de garder cela dans le fil privé.
+Je dois déplacer le contrôle à cause de [épilepsie] ; je transmettrai le document après le rendez-vous.
+Le compte rendu indique [ADHD] ; la posologie figure dans mon dossier.
+Message privé : je suis en congé pour [autisme] ; merci de garder cela dans le fil privé.
+Petit message : mon médecin a confirmé [grossesse] ; je transmettrai le document après le rendez-vous.
+Pour le rendez-vous de demain, je suis suivie pour [enceinte] ; la posologie figure dans mon dossier.
+Je dois déplacer le contrôle à cause de [allergie] ; merci de garder cela dans le fil privé.
+Le compte rendu indique [allergique] ; je transmettrai le document après le rendez-vous.
+Message privé : je suis en congé pour [migraine] ; la posologie figure dans mon dossier.
+Petit message : mon médecin a confirmé [dépression] ; merci de garder cela dans le fil privé.
+Pour le rendez-vous de demain, je suis suivie pour [anxiété] ; je transmettrai le document après le rendez-vous.
+Je dois déplacer le contrôle à cause de [hypertension] ; la posologie figure dans mon dossier.
+Le compte rendu indique [arrêt maladie] ; merci de garder cela dans le fil privé.
+Message privé : je suis en congé pour [en arrêt maladie] ; je transmettrai le document après le rendez-vous.
+Petit message : mon médecin a confirmé [chimiothérapie] ; la posologie figure dans mon dossier.
+Pour le rendez-vous de demain, je suis suivie pour [chimio] ; merci de garder cela dans le fil privé.
+Je dois déplacer le contrôle à cause de [radiothérapie] ; je transmettrai le document après le rendez-vous.
+Le compte rendu indique [insuline] ; la posologie figure dans mon dossier.
+Message privé : je suis en congé pour [metformin 500 mg] ; merci de garder cela dans le fil privé.
+Petit message : mon médecin a confirmé [ibuprofen 200 mg] ; je transmettrai le document après le rendez-vous.
+Pour le rendez-vous de demain, je suis suivie pour [sertraline 50 mg] ; la posologie figure dans mon dossier.
+Je dois déplacer le contrôle à cause de [levothyroxine 75 mcg] ; merci de garder cela dans le fil privé.
+Le compte rendu indique [prednisone 20 mg] ; je transmettrai le document après le rendez-vous.
+Message privé : je suis en congé pour [eczéma] ; la posologie figure dans mon dossier.
+Petit message : mon médecin a confirmé [lupus] ; merci de garder cela dans le fil privé.
+Pour le rendez-vous de demain, je suis suivie pour [psoriasis] ; je transmettrai le document après le rendez-vous.
+Je dois déplacer le contrôle à cause de [anémie] ; la posologie figure dans mon dossier.
+Le compte rendu indique [hypothyroïdie] ; merci de garder cela dans le fil privé.
+Message privé : je suis en congé pour [hyperthyroïdie] ; je transmettrai le document après le rendez-vous.
+Petit message : mon médecin a confirmé [pancréatite] ; la posologie figure dans mon dossier.
+Pour le rendez-vous de demain, je suis suivie pour [anaphylaxie] ; merci de garder cela dans le fil privé.
+Je dois déplacer le contrôle à cause de [calculs rénaux] ; je transmettrai le document après le rendez-vous.
+Le compte rendu indique [infertilité] ; la posologie figure dans mon dossier.
+Message privé : je suis en congé pour [handicap] ; merci de garder cela dans le fil privé.
+Net ’n vinnige nota: die dokter het [diabetes]; hou dit asseblief uit die groepklets.
+Ek skuif môre se afspraak weens [HbA1c: 6.9 %]; ek stuur die nota ná die afspraak.
+Die kliniek het bevestig dat ek [virale lading: 23 copies/mL]; die dosis staan op my behandelingsplan.
+Vir die span se beplanning is ek met [HIV]; hou dit asseblief uit die groepklets.
+Privaat boodskap: ek kry behandeling vir [epilepsie]; ek stuur die nota ná die afspraak.
+Net ’n vinnige nota: die dokter het [swangerskap]; die dosis staan op my behandelingsplan.
+Ek skuif môre se afspraak weens [miskraam]; hou dit asseblief uit die groepklets.
+Die kliniek het bevestig dat ek [onvrugbaarheid]; ek stuur die nota ná die afspraak.
+Vir die span se beplanning is ek met [IVF]; die dosis staan op my behandelingsplan.
+Privaat boodskap: ek kry behandeling vir [bevalling]; hou dit asseblief uit die groepklets.
+Net ’n vinnige nota: die dokter het [bloedarmoede]; ek stuur die nota ná die afspraak.
+Ek skuif môre se afspraak weens [hipotiroïdie]; die dosis staan op my behandelingsplan.
+Die kliniek het bevestig dat ek [hipertiroïdie]; hou dit asseblief uit die groepklets.
+Vir die span se beplanning is ek met [pankreatitis]; ek stuur die nota ná die afspraak.
+Privaat boodskap: ek kry behandeling vir [allergie]; die dosis staan op my behandelingsplan.
+Net ’n vinnige nota: die dokter het [geestesversteuring]; hou dit asseblief uit die groepklets.
+Ek skuif môre se afspraak weens [psigose]; ek stuur die nota ná die afspraak.
+Die kliniek het bevestig dat ek [bipolêre versteuring]; die dosis staan op my behandelingsplan.
+Vir die span se beplanning is ek met [depressie]; hou dit asseblief uit die groepklets.
+Privaat boodskap: ek kry behandeling vir [depressief]; ek stuur die nota ná die afspraak.
+Net ’n vinnige nota: die dokter het [migraine]; die dosis staan op my behandelingsplan.
+Ek skuif môre se afspraak weens [lupus]; hou dit asseblief uit die groepklets.
+Die kliniek het bevestig dat ek [psoriasis]; ek stuur die nota ná die afspraak.
+Vir die span se beplanning is ek met [ekseem]; die dosis staan op my behandelingsplan.
+Privaat boodskap: ek kry behandeling vir [serebrale gestremdheid]; hou dit asseblief uit die groepklets.
+Net ’n vinnige nota: die dokter het [gestremdheid]; ek stuur die nota ná die afspraak.
+Ek skuif môre se afspraak weens [niersteentjies]; die dosis staan op my behandelingsplan.
+Die kliniek het bevestig dat ek [maagsweer]; hou dit asseblief uit die groepklets.
+Vir die span se beplanning is ek met [galstene]; ek stuur die nota ná die afspraak.
+Privaat boodskap: ek kry behandeling vir [mediese verlof]; die dosis staan op my behandelingsplan.
+Rövid üzenet: az orvos megerősítette a [terhesség], ezt kérlek ne továbbítsd.
+Lelet: [lupus]. Holnap kontrollra megyek.
+Rövid üzenet: az orvos megerősítette a [anafilaxia], ezt kérlek ne továbbítsd.
+Holnap kontrollra megyek a [Crohn-betegség], holnap küldöm az igazolást.
+Kratko sporočilo: zdravnik je potrdil [nosečnost]; prosim, ne posreduj tega naprej.
+Jutri imam pregled zaradi [lupus]; potrdilo pošljem po pregledu.
+Kratko sporočilo: zdravnik je potrdil [anafilaksija]; prosim, ne posreduj tega naprej.
+医生刚确认了 [糖尿病]，请不要转发到群里。
+我明天要复诊，原因是 [甲状腺功能减退]，我复诊后再发证明。
+医生刚确认了 [关节炎]，请不要转发到群里。

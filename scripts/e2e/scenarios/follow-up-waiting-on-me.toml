@@ -1,0 +1,13 @@
+name = "follow-up-waiting-on-me"
+mode = "open"
+turns = [
+  "Which of my clients are waiting for an answer from me?",
+]
+fake_expect = ["reply_count_one", "provider_saw_no_raw_email", "provider_saw_no_raw_phone", "provider_saw_no_raw_bank", "lang_en"]
+
+[checks]
+lang = "en"
+must_contain = ["Camille Example", "Jonas Sample", "Mira Fictive"]
+must_not_contain = []
+max_replies_per_turn = 1
+no_send_without_approval = false

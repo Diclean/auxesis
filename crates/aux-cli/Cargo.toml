@@ -1,0 +1,57 @@
+[package]
+name = "aux-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+default = []
+# MA4: the frozen Google surfaces (`aux connect google`, `aux skill run`
+# writes), off by default. `--features google` restores them.
+google = ["dep:aux-google"]
+
+[[bin]]
+name = "aux"
+path = "src/main.rs"
+
+[dependencies]
+kernel-core.workspace = true
+kernel-privacy.workspace = true
+async-trait = "0.1"
+aux-brief = { path = "../aux-brief" }
+# `aux contacts import` and `aux crm` seed and promote CRM parties.
+aux-crm = { path = "../aux-crm" }
+# B3: `aux crm timeline refresh` runs the same refresh as the daemon job.
+auxd = { path = "../auxd" }
+aux-engine = { path = "../aux-engine" }
+aux-google = { path = "../aux-google", optional = true }
+# MA3: `aux mail` drives the native IMAP connector and its discovery.
+aux-mail = { path = "../aux-mail" }
+kernel-mcp.workspace = true
+aux-notify = { path = "../aux-notify" }
+aux-providers = { path = "../aux-providers" }
+aux-runtime = { path = "../aux-runtime" }
+aux-store = { path = "../aux-store" }
+kernel-broker.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+clap.workspace = true
+libc = "0.2"
+rusqlite.workspace = true
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-std", "io-util", "sync"] }
+toml.workspace = true
+# `aux mail add` appends one account to `config.toml` without rewriting the
+# owner's comments or the rest of the file.
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Enable auxd's `test-util` seams for the workspace test build (feature
+# unification), so auxd's own integration tests compile the turn hook.
+auxd = { path = "../auxd", features = ["test-util"] }
+# `MemoryAuditSink` for the skill-run tests (cfg(test) does not cross crates).
+kernel-broker = { workspace = true, features = ["test-util"] }

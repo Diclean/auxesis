@@ -1,0 +1,37 @@
+[package]
+name = "aux-docs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Documents: local receipt collection into the evidence registry (Phase 1, Wave C)"
+# Never published until the owner gives the go. The licence is Apache-2.0;
+# `deny.toml` `[licenses.private]` skips unpublishable members (see audit I-05).
+publish = false
+
+[dependencies]
+# C2 (C2b): the e-invoice XML parsers and the totals/VAT checks. From this rev
+# `aux-invoices` is a pure library (no aux-core or aux-store), so the build
+# server resolves it; the collector (C1) still needs only the mail read path
+# and the local registry.
+aux-invoices.workspace = true
+aux-mail = { path = "../aux-mail" }
+aux-store = { path = "../aux-store" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+kernel-core.workspace = true
+serde.workspace = true
+serde_json = "1"
+thiserror.workspace = true
+
+[dev-dependencies]
+# The fake-IMAP end-to-end acceptance lives in `crates/aux-mail/tests/`: the
+# `aux-mail` test seam may be named only by aux-mail's own dev-dependency
+# self-reference (`scripts/check-egress.sh`). Here the collector is covered by
+# unit tests over a fake `MailApi`.
+async-trait = "0.1"
+# C2b review: the deterministic parsers consume third-party text, so a
+# property test proves arbitrary bytes never panic them (already a workspace
+# dev-dependency, so this is a new edge, not a new version).
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

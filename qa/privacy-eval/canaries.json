@@ -1,0 +1,214 @@
+{
+  "canaries": [
+    {
+      "id": "canary-01",
+      "lang": "fr",
+      "type": "person",
+      "script": "Latin",
+      "value": "Élise Vautrin"
+    },
+    {
+      "id": "canary-02",
+      "lang": "fr",
+      "type": "email",
+      "script": "Latin",
+      "value": "elise.vautrin@example.invalid"
+    },
+    {
+      "id": "canary-03",
+      "lang": "fr",
+      "type": "phone",
+      "script": "Latin",
+      "value": "+33 1 99 00 41 27"
+    },
+    {
+      "id": "canary-04",
+      "lang": "fr",
+      "type": "iban",
+      "script": "Latin",
+      "value": "FR76 9999 9000 0112 3456 7890 152"
+    },
+    {
+      "id": "canary-05",
+      "lang": "fr",
+      "type": "national_id",
+      "script": "Latin",
+      "value": "1 84 03 00 999 001 55"
+    },
+    {
+      "id": "canary-06",
+      "lang": "en",
+      "type": "person",
+      "script": "Latin",
+      "value": "Mara Ellison"
+    },
+    {
+      "id": "canary-07",
+      "lang": "en",
+      "type": "email",
+      "script": "Latin",
+      "value": "mara.ellison@example.invalid"
+    },
+    {
+      "id": "canary-08",
+      "lang": "en",
+      "type": "phone",
+      "script": "Latin",
+      "value": "+1 212 555 0142"
+    },
+    {
+      "id": "canary-09",
+      "lang": "en",
+      "type": "passport",
+      "script": "Latin",
+      "value": "QXZ3000001"
+    },
+    {
+      "id": "canary-10",
+      "lang": "en",
+      "type": "org",
+      "script": "Latin",
+      "value": "Mothlight Works"
+    },
+    {
+      "id": "canary-11",
+      "lang": "af",
+      "type": "person",
+      "script": "Latin",
+      "value": "Owen Calder"
+    },
+    {
+      "id": "canary-12",
+      "lang": "af",
+      "type": "iban",
+      "script": "Latin",
+      "value": "ZA33 9999 0000 0112 3456 7890 12"
+    },
+    {
+      "id": "canary-13",
+      "lang": "af",
+      "type": "national_id",
+      "script": "Latin",
+      "value": "9002145033087"
+    },
+    {
+      "id": "canary-14",
+      "lang": "af",
+      "type": "address",
+      "script": "Latin",
+      "value": "18 Lanternlaan, 00000 Misvallei"
+    },
+    {
+      "id": "canary-15",
+      "lang": "af",
+      "type": "health",
+      "script": "Latin",
+      "value": "Misgriep"
+    },
+    {
+      "id": "canary-16",
+      "lang": "hu",
+      "type": "person",
+      "script": "Latin",
+      "value": "Kárpáti Lilla"
+    },
+    {
+      "id": "canary-17",
+      "lang": "hu",
+      "type": "email",
+      "script": "Latin",
+      "value": "lilla.k@example.invalid"
+    },
+    {
+      "id": "canary-18",
+      "lang": "hu",
+      "type": "national_id",
+      "script": "Latin",
+      "value": "987 654 322"
+    },
+    {
+      "id": "canary-19",
+      "lang": "hu",
+      "type": "religion",
+      "script": "Latin",
+      "value": "szolizmus"
+    },
+    {
+      "id": "canary-20",
+      "lang": "hu",
+      "type": "org",
+      "script": "Latin",
+      "value": "Holdfény Műhely"
+    },
+    {
+      "id": "canary-21",
+      "lang": "ar",
+      "type": "person",
+      "script": "Arabic",
+      "value": "ليلى السالمي"
+    },
+    {
+      "id": "canary-22",
+      "lang": "ar",
+      "type": "org",
+      "script": "Arabic",
+      "value": "شركة مدار الخيالية"
+    },
+    {
+      "id": "canary-23",
+      "lang": "ar",
+      "type": "address",
+      "script": "Arabic",
+      "value": "١٨ شارع الأقحوان، 00000 وادي الضباب"
+    },
+    {
+      "id": "canary-24",
+      "lang": "ar",
+      "type": "religion",
+      "script": "Arabic",
+      "value": "السوليسية"
+    },
+    {
+      "id": "canary-25",
+      "lang": "ar",
+      "type": "date_of_birth",
+      "script": "Arabic",
+      "value": "١٢/٠٣/١٩٨٤"
+    },
+    {
+      "id": "canary-26",
+      "lang": "ru",
+      "type": "person",
+      "script": "Cyrillic",
+      "value": "Ирина Ветрова"
+    },
+    {
+      "id": "canary-27",
+      "lang": "ru",
+      "type": "org",
+      "script": "Cyrillic",
+      "value": "ООО «Лунный Маяк»"
+    },
+    {
+      "id": "canary-28",
+      "lang": "ru",
+      "type": "phone",
+      "script": "Cyrillic",
+      "value": "+7 (00) 000-0001"
+    },
+    {
+      "id": "canary-29",
+      "lang": "ru",
+      "type": "religion",
+      "script": "Cyrillic",
+      "value": "солеизм"
+    },
+    {
+      "id": "canary-30",
+      "lang": "ru",
+      "type": "health",
+      "script": "Cyrillic",
+      "value": "болезни Тумана"
+    }
+  ]
+}

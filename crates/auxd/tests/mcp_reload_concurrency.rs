@@ -34,6 +34,7 @@ async fn serialized_mcp_replacement_wins_and_reaps_stdio() {
     let d = tempfile::tempdir().unwrap();
     let home = d.path().join(".auxesis");
     std::fs::create_dir(&home).unwrap();
+    std::fs::create_dir_all(home.join("agents/main")).unwrap();
     std::fs::write(
         home.join("config.toml"),
         "version=1\nprivacy.mode=\"open\"\ndefault_agent=\"main\"\n",
@@ -76,52 +77,33 @@ async fn serialized_mcp_replacement_wins_and_reaps_stdio() {
         "id": "slow",
         "transport": "stdio",
         "command": script_path,
-        "stdio_confirmed": true,
         "args": [report_dir],
+        "agent": "main",
+        "tools": ["FAKE_TOOL"],
     });
-    assert_eq!(
-        call(
-            addr,
-            token,
-            "POST",
-            "/v1/mcp/servers",
-            Some(cfg.to_string())
-        )
-        .await
-        .status,
-        200
-    );
-
-    // Confirmation is bound to the exact launch hash: fetch the preview and
-    // confirm it, so the server may actually spawn.
-    let preview = call(
-        addr,
-        token,
-        "GET",
-        "/v1/mcp/servers/slow/confirmation",
-        None,
-    )
-    .await;
-    assert_eq!(preview.status, 200, "{}", preview.body);
-    let hash = preview.json()["hash"].as_str().unwrap().to_owned();
-    let confirm = call(
+    let added = call(
         addr,
         token,
         "POST",
-        "/v1/mcp/servers/slow/confirm",
-        Some(format!("{{\"hash\":\"{hash}\"}}")),
+        "/v1/mcp/servers",
+        Some(cfg.to_string()),
     )
     .await;
-    assert_eq!(confirm.status, 200, "{}", confirm.body);
+    assert_eq!(added.status, 200, "{}", added.body);
+    let hash = added.json()["hash"].as_str().unwrap().to_owned();
 
+    // The legacy /confirm no longer mints an install approval; the one path
+    // is /approve, which binds the previewed binary and starts discovery
+    // before answering. Run it in the background so the test can disable the
+    // server mid-discovery.
     let (a, t) = (addr, token.to_owned());
-    let enable = tokio::spawn(async move {
+    let approve = tokio::spawn(async move {
         call(
             a,
             &t,
-            "PUT",
-            "/v1/mcp/servers/slow",
-            Some("{\"enabled\":true}".into()),
+            "POST",
+            "/v1/mcp/servers/slow/approve",
+            Some(format!("{{\"hash\":\"{hash}\",\"agent\":\"main\"}}")),
         )
         .await
     });
@@ -149,7 +131,7 @@ async fn serialized_mcp_replacement_wins_and_reaps_stdio() {
         )
         .await
     });
-    assert_eq!(enable.await.unwrap().status, 200);
+    assert_eq!(approve.await.unwrap().status, 200);
     assert_eq!(disable.await.unwrap().status, 200);
 
     let view = call(addr, token, "GET", "/v1/mcp/servers", None).await;

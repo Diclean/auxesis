@@ -35,13 +35,48 @@ pub const MCP_CONFIG_FILE: &str = "mcp.toml";
 /// API. The privacy watch swaps the runtime inside it when the mode changes.
 pub type McpSlot = Arc<RwLock<Arc<McpRuntime>>>;
 
+/// The ordering shared by every MCP config write and the privacy rebuild.
+///
+/// A mutation holds [`Self::mutation`] while it rewrites `mcp.toml` and
+/// installs the replacement runtime, and bumps [`Self::generation`] for each
+/// committed write. The privacy watch takes the same lock, so a rebuild can
+/// never install a runtime built from a config that a revoke, shrink or delete
+/// has already replaced.
+#[derive(Clone)]
+pub struct McpOrdering {
+    /// Serialises MCP config writes and runtime replacement.
+    pub mutation: Arc<tokio::sync::Mutex<()>>,
+    /// Monotone generation of the persisted MCP configuration.
+    pub generation: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl McpOrdering {
+    /// A fresh, unshared ordering.
+    pub fn new() -> Self {
+        Self {
+            mutation: Arc::new(tokio::sync::Mutex::new(())),
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+}
+
+impl Default for McpOrdering {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Keep the runtime in step with the live mode (`README.md`, "The two modes").
 /// MCP servers run in both modes. On a switch open → private every running
 /// child is stopped, even one that a mounted tool still holds, and the runtime
 /// is rebuilt, so no open-mode state survives into private. A plain
 /// private → private tick does nothing. A switch that lands during a rebuild
 /// drops the new runtime, which kills its children, and the rebuild is retried.
-pub fn spawn_privacy_watch(home: PathBuf, slot: McpSlot) -> tokio::task::JoinHandle<()> {
+pub fn spawn_privacy_watch(
+    home: PathBuf,
+    slot: McpSlot,
+    ordering: McpOrdering,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(privacy_wiring::WATCH_INTERVAL);
         let mut was_private = privacy_wiring::private_now(&home);
@@ -56,7 +91,7 @@ pub fn spawn_privacy_watch(home: PathBuf, slot: McpSlot) -> tokio::task::JoinHan
             was_private = private;
             if restart {
                 let mode = privacy_wiring::current_mode(&home);
-                restart = !rebuild(&home, &slot, mode).await;
+                restart = !rebuild(&home, &slot, mode, &ordering).await;
             }
         }
     })
@@ -68,7 +103,15 @@ pub fn current(slot: &McpSlot) -> Arc<McpRuntime> {
 }
 
 /// Whether the new runtime was installed (`false`: retry on the next tick).
-async fn rebuild(home: &Path, slot: &McpSlot, mode: PrivacyMode) -> bool {
+async fn rebuild(home: &Path, slot: &McpSlot, mode: PrivacyMode, ordering: &McpOrdering) -> bool {
+    // Read, discover and swap as one operation, under the same lock as every
+    // MCP mutation. A revoke that lands while a rebuild is discovering either
+    // waits and rebuilds the runtime from the new config, or lands before the
+    // read; the pre-revoke runtime can never be installed over it.
+    let _mutation = ordering.mutation.lock().await;
+    let generation = ordering
+        .generation
+        .load(std::sync::atomic::Ordering::SeqCst);
     let Ok(config) = crate::api::load_config_verified(home) else {
         return false;
     };
@@ -77,6 +120,15 @@ async fn rebuild(home: &Path, slot: &McpSlot, mode: PrivacyMode) -> bool {
     // The mode may have moved while discovery ran. A runtime built for the old
     // mode is dropped here, and dropping it kills the children it started.
     if privacy_wiring::current_mode(home) != mode {
+        return false;
+    }
+    // Defense in depth: a writer that only bumps the generation (without the
+    // lock) also refuses this runtime instead of installing a stale one.
+    if ordering
+        .generation
+        .load(std::sync::atomic::Ordering::SeqCst)
+        != generation
+    {
         return false;
     }
     let old = {

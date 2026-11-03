@@ -5,11 +5,11 @@ name: CI
 #
 # Every job runs on a GitHub-hosted machine: a pull request from anyone runs
 # here and never on a maintainer's machine. Rules for this file:
-#   * the runs-on label is ubuntu-latest or macos-15, written literally;
+#   * the runs-on label is ubuntu-latest, macos-15 or macos-26, written literally;
 #   * every action pinned by full commit SHA (tag in the trailing comment);
 #   * no repository secret and no job token in any step, a read-only token,
 #     only the push and pull_request triggers.
-# The export that builds the public copy refuses one that breaks these rules.
+# Review every change to this file against these rules.
 # These files cannot stop a pull request that edits them: the public
 # repository itself must register no runner of its own and must hold outside
 # pull requests for approval (CONTRIBUTING.md, Publishing checklist).

@@ -956,15 +956,36 @@ impl McpServerConfig {
     /// `catalog_pin` is the curated `catalog_hash` for a catalog entry; a
     /// catalog server without a pin gets no binding (fail closed). Like the
     /// confirmation, an empty secret yields `None`.
+    ///
+    /// A non-catalog `stdio` server's digest includes the SHA-256 of the
+    /// program file **as it is now**. A caller that already previewed the file
+    /// passes the previewed hash to [`Self::approval_binding_for_sha`] instead,
+    /// so a swap between preview and approve cannot be accepted by re-reading
+    /// the swapped file.
     pub fn approval_binding(&self, secret: &[u8], catalog_pin: Option<&str>) -> Option<String> {
-        approval_digest(secret, self, catalog_pin)
+        approval_digest(secret, self, catalog_pin, None)
+    }
+
+    /// The same approval binding, but over a binary SHA-256 the caller already
+    /// previewed, instead of re-reading the file.
+    ///
+    /// Only a non-catalog `stdio` server carries the hash: a catalog entry's
+    /// pin covers its published SHA, and an `http` server has no program.
+    pub fn approval_binding_for_sha(
+        &self,
+        secret: &[u8],
+        catalog_pin: Option<&str>,
+        sha256: &str,
+    ) -> Option<String> {
+        approval_digest(secret, self, catalog_pin, Some(sha256))
     }
 
     /// Whether the owner approved **this** install: a keyed digest over the
     /// id, catalog id and pin, transport, endpoint or launch, data class,
-    /// network and every agent→tool allowlist. A hand-edited `enabled = true`
-    /// never passes; the lifecycle fields are deliberately not hashed, so the
-    /// same hash the preview returned is still valid for the approve call.
+    /// network, every agent→tool allowlist and (for a non-catalog stdio
+    /// server) the program's SHA-256. A hand-edited `enabled = true` never
+    /// passes; the lifecycle fields are deliberately not hashed, so the same
+    /// hash the preview returned is still valid for the approve call.
     pub fn is_approved_with(&self, secret: &[u8], catalog_pin: Option<&str>) -> bool {
         let Some(stored) = self.approval.as_deref() else {
             return false;
@@ -1002,10 +1023,13 @@ impl McpServerConfig {
 /// (`enabled`, `approval`, `stdio_confirmed`): the preview hash must stay the
 /// same before and after the approve write. `catalog_pin` is required for a
 /// catalog server, so a lost or unverifiable entry invalidates the approval.
+/// A non-catalog `stdio` server also binds the program's SHA-256: `binary_sha`
+/// is the hash the caller previewed, or `None` to read the file now.
 fn approval_digest(
     secret: &[u8],
     server: &McpServerConfig,
     catalog_pin: Option<&str>,
+    binary_sha: Option<&str>,
 ) -> Option<String> {
     if secret.is_empty() {
         return None;
@@ -1061,6 +1085,23 @@ fn approval_digest(
         for tool in tools {
             hash_field(&mut hasher, b"tool:", tool);
         }
+    }
+    // Only a non-catalog stdio install names a program file: a catalog entry's
+    // pin already covers its published SHA, and an http server has none. The
+    // preview passes the hash it showed; a caller with no previewed hash reads
+    // the file now, so a swap changes the digest and refuses the old approval.
+    if server.transport == McpTransport::Stdio && server.catalog_id.is_none() {
+        let sha = match binary_sha {
+            Some(sha) => sha.to_ascii_lowercase(),
+            None => binary_sha256(
+                server
+                    .command
+                    .as_deref()
+                    .map(Path::new)
+                    .unwrap_or_else(|| Path::new("")),
+            ),
+        };
+        hash_field(&mut hasher, b"binary-sha256:", &sha);
     }
     Some(hasher.finalize().to_hex().to_string())
 }

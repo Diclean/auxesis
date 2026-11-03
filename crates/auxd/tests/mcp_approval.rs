@@ -796,3 +796,300 @@ async fn a_new_catalog_version_moves_the_approval_hash() {
     assert_ne!(moved.json()["hash"], first_pin.as_str());
     api.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_swapped_non_catalog_binary_is_refused_at_approve_and_never_spawns() {
+    // Break-It P2-1: a non-catalog stdio approval used to omit the program's
+    // SHA, so `approve` re-read whatever file was there. The preview now
+    // shows and binds that SHA; a swap between preview and click is stale.
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir_in(temp_base()).unwrap();
+    let (home, token) = write_home(dir.path());
+    let reports = dir.path().join("reports");
+    std::fs::create_dir(&reports).unwrap();
+    let _tmp = EnvVar::set("TMPDIR", &reports);
+    let script = dir.path().join("plain-server.sh");
+    fixture_script(&script);
+    let api = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let addr = api.addr();
+
+    let added = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers",
+        Some(
+            serde_json::json!({
+                "id": "plain",
+                "transport": "stdio",
+                "command": script,
+                "args": [reports],
+                "agent": "main",
+                "tools": ["FAKE_TOOL"],
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(added.status, 200, "{}", added.body);
+    let preview = added.json();
+    let hash = preview["hash"].as_str().unwrap().to_owned();
+    let sha = kernel_mcp::binary_sha256(&script);
+    assert_eq!(
+        preview["binary_hash"].as_str(),
+        Some(sha.as_str()),
+        "the install preview must show the program's SHA-256"
+    );
+
+    // Swap the program after the preview. The old hash names the old bytes;
+    // approving it must not re-read and bless the new file.
+    std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    let approved = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers/plain/approve",
+        Some(serde_json::json!({"hash": hash, "agent": "main"}).to_string()),
+    )
+    .await;
+    assert_eq!(approved.status, 409, "{}", approved.body);
+    assert!(
+        approved.body.contains("stale_confirmation"),
+        "{}",
+        approved.body
+    );
+    assert_eq!(spawn_count(&reports), 0, "a swapped binary never spawns");
+    let text = std::fs::read_to_string(home.join("mcp.toml")).unwrap();
+    assert!(
+        !text.contains("approval ="),
+        "a stale approve must write no approval: {text}"
+    );
+    api.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approve_requires_an_agent_from_the_previewed_allowlist() {
+    // Break-It P2-2: the preview only listed the merged tools, and the approve
+    // `agent` only reached the ledger. It now shows the per-agent map, and an
+    // agent outside that map is refused.
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir_in(temp_base()).unwrap();
+    let (home, token) = write_home(dir.path());
+    // `mail` is a real agent but never appears in this install's allowlist.
+    std::fs::create_dir_all(home.join("agents/mail")).unwrap();
+    let reports = dir.path().join("reports");
+    std::fs::create_dir(&reports).unwrap();
+    let _tmp = EnvVar::set("TMPDIR", &reports);
+    let script = dir.path().join("preview-server.sh");
+    fixture_script(&script);
+    let api = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let addr = api.addr();
+
+    let added = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers",
+        Some(
+            serde_json::json!({
+                "id": "preview",
+                "transport": "stdio",
+                "command": script,
+                "args": [reports],
+                "agent": "main",
+                "tools": ["FAKE_TOOL"],
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(added.status, 200, "{}", added.body);
+    let added = added.json();
+    let added_hash = added["hash"].as_str().unwrap().to_owned();
+    assert_eq!(added["agents"]["main"], serde_json::json!(["FAKE_TOOL"]));
+
+    // Stage a write tool for a second agent the way the finding did: a hand
+    // edit of the file. The preview must name the agent that gets it.
+    let mut staged = kernel_mcp::McpConfig::load_from_path(&home.join("mcp.toml")).unwrap();
+    staged.server[0]
+        .agents
+        .insert("clients".into(), vec!["WRITE_NOTE".into()]);
+    std::fs::write(home.join("mcp.toml"), staged.to_toml_string().unwrap()).unwrap();
+
+    let preview = call(addr, token, "GET", "/v1/mcp/servers/preview/approval", None).await;
+    assert_eq!(preview.status, 200, "{}", preview.body);
+    let preview = preview.json();
+    assert_eq!(preview["agents"]["main"], serde_json::json!(["FAKE_TOOL"]));
+    assert_eq!(
+        preview["agents"]["clients"],
+        serde_json::json!(["WRITE_NOTE"]),
+        "the preview must show which agent gets which tool"
+    );
+    assert_ne!(
+        preview["hash"].as_str(),
+        Some(added_hash.as_str()),
+        "the approval digest must cover the per-agent map"
+    );
+    let hash = preview["hash"].as_str().unwrap().to_owned();
+
+    // `mail` exists but is not in the previewed allowlist: 400, and nothing is
+    // written or started.
+    let refused = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers/preview/approve",
+        Some(serde_json::json!({"hash": hash, "agent": "mail"}).to_string()),
+    )
+    .await;
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert!(
+        refused.body.contains("agent_not_in_preview"),
+        "{}",
+        refused.body
+    );
+    assert_eq!(spawn_count(&reports), 0);
+
+    // An agent from the previewed map approves the whole map.
+    let approved = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers/preview/approve",
+        Some(serde_json::json!({"hash": hash, "agent": "main"}).to_string()),
+    )
+    .await;
+    assert_eq!(approved.status, 200, "{}", approved.body);
+    wait_for("the approved child to spawn", || spawn_count(&reports) == 1).await;
+    let listed = call(addr, token, "GET", "/v1/mcp/servers", None)
+        .await
+        .json();
+    let server = listed["servers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|server| server["id"] == "preview")
+        .unwrap();
+    assert_eq!(server["agents"]["main"], serde_json::json!(["FAKE_TOOL"]));
+    assert_eq!(
+        server["agents"]["clients"],
+        serde_json::json!(["WRITE_NOTE"])
+    );
+    api.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_confirm_only_confirms_an_approved_launch() {
+    // Break-It P2-3: the legacy /confirm minted a full install approval from a
+    // preview that shows no tools or agents. It now refuses with `use_approve`
+    // unless the server already carries a valid install approval.
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir_in(temp_base()).unwrap();
+    let (home, token) = write_home(dir.path());
+    let reports = dir.path().join("reports");
+    std::fs::create_dir(&reports).unwrap();
+    let _tmp = EnvVar::set("TMPDIR", &reports);
+    let script = dir.path().join("legacy-server.sh");
+    fixture_script(&script);
+    let api = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let addr = api.addr();
+
+    let added = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers",
+        Some(
+            serde_json::json!({
+                "id": "legacy",
+                "transport": "stdio",
+                "command": script,
+                "args": [reports],
+                "agent": "main",
+                "tools": ["FAKE_TOOL"],
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(added.status, 200, "{}", added.body);
+    let hash = added.json()["hash"].as_str().unwrap().to_owned();
+    let enabled = call(
+        addr,
+        token,
+        "PUT",
+        "/v1/mcp/servers/legacy",
+        Some("{\"enabled\":true}".into()),
+    )
+    .await;
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+    let listed = call(addr, token, "GET", "/v1/mcp/servers", None)
+        .await
+        .json();
+    assert_eq!(listed["servers"][0]["state"], "needs_confirmation");
+
+    let preview = call(
+        addr,
+        token,
+        "GET",
+        "/v1/mcp/servers/legacy/confirmation",
+        None,
+    )
+    .await;
+    assert_eq!(preview.status, 200, "{}", preview.body);
+    let launch_hash = preview.json()["hash"].as_str().unwrap().to_owned();
+    let confirmed = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers/legacy/confirm",
+        Some(serde_json::json!({"hash": launch_hash}).to_string()),
+    )
+    .await;
+    assert_eq!(confirmed.status, 409, "{}", confirmed.body);
+    assert!(confirmed.body.contains("use_approve"), "{}", confirmed.body);
+    assert_eq!(spawn_count(&reports), 0, "the legacy confirm never starts");
+    let text = std::fs::read_to_string(home.join("mcp.toml")).unwrap();
+    assert!(
+        !text.contains("approval ="),
+        "the legacy confirm must not mint an install approval: {text}"
+    );
+    let listed = call(addr, token, "GET", "/v1/mcp/servers", None)
+        .await
+        .json();
+    assert_eq!(listed["servers"][0]["state"], "needs_confirmation");
+
+    // The one install path still works.
+    let approved = call(
+        addr,
+        token,
+        "POST",
+        "/v1/mcp/servers/legacy/approve",
+        Some(serde_json::json!({"hash": hash, "agent": "main"}).to_string()),
+    )
+    .await;
+    assert_eq!(approved.status, 200, "{}", approved.body);
+    wait_for("the approved child to spawn", || spawn_count(&reports) == 1).await;
+    api.shutdown();
+}

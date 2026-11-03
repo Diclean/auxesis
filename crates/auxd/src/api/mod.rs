@@ -231,6 +231,11 @@ pub struct ApiOptions {
     /// Discovered MCP runtime (P2/P4), shared with the job runner and the
     /// privacy watch. `None` starts with no MCP tool.
     pub mcp: Option<crate::mcp::McpSlot>,
+    /// The ordering shared with the privacy rebuild. The daemon passes the
+    /// same one it gave the watch, so a mode rebuild and a config mutation
+    /// never interleave. `Default` makes a fresh one (tests that never spawn
+    /// the watch).
+    pub mcp_ordering: crate::mcp::McpOrdering,
     /// Mounted extensions (WO-13b). `None` starts with no extension tool.
     pub extensions: Option<crate::extensions::ExtSlot>,
     /// D33: the delegation runner. `None` runs the domain agent's own turn.
@@ -259,6 +264,7 @@ impl Default for ApiOptions {
             brief_source: None,
             notify_router: None,
             mcp: None,
+            mcp_ordering: crate::mcp::McpOrdering::new(),
             extensions: None,
             delegations: None,
             delegation_timeout: None,
@@ -576,8 +582,8 @@ pub fn spawn(home: &Path, options: ApiOptions) -> std::io::Result<ApiHandle> {
         #[cfg(feature = "google")]
         google_flow: Arc::new(google::FlowGuard::default()),
         config_write: Arc::new(std::sync::Mutex::new(())),
-        mcp_mutation: Arc::new(tokio::sync::Mutex::new(())),
-        mcp_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        mcp_mutation: Arc::clone(&options.mcp_ordering.mutation),
+        mcp_generation: Arc::clone(&options.mcp_ordering.generation),
         mcp,
         bridge,
         delegations,

@@ -343,9 +343,15 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
         Some(format!("{{\"hash\":\"{hash}\"}}")),
     )
     .await;
-    assert_eq!(confirmed.status, 200, "{}", confirmed.body);
-    // With confirmation the server is attempted; `npx` is absent on the test
-    // host, so it fails rather than staying blocked on confirmation.
+    // M6-HARDEN: the legacy confirm only re-confirms the launch of an already
+    // approved install. Without a valid install approval it refuses and mints
+    // nothing, so the owner has to go through `/approve`.
+    assert_refused(
+        &confirmed,
+        409,
+        "use_approve",
+        "legacy confirm without an install approval",
+    );
     let listed = call(addr, token, "GET", "/v1/mcp/servers", None).await;
     let listed: serde_json::Value = serde_json::from_str(&listed.body).unwrap();
     let runner = listed["servers"]
@@ -354,9 +360,15 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
         .iter()
         .find(|s| s["id"] == "npx-one")
         .unwrap();
-    assert_ne!(
+    assert_eq!(
         runner["state"], "needs_confirmation",
-        "a confirmed server must leave the confirmation gate"
+        "a refused legacy confirm must not start the server"
+    );
+    assert!(
+        !std::fs::read_to_string(home.join("mcp.toml"))
+            .unwrap()
+            .contains("approval ="),
+        "a legacy confirm must never mint an install approval"
     );
 
     // test_server: secrets and non-public endpoints are refused before any MCP traffic.

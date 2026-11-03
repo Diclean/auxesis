@@ -1034,7 +1034,9 @@ struct ApprovalTool {
 }
 
 /// What the owner sees before one approval: what the server can call, where it
-/// can connect, which env **names** it needs, its data class and catalog pin.
+/// can connect, which env **names** it needs, its data class, catalog pin, the
+/// per-agent allowlist it enables and (for a non-catalog `stdio` install) the
+/// SHA-256 of the program the yes is bound to.
 #[derive(Serialize)]
 struct ApprovalPreview {
     id: String,
@@ -1047,6 +1049,13 @@ struct ApprovalPreview {
     command: Option<String>,
     args: Vec<String>,
     tools: Vec<ApprovalTool>,
+    /// The exact agent→tool map the approval digest covers. The owner sees
+    /// which agent gets which tool; `approve` must name one of these agents.
+    agents: std::collections::BTreeMap<String, Vec<String>>,
+    /// The program SHA-256 a non-catalog `stdio` approval binds. `None` for an
+    /// `http` install and for a catalog entry (its pin covers the published
+    /// SHA).
+    binary_hash: Option<String>,
     catalog_version: Option<String>,
     catalog_pin: Option<String>,
     hash: String,
@@ -1059,9 +1068,37 @@ fn approval_hash(
     server: &kernel_mcp::McpServerConfig,
     secret: &[u8],
 ) -> Option<(String, Option<String>)> {
+    approval_hash_for_binary(server, secret, None)
+}
+
+/// The same digest, but over the SHA-256 the preview showed instead of a fresh
+/// read of the program file.
+///
+/// The preview and the approve call both pass the hash they computed once, so
+/// a file swapped between the two changes the digest and is refused as
+/// `stale_confirmation` rather than approved.
+fn approval_hash_for_binary(
+    server: &kernel_mcp::McpServerConfig,
+    secret: &[u8],
+    binary_sha: Option<&str>,
+) -> Option<(String, Option<String>)> {
     let pin = catalog_pin(server);
-    let hash = server.approval_binding(secret, pin.as_deref())?;
+    let hash = match binary_sha {
+        Some(sha) => server.approval_binding_for_sha(secret, pin.as_deref(), sha)?,
+        None => server.approval_binding(secret, pin.as_deref())?,
+    };
     Some((hash, pin))
+}
+
+/// The program SHA-256 a non-catalog `stdio` approval binds, or `None` for a
+/// transport with no local program (or a catalog entry, whose pin already
+/// covers the published hash).
+fn non_catalog_binary_sha(server: &kernel_mcp::McpServerConfig) -> Option<String> {
+    if server.transport != kernel_mcp::McpTransport::Stdio || server.catalog_id.is_some() {
+        return None;
+    }
+    let path = server.command.as_deref().unwrap_or("");
+    Some(kernel_mcp::binary_sha256(Path::new(path)))
 }
 
 /// The curated catalog pin for a server's claimed entry, if it has one: one
@@ -1109,7 +1146,10 @@ fn approval_preview(
     server: &kernel_mcp::McpServerConfig,
     secret: &[u8],
 ) -> Option<ApprovalPreview> {
-    let (hash, catalog_pin) = approval_hash(server, secret)?;
+    // Hash the program once: the digest and the shown `binary_hash` must name
+    // the same bytes, or the owner's yes would not cover what they saw.
+    let binary_hash = non_catalog_binary_sha(server);
+    let (hash, catalog_pin) = approval_hash_for_binary(server, secret, binary_hash.as_deref())?;
     let entry = catalog_entry(server.catalog_id.as_deref());
     let (risk, access) = match entry.as_ref().map(|entry| entry.access.as_str()) {
         Some("read-only") => ("low", "read"),
@@ -1138,6 +1178,8 @@ fn approval_preview(
             .into_iter()
             .map(|name| ApprovalTool { name, risk, access })
             .collect(),
+        agents: server.agents.clone(),
+        binary_hash,
         catalog_version: entry
             .as_ref()
             .and_then(|_| parsed_catalog().map(|catalog| catalog.catalog_version)),
@@ -1221,13 +1263,25 @@ pub(super) async fn approve_server(
             let Some(server) = config.server.iter_mut().find(|server| server.id == id) else {
                 return Err("server_not_found");
             };
-            let Some((binding, _pin)) = approval_hash(server, &secret) else {
+            // A non-catalog stdio approval binds the program file's SHA. Hash
+            // it here, the same way the preview did: a file swapped between
+            // preview and click changes the digest and is refused as stale,
+            // never approved as-is.
+            let binary_hash = non_catalog_binary_sha(server);
+            let Some((binding, _pin)) =
+                approval_hash_for_binary(server, &secret, binary_hash.as_deref())
+            else {
                 return Err("approval_unavailable");
             };
             if binding != req.hash {
                 // Distinct from the legacy confirm's 400: an approve replay after
                 // a config edit is a 409 `stale_confirmation` (mapped below).
                 return Err("stale_approval");
+            }
+            // The owner's yes names the allowlist the preview showed. An agent
+            // that is not in that map never gets this server's tools.
+            if !server.agents.contains_key(&req.agent) {
+                return Err("agent_not_in_preview");
             }
             // M6-2: a catalog stdio binary can be swapped between the preview and
             // this call. Re-run the catalog checks and bind the PUBLISHED sha —
@@ -1252,7 +1306,18 @@ pub(super) async fn approve_server(
                     }
                     confirmation = server.confirmation_binding_for_sha(&secret, pin.sha256);
                 } else {
-                    confirmation = server.confirmation_binding(&secret);
+                    // The same mutable-path refusal a catalog entry gets: a
+                    // program another account can replace (or a symlink) is
+                    // never approved, whatever bytes it holds now.
+                    if catalog_binary_is_mutable(Path::new(server.command.as_deref().unwrap_or("")))
+                    {
+                        return Err("binary_path_mutable");
+                    }
+                    // Bind the PREVIEWED sha (the digest match above proves it
+                    // equals the current file); the kernel's spawn re-hash then
+                    // refuses any swap after this point.
+                    let sha = binary_hash.as_deref().unwrap_or("unavailable");
+                    confirmation = server.confirmation_binding_for_sha(&secret, sha);
                 }
                 if confirmation.is_none() {
                     return Err("approval_unavailable");
@@ -1370,17 +1435,21 @@ pub(super) async fn confirm_server(
         if server.catalog_id.is_some() {
             return Err("use_approve");
         }
+        // This route only re-confirms the LAUNCH of a server the owner already
+        // approved. It has no tools/agents preview of its own, so it never
+        // mints an install approval: without a valid one, send the owner
+        // through `/approve` (which shows and binds the whole install). The
+        // launch-hash check stays first, so a forged or stale hash keeps its
+        // old 400 rather than being reported as a missing approval.
         let hash = stdio_launch_binding(server, &secret)?;
         if hash != req.hash {
             return Err("stale_confirmation");
         }
+        if !server.is_install_approved(Some(&secret), catalog_pin(server).as_deref()) {
+            return Err("use_approve");
+        }
         server.stdio_confirmed = true;
         server.stdio_confirmation = Some(hash);
-        // The legacy confirm is also the owner's approval of this preview:
-        // record it so an enabled server is not left `needs_approval`.
-        if let Some((approval, _pin)) = approval_hash(server, &secret) {
-            server.approval = Some(approval);
-        }
         Ok(())
     })
     .await
@@ -1971,8 +2040,9 @@ fn fail(status: StatusCode, code: &'static str) -> Response {
         "pack_server_mismatch" => "An existing server with this ID does not match the selected catalog transport or endpoint. Restore the catalog settings or remove that server first.",
         // Item 1 (keep): never silently create a twin of an unusable entry.
         "id_taken_by_quarantined_entry" => "An entry with this ID is already in mcp.toml but could not be loaded, so it is quarantined. Delete that entry or fix it first, then add this server.",
-        // Review P2: catalog servers have one install path: the approval.
-        "use_approve" => "This server comes from the catalog. Approve its install preview instead: POST /v1/mcp/servers/{id}/approve.",
+        // Review P2: catalog servers and non-catalog stdio installs have one
+        // install path: the approval, whose preview covers tools and agents.
+        "use_approve" => "This install must be approved from its preview: GET /v1/mcp/servers/{id}/approval, then POST /v1/mcp/servers/{id}/approve.",
         "ledger_failed" => "The approval could not be recorded in the audit log, so nothing was enabled. Check the store and retry.",
         other => other,
     };

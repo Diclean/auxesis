@@ -223,7 +223,11 @@ async fn run() -> anyhow::Result<()> {
         )
         .await,
     ));
-    let _mcp_watch = auxd::mcp::spawn_privacy_watch(home.clone(), Arc::clone(&mcp));
+    // The watch and the API share this ordering: a mode rebuild and a config
+    // mutation (revoke, shrink, delete) can never interleave.
+    let mcp_ordering = auxd::mcp::McpOrdering::new();
+    let _mcp_watch =
+        auxd::mcp::spawn_privacy_watch(home.clone(), Arc::clone(&mcp), mcp_ordering.clone());
 
     // WO-13b: start one sandboxed session per mounted, unfrozen extension and
     // verify its pinned tool identities. An empty mount table is a no-op, so a
@@ -392,6 +396,7 @@ async fn run() -> anyhow::Result<()> {
     // another process squats the port.
     let api = match api::spawn(&home, {
         api_options.mcp = Some(Arc::clone(&mcp));
+        api_options.mcp_ordering = mcp_ordering;
         api_options.extensions = Some(Arc::clone(&extensions));
         api_options
     }) {

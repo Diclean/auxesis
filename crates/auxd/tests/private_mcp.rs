@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod common;
 use aux_providers::{
     ChatMessage, ChatProvider, ChatRequest, ChatResponse, ProviderError, ToolCall,
 };
-use auxd::api::{EngineTurnRunner, TurnRunner};
+use auxd::api::{self, ApiOptions, EngineTurnRunner, TurnRunner};
+use common::http;
 use kernel_privacy::ContactIndex;
 
 const IBAN: &str = "FR7630006000011234567890189";
@@ -32,9 +34,7 @@ const SCRIPT: &str = r#"dir="${TMPDIR:-$1}"; echo $$ > "$dir/pid"; while IFS= re
 /// writes into.
 fn home_with_server(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     // `tempdir()` reads `$TMPDIR`, which an earlier test pointed at its own dir.
-    static BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    let base = BASE.get_or_init(std::env::temp_dir);
-    let dir = tempfile::tempdir_in(base).unwrap();
+    let dir = tempfile::tempdir_in(test_base()).unwrap();
     let home = dir.path().join("home");
     kernel_core::ensure_home(&home).unwrap();
     let tmp = dir.path().join("tmp");
@@ -205,7 +205,11 @@ async fn an_open_to_private_switch_restarts_the_children_once() {
     assert_eq!(runtime.tool_count(), 1);
     let before = child_pids(&tmp)[0];
     let slot: auxd::mcp::McpSlot = Arc::new(std::sync::RwLock::new(runtime));
-    let watch = auxd::mcp::spawn_privacy_watch(home.clone(), Arc::clone(&slot));
+    let watch = auxd::mcp::spawn_privacy_watch(
+        home.clone(),
+        Arc::clone(&slot),
+        auxd::mcp::McpOrdering::new(),
+    );
     let first = auxd::mcp::current(&slot);
     // The watch reads its starting mode on its first tick: a switch written
     // before that tick is read as the start, never as a switch.
@@ -244,4 +248,144 @@ async fn an_open_to_private_switch_restarts_the_children_once() {
     assert!(Arc::ptr_eq(&rebuilt, &auxd::mcp::current(&slot)));
     assert!(alive(after[0]));
     watch.abort();
+}
+
+/// A base dir captured before any test points `TMPDIR` elsewhere.
+fn test_base() -> PathBuf {
+    static BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BASE.get_or_init(std::env::temp_dir).clone()
+}
+
+/// P3 (Break-It M6): a privacy-mode rebuild must not resurrect a server the
+/// owner revokes while the rebuild is discovering.
+///
+/// The rebuild takes the same lock as every MCP mutation, so the revoke either
+/// lands before the config read or waits until the rebuilt runtime is in
+/// place. Without that ordering the revoke installs an empty runtime and the
+/// stale rebuild then installs the pre-revoke one over it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_privacy_rebuild_cannot_resurrect_a_server_revoked_mid_discovery() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir_in(test_base()).unwrap();
+    let home = dir.path().join("home");
+    kernel_core::ensure_home(&home).unwrap();
+    let tmp = dir.path().join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("TMPDIR", &tmp);
+    // Discovery takes 2 s, and the child drops a `discovering` marker as it
+    // enters tools/list, so the revoke can be issued inside that window.
+    let script = r#"dir="${TMPDIR:-$1}"; echo $$ > "$dir/pid"; while IFS= read -r line; do id=$(printf '%s' "$line"|/usr/bin/sed -n 's/.*"id":[ ]*\([0-9][0-9]*\).*/\1/p'); case "$line" in *'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"fixture","version":"1"}}}\n' "$id";; *tools/list*) : > "$dir/discovering"; sleep 2; printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"FAKE_TOOL","inputSchema":{"type":"object"}}],"nextCursor":null}}\n' "$id";; esac; done"#;
+    let script_path = dir.path().join("slow-server.sh");
+    std::fs::write(&script_path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let token = "private-mcp-token-0123456789";
+    std::fs::write(api::token_path(&home), token).unwrap();
+    let server = format!(
+        "[[server]]\nid = \"slow\"\ntransport = \"stdio\"\ncommand = \"{}\"\n\
+         args = [\"{}\"]\nenabled = true\n[server.agents]\nmain = [\"FAKE_TOOL\"]\n",
+        script_path.display(),
+        tmp.display()
+    );
+    let parsed = kernel_mcp::McpConfig::parse("mcp.toml", &server).unwrap();
+    let confirmation = parsed.server[0]
+        .confirmation_binding(token.as_bytes())
+        .unwrap();
+    std::fs::write(
+        home.join("mcp.toml"),
+        server.replace(
+            "enabled = true",
+            &format!(
+                "enabled = true\nstdio_confirmed = true\nstdio_confirmation = \"{confirmation}\""
+            ),
+        ),
+    )
+    .unwrap();
+    write_mode(&home, "open");
+
+    let web = kernel_core::WebConfig::default();
+    let sandbox = kernel_broker::ShellSandbox::new(false, false, true);
+    let runtime = auxd::mcp::start(&home, &web, &sandbox).await;
+    assert_eq!(runtime.tool_count(), 1, "the approved server runs");
+    let initial_pid = child_pids(&tmp)
+        .into_iter()
+        .find(|pid| alive(*pid))
+        .expect("the first child wrote its pid");
+    let slot: auxd::mcp::McpSlot = Arc::new(std::sync::RwLock::new(runtime));
+    let ordering = auxd::mcp::McpOrdering::new();
+    let api = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            mcp: Some(Arc::clone(&slot)),
+            mcp_ordering: ordering.clone(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let addr = api.addr();
+    let watch = auxd::mcp::spawn_privacy_watch(home.clone(), Arc::clone(&slot), ordering);
+    // The watch reads its starting mode on the first tick: let it see `open`.
+    tokio::time::sleep(auxd::privacy_wiring::WATCH_INTERVAL * 2).await;
+
+    // Drop the first child's discovery marker so the next one is the rebuild's.
+    for marker in child_files(&tmp, "discovering") {
+        let _ = std::fs::remove_file(marker);
+    }
+    write_mode(&home, "private");
+
+    // Wait until the rebuild is inside discovery, then revoke the server while
+    // it is running. On the fixed build the revoke waits for the rebuild; on
+    // the old build it slips through and the stale runtime is installed last.
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while child_files(&tmp, "discovering").is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the rebuild started discovery");
+    let rebuild_pid = child_pids(&tmp)
+        .into_iter()
+        .find(|pid| *pid != initial_pid && alive(*pid))
+        .expect("the rebuild child wrote its pid");
+
+    let addr_call = addr;
+    let token = token.to_owned();
+    let revoke = tokio::task::spawn_blocking(move || {
+        http(
+            addr_call,
+            "DELETE",
+            "/v1/mcp/servers/slow",
+            Some(&token),
+            None,
+        )
+    });
+    let revoked = tokio::time::timeout(Duration::from_secs(30), revoke)
+        .await
+        .expect("the revoke returned")
+        .unwrap();
+    assert_eq!(revoked.status, 200, "{}", revoked.body);
+
+    // Give any stale rebuild time to land after the revoke, then require the
+    // server to be gone for good: no mounted server and no live child.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(
+        auxd::mcp::current(&slot).tool_count(),
+        0,
+        "a privacy rebuild must not resurrect a revoked server"
+    );
+    assert!(
+        !alive(rebuild_pid),
+        "the revoked server's child must be reaped"
+    );
+    assert!(
+        !home.join("mcp.toml").exists() || {
+            let text = std::fs::read_to_string(home.join("mcp.toml")).unwrap();
+            !text.contains("id = \"slow\"")
+        }
+    );
+    watch.abort();
+    api.shutdown();
 }

@@ -10,10 +10,13 @@ private struct StubAuth: DraftAuthenticating {
 final class PhoneModelTests: XCTestCase {
     func testRequestStaysInWaitingUntilMacConfirms() {
         let model = PhoneModel(authenticator: StubAuth(succeeds: true), autoConfirm: false)
+        XCTAssertEqual(model.waitingCount, 2)
         model.submit(.receipts, decision: .allow)
+        XCTAssertEqual(model.waitingCount, 2)
         XCTAssertTrue(model.waiting.contains(.receipts))
         XCTAssertEqual(model.pending[.receipts], .allow)
         model.macConfirmed(.receipts)
+        XCTAssertEqual(model.waitingCount, 1)
         XCTAssertFalse(model.waiting.contains(.receipts))
         XCTAssertNil(model.pending[.receipts])
         model.macConfirmed(.reminder) // An unsolicited confirmation changes nothing.
@@ -46,6 +49,18 @@ final class PhoneModelTests: XCTestCase {
         allowed.macConfirmed(.jonas)
         XCTAssertFalse(allowed.waiting.contains(.jonas))
         XCTAssertNotNil(allowed.recent)
+    }
+
+    func testFailedAuthenticationKeepsDraftPendingAndShowsFailureCopy() async {
+        let model = PhoneModel(authenticator: StubAuth(succeeds: false), autoConfirm: false)
+        model.openDraft(.jonas)
+        await model.send(reason: "Confirm")
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertNil(model.recent)
+        XCTAssertTrue(model.waiting.contains(.jonas))
+        XCTAssertEqual(model.screen, .review)
+        XCTAssertTrue(model.authFailed) // ReviewScreen displays authFailed copy for this state.
+        XCTAssertEqual(Copy(french: false)("authFailed"), "Authentication was not completed. Nothing was sent.")
     }
 
     func testCancelWindowEndsAtExactlyTenSeconds() async {

@@ -8,14 +8,9 @@ protocol DraftAuthenticating {
 
 struct DeviceAuthenticator: DraftAuthenticating {
     func authenticate(reason: String) async -> Bool {
-        #if targetEnvironment(simulator)
-        // The simulator has no enrolled biometric identity in the fixture.
-        return true
-        #else
         let context = LAContext()
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else { return false }
-        return (try? await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)) ?? false
-        #endif
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) else { return false }
+        return (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
     }
 }
 

@@ -115,6 +115,7 @@ struct ActionButton: View {
     let palette: PhonePalette
     var primary = false
     var icon: String? = nil
+    var fullWidth = false
     var action: () -> Void
     var body: some View {
         Button(action: action) {
@@ -123,7 +124,7 @@ struct ActionButton: View {
                 Text(title).fontWeight(.semibold)
             }
             .font(.subheadline).padding(.horizontal, 13).padding(.vertical, 9)
-            .frame(minHeight: 44)
+            .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44)
             .foregroundStyle(primary ? palette.onInk : palette.ink)
             .background(primary ? palette.ink : palette.bg, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(primary ? palette.ink : palette.line))

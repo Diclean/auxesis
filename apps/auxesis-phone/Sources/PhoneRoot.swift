@@ -65,6 +65,16 @@ struct Tabs: View {
         Button { model.screen = screen } label: {
             VStack(spacing: 4) {
                 Image(systemName: icon).font(.body)
+                    .overlay(alignment: .topTrailing) {
+                        if screen == .waiting && model.waitingCount > 0 {
+                            Text("\(model.waitingCount)")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .foregroundStyle(p.wait).background(p.waitBG, in: Capsule())
+                                .fixedSize().offset(x: 14, y: -5)
+                                .accessibilityHidden(true)
+                        }
+                    }
                 Text(c(title)).font(.caption2).multilineTextAlignment(.center)
             }
             .fontWeight(model.screen == screen ? .semibold : .regular)
@@ -73,6 +83,7 @@ struct Tabs: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(c(title))
+        .accessibilityValue(screen == .waiting ? "\(model.waitingCount)" : "")
         .accessibilityAddTraits(model.screen == screen ? .isSelected : [])
     }
 }
@@ -103,7 +114,7 @@ struct PairScreen: View {
                     }
                 }.padding(.top, 14)
                 Text(c("wordsTime")).font(.caption).foregroundStyle(p.ink3).padding(.top, 6)
-                ActionButton(title: c("connect"), palette: p, primary: true) { model.connect() }
+                ActionButton(title: c("connect"), palette: p, primary: true, fullWidth: true) { model.connect() }
                     .frame(maxWidth: .infinity).padding(.top, 18)
                 VStack(alignment: .leading, spacing: 9) {
                     Fact(icon: "checkmark.shield", text: c("pairDirect"), palette: p, glyph: p.local)

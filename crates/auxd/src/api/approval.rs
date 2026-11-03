@@ -1636,6 +1636,7 @@ mod tests {
             }),
             tainted: false,
             taint_source: None,
+            web_approval: None,
             unsandboxed: false,
             networked: false,
         };

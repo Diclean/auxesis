@@ -345,7 +345,7 @@ public enum StringKey: String, CaseIterable {
     case settingsNotificationsHint
     case settingsHotkeyFailed
     case settingsTokenPresent
-    case pluginsTitle, pluginsCatalog, pluginsInstalled, pluginsAdd, pluginsCommunityWarning, pluginsWriteWarning, pluginsKeyHint, pluginsEnable, pluginsRemove, pluginsOfficial, pluginsCommunity, pluginsEmpty, pluginsFailed, pluginsConfirmWarning, pluginsUnverifiedProgram
+    case pluginsTitle, pluginsCatalog, pluginsInstalled, pluginsAdd, pluginsCommunityWarning, pluginsWriteWarning, pluginsKeyHint, pluginsEnable, pluginsRemove, pluginsOfficial, pluginsCommunity, pluginsEmpty, pluginsFailed
 
     // New-agent screen
     case newAgentTitle
@@ -1126,16 +1126,6 @@ public enum L10n {
         .pluginsCommunity: [.fr: "Communautaire", .en: "Community"],
         .pluginsEmpty: [.fr: "Aucun serveur ajouté.", .en: "No servers added."],
         .pluginsFailed: [.fr: "Les plugins ne sont pas disponibles.", .en: "Plugins are unavailable."],
-        .pluginsConfirmWarning: [
-            .fr: "Ce serveur lance un programme sur ton Mac. Auxesis le garde dans un espace protégé, mais ne confirme qu'une commande que tu reconnais.",
-            .en: "This server runs a program on your Mac. Auxesis keeps it in a protected space, but confirm only a command you recognise.",
-        ],
-        // Item 2: the generic warning every non-catalog stdio server carries,
-        // whatever the heuristic high-risk label says.
-        .pluginsUnverifiedProgram: [
-            .fr: "Ce programme s'exécute avec tes droits ; Auxesis ne peut pas vérifier ce qu'il fait.",
-            .en: "This runs a program with your user rights; Auxesis cannot verify what it does.",
-        ],
 
         // New-agent screen
         .newAgentTitle: [.fr: "Nouvel agent", .en: "New agent"],

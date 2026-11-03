@@ -17,6 +17,9 @@ import XCTest
         /// r1: the daemon's hash binds the staged agent; the fake mirrors that per agent.
         nonisolated(unsafe) var hashPerAgent = false
         nonisolated(unsafe) var addFails = false
+        /// M6-APP-APPROVE-ONLY: what the daemon answers to the next write (PUT, approve).
+        nonisolated(unsafe) var writeError: Error?
+        private func write() throws { if let error = writeError { writeError = nil; throw error } }
         private func log(_ call: String) { lock.lock(); calls.append(call); lock.unlock() }
 
         func mcpCatalog() async throws -> [McpCatalogEntry] { log("GET catalog"); return catalog }
@@ -30,14 +33,12 @@ import XCTest
             return try JSONDecoder().decode(McpApprovalPreview.self, from: Data(#"{"id":"\#(preview.id)","transport":"http","enabled":false,"network":true,"env":[],"data_class":"public","args":[],"tools":[],"hash":"hash-\#(agent)"}"#.utf8))
         }
         func mcpApproval(id: String) async throws -> McpApprovalPreview { log("GET approval \(id)"); return preview! }
-        func approveMcpServer(id: String, hash: String, agent: String) async throws { log("POST approve \(id)"); approved = (id, hash, agent) }
+        func approveMcpServer(id: String, hash: String, agent: String) async throws { log("POST approve \(id)"); try write(); approved = (id, hash, agent) }
         func testMcpServer(url: String) async throws -> McpConnectionTest { log("POST test"); throw Unused.call }
         func addMcpUrlServer(id: String, url: String, dataClass: String, testDigest: String) async throws { log("POST add-url") }
-        func setMcpServer(id: String, enabled: Bool) async throws { log("PUT enabled") }
-        func setMcpTools(id: String, agent: String, tools: [String]) async throws { log("PUT tools") }
+        func setMcpServer(id: String, enabled: Bool) async throws { log("PUT enabled \(enabled)"); try write() }
+        func setMcpTools(id: String, agent: String, tools: [String]) async throws { log("PUT tools"); try write() }
         func deleteMcpServer(id: String) async throws { log("DELETE \(id)") }
-        func mcpConfirmation(id: String) async throws -> McpConfirmationDetails { log("GET confirmation"); throw Unused.call }
-        func confirmMcpServer(id: String, hash: String) async throws { log("POST confirm") }
 
         func health() async throws -> HealthResponse { throw Unused.call }
         func agents() async throws -> [AgentSummary] { throw Unused.call }
@@ -175,5 +176,65 @@ import XCTest
         let url = try keys(McpUrlBody(id: "web", url: "https://example.test/mcp", dataClass: "public", testDigest: "d"))
         XCTAssertTrue(url.isSubset(of: addRequestFields))
         XCTAssertEqual(try keys(McpApproveBody(hash: "h", agent: "aux")), ["hash", "agent"])
+    }
+
+    // MARK: M6-APP-APPROVE-ONLY: every turn-on goes through the preview and one approve.
+
+    private static func conflict(_ code: String) -> AuxdError {
+        .http(status: 409, body: #"{"error":{"code":"\#(code)","message":"x"}}"#)
+    }
+
+    func testNoFlowCallsLegacyConfirm() async throws {
+        let fake = try fake()
+        let store = Store(transport: fake, language: .en)
+        await store.loadPlugins()
+        await store.installPlugin(store.mcpCatalog[1]); await store.approvePluginPreview()
+        for server in fake.servers { await store.setPlugin(server, enabled: !server.enabled); await store.approvePluginPreview() }
+        await store.reviewPlugin(fake.servers[1]); await store.approvePluginPreview()
+        XCTAssertFalse(fake.calls.contains { $0.lowercased().contains("confirm") }, "\(fake.calls)")
+        XCTAssertFalse(fake.calls.contains("PUT enabled true"), "turning on is never a bare PUT")
+        let client = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Sources/AuxesisKit/AuxdClient.swift")
+        let source = try String(contentsOf: client, encoding: .utf8)
+        XCTAssertFalse(source.contains("/confirm"), "the app never builds the legacy confirm route")
+    }
+
+    func testReEnablingAnOffServerPreviewsThenApprovesHashAndAgent() async throws {
+        let fake = try fake()
+        let store = Store(transport: fake, language: .en)
+        let off = fake.servers[2]
+        XCTAssertEqual(PluginState(off), .off)
+        await store.setPlugin(off, enabled: true)
+        XCTAssertEqual(fake.calls.first, "GET approval old")
+        XCTAssertNil(fake.approved, "nothing runs before the yes")
+        XCTAssertEqual(store.pluginPreview?.hash, "approval-hash-1")
+        await store.approvePluginPreview()
+        XCTAssertEqual(fake.approved?.id, "public-data", "the approve names the previewed server")
+        XCTAssertEqual(fake.approved?.hash, "approval-hash-1")
+        XCTAssertEqual(fake.approved?.agent, "aux", "the agent the sheet showed")
+    }
+
+    func testUseApproveConflictOpensThePreviewNotAnError() async throws {
+        let fake = try fake()
+        let store = Store(transport: fake, language: .en)
+        fake.writeError = Self.conflict("use_approve")
+        await store.setPluginTools(fake.servers[1], agent: "main", tools: ["LOOKUP"])
+        XCTAssertEqual(store.pluginPreview?.hash, "approval-hash-1", "409 use_approve opens the preview")
+        XCTAssertFalse(store.mcpFailed)
+        XCTAssertNil(store.mcpFailureCode)
+        XCTAssertTrue(fake.calls.contains("GET approval notes"))
+    }
+
+    func testStaleApproveRefetchesThePreview() async throws {
+        let fake = try fake()
+        let store = Store(transport: fake, language: .en)
+        await store.reviewPlugin(fake.servers[2])
+        fake.writeError = Self.conflict("approval_required")
+        await store.approvePluginPreview()
+        XCTAssertNil(fake.approved)
+        XCTAssertNotNil(store.pluginPreview, "the sheet stays open on the fresh preview")
+        XCTAssertNil(store.mcpFailureCode)
+        XCTAssertEqual(fake.calls.filter { $0.hasPrefix("GET approval") }.count, 2, "a fresh preview, no error")
+        await store.approvePluginPreview()
+        XCTAssertEqual(fake.approved?.hash, "approval-hash-1")
     }
 }

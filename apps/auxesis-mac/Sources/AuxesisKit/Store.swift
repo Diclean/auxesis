@@ -535,10 +535,6 @@ public final class Store: ObservableObject {
     @Published public private(set) var mcpFailureCode: String?
     @Published public private(set) var mcpTestResult: McpConnectionTest?
     @Published public private(set) var mcpTestedURL: String?
-    /// Item 12: the stdio server whose confirmation sheet is open, and its
-    /// exact launch preview. NOTE: these Swift sources are not compiled.
-    @Published public var mcpConfirmTarget: McpServerView?
-    @Published public private(set) var mcpConfirmation: McpConfirmationDetails?
     @Published public var mcpCustomDataClass = "sensitive"
     /// M6-4: the install preview waiting for the owner's one yes.
     @Published public private(set) var pluginPreview: McpApprovalPreview?
@@ -1352,7 +1348,10 @@ public final class Store: ObservableObject {
     /// The owner's one yes: approves exactly the shown preview (its hash) for exactly the shown agent.
     public func approvePluginPreview() async {
         guard let client = transport as? PluginsClient, let preview = pluginPreview, let agent = pluginPreviewAgent, agent == pluginAgent else { return }
-        do { try await client.approveMcpServer(id: preview.id, hash: preview.hash, agent: agent); cancelPluginPreview(); mcpFailureCode = nil } catch { mcpFailed = true; mcpFailureCode = mcpCode(error) }
+        do { try await client.approveMcpServer(id: preview.id, hash: preview.hash, agent: agent); cancelPluginPreview(); mcpFailureCode = nil } catch let error where Self.wantsApprove(mcpCode(error)) {
+            // The shown preview went stale: fetch the current one; the owner says yes again.
+            await showPluginPreview(agent: agent) { try await $0.mcpApproval(id: preview.id) }
+        } catch { mcpFailed = true; mcpFailureCode = mcpCode(error) }
         await loadPlugins()
     }
     public func cancelPluginPreview() { pluginStage += 1; pluginPreview = nil; pluginPreviewAgent = nil; pluginPreviewCatalogID = nil }
@@ -1368,23 +1367,23 @@ public final class Store: ObservableObject {
     }
     public func testPluginURL(_ url: String) { guard let client = transport as? PluginsClient else { mcpFailed = true; return }; clearPluginTest(); Task { do { self.mcpTestResult = try await client.testMcpServer(url: url); self.mcpTestedURL = url; self.mcpFailed = false; self.mcpFailureCode = nil } catch { self.mcpTestResult = nil; self.mcpTestedURL = nil; self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
     public func addPluginURL(_ url: String, id: String) { guard let client = transport as? PluginsClient, let test = mcpTestResult, Self.pluginAddReady(url: url, id: id, testedURL: mcpTestedURL) else { return }; Task { do { try await client.addMcpUrlServer(id: id, url: url, dataClass: mcpCustomDataClass, testDigest: test.digest); clearPluginTest(); self.refreshPlugins(); self.mcpFailureCode = nil } catch { self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
-    public func setPlugin(_ server: McpServerView, enabled: Bool) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.setMcpServer(id: server.id, enabled: enabled); self.refreshPlugins() } catch { self.mcpFailed = true } } }
-    public func setPluginTools(_ server: McpServerView, agent: String, tools: [String]) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.setMcpTools(id: server.id, agent: agent, tools: tools); self.refreshPlugins() } catch { self.mcpFailed = true } } }
-    public func deletePlugin(_ server: McpServerView) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.deleteMcpServer(id: server.id); self.refreshPlugins() } catch { self.mcpFailed = true } } }
-    /// Item 12: fetch the exact launch preview and open the confirmation sheet.
-    public func requestMcpConfirmation(_ server: McpServerView) {
+    /// M6-APP-APPROVE-ONLY: turning a server on is never a bare PUT; it goes through the
+    /// preview and the one approve (`reviewPlugin`). Only "off" is a direct call.
+    public func setPlugin(_ server: McpServerView, enabled: Bool) async {
+        guard enabled else { await mcpCall(server) { try await $0.setMcpServer(id: server.id, enabled: false) }; return }
+        await reviewPlugin(server)
+    }
+    public func setPluginTools(_ server: McpServerView, agent: String, tools: [String]) async { await mcpCall(server) { try await $0.setMcpTools(id: server.id, agent: agent, tools: tools) } }
+    /// One plugin write, then a refresh. A daemon asking for the approve flow is not an error:
+    /// it opens the server's preview sheet.
+    private func mcpCall(_ server: McpServerView, _ call: (PluginsClient) async throws -> Void) async {
         guard let client = transport as? PluginsClient else { return }
-        mcpConfirmation = nil
-        mcpConfirmTarget = server
-        Task { do { self.mcpConfirmation = try await client.mcpConfirmation(id: server.id); self.mcpFailureCode = nil } catch { self.mcpConfirmation = nil; self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } }
+        do { try await call(client) } catch let error where Self.wantsApprove(mcpCode(error)) { await reviewPlugin(server) } catch { mcpFailed = true }
+        await loadPlugins()
     }
-    /// Item 12: confirm the launch exactly as previewed, then refresh.
-    public func confirmMcpServer(_ server: McpServerView) {
-        guard let client = transport as? PluginsClient, let hash = mcpConfirmation?.hash else { return }
-        Task { do { try await client.confirmMcpServer(id: server.id, hash: hash); self.mcpConfirmTarget = nil; self.mcpConfirmation = nil; self.refreshPlugins(); self.mcpFailureCode = nil } catch { self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } }
-    }
-    /// Item 12: close the confirmation sheet without confirming.
-    public func cancelMcpConfirmation() { mcpConfirmTarget = nil; mcpConfirmation = nil }
+    /// 409 `use_approve` (legacy confirm gone) or `approval_required`: show the preview instead.
+    static func wantsApprove(_ code: String?) -> Bool { code == "use_approve" || code == "approval_required" }
+    public func deletePlugin(_ server: McpServerView) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.deleteMcpServer(id: server.id); self.refreshPlugins() } catch { self.mcpFailed = true } } }
 
     public func skills() async throws -> [LocalSkill] {
         guard let client = transport as? SkillsClient else {

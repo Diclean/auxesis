@@ -83,6 +83,14 @@ jobs:
           rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
             --profile minimal --component rustfmt --component clippy
           rustup show
+      - name: Owner-like Mac (Paris time, Command Line Tools)
+        # Many tests are written for an owner in Europe/Paris, and the shell
+        # sandbox allows the Command Line Tools, not a full Xcode (which the
+        # image selects by default). Match the maintainer's Mac.
+        run: |
+          sudo systemsetup -settimezone Europe/Paris >/dev/null
+          sudo xcode-select --switch /Library/Developer/CommandLineTools
+          date; xcode-select -p
       - name: Clippy
         run: scripts/ci-sandbox-env.sh cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests (sandboxed, no Keychain)

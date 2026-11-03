@@ -1,6 +1,21 @@
 # Curated discovery catalogue. Nothing is installed or activated automatically.
 # The admission rules are enforced by scripts/check-mcp-catalog.sh; every entry
 # carries its own source and evidence URLs.
+#
+# catalog_version is bumped whenever any entry changes. An HTTP server has no
+# artefact to checksum, so the catalog version plus the entry hash (computed by
+# the daemon, returned by GET /v1/mcp/catalog) is its pin.
+catalog_version = "2026.11.02-1"
+#
+# A stdio entry is installable only when it publishes the complete pin below;
+# any entry missing a field is display-only. We do not publish a pin we cannot
+# verify against a downloaded artefact, so every stdio entry here is display-only
+# until its release artefact is checked:
+#   version = "1.2.3"
+#   sha256 = "<64 lowercase hex chars of the exact binary at command>"
+#   command = "/absolute/path/to/server"
+#   args = ["--stdio"]
+#   permissions = { tools = ["read_x"], network = false, env = ["EXAMPLE_KEY"] }
 
 [[server]]
 id = "datagouv-mcp"

@@ -23,7 +23,7 @@ the caller supplies the URL and a separate policy (SSRF) vets it.
 | `crates/aux-runtime/src/net.rs` (`pinned_client`, kernel-net `build_client`) | the simple fetch and the extension artefact URL: `resolve_checked` public-only, client pinned to the one validated address | `none` (kernel) | fetch: `FETCH_TIMEOUT`; download: total 60s | none (`.no_proxy()`, kernel) |
 | `crates/aux-runtime/src/net.rs:50` | `127.0.0.1` wiremock test server, pinned by hand (kernel `build_client` refuses loopback); `#[cfg(any(test, feature = "testing"))]` only | `none` | connect `CONNECT_TIMEOUT` | none (`.no_proxy()`) |
 | `crates/aux-runtime/src/extensions/oauth.rs` (kernel `resolve_checked` + `build_client` via `crates/aux-runtime/src/net.rs::pinned_client`) | the catalog entry's `[oauth].token_url`: `https` and public only, DNS-pinned to the one validated address (the extension token exchange; no relay) | `none` (kernel) | one token request bounded by total 30s | none (`.no_proxy()`, kernel) |
-| `crates/aux-cli/src/brief.rs` (`call_daemon`) | the local `auxd` API on `127.0.0.1` only (the `/v1/brief/run` and `/v1/brief/status` owner routes; sandbox-aware endpoint, `AUXESIS_API_PORT=0` = no call) | `none` | total 30s | none (`.no_proxy()`) |
+| `crates/aux-cli/src/brief.rs` (`call_daemon_with_body`) | the local `auxd` API on `127.0.0.1` only (the brief, docs, notification, and skill owner routes; sandbox-aware endpoint, `AUXESIS_API_PORT=0` = no call) | `none` | total 30s | none (`.no_proxy()`) |
 | `crates/aux-cli/src/chat/daemon.rs` (`connect`) | the local `auxd` API on a literal loopback IP only (`127.0.0.1` or `::1`, never `localhost`; `/v1/health`, `/v1/threads/<agent>/messages`, `/v1/approvals`; sandbox-aware endpoint, `AUXESIS_API_PORT=0` = no call) | `none` | connect 2s / request 5s (health, approvals) / turn 6h backstop (the daemon's deadlines end it first); a daemon that answers but refuses the token fails closed, never falls back | none (`.no_proxy()`) |
 | `crates/aux-runtime/src/executor.rs:1889` | `127.0.0.1` wiremock test server, loopback; `#[cfg(test)]` only | reqwest default | reqwest defaults | default |
 
@@ -153,7 +153,7 @@ crates/aux-runtime/src/executor.rs::google_wiremock_receives_real_values_only_af
 crates/aux-providers/src/openai_compat.rs::with_key_and_timeout
 crates/aux-providers/src/anthropic.rs::with_key_and_timeout
 crates/aux-runtime/src/net.rs::loopback_client
-crates/aux-cli/src/brief.rs::call_daemon
+crates/aux-cli/src/brief.rs::call_daemon_with_body
 crates/aux-cli/src/chat/daemon.rs::connect
 <!-- egress-allowlist:end -->
 

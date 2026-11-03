@@ -61,8 +61,8 @@
 
 use crate::ToolError;
 use std::path::{Component, Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use thiserror::Error;
 
@@ -285,11 +285,17 @@ const SYSTEM_TREES: &[&str] = &[
     "/Library/Frameworks/Python.framework",
 ];
 
-/// Absolute roots a resolved developer directory may live under. A full Xcode
-/// is only recognised below one of these; anything else (a relocated app, a
-/// relative path, an owner-writable tree) is refused so the profile can never
-/// grow a rule for a path the owner controls.
-const DEVELOPER_DIR_ROOTS: &[&str] = &["/Applications", "/Library/Developer"];
+/// The only root a full Xcode developer directory may come from. The bundle
+/// must sit directly here, and the selected path must already be canonical.
+const APPLICATIONS_ROOT: &str = "/Applications";
+
+/// The only bundle identifier accepted for an `/Applications` developer
+/// directory: a full Xcode, not just any app that ships a `Developer` folder.
+const XCODE_BUNDLE_ID: &str = "com.apple.dt.Xcode";
+
+/// Upper bound for the `xcode-select` and `plutil` helpers, so a wedged tool
+/// can never stall profile construction.
+const DEVELOPER_TOOL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The Command Line Tools developer directory. It is already in
 /// [`SYSTEM_TREES`], so resolving it adds no rule and no duplicate: the
@@ -486,94 +492,180 @@ fn absolute_overlap(workspace: &Path) -> Option<&'static str> {
         .find(|dir| overlaps(workspace, Path::new(dir)))
 }
 
-/// The developer directory `xcrun` shims use for this process.
-///
-/// `DEVELOPER_DIR` wins, mirroring `xcrun`. When it is set, an invalid value
-/// adds nothing: there is deliberately no fallback to `xcode-select`, so a
-/// malformed environment variable cannot widen the profile for a directory
-/// the command will not use. Otherwise ask `xcode-select -p`. Any failure at
-/// either step means no extra rule, exactly as before this allowlist existed.
-fn active_developer_dir() -> Option<PathBuf> {
-    developer_dir_from_env(std::env::var_os("DEVELOPER_DIR").as_deref())
+/// Filesystem facts the Xcode developer-directory checks need.
+struct PathFacts {
+    uid: u32,
+    mode: u32,
+    is_dir: bool,
+    is_symlink: bool,
 }
 
-/// Testable core of [`active_developer_dir`]: the `DEVELOPER_DIR` value, if
-/// any, is passed in.
-fn developer_dir_from_env(value: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
-    if let Some(raw) = value {
-        return resolve_developer_dir(Path::new(raw));
+/// Real `symlink_metadata` facts for one path.
+fn system_facts(path: &Path) -> Option<PathFacts> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        Some(PathFacts {
+            uid: meta.uid(),
+            mode: meta.mode(),
+            is_dir: meta.is_dir(),
+            is_symlink: meta.file_type().is_symlink(),
+        })
     }
-    let output = std::process::Command::new("/usr/bin/xcode-select")
-        .arg("-p")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// `CFBundleIdentifier` read with `plutil` (XML or binary), under a timeout.
+fn system_bundle_id(info_plist: &Path) -> Option<String> {
+    let mut command = Command::new("/usr/bin/plutil");
+    command
+        .args(["-extract", "CFBundleIdentifier", "raw", "-o", "-"])
+        .arg(info_plist);
+    let output = run_with_timeout(&mut command, DEVELOPER_TOOL_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
-    let path = std::str::from_utf8(&output.stdout).ok()?;
-    resolve_developer_dir(Path::new(path.trim()))
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
 }
 
-/// Canonicalise and validate a candidate developer directory.
-///
-/// Requires an absolute path with no `..`, an existing directory, a canonical
-/// location under [`DEVELOPER_DIR_ROOTS`], and either the Command Line Tools
-/// path or an `.app/Contents/Developer` layout. Every failure returns `None`:
-/// the caller then adds no rule.
-fn resolve_developer_dir(raw: &Path) -> Option<PathBuf> {
-    if !raw.is_absolute()
-        || raw
-            .components()
-            .any(|component| component == Component::ParentDir)
-    {
+/// Run `command` with a wall-clock limit; kill and reap it on timeout.
+fn run_with_timeout(command: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
+}
+
+/// The developer directory `xcrun` shims will use for a sandboxed child.
+/// Asked of `xcode-select -p` with `DEVELOPER_DIR` removed: the child's
+/// environment is cleared, so that variable must never pick the toolchain.
+/// Any failure returns `None` and the caller adds no rule.
+fn active_developer_dir() -> Option<PathBuf> {
+    let mut command = Command::new("/usr/bin/xcode-select");
+    command.arg("-p").env_remove("DEVELOPER_DIR");
+    let output = run_with_timeout(&mut command, DEVELOPER_TOOL_TIMEOUT)?;
+    if !output.status.success() {
         return None;
     }
-    let canonical = raw.canonicalize().ok()?;
-    if !canonical.is_dir() || !is_allowed_developer_dir(&canonical) {
+    let selected = PathBuf::from(std::str::from_utf8(&output.stdout).ok()?.trim());
+    resolve_developer_dir(
+        &selected,
+        Path::new(APPLICATIONS_ROOT),
+        &system_facts,
+        &system_bundle_id,
+    )
+}
+
+/// The bundle directories of a canonical developer directory.
+struct XcodeBundle {
+    app: PathBuf,
+    contents: PathBuf,
+    developer: PathBuf,
+}
+
+/// Canonicalise and validate the selected developer directory. The Command
+/// Line Tools is accepted (it is already in [`SYSTEM_TREES`], so it adds no
+/// rule). A full Xcode is accepted only when the canonical path is exactly
+/// `<root>/<bundle>.app/Contents/Developer` with the bundle directly under the
+/// root, the selected path is already canonical (no symlink in it), the
+/// bundle's `Info.plist` says `CFBundleIdentifier` is [`XCODE_BUNDLE_ID`], and
+/// the bundle, `Contents` and `Developer` are each a real directory (checked
+/// with `symlink_metadata`), owned by uid 0 with `mode & 0o022 == 0` (not
+/// writable by group or others). Every failure returns `None`: no rule.
+fn resolve_developer_dir(
+    selected: &Path,
+    applications_root: &Path,
+    facts: &dyn Fn(&Path) -> Option<PathFacts>,
+    bundle_id: &dyn Fn(&Path) -> Option<String>,
+) -> Option<PathBuf> {
+    if !selected.is_absolute() {
         return None;
+    }
+    let canonical = selected.canonicalize().ok()?;
+    if canonical == Path::new(CLT_DEVELOPER_DIR) {
+        return Some(canonical);
+    }
+    // Canonicalisation resolves symlinks, which would hide a symlinked
+    // `Developer` (or bundle) behind another otherwise valid path. Only the
+    // path the tool named is checked, and it must have no symlink in it.
+    if canonical != selected {
+        return None;
+    }
+    let bundle = xcode_bundle_paths(&canonical, applications_root)?;
+    if bundle_id(&bundle.contents.join("Info.plist")).as_deref() != Some(XCODE_BUNDLE_ID) {
+        return None;
+    }
+    for dir in [&bundle.app, &bundle.contents, &bundle.developer] {
+        let facts = facts(dir)?;
+        if facts.is_symlink || !facts.is_dir || facts.uid != 0 || facts.mode & 0o022 != 0 {
+            return None;
+        }
     }
     Some(canonical)
 }
 
-/// True when `dir` is a developer directory the profile may grant read+exec
-/// to: the Command Line Tools, or an Xcode `.app/Contents/Developer` below one
-/// of the two system roots.
-fn is_allowed_developer_dir(dir: &Path) -> bool {
-    if !dir.is_absolute()
-        || dir
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
-        || !DEVELOPER_DIR_ROOTS.iter().any(|root| dir.starts_with(root))
-    {
-        return false;
-    }
-    if dir == Path::new(CLT_DEVELOPER_DIR) {
-        return true;
-    }
-    let mut tail = dir.components().rev();
-    matches!(
-        (tail.next(), tail.next(), tail.next()),
+/// Split a canonical developer directory into its bundle paths. Requires the
+/// bundle to sit directly under `applications_root`:
+/// `<root>/<name>.app/Contents/Developer`, never deeper.
+fn xcode_bundle_paths(developer: &Path, applications_root: &Path) -> Option<XcodeBundle> {
+    let mut parts = developer.strip_prefix(applications_root).ok()?.components();
+    let name = match (parts.next(), parts.next(), parts.next(), parts.next()) {
         (
-            Some(Component::Normal(developer)),
+            Some(Component::Normal(name)),
             Some(Component::Normal(contents)),
-            Some(Component::Normal(app)),
-        ) if developer == "Developer"
+            Some(Component::Normal(dev)),
+            None,
+        ) if name.to_string_lossy().ends_with(".app")
+            && name.len() > ".app".len()
             && contents == "Contents"
-            && app.to_string_lossy().ends_with(".app")
-    )
+            && dev == "Developer" =>
+        {
+            name.to_owned()
+        }
+        _ => return None,
+    };
+    let app = applications_root.join(&name);
+    let contents = app.join("Contents");
+    let developer = contents.join("Developer");
+    Some(XcodeBundle {
+        app,
+        contents,
+        developer,
+    })
 }
 
 /// The read + exec grant for a full Xcode developer directory, or `None` when
 /// the directory is already covered (the Command Line Tools, in
 /// [`SYSTEM_TREES`]).
 ///
+/// The caller passes a directory that already passed [`resolve_developer_dir`].
 /// The two lines mirror exactly what the profile already grants the Command
 /// Line Tools: `file-read*` and `process-exec*`, never a write, network or
 /// `file-map-executable` rule.
 fn developer_dir_rules(developer_dir: &Path) -> Option<String> {
-    if developer_dir == Path::new(CLT_DEVELOPER_DIR) || !is_allowed_developer_dir(developer_dir) {
+    if developer_dir == Path::new(CLT_DEVELOPER_DIR) {
         return None;
     }
     let dir = scheme_string(developer_dir).ok()?;
@@ -592,10 +684,11 @@ fn developer_dir_rules(developer_dir: &Path) -> Option<String> {
 /// come after the system allows and the workspace/temp allows after the
 /// denies. Refuses a workspace that would override a protected location.
 ///
-/// The active developer directory (`DEVELOPER_DIR`, else `xcode-select -p`)
-/// is resolved here. When it is a full Xcode under a system root, that
-/// directory gets the same read+exec grant as the Command Line Tools; every
-/// other value adds no rule.
+/// The active developer directory is resolved from `xcode-select -p` (with
+/// `DEVELOPER_DIR` removed) and accepted only when it passes the
+/// authenticity and ownership checks in [`resolve_developer_dir`]. When it is
+/// a full Xcode, that directory gets the same read+exec grant as the Command
+/// Line Tools; every other value adds no rule.
 pub fn seatbelt_profile(
     workspace: &Path,
     temp: &Path,
@@ -615,15 +708,14 @@ fn seatbelt_profile_with_developer_dir(
     network: bool,
     developer_dir: Option<&Path>,
 ) -> Result<String, LaunchError> {
-    // Only a directory the profile will actually grant is allowed to veto a
-    // workspace: otherwise an ignored candidate under /tmp could refuse a
-    // perfectly valid workspace.
-    let developer_dir = developer_dir.filter(|dir| is_allowed_developer_dir(dir));
+    // The grant is read-only. A workspace overlapping it would turn it
+    // writable through the unconditional workspace allow, so skip the grant
+    // exactly as if no Xcode were selected.
+    let developer_dir = developer_dir.filter(|dir| !overlaps(workspace, dir));
     let sensitive = home
         .map(|home| home_overlap(workspace, home).is_some())
         .unwrap_or(false)
-        || absolute_overlap(workspace).is_some()
-        || developer_dir.is_some_and(|dir| overlaps(workspace, dir));
+        || absolute_overlap(workspace).is_some();
     if sensitive {
         return Err(LaunchError::SensitiveWorkspace(
             workspace.display().to_string(),
@@ -1775,6 +1867,95 @@ mod tests {
         .unwrap()
     }
 
+    fn fake_facts(uid: u32, mode: u32) -> impl Fn(&Path) -> Option<PathFacts> {
+        move |path| {
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            Some(PathFacts {
+                uid,
+                mode,
+                is_dir: meta.is_dir(),
+                is_symlink: meta.file_type().is_symlink(),
+            })
+        }
+    }
+
+    fn resolve(root: &Path, path: &Path, uid: u32, mode: u32, id: &'static str) -> Option<PathBuf> {
+        resolve_developer_dir(path, root, &fake_facts(uid, mode), &|_| {
+            Some(id.to_string())
+        })
+    }
+
+    /// A temp directory standing in for `/Applications`, canonicalised so the
+    /// selected paths compare equal after canonicalisation.
+    fn fake_applications_root(sandbox: &tempfile::TempDir) -> PathBuf {
+        let root = sandbox.path().canonicalize().unwrap().join("Applications");
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn fake_xcode_bundle(root: &Path, name: &str) -> PathBuf {
+        let developer = root.join(name).join("Contents/Developer");
+        std::fs::create_dir_all(&developer).unwrap();
+        developer
+    }
+
+    #[test]
+    fn wrong_bundle_id_adds_no_rule() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = fake_applications_root(&sandbox);
+        let developer = fake_xcode_bundle(&root, "Evil.app");
+        assert_eq!(
+            resolve(&root, &developer, 0, 0o755, "com.example.evil"),
+            None
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn non_root_owned_or_group_writable_bundle_adds_no_rule() {
+        use std::os::unix::fs::MetadataExt;
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = fake_applications_root(&sandbox);
+        let developer = fake_xcode_bundle(&root, "Xcode.app");
+        let test_uid = std::fs::symlink_metadata(&developer).unwrap().uid();
+        if test_uid != 0 {
+            assert_eq!(
+                resolve(&root, &developer, test_uid, 0o755, XCODE_BUNDLE_ID),
+                None
+            );
+        }
+        assert_eq!(resolve(&root, &developer, 0, 0o775, XCODE_BUNDLE_ID), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_developer_directory_adds_no_rule() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = fake_applications_root(&sandbox);
+        let real = fake_xcode_bundle(&root, "Real.app");
+        let contents = root.join("Evil.app/Contents");
+        std::fs::create_dir_all(&contents).unwrap();
+        let link = contents.join("Developer");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(resolve(&root, &link, 0, 0o755, XCODE_BUNDLE_ID), None);
+    }
+
+    #[test]
+    fn developer_dir_environment_variable_has_no_effect() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = fake_applications_root(&sandbox);
+        let selected = fake_xcode_bundle(&root, "Selected.app");
+        let env_candidate = fake_xcode_bundle(&root, "Evil.app");
+        std::env::set_var("DEVELOPER_DIR", &env_candidate);
+        let resolved = resolve(&root, &selected, 0, 0o755, XCODE_BUNDLE_ID);
+        let with_env = active_developer_dir();
+        std::env::remove_var("DEVELOPER_DIR");
+        let without_env = active_developer_dir();
+        // A valid candidate in DEVELOPER_DIR never wins; only `xcode-select`.
+        assert_eq!(resolved.as_deref(), Some(selected.as_path()));
+        assert_eq!(with_env, without_env);
+    }
+
     #[test]
     fn resolved_xcode_developer_dir_gets_read_and_exec_but_never_write() {
         let developer_dir = Path::new("/Applications/Xcode_16.4.app/Contents/Developer");
@@ -1814,47 +1995,25 @@ mod tests {
     }
 
     #[test]
-    fn developer_dir_outside_the_allowed_roots_adds_no_rule() {
-        let base = profile_with_developer_dir(None);
+    fn resolved_xcode_developer_dir_yields_exactly_read_and_exec() {
         let sandbox = tempfile::tempdir().unwrap();
-        let fake_xcode = sandbox.path().join("x.app/Contents/Developer");
-        std::fs::create_dir_all(&fake_xcode).unwrap();
-        let fake_home_evil = sandbox.path().join("evil");
-        std::fs::create_dir_all(&fake_home_evil).unwrap();
-        let dotted = fake_xcode.join("../../../x.app/Contents/Developer");
-        let relative = Path::new("Applications/Xcode.app/Contents/Developer");
-
-        // The same values a hostile or stale DEVELOPER_DIR could carry:
-        // a fake Xcode under /tmp, a path under the home, a relative path and
-        // one containing `..` must all resolve to nothing.
-        for candidate in [
-            fake_xcode.as_path(),
-            fake_home_evil.as_path(),
-            dotted.as_path(),
-            relative,
-        ] {
-            assert_eq!(
-                developer_dir_from_env(Some(candidate.as_os_str())),
-                None,
-                "{} must not resolve",
-                candidate.display()
-            );
-            assert_eq!(
-                profile_with_developer_dir(Some(candidate)),
-                base,
-                "{} must add no rule",
-                candidate.display()
-            );
-        }
-
-        // A symlink that canonicalises outside the allowed roots is refused.
-        #[cfg(unix)]
-        {
-            let link = sandbox.path().join("relocated.app/Contents/Developer");
-            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink(&fake_xcode, &link).unwrap();
-            assert_eq!(resolve_developer_dir(&link), None);
-        }
+        let root = fake_applications_root(&sandbox);
+        let developer = fake_xcode_bundle(&root, "Xcode_16.4.app");
+        let resolved = resolve(&root, &developer, 0, 0o755, XCODE_BUNDLE_ID)
+            .expect("a root-owned Xcode bundle must resolve");
+        let rules = developer_dir_rules(&resolved).expect("a full Xcode must get a grant");
+        let rules: Vec<&str> = rules
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with(';'))
+            .collect();
+        assert_eq!(
+            rules.join("\n"),
+            format!(
+                "(allow file-read* (subpath \"{dir}\"))\n\
+                 (allow process-exec* (subpath \"{dir}\"))",
+                dir = developer.display()
+            )
+        );
     }
 
     #[test]
@@ -1885,19 +2044,27 @@ mod tests {
     }
 
     #[test]
-    fn resolved_xcode_developer_dir_cannot_be_the_workspace() {
-        // The new grant is read-only; a workspace there would make it
-        // writable through the unconditional workspace allow.
+    fn xcode_developer_dir_overlapping_the_workspace_adds_no_rule() {
+        // The grant is read-only; a workspace there would turn it writable
+        // through the unconditional workspace allow, so it is skipped.
         let developer_dir = Path::new("/Applications/Xcode.app/Contents/Developer");
-        let err = seatbelt_profile_with_developer_dir(
+        let base = seatbelt_profile_with_developer_dir(
+            developer_dir,
+            Path::new("/tmp/tmp"),
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+        let profile = seatbelt_profile_with_developer_dir(
             developer_dir,
             Path::new("/tmp/tmp"),
             None,
             false,
             Some(developer_dir),
         )
-        .unwrap_err();
-        assert!(matches!(err, LaunchError::SensitiveWorkspace(_)));
+        .unwrap();
+        assert_eq!(profile, base);
     }
 
     #[test]

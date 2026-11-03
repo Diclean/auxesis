@@ -71,21 +71,25 @@ struct OAuthStatus {
     connected: bool,
 }
 
+/// The one 404 body the start and disconnect routes answer with.
+fn extension_not_found() -> Response {
+    error::error_response(
+        StatusCode::NOT_FOUND,
+        "extension_not_found",
+        "unknown extension",
+        None,
+    )
+}
+
 // Check before resolving OAuth secrets or starting a flow (the route that goes
-// out to the network). A missing pin is a refusal too. Status and disconnect stay
-// open: they are local, and the owner must always be able to revoke a token.
+// out to the network). A missing pin is a refusal too. Status and disconnect
+// stay open for any valid name: they are local, and the owner must always be
+// able to revoke a token.
 fn approved_install(home: &FsPath, id: &str) -> Result<InstalledExtension, Box<Response>> {
     let installed = aux_runtime::extensions::valid_name(id)
         .then(|| load_installed(home, id))
         .flatten()
-        .ok_or_else(|| {
-            Box::new(error::error_response(
-                StatusCode::NOT_FOUND,
-                "extension_not_found",
-                "unknown extension",
-                None,
-            ))
-        })?;
+        .ok_or_else(|| Box::new(extension_not_found()))?;
     require_approval(home, &installed).map_err(|_| {
         Box::new(error::error_response(
             StatusCode::CONFLICT,
@@ -210,6 +214,12 @@ pub async fn status(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
 
 /// `DELETE /v1/extensions/{id}/oauth`.
 pub async fn disconnect(State(state): State<Arc<ApiState>>, Path(id): Path<String>) -> Response {
+    // No install can carry this name, so it must not grow the generation map
+    // (keyed by the raw URL id). The 404 matches the start route. Any valid
+    // name still revokes, installed or not.
+    if !aux_runtime::extensions::valid_name(&id) {
+        return extension_not_found();
+    }
     let store = FileTokenStore::new(&state.home);
     let mut map = generations().lock().unwrap_or_else(|p| p.into_inner());
     let next = generation(&map, &id).wrapping_add(1);

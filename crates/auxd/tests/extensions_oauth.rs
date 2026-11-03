@@ -333,6 +333,42 @@ async fn an_extension_without_oauth_is_refused() {
     api.stop();
 }
 
+// The disconnect generation map is keyed by the raw URL id, so a name no
+// install can carry must be refused before it touches the map. The 404
+// matches the start route, and any valid name still revokes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disconnect_refuses_an_invalid_name_and_revokes_any_valid_one() {
+    let server = MockServer::start().await;
+    let mut api = TestApi::start(&server);
+
+    let invalid = call(
+        api.addr,
+        "DELETE",
+        "/v1/extensions/BAD..NAME/oauth",
+        Some(&api.token),
+        None,
+    )
+    .await;
+    assert_eq!(invalid.status, 404, "body: {}", invalid.body);
+    assert_eq!(invalid.json()["error"]["code"], "extension_not_found");
+
+    // An installed name and an uninstalled one both revoke: the owner can
+    // always take a token back.
+    for name in [EXTENSION, "no-such-extension"] {
+        let revoked = call(
+            api.addr,
+            "DELETE",
+            &format!("/v1/extensions/{name}/oauth"),
+            Some(&api.token),
+            None,
+        )
+        .await;
+        assert_eq!(revoked.status, 200, "{name}: {}", revoked.body);
+        assert_eq!(revoked.json()["connected"], json!(false));
+    }
+    api.stop();
+}
+
 // A file-backed MCP fixture: real install, pin and accept, with no external service.
 const MCP_FIXTURE: &str = r##"#!/bin/sh
 while IFS= read -r line; do

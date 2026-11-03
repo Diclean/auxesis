@@ -42,23 +42,28 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 roun
 
 cd "$(git rev-parse --show-toplevel)"
 
-scan_root="apps/auxesis-mac/Sources"
+# The shipped app: the Mac package and the shared package it links. The
+# shared package is scanned too, because the Mac app now renders model text
+# through it (PHONE-1a) — the phone app will as well.
+scan_roots=("apps/auxesis-mac/Sources" "packages/AuxesisShared/Sources")
 
 if ! command -v grep >/dev/null 2>&1; then
     echo "check-no-rich-render: grep is unavailable — refusing to report a clean scan" >&2
     exit 1
 fi
-if [ ! -d "$scan_root" ]; then
-    echo "check-no-rich-render: scan root '$scan_root' is missing — failing closed" >&2
-    exit 1
-fi
+for scan_root in "${scan_roots[@]}"; do
+    if [ ! -d "$scan_root" ]; then
+        echo "check-no-rich-render: scan root '$scan_root' is missing — failing closed" >&2
+        exit 1
+    fi
+done
 
 fail=0
 
 # Matches are read as `<path>:<line>:<text>`, so a path holding `:` or a newline
 # could pose as an excepted file. No app source may carry either: fail closed.
-odd="$(find "$scan_root" \( -name '*:*' -o -name "*$'\n'*" \) -print 2>&1)" || {
-    echo "check-no-rich-render: find failed under $scan_root — failing closed" >&2
+odd="$(find "${scan_roots[@]}" \( -name '*:*' -o -name "*$'\n'*" \) -print 2>&1)" || {
+    echo "check-no-rich-render: find failed under ${scan_roots[*]} — failing closed" >&2
     exit 1
 }
 if [ -n "$odd" ]; then
@@ -89,10 +94,10 @@ is_excepted() {  # <path> <pattern-id>
     return 1
 }
 
-# Report every fixed-string match under $scan_root that is not excepted.
+# Report every fixed-string match under the scan roots that is not excepted.
 check_fixed() {  # <pattern-id> <fixed-string>
     local id="$1" pattern="$2" hits status hit file
-    hits="$(grep -rnF -- "$pattern" "$scan_root" 2>&1)" && status=0 || status=$?
+    hits="$(grep -rnF -- "$pattern" "${scan_roots[@]}" 2>&1)" && status=0 || status=$?
     if [ "$status" -gt 1 ]; then
         echo "check-no-rich-render: grep failed for '$id' (status $status)" >&2
         printf '%s\n' "$hits" >&2
@@ -114,7 +119,7 @@ check_fixed() {  # <pattern-id> <fixed-string>
 # a rich-render sink: it is a localization key, and keys are rendered richly.
 check_localized_key_var() {
     local id="localized-key-var" hits status hit file rest content remainder
-    hits="$(grep -rnF -- 'LocalizedStringKey(' "$scan_root" 2>&1)" && status=0 || status=$?
+    hits="$(grep -rnF -- 'LocalizedStringKey(' "${scan_roots[@]}" 2>&1)" && status=0 || status=$?
     if [ "$status" -gt 1 ]; then
         echo "check-no-rich-render: grep failed for '$id' (status $status)" >&2
         printf '%s\n' "$hits" >&2
@@ -154,4 +159,4 @@ if [ "$fail" -ne 0 ]; then
     echo "check-no-rich-render: FAIL — untrusted text must stay plain; see docs/rendering.md" >&2
     exit 1
 fi
-echo "check-no-rich-render: OK — no rich rendering of text in $scan_root"
+echo "check-no-rich-render: OK — no rich rendering of text in ${scan_roots[*]}"

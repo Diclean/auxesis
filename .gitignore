@@ -53,6 +53,10 @@ __pycache__/
 # SwiftPM (apps/auxesis-mac): build products and package scratch
 apps/auxesis-mac/.build/
 apps/auxesis-mac/.swiftpm/
+# SwiftPM (packages/AuxesisShared): the shared package is built on its own for
+# the iOS check, so it keeps its own scratch beside the sources.
+packages/AuxesisShared/.build/
+packages/AuxesisShared/.swiftpm/
 # make-app.sh assembles the double-clickable bundle here (regenerated)
 apps/auxesis-mac/build/
 

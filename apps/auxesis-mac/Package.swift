@@ -15,6 +15,12 @@ let package = Package(
         .library(name: "AuxesisKit", targets: ["AuxesisKit"]),
         .executable(name: "AuxesisMac", targets: ["AuxesisMac"]),
     ],
+    dependencies: [
+        // The one copy of the models, the theme and the pure text helpers.
+        // The phone app will link the same package; the Mac app keeps only
+        // what is Mac-only (AppKit, EventKit, Vision, the bridge, the updater).
+        .package(path: "../../packages/AuxesisShared"),
+    ],
     targets: [
         // Offline release-manifest signer (H4): a dev tool, never bundled in
         // the app. `scripts/sign-release.sh` drives it.
@@ -23,7 +29,7 @@ let package = Package(
         .target(name: "XCTest"),
         .target(name: "Testing", dependencies: ["XCTest"]),
         // Everything that can be tested headlessly: models, client, store, copy, palette.
-        .target(name: "AuxesisKit"),
+        .target(name: "AuxesisKit", dependencies: ["AuxesisShared"]),
         // The SwiftUI app shell uses system SF Pro fonts.
         .executableTarget(name: "AuxesisMac", dependencies: ["AuxesisKit"], exclude: ["Resources"]),
         .testTarget(

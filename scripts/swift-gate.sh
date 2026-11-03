@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Swift gate — runs the product's macOS Swift build and tests.
 #
+#   packages/AuxesisShared : the shared-import rule (Foundation, CoreGraphics,
+#                             CryptoKit only)
 #   apps/auxesis-mac : swift build, then swift test --disable-sandbox -j 3
 #
 # macOS only. scripts/precheck.sh calls this script for every code change;
@@ -35,6 +37,12 @@ swiftpm_paths=(
     --cache-path .build/swiftpm-cache
     --config-path .build/swiftpm-config
     --security-path .build/swiftpm-security
+)
+
+echo "swift-gate: packages/AuxesisShared — shared imports"
+(
+    cd "$repo_root"
+    nice -n 15 scripts/check-shared-imports.sh
 )
 
 echo "swift-gate: apps/auxesis-mac — swift build"

@@ -720,6 +720,7 @@ mod tests {
 
     /// The send-invite fill both tests run. `email` is derived from `person`, so
     /// every recipient field carries that value and the runtime resolves it.
+    /// The times carry no offset, so the owner's zone reads them on any machine.
     fn invite_fill() -> serde_json::Value {
         json!({
             "slots": {
@@ -731,8 +732,8 @@ mod tests {
                     "tool": "apple_calendar_create_event",
                     "arguments": {
                         "title": "Meeting with Camille Exemple",
-                        "start": "2026-10-11T10:00:00+02:00",
-                        "end": "2026-10-11T10:30:00+02:00"
+                        "start": "2026-10-11T10:00:00",
+                        "end": "2026-10-11T10:30:00"
                     }
                 },
                 {

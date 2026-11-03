@@ -1090,15 +1090,29 @@ fn approval_hash_for_binary(
     Some((hash, pin))
 }
 
+/// The SHA-256 of a program file, or `None` when the file cannot be read.
+///
+/// A program that cannot be read cannot be hashed: the kernel's
+/// [`UNAVAILABLE_SHA256`](kernel_mcp::UNAVAILABLE_SHA256) marker is not a
+/// hash, so it is never bound, never compared equal to a catalog pin and
+/// never approved.
+fn hashed_binary(path: &Path) -> Option<String> {
+    let sha = kernel_mcp::binary_sha256(path);
+    if sha.eq_ignore_ascii_case(kernel_mcp::UNAVAILABLE_SHA256) {
+        return None;
+    }
+    Some(sha)
+}
+
 /// The program SHA-256 a non-catalog `stdio` approval binds, or `None` for a
 /// transport with no local program (or a catalog entry, whose pin already
-/// covers the published hash).
+/// covers the published hash), or for a program that cannot be read.
 fn non_catalog_binary_sha(server: &kernel_mcp::McpServerConfig) -> Option<String> {
     if server.transport != kernel_mcp::McpTransport::Stdio || server.catalog_id.is_some() {
         return None;
     }
     let path = server.command.as_deref().unwrap_or("");
-    Some(kernel_mcp::binary_sha256(Path::new(path)))
+    hashed_binary(Path::new(path))
 }
 
 /// The curated catalog pin for a server's claimed entry, if it has one: one
@@ -1299,8 +1313,8 @@ pub(super) async fn approve_server(
                     if catalog_binary_is_mutable(Path::new(pin.command)) {
                         return Err("binary_path_mutable");
                     }
-                    if !kernel_mcp::binary_sha256(Path::new(pin.command))
-                        .eq_ignore_ascii_case(pin.sha256)
+                    if !hashed_binary(Path::new(pin.command))
+                        .is_some_and(|sha| sha.eq_ignore_ascii_case(pin.sha256))
                     {
                         return Err("checksum_mismatch");
                     }
@@ -1315,8 +1329,12 @@ pub(super) async fn approve_server(
                     }
                     // Bind the PREVIEWED sha (the digest match above proves it
                     // equals the current file); the kernel's spawn re-hash then
-                    // refuses any swap after this point.
-                    let sha = binary_hash.as_deref().unwrap_or("unavailable");
+                    // refuses any swap after this point. An unreadable program
+                    // has no previewed sha: the marker is never bound, so the
+                    // kernel refuses and the install is not approved.
+                    let sha = binary_hash
+                        .as_deref()
+                        .unwrap_or(kernel_mcp::UNAVAILABLE_SHA256);
                     confirmation = server.confirmation_binding_for_sha(&secret, sha);
                 }
                 if confirmation.is_none() {
@@ -1374,7 +1392,8 @@ pub(super) async fn confirmation_preview(
         Err("invalid_server") => return internal("confirmation_unavailable"),
         Err(code) => return fail(StatusCode::BAD_REQUEST, code),
     };
-    let binary_hash = kernel_mcp::binary_sha256(Path::new(&command));
+    let binary_hash = hashed_binary(Path::new(&command))
+        .unwrap_or_else(|| kernel_mcp::UNAVAILABLE_SHA256.to_owned());
     Json(ConfirmationPreview {
         id: server.id.clone(),
         command,
@@ -1601,7 +1620,9 @@ pub(super) async fn add_server(
             if catalog_binary_is_mutable(Path::new(pin.command)) {
                 return fail(StatusCode::BAD_REQUEST, "binary_path_mutable");
             }
-            if !kernel_mcp::binary_sha256(Path::new(pin.command)).eq_ignore_ascii_case(pin.sha256) {
+            if !hashed_binary(Path::new(pin.command))
+                .is_some_and(|sha| sha.eq_ignore_ascii_case(pin.sha256))
+            {
                 return fail(StatusCode::BAD_REQUEST, "checksum_mismatch");
             }
             kernel_mcp::McpServerConfig {
@@ -2418,7 +2439,7 @@ mod tests {
                 env: vec![],
                 network: false,
                 data_class: "sensitive".to_owned(),
-                binary_hash: "unavailable".to_owned(),
+                binary_hash: kernel_mcp::UNAVAILABLE_SHA256.to_owned(),
                 high_risk,
                 unverified_program: Some(UNVERIFIED_PROGRAM_WARNING_CODE),
                 hash: "hash".to_owned(),

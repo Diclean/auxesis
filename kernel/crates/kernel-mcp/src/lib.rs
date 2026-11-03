@@ -82,7 +82,7 @@ pub use config::{
     binary_sha256, evaluate_stdio_policy, is_loopback_host, looks_like_secret, stdio_risk_label,
     wrapper_launcher_label, McpConfig, McpConfigError, McpDataClass, McpServerConfig, McpTransport,
     QuarantinedServer, ServerRefusal, StdioPolicy, MAX_MCP_CONFIG_BYTES, MAX_MCP_SERVERS,
-    MAX_MCP_URL_BYTES,
+    MAX_MCP_URL_BYTES, UNAVAILABLE_SHA256,
 };
 pub use descriptor::{
     risk_from_tags, sanitize_description, sanitize_schema, McpTag, McpToolDescriptor,

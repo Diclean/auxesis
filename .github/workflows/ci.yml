@@ -28,7 +28,8 @@ permissions:
 # One run per ref: a new push cancels the superseded in-flight run.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Pushes to main never cancel each other, so every merge gets a finished result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The suite is not parallel-safe at one thread per core; four is the pin.

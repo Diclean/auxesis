@@ -1201,6 +1201,77 @@ async fn a_stored_client_zone_wins_over_the_models_zone() {
     assert!(!ics.contains("attendee_time_zone_source"), "{ics}");
 }
 
+/// CLIENT-TZ-FIELD acceptance: a client imported from a vCard carrying
+/// `TZ:America/New_York`, then an invite whose model guessed `Europe/Paris`.
+/// The card's zone wins before the approval card, and the `.ics` carries the
+/// instant that is 10:00 in Paris and 05:00 in New York. A `TZ:` that is not an
+/// IANA name (`Mars/Base`) is ignored on import, never guessed, and the import
+/// report says so.
+#[tokio::test]
+async fn an_imported_vcard_zone_reaches_the_invite_and_beats_the_models_guess() {
+    let dir = tempfile::tempdir().expect("a temp store");
+    let store = Store::open(&dir.path().join("store.db")).expect("a store");
+    let file = dir.path().join("contacts.vcf");
+    std::fs::write(
+        &file,
+        "BEGIN:VCARD\nVERSION:4.0\nFN:Camille Exemple\nEMAIL:camille@exemple.fr\n\
+         TZ:America/New_York\nEND:VCARD\n\
+         BEGIN:VCARD\nVERSION:4.0\nFN:Jonas Weber\nEMAIL:jonas@exemple.fr\n\
+         TZ:Mars/Base\nEND:VCARD\n",
+    )
+    .expect("a vCard");
+    let summary = aux_runtime::contacts_import::import_file(&store, &file, None, Some("client"))
+        .expect("an import");
+    assert_eq!(summary.time_zone_ignored, 1, "Mars/Base is not a zone");
+    assert!(
+        summary.to_string().contains("not an IANA name"),
+        "the report must say the invalid zone was ignored: {summary}"
+    );
+    let parties = aux_crm::Crm::new(&store).list().expect("the cards");
+    let zone_of = |email: &str| {
+        parties
+            .iter()
+            .find(|party| party.emails.iter().any(|known| known == email))
+            .and_then(|party| party.time_zone.as_deref())
+    };
+    assert_eq!(zone_of("camille@exemple.fr"), Some("America/New_York"));
+    assert_eq!(
+        zone_of("jonas@exemple.fr"),
+        None,
+        "an invalid zone is ignored"
+    );
+
+    let index = aux_runtime::known_names::contacts_index(&store.contacts().expect("contacts"));
+    let directory = ContactsWithZones::from_store(Arc::new(index), &store);
+    let (outcome, cards, sent) = run_invite_with(
+        json!({
+            "title": "Meeting with Camille Exemple",
+            "start": "2026-10-26T10:00:00",
+            "end": "2026-10-26T10:30:00",
+            "time_zone": "Europe/Paris",
+            // The model's guess: the card's New York zone replaces it.
+            "attendee_time_zone": "Europe/Paris",
+        }),
+        &directory,
+    )
+    .await;
+    assert!(matches!(outcome, RunOutcome::Done { .. }), "{outcome:?}");
+    let shown = &cards[0]["calls"][0]["real"];
+    assert_eq!(shown["attendee_time_zone"], "America/New_York");
+    // 10:00 in Paris is 09:00 UTC, 05:00 in New York.
+    assert_eq!(shown["attendee_start"], "2026-10-26T05:00:00-04:00");
+    let source = shown["attendee_time_zone_source"]
+        .as_str()
+        .expect("the card says where the zone came from");
+    assert!(
+        source.contains("client card") && source.contains("Europe/Paris"),
+        "{source}"
+    );
+    assert_eq!(sent.len(), 1, "one invite");
+    let ics = sent[0].ics.as_deref().expect("an .ics");
+    assert!(ics.contains("DTSTART:20261026T090000Z"), "{ics}");
+}
+
 /// Refused before any card, nothing sent, no zone assumed: today's `+02:00` on
 /// a `+01:00` day, an unknown zone, a time the clocks skip.
 #[tokio::test]

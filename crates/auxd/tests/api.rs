@@ -4838,6 +4838,21 @@ impl Tool for PortableFakeShell {
     }
 }
 
+/// A killed in-flight turn may report either abort status: the cancellation
+/// token (`499 turn_cancelled`) or the agent's stop marker (`409 stopped`),
+/// depending on which check the engine reaches first. Both mean the turn
+/// aborted; the caller's cleanup assertions prove the rest.
+fn assert_turn_aborted(response: &HttpResponse) {
+    match response.status {
+        499 => assert_error(response, 499, "turn_cancelled"),
+        409 => assert_error(response, 409, "stopped"),
+        status => panic!(
+            "a killed turn must abort (499 turn_cancelled or 409 stopped), got HTTP {status}: {}",
+            response.body
+        ),
+    }
+}
+
 /// B-API v3 × E-18: a per-agent kill during an in-flight turn must end the
 /// turn now, with the same cleanup a client-disconnect cancellation gets.
 ///
@@ -4935,7 +4950,7 @@ async fn killing_an_agent_aborts_its_turn_retires_the_approval_and_reaps_the_she
     assert_eq!(killed.json()["killed"], true);
 
     let response = send.await.unwrap();
-    assert_error(&response, 499, "turn_cancelled");
+    assert_turn_aborted(&response);
 
     let deadline = tokio::time::Instant::now() + common::LOADED_RUNNER_WAIT;
     loop {
@@ -4990,7 +5005,7 @@ async fn killing_an_agent_aborts_its_turn_retires_the_approval_and_reaps_the_she
     let killed = post_auth(&t, "/v1/agents/main/kill", "{}").await;
     assert_eq!(killed.status, 200, "body: {}", killed.body);
     let response = send.await.unwrap();
-    assert_error(&response, 499, "turn_cancelled");
+    assert_turn_aborted(&response);
 
     // The killed turn's child (and its process group) must be gone.
     let deadline = tokio::time::Instant::now() + common::LOADED_RUNNER_WAIT;
@@ -5096,7 +5111,7 @@ async fn killing_an_agent_reaps_a_real_sandboxed_shell_tree_on_macos() {
     let killed = post_auth(&t, "/v1/agents/main/kill", "{}").await;
     assert_eq!(killed.status, 200, "body: {}", killed.body);
     let response = send.await.unwrap();
-    assert_error(&response, 499, "turn_cancelled");
+    assert_turn_aborted(&response);
 
     // The killed turn's shell child must be gone (the whole tree sweep).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);

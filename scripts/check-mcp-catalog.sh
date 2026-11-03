@@ -7,7 +7,10 @@
 #   * field values inside their enums ("unverified" is the explicit unknown);
 #   * provenance URLs are https (endpoint is required when transport = http);
 #   * tier = recommended only for official / public-body / vendor-first-party
-#     servers that are read-only.
+#     servers that are read-only;
+#   * a file-level catalog_version, and a stdio install pin that is either
+#     complete (version, sha256, command, args, permissions) or absent:
+#     a partial pin is a hole, so a partial entry is display-only.
 #
 # Uses python3 -I and the standard-library tomllib only. No network, no
 # Keychain, no home directory access.
@@ -62,10 +65,58 @@ REGION_RE = re.compile(r"^[a-z]{2}$")
 PACKS = {"freelance-fr", "freelance-eu", "travel", "research", "productivity", "public-data", "finance", "unassigned"}
 VERIFIED = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+CATALOG_VERSION_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}-\d+$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+TOOL_RE = re.compile(r"^[A-Za-z0-9_.-]{1,48}$")
+# A stdio install pin is all five or none: a partial pin is a hole, not data.
+PIN_FIELDS = ("version", "sha256", "command", "args", "permissions")
 
 errors = []
 seen_ids = {}
 counts = {"recommended": 0, "candidate": 0, "avoid": 0}
+pinned = 0
+
+
+def bad(condition, message):
+    if condition:
+        errors.append(message)
+
+
+def check_pin(label, server, transport):
+    """Return 1 for a complete stdio pin; record why a partial one is refused."""
+    if not any(field in server for field in PIN_FIELDS):
+        return 0
+    if transport != "stdio":
+        errors.append(f"{label}: pin fields are stdio-only, transport is {transport}")
+        return 0
+    for field in PIN_FIELDS:
+        bad(field not in server, f"{label}: pinned stdio entry is missing '{field}'")
+    version = server.get("version")
+    bad(not isinstance(version, str) or not VERSION_RE.match(version), f"{label}: version must look like 1.2.3")
+    sha = server.get("sha256")
+    bad(not isinstance(sha, str) or not SHA256_RE.match(sha), f"{label}: sha256 must be 64 lowercase hex characters")
+    command = server.get("command")
+    bad(not isinstance(command, str) or not command.startswith("/") or any(ch.isspace() for ch in command), f"{label}: command must be one absolute path")
+    args = server.get("args")
+    bad(not isinstance(args, list) or any(not isinstance(arg, str) for arg in args), f"{label}: args must be a list of strings")
+    permissions = server.get("permissions")
+    if not isinstance(permissions, dict):
+        errors.append(f"{label}: permissions must be a table")
+        return 0
+    bad(set(permissions) - {"tools", "network", "env"}, f"{label}: unknown permissions keys {sorted(set(permissions) - {'tools', 'network', 'env'})}")
+    tools = permissions.get("tools")
+    bad(not isinstance(tools, list) or not 1 <= len(tools) <= 32 or any(not isinstance(name, str) or not TOOL_RE.match(name) for name in tools), f"{label}: permissions.tools must list 1 to 32 tool names")
+    bad(not isinstance(permissions.get("network"), bool), f"{label}: permissions.network must be a boolean")
+    env = permissions.get("env")
+    bad(not isinstance(env, list) or any(not isinstance(name, str) or not ENV_RE.match(name) for name in env), f"{label}: permissions.env must list env NAMES")
+    return 0 if any(field not in server for field in PIN_FIELDS) else 1
+
+
+catalog_version = data.get("catalog_version")
+if not isinstance(catalog_version, str) or not CATALOG_VERSION_RE.match(catalog_version):
+    errors.append("catalog_version must look like 2026.11.02-1")
 
 for index, server in enumerate(servers, start=1):
     label = server.get("id") or f"entry #{index}"
@@ -123,6 +174,8 @@ for index, server in enumerate(servers, start=1):
     tool_count = server.get("tool_count")
     if not (tool_count == "unverified" or isinstance(tool_count, int) and tool_count >= 0):
         errors.append(f"{label}: tool_count must be a non-negative integer or 'unverified'")
+
+    pinned += check_pin(label, server, transport)
 
     if transport == "http" and not server.get("endpoint"):
         errors.append(f"{label}: transport is http but endpoint is missing")
@@ -185,6 +238,7 @@ print(
     "check-mcp-catalog: OK — "
     f"{len(servers)} servers across {len(pack_entries)} packs "
     f"({counts['recommended']} recommended, {counts['candidate']} candidate, "
-    f"{counts['avoid']} avoid) in {path} and {packs_path}"
+    f"{counts['avoid']} avoid; {pinned} pinned, {len(servers) - pinned} display-only) "
+    f"in {path} and {packs_path}"
 )
 PY

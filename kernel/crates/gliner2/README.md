@@ -50,8 +50,8 @@ in its module docs.
 
 ## Licence
 
-Apache-2.0, the workspace licence. The model is a separate work under its own
-licence (above).
+PolyForm-Noncommercial-1.0.0, the workspace licence. The model is a separate
+work under its own licence (above).
 
 ## Safety
 

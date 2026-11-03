@@ -41,7 +41,7 @@ These are enforced by code, not by prompts. A change that weakens one is rejecte
 | 7 | Every action leaves a replayable trace with the rule that decided it. |
 | 8 | There is always a stop: the STOP file, a kill switch and daily budgets. |
 | 9 | We attack our own builds: every fix becomes a permanent test, and only breakers close defects. |
-| 10 | Rust with rustls only, no `unsafe` in sensitive crates, Apache-2.0, EN/FR copy, E.164 phone numbers. |
+| 10 | Rust with rustls only, no `unsafe` in sensitive crates, PolyForm Noncommercial 1.0.0, EN/FR copy, E.164 phone numbers. |
 
 ## Build and test
 
@@ -246,4 +246,7 @@ Early and owner-first. The kernel has no releases and no stable API yet. Only
 
 ## Licence
 
-Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+**PolyForm Noncommercial 1.0.0.** Free for noncommercial use. Any commercial
+use needs a paid licence from the copyright holder — see
+[COMMERCIAL.md](COMMERCIAL.md). The full text is in [LICENSE](LICENSE) and the
+notices in [NOTICE](NOTICE).

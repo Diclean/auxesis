@@ -1,9 +1,13 @@
 # Contributing
 
-**Contributions are accepted.** The project is licensed under the Apache
-License 2.0 (see [`LICENSE`](./LICENSE)); a patch you send is accepted under
-the same licence. Issues and security reports are welcome — for vulnerabilities
-use [`SECURITY.md`](./SECURITY.md), not a public issue.
+**Contributions are accepted.** The project is licensed under the PolyForm
+Noncommercial License 1.0.0 (see [`LICENSE`](./LICENSE)); a patch you send is
+accepted under the same licence. By sending a contribution you grant the
+copyright holder the right to license that contribution commercially as well,
+on the same terms it can license the rest of the project; see
+[`COMMERCIAL.md`](./COMMERCIAL.md) for what counts as commercial use. Issues
+and security reports are welcome — for vulnerabilities use
+[`SECURITY.md`](./SECURITY.md), not a public issue.
 
 ## Build and test
 

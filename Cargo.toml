@@ -30,7 +30,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 authors = ["The Auxesis Authors"]
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 description = "Auxesis — your own always-on agents, in Rust."
 
 [workspace.dependencies]

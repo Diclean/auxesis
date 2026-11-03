@@ -12,9 +12,9 @@
 # tree and in its upstream repository.
 #
 # The crates of this workspace are Auxesis itself, so they are not in this
-# list: they are under the Apache-2.0 text in LICENSE. The components named
-# in NOTICE are not Rust crates; they keep their own licences, and the list
-# starts with them:
+# list: they are under the PolyForm Noncommercial 1.0.0 text in LICENSE. The
+# components named in NOTICE are not Rust crates; they keep their own
+# licences, and the list starts with them:
 #
 #   <name>: <licence>
 #

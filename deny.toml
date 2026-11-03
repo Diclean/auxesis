@@ -47,6 +47,11 @@ ignore = [
 # approves may be added (as a per-crate exception where that is narrower).
 # A new licence still needs that call: the blocking public check reports it,
 # it does not approve it.
+#
+# The list covers third-party dependencies only. The project's own crates are
+# licensed under PolyForm Noncommercial 1.0.0 and are allowed by the
+# per-crate exceptions below, never here: a dependency that ships under
+# PolyForm Noncommercial is not accepted.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -66,12 +71,85 @@ allow = [
 # (only `openssl-probe`, which is MIT OR Apache-2.0), so no crate needs it.
 confidence-threshold = 0.9
 
+# Our own crates. PolyForm Noncommercial 1.0.0 is the licence of this
+# repository (see LICENSE), so the workspace crates are allowed that licence
+# and nothing else. Every entry names one crate of this repository: a
+# dependency under the same licence stays rejected.
+[[licenses.exceptions]]
+crate = "aux-acp"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-brief"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-cli"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-crm"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-docs"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-engine"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-fakemail"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-google"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-invoices"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-imessage"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-mail"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-notify"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-providers"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-runtime"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "aux-store"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "auxd"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "gliner2-rs"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "kernel-broker"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "kernel-core"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "kernel-mcp"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "kernel-net"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "kernel-privacy"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
+crate = "privacy-eval"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+
 [licenses.private]
-# Every workspace member is `publish = false`, so the members' own licence
-# fields are not checked here. The owner has chosen Apache-2.0: the crates
-# declare it and the `LICENSE` file at the repository root carries the full
-# text. cargo-deny does not decide that.
-ignore = true
+# The private crates of this workspace (the ones with `publish = false`) are
+# checked too: they carry the same licence as the published crates,
+# including the in-tree `crates/aux-invoices`.
+ignore = false
 
 [bans]
 multiple-versions = "warn"

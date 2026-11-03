@@ -2,7 +2,7 @@
 name = "aux-invoices"
 version = "0.1.0"
 edition = "2021"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = ["The Auxesis Authors"]
 description = "Invoice e-invoice XML parsing and deterministic totals checks for Auxesis. Pure: no I/O, no network."
 publish = false

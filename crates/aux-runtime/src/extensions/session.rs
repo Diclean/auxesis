@@ -752,6 +752,9 @@ pub async fn pin_extension(
             .collect(),
         network: super::mount::network_pins(&installed.entry),
         secrets: installed.entry.secret_names(),
+        // The `[oauth]` endpoints are pinned with the tools: a same-version
+        // reinstall that moves the token URL must not pass the approval check.
+        oauth: installed.entry.oauth.clone(),
     };
     store_state(home, &state)?;
     session.stop().await;
@@ -786,6 +789,10 @@ pub async fn accept_current(
     state.version = installed.version.clone();
     state.network = super::mount::network_pins(&installed.entry);
     state.secrets = installed.entry.secret_names();
+    // The owner's yes also covers this build's OAuth endpoints (authorize and
+    // token URLs, client id, client secret name, scopes), including a table
+    // that an older pin never recorded.
+    state.oauth = installed.entry.oauth.clone();
     state.frozen = false;
     store_state(home, &state)?;
     session.stop().await;

@@ -100,6 +100,9 @@ allow = ["PolyForm-Noncommercial-1.0.0"]
 crate = "aux-google"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
+crate = "aux-invoices"
+allow = ["PolyForm-Noncommercial-1.0.0"]
+[[licenses.exceptions]]
 crate = "aux-imessage"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
@@ -144,10 +147,8 @@ allow = ["PolyForm-Noncommercial-1.0.0"]
 
 [licenses.private]
 # The private crates of this workspace (the ones with `publish = false`) are
-# checked too: they carry the same licence as the published crates. The
-# in-tree `crates/aux-invoices` is a vendored export of another repository
-# and keeps its own Apache-2.0 licence, so it resolves through the
-# allow-list above, not through an exception.
+# checked too: they carry the same licence as the published crates,
+# including the in-tree `crates/aux-invoices`.
 ignore = false
 
 [bans]

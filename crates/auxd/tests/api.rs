@@ -1430,6 +1430,92 @@ async fn send_turn_runs_the_engine_with_the_fake_provider() {
     t.stop();
 }
 
+/// WO-BUD-5: a tiny daily cap refuses the turn at the HTTP boundary. The
+/// provider is never called, the denial is audited once as `budget.denied`,
+/// and the receipt says `stopped_budget`.
+///
+/// The brief names the route `POST /v1/turn`; this daemon names it
+/// `POST /v1/threads/{id}/messages`. Everything else is asserted under the
+/// exact names the code uses (`budget_denied`, `budget.denied`,
+/// `stopped_budget`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tiny_budget_refuses_the_turn_before_the_provider() {
+    let provider = Arc::new(FakeProvider::echo("the provider must not run"));
+    let selected = Arc::clone(&provider);
+    let mut t = TestApi::start_with(move |home| {
+        // One input token a day: the first estimated prompt cannot fit.
+        let config = FAKE_CONFIG.replace(
+            "[[providers]]",
+            "[budgets.agents.main]\ntokens_in = 1\n\n[[providers]]",
+        );
+        std::fs::write(config_path(home), config).unwrap();
+        ApiOptions {
+            provider: Some(selected as Arc<dyn aux_providers::ChatProvider>),
+            ..fast_options()
+        }
+    })
+    .await;
+
+    let refused = post_auth(
+        &t,
+        "/v1/threads/main/messages",
+        r#"{"content":"a prompt larger than one token"}"#,
+    )
+    .await;
+    assert_error(&refused, 429, "budget_denied");
+    let body = refused.json();
+    assert_eq!(
+        body["error"]["message"], "the agent's daily budget denied this turn",
+        "the refusal keeps its stable sentence"
+    );
+    let detail = body["error"]["detail"]
+        .as_str()
+        .expect("budget_denied carries its detail");
+    assert!(detail.contains("tokens_in"), "{detail}");
+    assert!(detail.contains("0/1"), "{detail}");
+    assert!(
+        detail.contains(&t.store().local_day().unwrap()),
+        "the detail names the budget day: {detail}"
+    );
+
+    assert_eq!(
+        provider.request_count(),
+        0,
+        "the provider was called despite the refusal"
+    );
+
+    let denials = event_payloads(&t.home, "budget.denied");
+    assert_eq!(denials.len(), 1, "one audited denial: {denials:?}");
+    let denial: Value = serde_json::from_str(&denials[0]).unwrap();
+    assert_eq!(denial["agent"], "main");
+    assert_eq!(denial["kind"], "tokens_in");
+    assert_eq!(denial["limit"], 1);
+    assert_eq!(denial["spent"], 0);
+    assert_eq!(denial["reserved"], 0);
+
+    let receipts = get_auth(&t, "/v1/receipts?agent=main&limit=10").await;
+    assert_eq!(receipts.status, 200, "body: {}", receipts.body);
+    let receipts = receipts.json();
+    let receipt = receipts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|receipt| receipt["agent"] == "main")
+        .expect("a receipt for the refused turn");
+    assert_eq!(receipt["status"], "stopped_budget", "{receipt}");
+    assert_eq!(receipt["trigger"], "owner_message");
+    assert!(
+        receipt["could_not_verify"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some("budget denied")),
+        "the receipt keeps the refusal reason: {receipt}"
+    );
+
+    t.stop();
+}
+
 // ---------------------------------------------------------------------------
 // approvals
 // ---------------------------------------------------------------------------

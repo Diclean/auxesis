@@ -142,8 +142,19 @@ impl RoutineSchedule {
     /// DST gap folding two wall-clock times together) is skipped, so the
     /// floor holds on every transition, not only the sampled ones.
     pub fn next_after_run(&self, started: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+        self.next_after_run_in(started, now, Local)
+    }
+
+    /// [`Self::next_after_run`] in an explicit zone, for deterministic DST
+    /// tests. Basic interval schedules are elapsed-time and ignore the zone.
+    pub(crate) fn next_after_run_in<Tz: TimeZone + Copy>(
+        &self,
+        started: DateTime<Utc>,
+        now: DateTime<Utc>,
+        tz: Tz,
+    ) -> DateTime<Utc> {
         match self {
-            Self::Calendar(calendar) => calendar.next_after_run_in(started, now, Local),
+            Self::Calendar(calendar) => calendar.next_after_run_in(started, now, tz),
             Self::Basic(_) => self.next_after_utc(now),
         }
     }
@@ -536,6 +547,9 @@ fn view(job: &Job) -> JobJson {
         enabled: job.enabled,
         next_run_at: job.next_run_at.clone(),
         last_run_at: job.last_run_at.clone(),
+        // Write responses do not re-read the run history; GET /v1/jobs does.
+        health: crate::job_health::HealthState::Unknown.as_str().to_string(),
+        reason: None,
     }
 }
 

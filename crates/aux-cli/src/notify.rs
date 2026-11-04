@@ -58,7 +58,7 @@ pub fn run(args: NotifyArgs) -> ExitCode {
 /// `aux notify --test`: one `POST /v1/notify/test` over loopback, with the
 /// same endpoint and token rules as `aux brief`.
 fn run_test(home: &Path) -> ExitCode {
-    let lang = kernel_core::Config::load_or_create(&kernel_core::config_path(home))
+    let lang = aux_engine::config::load_or_create(&kernel_core::config_path(home))
         .map(|config| config.ui.language)
         .unwrap_or_default();
     let called = crate::brief::daemon_target(lang).and_then(|(url, token)| {
@@ -127,7 +127,7 @@ fn test_report(lang: Lang, value: &serde_json::Value) -> (String, bool) {
 /// The live privacy mode of `home`. A config that cannot be loaded is private,
 /// the same fail-closed rule the daemon applies.
 pub(crate) fn current_mode(home: &Path) -> PrivacyMode {
-    kernel_core::Config::load_or_create(&kernel_core::config_path(home))
+    aux_engine::config::load_or_create(&kernel_core::config_path(home))
         .map_or(PrivacyMode::Private, |config| config.privacy.mode)
 }
 

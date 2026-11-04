@@ -143,7 +143,9 @@ struct Rig {
 }
 
 impl Rig {
-    /// `config` is written before the first start; `None` lets it write a fresh one.
+    /// `config` is written before the first start; `None` writes the kernel's
+    /// own defaults, as a daemon did before the app named `main` the chief: an
+    /// older install, whose chief is `aux`.
     fn start(config: Option<&str>, provider: Recording, tools: Option<ToolRegistryHook>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
@@ -151,6 +153,7 @@ impl Rig {
         if let Some(config) = config {
             std::fs::write(config_path(&home), format!("version = 1\n{config}\n")).unwrap();
         }
+        #[allow(clippy::disallowed_methods)]
         kernel_core::Config::load_or_create(&config_path(&home)).unwrap();
         let text = std::fs::read_to_string(config_path(&home)).unwrap() + EXTRA;
         std::fs::write(config_path(&home), text).unwrap();

@@ -114,8 +114,7 @@ fn run_inner(args: ChatArgs) -> Result<(), ChatCliError> {
     let verified = ensure_home(&home)?;
     let config_file = verified.real_path()?.join("config.toml");
     // `aux chat` is the CLI's first run: a fresh home starts with the chief.
-    aux_engine::config::bootstrap_config(&verified)?;
-    let config = Config::load_or_create_verified(&verified)?;
+    let config = aux_engine::config::load_or_create_verified(&verified)?;
     let agent = args
         .agent
         .clone()
@@ -175,7 +174,7 @@ fn run_inner(args: ChatArgs) -> Result<(), ChatCliError> {
     let live_mode: kernel_core::privacy::ModeFn = std::sync::Arc::new(move || {
         aux_runtime::skills::effective_mode(
             kernel_core::privacy::PrivacyMode::from_config_or_private(
-                Config::load_or_create(&live_config).map(|config| config.privacy),
+                aux_engine::config::load_or_create(&live_config).map(|config| config.privacy),
             ),
             aux_runtime::skills::agent_mode_layer(&live_agent_dir),
         )
@@ -471,7 +470,7 @@ mod tests {
         let config_file = config_file.to_path_buf();
         Arc::new(move || {
             kernel_core::privacy::PrivacyMode::from_config_or_private(
-                Config::load_or_create(&config_file).map(|config| config.privacy),
+                aux_engine::config::load_or_create(&config_file).map(|config| config.privacy),
             )
         })
     }

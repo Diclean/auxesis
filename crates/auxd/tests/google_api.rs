@@ -272,7 +272,7 @@ async fn authenticated_settings_route_updates_the_background_language() {
     .await;
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert_eq!(response.json()["language"], "fr");
-    let config = kernel_core::Config::load_or_create(&config_path(&api.home)).unwrap();
+    let config = aux_engine::config::load_or_create(&config_path(&api.home)).unwrap();
     assert_eq!(config.ui.language, kernel_core::Lang::Fr);
 
     let unauthenticated = call(

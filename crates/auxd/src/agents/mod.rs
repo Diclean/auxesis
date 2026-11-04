@@ -1728,6 +1728,59 @@ level = "auto"
         assert!(validate_grants(home, "scout", &reader).is_ok());
     }
 
+    /// Run one daemon path that can create `config.toml` on `home`.
+    fn create_config_through(path: &str, home: &Path) {
+        let config = kernel_core::config_path(home);
+        match path {
+            "daemon and API load" => {
+                crate::api::load_config_verified(home).unwrap();
+            }
+            "job load by path" => {
+                aux_engine::config::load_or_create(&config).unwrap();
+            }
+            "job load by handle" => {
+                let verified = kernel_core::verified_home_or_verify(home).unwrap();
+                aux_engine::config::load_or_create_verified(&verified).unwrap();
+            }
+            "always-allow rule" => {
+                let rule =
+                    kernel_broker::Rule::new("main", "read_file", kernel_broker::Action::Allow);
+                aux_engine::config::append_rule(&config, &rule).unwrap();
+            }
+            other => panic!("no daemon path named {other}"),
+        }
+    }
+
+    /// Each daemon path that can create `config.toml` names `main` the chief,
+    /// so a new home starts with the chief alone; a home whose config names
+    /// `aux` stays an older install.
+    #[test]
+    fn a_daemon_path_that_creates_the_config_names_main_the_chief() {
+        let paths = [
+            "daemon and API load",
+            "job load by path",
+            "job load by handle",
+            "always-allow rule",
+        ];
+        for name in paths {
+            let dir = tempdir().unwrap();
+            create_config_through(name, dir.path());
+            assert_eq!(chief_id(dir.path()), CHIEF_AGENT, "{name}");
+            let ids: Vec<String> = registry(dir.path())
+                .unwrap()
+                .into_iter()
+                .map(|agent| agent.id)
+                .collect();
+            assert_eq!(ids, [CHIEF_AGENT], "{name}");
+
+            let dir = tempdir().unwrap();
+            let older = "version = 1\ndefault_agent = \"aux\"\n";
+            std::fs::write(dir.path().join("config.toml"), older).unwrap();
+            create_config_through(name, dir.path());
+            assert_eq!(chief_id(dir.path()), LEGACY_CHIEF, "{name}");
+        }
+    }
+
     fn calendar_file(home: &Path, file: &str) -> Option<Vec<u8>> {
         std::fs::read(home.join("agents").join("calendar").join(file)).ok()
     }

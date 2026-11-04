@@ -219,7 +219,7 @@ fn check_config(home: &Path) -> (Check, Option<Config>) {
     if let Ok(verified) = kernel_core::verified_home_or_verify(home) {
         let _ = aux_engine::config::bootstrap_config(&verified);
     }
-    match Config::load_or_create(&config_path(home)) {
+    match aux_engine::config::load_or_create(&config_path(home)) {
         Ok(config) => {
             let agent = if config.default_agent.is_empty() {
                 pick("aucun", "none").to_owned()

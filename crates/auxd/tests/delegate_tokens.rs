@@ -179,7 +179,7 @@ impl Rig {
         let config = "version = 1\ndefault_agent = \"aux\"\n\n[privacy]\nmode = \"private\"\n\n\
                       [[rules]]\nagent = \"aux\"\ntool = \"delegate\"\naction = \"allow\"\n";
         std::fs::write(config_path(&home), config).unwrap();
-        kernel_core::Config::load_or_create(&config_path(&home)).unwrap();
+        aux_engine::config::load_or_create(&config_path(&home)).unwrap();
         let text = std::fs::read_to_string(config_path(&home)).unwrap() + EXTRA;
         std::fs::write(config_path(&home), text).unwrap();
         std::fs::write(api::token_path(&home), format!("{TOKEN}\n")).unwrap();

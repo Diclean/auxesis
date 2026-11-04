@@ -172,8 +172,7 @@ fn configure(opened: &OpenedHome) -> anyhow::Result<(std::path::PathBuf, Config)
     let home = opened.home.clone();
     let verified = opened.verified.clone();
     let config_file = config_path(&home);
-    aux_engine::config::bootstrap_config(&verified)?;
-    let config = Config::load_or_create_verified(&verified)?;
+    let config = aux_engine::config::load_or_create_verified(&verified)?;
     // Default-silence the HTML/XML parser crates: html5ever logs one `WARN`
     // per foster-parented token, so a hostile 512 KiB page used to write
     // ~8.85 MiB into the launchd-redirected log file. The WhatsApp transport

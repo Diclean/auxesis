@@ -12,16 +12,67 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
-/// Create an app default only when this home has no config; never rewrite an
-/// existing installation. All remaining values are the kernel's defaults.
-pub fn bootstrap_config(home: &kernel_core::SandboxHome) -> Result<(), kernel_core::ConfigError> {
+/// The text of a new `config.toml`: the kernel's defaults with `main` as the
+/// chief. Every path that creates the file starts from it. A new file with no
+/// `default_agent` would read as an older install, whose chief is `aux`.
+pub fn new_config_text() -> Result<String, toml::ser::Error> {
     let config = kernel_core::Config {
         default_agent: aux_runtime::grants::CHIEF_AGENT.to_string(),
         ..kernel_core::Config::default()
     };
-    let text = toml::to_string_pretty(&config)?;
+    toml::to_string_pretty(&config)
+}
+
+/// Create an app default only when this home has no config; never rewrite an
+/// existing installation. An explicit `default_agent`, or an older install's
+/// file without one, stays exactly as it is.
+pub fn bootstrap_config(home: &kernel_core::SandboxHome) -> Result<(), kernel_core::ConfigError> {
+    let text = new_config_text()?;
     home.write_new(Path::new("config.toml"), text.as_bytes(), 0o600)?;
     Ok(())
+}
+
+/// Load the config of `home`, creating it first with [`bootstrap_config`].
+///
+/// The app loads through this or [`load_or_create`], never through the
+/// kernel's own load-or-create: that one writes the kernel's defaults, whose
+/// chief is `aux`, into a new home (the workspace `clippy.toml` refuses it).
+#[allow(clippy::disallowed_methods)]
+pub fn load_or_create_verified(
+    home: &kernel_core::SandboxHome,
+) -> Result<Config, kernel_core::ConfigError> {
+    bootstrap_config(home)?;
+    Config::load_or_create_verified(home)
+}
+
+/// [`load_or_create_verified`] for a config file given by path, as the
+/// kernel's path-based load takes it: a missing file is created from
+/// [`new_config_text`] (0600, never through a symlink), then loaded.
+#[allow(clippy::disallowed_methods)]
+pub fn load_or_create(path: &Path) -> Result<Config, kernel_core::ConfigError> {
+    create_config_file(path)?;
+    Config::load_or_create(path)
+}
+
+/// Create `path` from [`new_config_text`] unless something is already there.
+fn create_config_file(path: &Path) -> Result<(), kernel_core::ConfigError> {
+    let text = new_config_text()?;
+    if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    // `create_new` never follows a (dangling) symlink.
+    match options.open(path) {
+        Ok(mut file) => Ok(file.write_all(text.as_bytes())?),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Why no provider could be selected.
@@ -201,7 +252,8 @@ pub fn load_rules(path: &Path) -> Result<Vec<Rule>, RulesError> {
 /// lock, so writers in other processes are serialized too (security review P2).
 static APPEND_RULE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Append one `[[rules]]` entry to `path`, creating the file when missing.
+/// Append one `[[rules]]` entry to `path`, creating the file when missing
+/// (from [`new_config_text`], as every new config starts).
 ///
 /// Existing content is preserved byte for byte; the new rule is appended
 /// last, so it wins under the broker's last-match-wins evaluation.
@@ -228,7 +280,9 @@ pub fn append_rule(path: &Path, rule: &Rule) -> Result<(), RulesError> {
 
     let mut text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            new_config_text().map_err(|source| RulesError::Serialize { source })?
+        }
         Err(err) => return Err(RulesError::Io(err)),
     };
     if !text.is_empty() {
@@ -563,6 +617,68 @@ mod tests {
             load_rules(&path).unwrap(),
             vec![Rule::new("axis", "read_file", Action::Allow)]
         );
+        // It starts as every new config does: `main` is the chief.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let config: Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_agent, "main", "{text}");
+    }
+
+    /// A new config names `main` as its chief, whichever load creates it; an
+    /// existing file is never rewritten, so an explicit `aux` and an older
+    /// install's file without the key both stay exactly as they were.
+    #[test]
+    fn a_new_config_names_main_and_an_existing_one_is_kept_byte_for_byte() {
+        let existing = [
+            "version = 1\ndefault_agent = \"aux\"\n",
+            "version = 1\n\n[privacy]\nmode = \"open\"\n",
+        ];
+        for verified in [false, true] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let load = |path: &Path| {
+                if verified {
+                    let home = kernel_core::verified_home_or_verify(path.parent().unwrap());
+                    load_or_create_verified(&home.unwrap())
+                } else {
+                    load_or_create(path)
+                }
+            };
+            let config = load(&path).unwrap();
+            assert_eq!(config.default_agent, "main", "verified: {verified}");
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("default_agent = \"main\""), "{text}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "verified: {verified}");
+            }
+
+            for before in existing {
+                std::fs::write(&path, before).unwrap();
+                load(&path).unwrap();
+                append_rule(&path, &Rule::new("main", "shell", Action::Allow)).unwrap();
+                // Kept as it was; the rule is only added after it.
+                let after = std::fs::read_to_string(&path).unwrap();
+                assert!(after.starts_with(before), "{after}");
+                let raw: toml::Table = toml::from_str(&after).unwrap();
+                let named = raw.get("default_agent").and_then(|value| value.as_str());
+                let expected = before.contains("default_agent").then_some("aux");
+                assert_eq!(named, expected, "{after}");
+            }
+        }
+    }
+
+    /// The path-based load never writes through a symlink at `config.toml`.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_config_is_never_written_through_a_symlink() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("elsewhere.toml");
+        let path = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(load_or_create(&path).is_err());
+        assert!(!target.exists(), "the symlink target was created");
     }
 
     #[test]

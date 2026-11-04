@@ -118,7 +118,7 @@ fn rig(slow: mpsc::Sender<()>) -> Rig {
     std::fs::create_dir_all(&home).unwrap();
     let config = "version = 1\ndefault_agent = \"aux\"\n\n[privacy]\nmode = \"open\"\n";
     std::fs::write(config_path(&home), config).unwrap();
-    kernel_core::Config::load_or_create(&config_path(&home)).unwrap();
+    aux_engine::config::load_or_create(&config_path(&home)).unwrap();
     let providers = format!(
         "[[provider]]\nid = \"deepseek\"\nkind = \"openai\"\nbase_url = \"{base}/v1\"\n\
          models = [\"deepseek-flash\"]\nkey = \"env:AUX_KEY_TURN2\"\n\n\

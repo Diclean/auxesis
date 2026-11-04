@@ -134,7 +134,7 @@ impl JobRunner for DispatchJobRunner {
         // config; only `[ui].language` is re-read here so an edit to
         // config.toml takes effect on the next send without a restart.
         let mut config = self.config.clone();
-        if let Ok(live) = kernel_core::Config::load_or_create(&kernel_core::config_path(&self.home))
+        if let Ok(live) = aux_engine::config::load_or_create(&kernel_core::config_path(&self.home))
         {
             config.ui.language = live.ui.language;
         }

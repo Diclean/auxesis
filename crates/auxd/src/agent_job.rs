@@ -586,7 +586,7 @@ impl JobRunner for AgentJobRunner {
             Ok(verified) => verified,
             Err(err) => return self.fail(job, &format!("verified home unavailable: {err}")),
         };
-        let config = match Config::load_or_create_verified(&verified) {
+        let config = match aux_engine::config::load_or_create_verified(&verified) {
             Ok(config) => config,
             Err(err) => return self.fail(job, &format!("cannot load the config: {err}")),
         };
@@ -1921,7 +1921,7 @@ mod tests {
             "version = 1\nprivacy.mode = \"open\"\ndefault_agent = \"main\"\n",
         )
         .unwrap();
-        let config = Config::load_or_create(&config_file).unwrap();
+        let config = aux_engine::config::load_or_create(&config_file).unwrap();
         let runner = daemon_runner(
             &harness.home,
             &config_file,
@@ -1970,7 +1970,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let config = Config::load_or_create(&config_file).unwrap();
+        let config = aux_engine::config::load_or_create(&config_file).unwrap();
         let runner = daemon_runner(
             &harness.home,
             &config_file,
@@ -2027,7 +2027,7 @@ mod tests {
             },
         )
         .unwrap();
-        let config = Config::load_or_create(&config_file).unwrap();
+        let config = aux_engine::config::load_or_create(&config_file).unwrap();
         let runner = daemon_runner(
             &harness.home,
             &config_file,

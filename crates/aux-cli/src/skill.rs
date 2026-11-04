@@ -30,7 +30,7 @@ use kernel_broker::{
 };
 #[cfg(feature = "google")]
 use kernel_broker::{NativeTool, ToolCtx};
-use kernel_core::{clean_field, ensure_home, Config, SandboxHome};
+use kernel_core::{clean_field, ensure_home, SandboxHome};
 use kernel_privacy::{TokenMap, Vault};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 
@@ -79,7 +79,7 @@ pub fn run(args: SkillArgs) -> ExitCode {
         let agent = args.agent.or_else(|| {
             kernel_core::verified_home_or_verify(&home)
                 .ok()
-                .and_then(|home| Config::load_or_create_verified(&home).ok())
+                .and_then(|home| aux_engine::config::load_or_create_verified(&home).ok())
                 .map(|config| config.default_agent)
         });
         let Some(agent) = agent else {
@@ -447,7 +447,7 @@ fn run_skill(
             return ExitCode::FAILURE;
         }
     };
-    let config = match Config::load_or_create_verified(&verified) {
+    let config = match aux_engine::config::load_or_create_verified(&verified) {
         Ok(config) => config,
         Err(err) => {
             eprintln!("aux skill run: {err}");

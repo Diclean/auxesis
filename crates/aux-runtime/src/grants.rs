@@ -431,7 +431,13 @@ impl AgentGrants {
             .then(|| self.level_for_skill(tool))
             .flatten()
             .or_else(|| server.and_then(|skill| self.level_for_skill(&skill)))
-            .or_else(|| self.level_for_skill(&format!("{bucket}.access")));
+            .or_else(|| {
+                // The bucket: `mcp` / `connector`, or its `.access` form.
+                [bucket.to_string(), format!("{bucket}.access")]
+                    .iter()
+                    .filter_map(|skill| self.level_for_skill(skill))
+                    .max_by_key(|level| level.rank())
+            });
         match level {
             Some(ActionLevel::Auto) => Ok(GrantLevel::Allow),
             Some(ActionLevel::Ask) => Ok(GrantLevel::Ask),
@@ -905,6 +911,19 @@ mod tests {
         );
         assert!(chief
             .check_tool(CHIEF_AGENT, "mcp__evil__mail_read")
+            .is_err());
+        // The bare bucket skill (`mcp`, as main read it) opens every MCP tool.
+        let mut bucket = default_grants(CHIEF_AGENT).unwrap();
+        bucket.can_do.push(DoGrant {
+            skill: "mcp".to_string(),
+            level: ActionLevel::Auto,
+        });
+        assert_eq!(
+            bucket.action_for_tool(CHIEF_AGENT, "mcp__any__read_note"),
+            Ok(GrantLevel::Allow)
+        );
+        assert!(bucket
+            .check_tool(CHIEF_AGENT, "google_mail_send_x")
             .is_err());
         // A `never` on the domain word still refuses the explicit grant.
         chief.never.push("mail".to_string());

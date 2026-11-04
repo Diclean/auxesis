@@ -464,11 +464,13 @@ step_m2_brief() {
 
 # The agent the CLI runs skills as: `main`, open mode (the brief step already
 # switched the mode), the CRM tools, and the shipped log-interaction skill.
+# `main` is the chief: its tool list caps every agent (CHIEF-BASE-1), so it
+# also lists what the Calendar and Mail agents run in M4.
 step_m3_skill_setup() {
   STEP="m3-skill-setup"
   local agent_dir="$WORK/home/.auxesis/agents/main"
   mkdir -p "$agent_dir/skills"
-  printf -- '---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\ntools:\n  - crm.search\n  - crm.get\n  - crm.log_interaction\n  - docs.ingest\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nHero smoke assistant.\n' \
+  printf -- '---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\ntools:\n  - crm.search\n  - crm.get\n  - crm.log_interaction\n  - docs.ingest\n  - calendar.list_events\n  - calendar.create_event\n  - calendar.update_event\n  - reminders.list\n  - mail.list\n  - mail.search\n  - mail.thread\n  - mail.read\n  - mail.draft\n  - mail.send\n  - recall\n  - remember\n  - suggest_memory\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nHero smoke assistant.\n' \
     >"$agent_dir/agent.md"
   cp "$REPO_ROOT/crates/aux-runtime/src/skills/fixtures/skills/log-interaction.md" "$agent_dir/skills/log-interaction.md"
 }
@@ -885,6 +887,15 @@ step_m6_setup() {
   # rule is exact (MCP tools never ride a wildcard).
   mkdir -p "$agent_dir"
   printf '[[do]]\nskill = "mcp"\nlevel = "auto"\n' >"$agent_dir/grants.toml"
+  # The chief caps every agent (CHIEF-BASE-1): it must cover the MCP bucket
+  # and list both fixture tools too. M6 is the last step, so the chief's
+  # overlay here changes no earlier one.
+  local chief_dir="$WORK/home/.auxesis/agents/main"
+  printf '[[do]]\nskill = "mcp"\nlevel = "auto"\n' >"$chief_dir/grants.toml"
+  sed "s|^  - docs.ingest\$|  - docs.ingest\\
+  - mcp__${M6_SERVER}__${M6_READ}\\
+  - mcp__${M6_SERVER}__${M6_WRITE}|" "$chief_dir/agent.md" >"$chief_dir/agent.md.tmp" && mv "$chief_dir/agent.md.tmp" "$chief_dir/agent.md"
+  grep -q "mcp__${M6_SERVER}__${M6_WRITE}" "$chief_dir/agent.md" || red "could not list the M6 tools for the chief"
   printf '\n[[rules]]\nagent = "%s"\ntool = "mcp__%s__%s"\naction = "allow"\n' \
     "$M6_AGENT" "$M6_SERVER" "$M6_READ" >>"$config"
 }

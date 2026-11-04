@@ -5,8 +5,10 @@
 //! (`script`, `style`, `noscript`, `template`, `nav`, `aside`, …), treats a
 //! top-level `<header>`/`<footer>` as site chrome rather than an article
 //! candidate, prefers `main`/`article`/`[role=main]`, and otherwise scores
-//! containers by text volume, paragraph count and link density. It does
-//! **not** model CSS visibility; see the crate docs.
+//! containers by text volume, paragraph count and link density. The page
+//! path does **not** model CSS visibility; see the crate docs. The mail path
+//! ([`extract_body_text`]) also drops what an element hides through its own
+//! attributes or inline style, never through a style sheet.
 
 use html5ever::parse_document;
 use html5ever::tendril::{StrTendril, Tendril, TendrilSink};
@@ -47,34 +49,53 @@ pub fn extract_readable(html: &[u8]) -> Readable {
 /// not cancellable, so without this it would keep burning CPU after the
 /// caller has already received [`kernel_net::FetchError::Timeout`].
 pub(crate) fn extract_readable_before(html: &[u8], deadline: Instant) -> Readable {
-    extract_with_deadline(html, Deadline { limit: deadline }, choose_root)
+    extract_with_deadline(html, Deadline { limit: deadline }, Mode::Page)
 }
 
-/// [`extract_readable`] without the scorer: the whole `<body>`, with the same
-/// dropped elements and budget. A mail body is all content, so a greeting or
-/// a deadline next to a longer paragraph is never dropped like page chrome.
+/// [`extract_readable`] for a mail body: no scorer, the same dropped elements
+/// and budget, and none of the text a mail client hides through an element's
+/// own attributes or inline style ([`hides_subtree`], [`Paint`]). A mail body
+/// is all content, so a greeting or a deadline next to a longer paragraph is
+/// never dropped like page chrome.
+///
+/// Style sheets are not evaluated, so a `<style>` rule can still hide text
+/// from the reader: mail stays untrusted. `title` ignores visibility; mail
+/// callers use `text`.
 pub fn extract_body_text(html: &[u8]) -> Readable {
     let limit = Instant::now() + EXTRACT_WALL_BUDGET;
-    extract_with_deadline(html, Deadline { limit }, body_of)
+    extract_with_deadline(html, Deadline { limit }, Mode::Mail)
 }
 
-fn extract_with_deadline(
-    html: &[u8],
-    deadline: Deadline,
-    choose: fn(&Handle, &Deadline) -> Handle,
-) -> Readable {
+/// Which view of the document the walkers render.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// A web page: the scorer's container, structure only.
+    Page,
+    /// A mail body: the whole document, minus what elements hide inline.
+    Mail,
+}
+
+fn extract_with_deadline(html: &[u8], deadline: Deadline, mode: Mode) -> Readable {
     let (dom, parse_aborted) = parse(html, &deadline);
-    let root = choose(&dom.document, &deadline);
+    let root = match mode {
+        Mode::Page => choose_root(&dom.document, &deadline),
+        // `<html>`, not `<body>`: a hidden `<html>` hides the whole mail.
+        Mode::Mail => {
+            find_first(&dom.document, "html", 0, &deadline).unwrap_or_else(|| dom.document.clone())
+        }
+    };
     let readable = Readable {
         title: title_of(&dom.document, &root, &deadline),
-        text: normalize(&render(&root, &deadline)),
+        text: normalize(&render(&root, &deadline, mode)),
         // The walkers below stop at `MAX_DOM_DEPTH`; html5ever can build a
         // deeper tree than the walkers descend (implied `html`/`body`/`tbody`
         // nodes), so flag any content the walkers dropped instead of silently
         // reporting a complete fetch. An expired deadline also means some
         // stage stopped early, so it flags truncation even if nothing was
         // visibly dropped (fail closed).
-        truncated: parse_aborted || deadline.expired() || depth_exceeds(&dom.document, &deadline),
+        truncated: parse_aborted
+            || deadline.expired()
+            || depth_exceeds(&dom.document, &deadline, mode),
     };
     // Hostile pages can nest tens of thousands of elements; tear the DOM
     // down with an explicit stack so recursive `Drop` cannot overflow ours.
@@ -90,7 +111,7 @@ fn extract_with_deadline(
 /// top-level site chrome such as `<header>`/`<footer>` directly under
 /// `<body>`) are skipped here too, so a deep tree hidden inside skipped
 /// chrome does not report truncation when nothing was lost from the output.
-fn depth_exceeds(root: &Handle, deadline: &Deadline) -> bool {
+fn depth_exceeds(root: &Handle, deadline: &Deadline, mode: Mode) -> bool {
     let mut stack = vec![(root.clone(), 0usize)];
     while let Some((node, depth)) = stack.pop() {
         if depth > MAX_DOM_DEPTH {
@@ -102,7 +123,7 @@ fn depth_exceeds(root: &Handle, deadline: &Deadline) -> bool {
             return false;
         }
         if let Some(tag) = tag_name(&node) {
-            if walker_skips(&node, tag) {
+            if walker_skips(&node, tag, mode) {
                 continue;
             }
         }
@@ -142,7 +163,7 @@ const DROPPED: &[&str] = &[
     "script", "style", "noscript", "template", "head", "title", "meta", "link", "base", "nav",
     "aside", "iframe", "frame", "frameset", "svg", "math", "canvas", "object", "embed", "form",
     "button", "select", "option", "optgroup", "textarea", "input", "label", "audio", "video",
-    "source", "track", "map", "area", "dialog", "menu",
+    "source", "track", "map", "area", "dialog", "menu", "noembed", "noframes", "datalist",
 ];
 
 /// Block-level elements: each starts and ends its own paragraph.
@@ -216,11 +237,133 @@ fn is_site_chrome(node: &Handle) -> bool {
 }
 
 /// True when a walker must not descend into `node`: an element that never
-/// contributes readable content ([`is_dropped`]) or top-level site chrome.
+/// contributes readable content ([`is_dropped`]), top-level site chrome, or
+/// in a mail body an element hidden with its subtree ([`hides_subtree`]).
 /// All three walkers (`scan`, `render_into`, `depth_exceeds`) share this
 /// predicate so a skip rule cannot be taught to only one of them.
-fn walker_skips(node: &Handle, tag: &str) -> bool {
-    is_dropped(tag) || is_site_chrome(node)
+fn walker_skips(node: &Handle, tag: &str, mode: Mode) -> bool {
+    is_dropped(tag) || is_site_chrome(node) || (mode == Mode::Mail && hides_subtree(node))
+}
+
+/// True when a mail client shows nothing of `node` or its subtree, whatever
+/// the children say: the `hidden` attribute, `aria-hidden="true"`, or an
+/// inline `display:none`, `opacity:0`, or a zero `height`/`width` (or their
+/// `max-` forms) with an `overflow` that clips.
+fn hides_subtree(node: &Handle) -> bool {
+    attr(node, "hidden").is_some()
+        || attr(node, "aria-hidden").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+        || inline_style(node).gone
+}
+
+/// Inherited text visibility in a mail body. Unlike [`hides_subtree`], CSS
+/// lets a descendant undo these with its own declaration: responsive mail
+/// layouts wrap whole columns in `font-size:0` and set the size again
+/// inside, so they hide text, not elements.
+#[derive(Clone, Copy, Default)]
+struct Paint {
+    zero_font: bool,
+    invisible: bool,
+}
+
+impl Paint {
+    /// The paint inside `node`, an element.
+    fn under(self, node: &Handle) -> Paint {
+        let style = inline_style(node);
+        Paint {
+            zero_font: style.zero_font.unwrap_or(self.zero_font),
+            invisible: style.invisible.unwrap_or(self.invisible),
+        }
+    }
+}
+
+/// What one element's inline `style` says about visibility. Declarations are
+/// read literally: comments are skipped, but CSS escapes, `calc()` and
+/// `var()` are not evaluated. A hiding declaration beats a later one that
+/// shows (drop more, never less).
+#[derive(Default)]
+struct InlineStyle {
+    /// See [`hides_subtree`].
+    gone: bool,
+    /// `font-size`: `Some(true)` when zero, `Some(false)` for a size that
+    /// does not scale the parent's (`em`, `%`, `smaller` keep a zero).
+    zero_font: Option<bool>,
+    /// `visibility`: `Some(true)` for `hidden` or `collapse`.
+    invisible: Option<bool>,
+}
+
+fn inline_style(node: &Handle) -> InlineStyle {
+    let mut style = InlineStyle::default();
+    let Some(css) = attr(node, "style") else {
+        return style;
+    };
+    let css = without_comments(&css.to_ascii_lowercase());
+    let (mut zero_box, mut clipped) = (false, false);
+    for declaration in css.split(';') {
+        let Some((name, value)) = declaration.split_once(':') else {
+            continue;
+        };
+        let value = value.split('!').next().unwrap_or_default().trim();
+        match name.trim() {
+            "display" => style.gone |= value == "none",
+            "opacity" => style.gone |= number(value).is_some_and(|(n, _)| n <= 0.0),
+            "height" | "max-height" | "width" | "max-width" => {
+                zero_box |= number(value).is_some_and(|(n, _)| n == 0.0);
+            }
+            "overflow" | "overflow-x" | "overflow-y" => {
+                clipped |= value
+                    .split_whitespace()
+                    .any(|word| matches!(word, "hidden" | "clip" | "auto" | "scroll"));
+            }
+            "visibility" => match value {
+                "hidden" | "collapse" => style.invisible = Some(true),
+                "visible" | "initial" => style.invisible = style.invisible.or(Some(false)),
+                _ => {}
+            },
+            "font-size" => match font_zero(value) {
+                Some(true) => style.zero_font = Some(true),
+                shown => style.zero_font = style.zero_font.or(shown),
+            },
+            _ => {}
+        }
+    }
+    style.gone |= zero_box && clipped;
+    style
+}
+
+/// `css` with every `/* … */` comment replaced by a space.
+fn without_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        out.push(' ');
+        let comment = &rest[start + 2..];
+        rest = comment.find("*/").map_or("", |end| &comment[end + 2..]);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The number a CSS value starts with (`0`, `-1`, `.5`, `0px`) and its unit.
+fn number(value: &str) -> Option<(f64, &str)> {
+    let end = value
+        .find(|c: char| !matches!(c, '0'..='9' | '.' | '+' | '-'))
+        .unwrap_or(value.len());
+    Some((value[..end].parse().ok()?, &value[end..]))
+}
+
+/// [`InlineStyle::zero_font`] for one `font-size` value.
+fn font_zero(value: &str) -> Option<bool> {
+    let Some((size, unit)) = number(value) else {
+        let absolute = value.ends_with("small") || value.ends_with("large");
+        return (absolute || matches!(value, "medium" | "initial")).then_some(false);
+    };
+    let scales = matches!(unit, "em" | "%" | "ex" | "ch" | "cap" | "ic" | "lh");
+    if size == 0.0 {
+        Some(true)
+    } else {
+        (size > 0.0 && !scales).then_some(false)
+    }
 }
 
 /// Wall-clock budget for one whole extraction: feeding the parser, the
@@ -560,7 +703,7 @@ fn scan(node: &Handle, best: &mut Best, depth: usize, deadline: &Deadline) -> St
         },
         NodeData::Element { .. } => {
             let tag = tag_name(node).unwrap_or_default();
-            if walker_skips(node, tag) {
+            if walker_skips(node, tag, Mode::Page) {
                 return Stats::default();
             }
             let mut stats = Stats::default();
@@ -741,24 +884,37 @@ fn ensure_paragraph(out: &mut String) {
 
 /// Render `node`'s visible structure as text: blocks are separated by a blank
 /// line, list items get a `- ` bullet on their own line, table cells are
-/// pipe-separated.
-fn render(node: &Handle, deadline: &Deadline) -> String {
+/// pipe-separated. In a mail body, text the [`Paint`] hides is left out.
+fn render(node: &Handle, deadline: &Deadline, mode: Mode) -> String {
     let mut out = String::new();
-    render_into(node, &mut out, 0, deadline);
+    render_into(node, &mut out, 0, deadline, mode, Paint::default());
     out
 }
 
-fn render_into(node: &Handle, out: &mut String, depth: usize, deadline: &Deadline) {
+fn render_into(
+    node: &Handle,
+    out: &mut String,
+    depth: usize,
+    deadline: &Deadline,
+    mode: Mode,
+    paint: Paint,
+) {
     if depth > MAX_DOM_DEPTH || deadline.expired() {
         return;
     }
     match &node.data {
-        NodeData::Text { contents } => out.push_str(&contents.borrow()),
+        NodeData::Text { contents } if !paint.zero_font && !paint.invisible => {
+            out.push_str(&contents.borrow());
+        }
         NodeData::Element { .. } => {
             let tag = tag_name(node).unwrap_or_default();
-            if walker_skips(node, tag) {
+            if walker_skips(node, tag, mode) {
                 return;
             }
+            let paint = match mode {
+                Mode::Page => paint,
+                Mode::Mail => paint.under(node),
+            };
             if tag == "br" {
                 out.push('\n');
                 return;
@@ -778,7 +934,7 @@ fn render_into(node: &Handle, out: &mut String, depth: usize, deadline: &Deadlin
                 ensure_paragraph(out);
             }
             for child in node.children.borrow().iter() {
-                render_into(child, out, depth + 1, deadline);
+                render_into(child, out, depth + 1, deadline, mode, paint);
             }
             if matches!(tag, "td" | "th") {
                 out.push_str(" | ");
@@ -951,6 +1107,69 @@ mod tests {
             "Hello Camille, thanks for the call about the timeline.\n\n\
              Please send the signed contract by Friday at noon.\n\nRegards"
         );
+    }
+
+    /// Elements a mail client hides without a style sheet, each around a
+    /// payload, in the spellings a sender can type.
+    pub(super) const HIDDEN_INLINE: &[&str] = &[
+        "<div hidden>PAYLOAD</div>",
+        r#"<span aria-hidden=" TRUE ">PAYLOAD</span>"#,
+        r#"<div style="display:none">PAYLOAD</div>"#,
+        r#"<div style="COLOR:red; Display : None !important">PAYLOAD</div>"#,
+        r#"<div style="display:/* x */none">PAYLOAD</div>"#,
+        r#"<p style="visibility:hidden; visibility:visible">PAYLOAD</p>"#,
+        r#"<span style="font-size:0px">PAYLOAD</span>"#,
+        r#"<div style="font-size:0"><b style="font-size:1.5em">PAYLOAD</b></div>"#,
+        r#"<div style="opacity:.0">PAYLOAD</div>"#,
+        r#"<div style="max-height:0px;overflow:hidden">PAYLOAD</div>"#,
+        r#"<div style="display:none"><p style="display:block">PAYLOAD</p></div>"#,
+        "<noembed>PAYLOAD</noembed>",
+    ];
+
+    #[test]
+    fn body_text_drops_text_hidden_by_attributes_and_inline_style() {
+        for hidden in HIDDEN_INLINE {
+            let html = format!("<body><p>Visible greeting.</p>{hidden}<p>Visible end.</p></body>");
+            let text = extract_body_text(html.as_bytes()).text;
+            assert_eq!(text, "Visible greeting.\n\nVisible end.", "{hidden}");
+        }
+        for whole in [
+            "<html hidden><body><p>PAYLOAD</p></body></html>",
+            r#"<body style="display:none"><p>PAYLOAD</p></body>"#,
+            "<frameset></frameset><noframes>PAYLOAD</noframes>",
+        ] {
+            assert_eq!(extract_body_text(whole.as_bytes()).text, "", "{whole}");
+        }
+    }
+
+    #[test]
+    fn body_text_keeps_text_a_descendant_shows_again() {
+        // Responsive mail layouts zero the font size around inline-block
+        // columns and set it again inside; `visibility` is undone the same way.
+        let html = r#"<body><div style="font-size:0px"><div style="font-size:13px">
+            Order 1042 ships on Monday.</div></div>
+            <div style="visibility:hidden"><span style="visibility:visible">Total: 18 EUR</span></div>
+            <p style="display:block;opacity:0.5;height:0">Kept: no clipping overflow.</p></body>"#;
+        let text = extract_body_text(html.as_bytes()).text;
+        for shown in ["ships on Monday.", "Total: 18 EUR", "Kept: no clipping"] {
+            assert!(text.contains(shown), "{shown:?} missing from {text:?}");
+        }
+    }
+
+    #[test]
+    fn hostile_inline_styles_stay_within_the_budget() {
+        // One huge style attribute with an unclosed comment, then deep
+        // nesting of zero-size wrappers: no panic, and the deadline holds.
+        let style = "display:block;/*".repeat(40_000);
+        let mut html = format!(r#"<p style="{style}">big</p>"#);
+        html.push_str(&r#"<div style="font-size:0"><span aria-hidden="false">"#.repeat(20_000));
+        html.push_str("TAIL");
+        let started = Instant::now();
+        let readable = extract_body_text(html.as_bytes());
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+        assert!(readable.truncated);
+        assert!(!readable.text.contains("TAIL"), "{:?}", readable.text);
     }
 
     #[test]
@@ -1836,6 +2055,30 @@ mod proptests {
             let readable = extract_readable(text.as_bytes());
             prop_assert_eq!(readable.text, text);
             prop_assert_eq!(readable.title, String::new());
+        }
+
+        /// Text inside a hidden wrapper never renders in a mail body, at any
+        /// nesting depth, while the visible text around it always does.
+        #[test]
+        fn hidden_wrappers_never_render(
+            hidden in proptest::sample::select(super::tests::HIDDEN_INLINE),
+            depth in 0usize..64,
+            words in "[a-z]{1,12}( [a-z]{1,12}){0,4}",
+        ) {
+            let open = "<div><span>".repeat(depth);
+            let html = format!("<body>{open}<p>{words}</p>{hidden}<p>{words}</p></body>");
+            let text = extract_body_text(html.as_bytes()).text;
+            prop_assert!(!text.contains("PAYLOAD"), "{}", text);
+            prop_assert!(text.contains(&words), "{}", text);
+        }
+
+        /// Arbitrary inline styles never panic and stay within the budget.
+        #[test]
+        fn arbitrary_inline_styles_never_panic(style in "[ -~]{0,512}") {
+            let html = format!("<p style=\"{}\">text</p>", style.replace('"', "&quot;"));
+            let started = Instant::now();
+            let _ = extract_body_text(html.as_bytes());
+            prop_assert!(started.elapsed() < Duration::from_secs(5));
         }
 
         /// An already-expired deadline is a clean refusal: nothing rendered,

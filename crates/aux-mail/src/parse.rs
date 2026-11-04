@@ -98,7 +98,8 @@ pub fn parse_message(raw: &RawMail) -> Result<MailItem, MailError> {
 
 /// The text of one body part: a text part as decoded, an HTML part through
 /// the runtime's extractor, which drops `noscript`, `iframe` and the other
-/// elements a reader never sees (`mail-parser`'s own conversion keeps them).
+/// elements a reader never sees (`mail-parser`'s own conversion keeps them),
+/// and text hidden by an element's own attributes or inline style.
 /// `None` for inline media.
 fn body_part_text(part: MessagePart<'_>) -> Option<String> {
     match part.kind() {

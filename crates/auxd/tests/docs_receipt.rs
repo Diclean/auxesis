@@ -1,4 +1,4 @@
-//! DOC-COLLECT-2: the demo receipt is a real PDF, and the extractor reads it.
+//! The demo receipt is a real PDF, and the extractor reads it.
 //!
 //! The demo mailbox used to attach a `%PDF-1.4` header followed by plain
 //! text: not a PDF at all, so the Mac bridge (PDFKit) refused it and the

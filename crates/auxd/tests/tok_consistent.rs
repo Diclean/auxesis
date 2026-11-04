@@ -1,6 +1,6 @@
-//! TOK-CONSISTENT-1: one value is one placeholder (every turn, chief and Clients)
-//! and no `⟦…⟧` reaches the owner; the owner's live T1–T3 of 2026-10-18. Names
-//! pass as written since NAMES-OFF (owner, 2026-10-19); addresses are the values.
+//! One value is one placeholder (every turn, chief and Clients)
+//! and no `⟦…⟧` reaches the owner. Names
+//! pass as written; addresses are the values.
 
 mod common;
 
@@ -48,7 +48,7 @@ const PEOPLE: [&str; 3] = ["Mira Fictive", "Jonas Sample", "Api Key"];
 
 /// Chief: delegate the owner's first person, then repeat Clients with a forged
 /// token. Clients: read the card, answer it, recall its first task's person;
-/// with `echo`, also echo and look up the chief's last address (seal r2 P2b).
+/// with `echo`, also echo and look up the chief's last address.
 #[derive(Default)]
 struct Script {
     bodies: StdMutex<Vec<Body>>,
@@ -260,9 +260,8 @@ async fn one_value_is_one_placeholder_across_turns_and_agents() {
     );
 }
 
-/// Seal r2: detection reads the text as written (P1, owner text and tool
-/// result), names stay as written (P2a, NAMES-OFF), and a token the model only
-/// echoes never resolves for a tool (P2b).
+/// Detection reads the text as written (owner text and tool result), names stay
+/// as written, and a token the model only echoes never resolves for a tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_carried_token_never_hides_a_secret_or_resolves_an_echo_and_names_stay() {
     let brain = Arc::new(Script {

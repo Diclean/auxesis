@@ -1,4 +1,4 @@
-//! WO-TOK-6: an ACP turn in private mode. The agent is the `aux-acp` fake agent
+//! An ACP turn in private mode. The agent is the `aux-acp` fake agent
 //! (scenario `private-probe`): it records what it was sent, reads a workspace file
 //! through the host and answers with both. Nothing here touches the network.
 //!
@@ -133,7 +133,7 @@ fn a_private_acp_turn_shows_the_agent_tokens_and_the_owner_the_values() {
     let run = run("private");
 
     // D1 and D2: the agent was sent no raw value, in the prompt or in the file.
-    // A name is no hidden value (NAMES-OFF, owner 2026-10-19).
+    // A name is not a hidden value.
     assert!(run.received.contains(NAME), "{}", run.received);
     for value in [EMAIL, IBAN, PHONE] {
         assert!(

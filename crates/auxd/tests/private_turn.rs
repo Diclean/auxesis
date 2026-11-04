@@ -87,7 +87,7 @@ fn a_private_turn_completes_without_raw_text_and_the_next_turn_sees_it() {
     );
 }
 
-/// Security-review B P2-1 at the app level: K10 masks the sensitive values of a turn
+/// The sensitive values of a turn
 /// (a CN resident ID, an EN health term, a bare CN mobile, an API key and a
 /// `name=value` secret) before the provider sees it.
 #[test]
@@ -134,7 +134,7 @@ fn a_private_turn_keeps_sensitive_values_from_the_provider() {
     }
 }
 
-/// Security-review B r2 at the app level: K13 masks English health inflections,
+/// English health inflections,
 /// secrets written in prose and UK National Insurance numbers before the
 /// provider sees them.
 #[test]
@@ -184,7 +184,7 @@ fn a_private_turn_keeps_english_prose_secrets_and_health_from_the_provider() {
     }
 }
 
-/// Security-review B r3 at the app level: K14 masks a passport machine-readable zone
+/// A passport machine-readable zone is masked
 /// whole, a Markdown-decorated password key and a singular health term.
 #[test]
 fn a_private_turn_keeps_mrz_lines_decorated_secrets_and_singular_health_from_the_provider() {
@@ -221,7 +221,7 @@ fn a_private_turn_keeps_mrz_lines_decorated_secrets_and_singular_health_from_the
     }
 }
 
-/// Security-review B r4 at the app level: K15 masks the values of decorated and
+/// The values of decorated and
 /// curly-quoted secret keys.
 #[test]
 fn a_private_turn_keeps_decorated_and_curly_quoted_secrets_from_the_provider() {

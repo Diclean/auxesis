@@ -1,4 +1,4 @@
-//! MEM-FORGET-HANG (live 2026-10-20): a saved word is listed and can be
+//! A saved word is listed and can be
 //! deleted from the list; a `forget` always asks, even after nothing but the
 //! owner's own memory, and its card stops waiting before the client gives up;
 //! a "saved" with no write is corrected; an unanswered card is said plainly.

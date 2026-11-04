@@ -1,4 +1,4 @@
-//! KERNEL-ATOMIC-2 probe floor: every input of #100's six seal rounds, on the
+//! Probe floor: every known evasion input, on the
 //! real path of a delegated tool result: owner → chief gate → handed token →
 //! Mail's search → sanitizer → gate → carry (retokenize) → gate → provider.
 //! - `no_worse_than_main::*`: no raw run of a marked value (card, IBAN, ID, key,
@@ -292,7 +292,7 @@ fn goal(owner: &str, found: &str) {
     assert_eq!(answer, whole, "the owner's copy");
 }
 
-/// The seal r1 prefix: a long URL right before the value.
+/// A long URL right before a value.
 fn p() -> String {
     format!("https://e.test/{}/", "x".repeat(110))
 }
@@ -306,7 +306,7 @@ fn key() -> String {
 const CARD: &str = "Find the mail about card «4111 1111 1111 1111»";
 const DIGITS: &str = "4111111111111111";
 
-/// The TOK-DELEGATE-4 sweep of #100 (its IP address left out: not a covered class).
+/// The sweep of values (its IP address left out: not a covered class).
 const VALUES: &str = concat!(
     "4111111111111111|4111 1111 1111 1111|4111-1111-1111-1111|4111.1111.1111.1111|",
     "4111/1111/1111/1111|4012888888881881|5555 5555 5555 4444|FR7630006000011234567890189|",
@@ -315,7 +315,7 @@ const VALUES: &str = concat!(
 );
 
 /// Each sweep value beside the next one (often its other spelling), in one of
-/// the four wrappers of #100's property test.
+/// four wrappers.
 fn sweep() -> Vec<(String, String)> {
     let values = VALUES.split('|');
     let wrappers = [
@@ -410,11 +410,11 @@ macro_rules! probes {
 const NEWEST: &str = "Find my newest mail.";
 
 probes! {
-    // r1 (c68699bf): one placeholder for two values behind a long URL.
+    // One placeholder for two values behind a long URL.
     r1_slashed_and_plain_card: one(NEWEST, format!("{0}«4222222222222/006» and {0}«4222222222222006»", p()));
     r1_two_passport_spellings: one(NEWEST, format!("{0}Q/«QXZ1234567» and {0}QQ/«XZ1234567»", p()));
     r1_two_cards_one_slash: one(NEWEST, format!("{}«4123456789012349»/«4532015112830366»", p()));
-    // #100's own tests (TOK-DELEGATE-4 r2): each split before.
+    // Each split before.
     url_then_card_twice: one(NEWEST, format!("https://e.test/{0}«4111111111111111» and https://e.test/{0}«4012888888881881»", "x".repeat(98)));
     names_then_iban: one(NEWEST, format!("{}«FR7630006000011234567890189»", "Mara Quell ".repeat(8)));
     card_pairs_126_spaces_apart: one(NEWEST, format!("pay «{}» now", ["41", "23", "45", "67", "89", "01", "23", "49"].join(&" ".repeat(126))));
@@ -422,22 +422,22 @@ probes! {
     two_cards_a_blank_apart: one(NEWEST, "«4111111111111111» «4012888888881881»".into());
     phone_two_spellings_one_slash: one(NEWEST, "«06.12.34.56.78»/«06 12 34 56 78»".into());
     values_in_wrappers: sweep();
-    // r2 (6081f81d): a handed card or key met in another spelling.
+    // A handed card or key met in another spelling.
     r2_handed_card_spaced_and_plain: one(CARD, format!("«4111 1111 1111 1111» and «{DIGITS}»"));
     r2_handed_key_and_its_lowercase: one(&format!("Find the mail with key «{}»", key()), format!("«{}» and «{}»", key(), key().to_lowercase()));
-    // r3 (b26021bb): a handed address as two passwords; a key with a tail.
+    // A handed address as two passwords; a key with a tail.
     r3_handed_address_as_two_passwords: one("Find the mail from «Mara@Quell.test»", "password=«Mara@Quell.test»\npassword=«mara@quell.test»".into());
     r3_handed_key_and_key_with_tail: one(&format!("Find the mail with key «{}»", key()), format!("«{0}» and «{0}-extra»", key()));
     r3_unlisted_suffix_token_beside_an_address: one("Find the mail from «mara@quell.test»", "⟦EMAIL_SECRET_012345678901⟧ wrote from «mara@quell.test»".into());
-    // r4 (b26021bb): a card before slash or dot digits.
+    // A card before slash or dot digits.
     r4_card_then_slash_digits: one(NEWEST, format!("«{DIGITS}»/1/2/3/4/5"));
     r4_card_then_dot_digits: one(NEWEST, format!("«{DIGITS}».1.2.3.4.5"));
     r4_dotted_digit_run: one(NEWEST, "«4.2.2.2-222.22.22.22»".into());
-    // r5 (c7a85d21): the handed card in odd whitespace, or between digits.
+    // The handed card in odd whitespace, or between digits.
     r5_handed_card_double_spaced: one(CARD, format!("«{}»", DIGITS.chars().map(String::from).collect::<Vec<_>>().join("  ")));
     r5_handed_card_triple_newlines: one(CARD, "«4111\n\n\n1111\n\n\n1111\n\n\n1111»".into());
     r5_spaced_card_between_digits: one(NEWEST, "7/«4111 1111 1111 1111»/9".into());
-    // r6 (89b6cd56): a handed ID or IBAN met lower-cased in odd whitespace.
+    // A handed ID or IBAN met lower-cased in odd whitespace.
     r6_handed_id_lowercase_spaced: one("Find the mail about passport «QXZ1234567»", "«qxz  1234567»".into());
     r6_handed_iban_lowercase_newlines: one("Find the mail about IBAN «FR76 3000 6000 0112 3456 7890 189»", format!("«{}»", "fr76 3000 6000 0112 3456 7890 189".replace(' ', "\n\n\n")));
 }

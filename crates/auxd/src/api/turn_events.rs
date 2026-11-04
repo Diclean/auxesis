@@ -925,7 +925,7 @@ mod tests {
 
     #[test]
     fn a_panic_after_settle_keeps_the_usage_and_writes_no_receipt() {
-        // P2-B: receipts cover the normal lifecycle only. If the turn task
+        // Receipts cover the normal lifecycle only. If the turn task
         // panics after the engine settled (so unwinding drops the sink and
         // `done` — which persists the receipt — never runs), the already
         // committed usage must survive, count in the daily budget, and leave

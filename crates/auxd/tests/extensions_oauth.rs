@@ -617,8 +617,8 @@ async fn a_pending_flow_dies_on_upgrade_or_disconnect() {
     api.stop();
 }
 
-// WO EXT-OAUTH-ENDPOINT-PIN (#528): the pin covered the version, the tool
-// network hosts and the secret names, but not `[oauth]`. A same-version
+// The install pin covers the version, the tool network hosts and the secret
+// names, but not `[oauth]`. A same-version
 // reinstall that moves only the token URL must be refused before the
 // authorization code (and a possible client secret) reaches the moved endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

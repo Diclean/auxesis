@@ -1,4 +1,4 @@
-//! M2-HOME acceptance: the daily-use demo mailbox (`aux-fakemail demo`) served
+//! The daily-use demo mailbox (`aux-fakemail demo`) served
 //! over loopback, one brief run through `LocalBriefSource`.
 //!
 //! The brief lists three possible new clients (two requests and a referral),

@@ -1,4 +1,4 @@
-//! TOK-2: a scheduled agent job in private mode runs exactly like a private
+//! A scheduled agent job in private mode runs exactly like a private
 //! chat turn (F1). The real `auxd` binary is spawned in a throwaway home with a
 //! loopback OpenAI-compatible provider that records every request body. The
 //! prompt carries a fictional contact's name, an e-mail address, an IBAN and a
@@ -249,7 +249,7 @@ fn a_private_job_sends_no_raw_value_and_keeps_the_rehydrated_result_local() {
     let bodies = provider.bodies();
     assert!(!bodies.is_empty(), "the job sent no provider request");
     for body in &bodies {
-        // A name is no hidden value (NAMES-OFF, owner 2026-10-19).
+        // A name is not a hidden value.
         for raw in [EMAIL, IBAN, PHONE, "6 12 34 56 78"] {
             assert!(
                 !body.contains(raw),

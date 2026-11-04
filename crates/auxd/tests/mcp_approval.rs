@@ -1,4 +1,4 @@
-//! M6-2 acceptance: one approval installs an MCP server.
+//! One approval installs an MCP server.
 //!
 //! The fixture is a local shebang stdio server that writes one line per spawn
 //! into its sandbox temp dir. No real MCP server, no network: the daemon runs
@@ -745,8 +745,8 @@ async fn a_pack_never_approves_an_existing_server_outside_its_read_only_tools() 
     api.shutdown();
 }
 
-/// M6-3 (#524 P3): a new catalog release is a changed pin, so the approval
-/// preview hash moves and the old approval no longer matches.
+/// A new catalog release is a changed pin, so the approval preview hash moves
+/// and the old approval no longer matches.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_new_catalog_version_moves_the_approval_hash() {
     let _serial = SERIAL.lock().await;
@@ -799,9 +799,9 @@ async fn a_new_catalog_version_moves_the_approval_hash() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_swapped_non_catalog_binary_is_refused_at_approve_and_never_spawns() {
-    // Break-It P2-1: a non-catalog stdio approval used to omit the program's
-    // SHA, so `approve` re-read whatever file was there. The preview now
-    // shows and binds that SHA; a swap between preview and click is stale.
+    // A non-catalog stdio approval binds the program's SHA, so `approve` never
+    // re-reads whatever file is there; the preview shows and binds that SHA,
+    // and a swap between preview and click is stale.
     let _serial = SERIAL.lock().await;
     let dir = tempfile::tempdir_in(temp_base()).unwrap();
     let (home, token) = write_home(dir.path());
@@ -876,9 +876,8 @@ async fn a_swapped_non_catalog_binary_is_refused_at_approve_and_never_spawns() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approve_requires_an_agent_from_the_previewed_allowlist() {
-    // Break-It P2-2: the preview only listed the merged tools, and the approve
-    // `agent` only reached the ledger. It now shows the per-agent map, and an
-    // agent outside that map is refused.
+    // The preview shows the per-agent map, and an approve `agent` outside it
+    // is refused before the server is enabled.
     let _serial = SERIAL.lock().await;
     let dir = tempfile::tempdir_in(temp_base()).unwrap();
     let (home, token) = write_home(dir.path());
@@ -994,9 +993,9 @@ async fn approve_requires_an_agent_from_the_previewed_allowlist() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn legacy_confirm_only_confirms_an_approved_launch() {
-    // Break-It P2-3: the legacy /confirm minted a full install approval from a
-    // preview that shows no tools or agents. It now refuses with `use_approve`
-    // unless the server already carries a valid install approval.
+    // The legacy /confirm refuses with `use_approve` unless the server already
+    // carries a valid install approval; it never mints one from a preview that
+    // shows no tools or agents.
     let _serial = SERIAL.lock().await;
     let dir = tempfile::tempdir_in(temp_base()).unwrap();
     let (home, token) = write_home(dir.path());

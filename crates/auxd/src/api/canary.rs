@@ -1,4 +1,4 @@
-//! Test-only canary corpus (DAEMON-HARDEN-1 fix r2).
+//! Test-only canary corpus.
 //!
 //! Every surface test drives these values through its display function, so a
 //! surface cannot regress to a private scrubber. The vendor-shaped entries are
@@ -11,7 +11,7 @@ pub(crate) fn canaries() -> Vec<(String, String)> {
     let mut cases: Vec<(String, String)> = Vec::new();
     let mut add = |raw: String, secret: &str| cases.push((raw, secret.to_string()));
 
-    // --- round 1: assignments, prefixes, PEM, JWT, env ---
+    // --- assignments, prefixes, PEM, JWT, env ---
     add("DB_PASSWORD=CANARYSECRET123".into(), "CANARYSECRET123");
     add(
         "MY_SERVICE_PASSWORD=CANARYSECRET123".into(),
@@ -78,7 +78,7 @@ pub(crate) fn canaries() -> Vec<(String, String)> {
     );
     add("secret=CANARYsecretword52".into(), "CANARYsecretword52");
 
-    // --- B2-01: colon/`:=`/JSON/YAML/ini spellings ---
+    // --- colon/`:=`/JSON/YAML/ini spellings ---
     add(
         "{\"api_key\":\"CANARYJSONKEY0001\"}".into(),
         "CANARYJSONKEY0001",
@@ -108,7 +108,7 @@ pub(crate) fn canaries() -> Vec<(String, String)> {
         "CANARYE2EJSON01",
     );
 
-    // --- B2-02: URL/URI userinfo + url/uri/webhook names ---
+    // --- URL/URI userinfo + url/uri/webhook names ---
     add(
         "postgres://app:CANARYE2EURL04@db.internal:5432/prod".into(),
         "CANARYE2EURL04",
@@ -145,7 +145,7 @@ pub(crate) fn canaries() -> Vec<(String, String)> {
         "CANARYHOOK0004",
     );
 
-    // --- B2-03: credential headers ---
+    // --- credential headers ---
     add(
         "X-Api-Key: CANARYE2EHDR06ABCDEFGHIJ".into(), // gitleaks:allow
         "CANARYE2EHDR06ABCDEFGHIJ",
@@ -167,13 +167,13 @@ pub(crate) fn canaries() -> Vec<(String, String)> {
         "CANARYE2EHDR08abcdef",
     );
 
-    // --- B2-05: passphrase / credential(s) ---
+    // --- passphrase / credential(s) ---
     add("GPG_PASSPHRASE=CANARYE2EPASS08".into(), "CANARYE2EPASS08");
     add("SSH_PASSPHRASE=CANARYE2EPASS09".into(), "CANARYE2EPASS09");
     add("AWS_CREDENTIALS=CANARYE2ECRED10".into(), "CANARYE2ECRED10");
     add("DB_CREDENTIAL=CANARYE2ECRED11".into(), "CANARYE2ECRED11");
 
-    // --- B2-06: PEM labels + PuTTY ---
+    // --- PEM labels + PuTTY ---
     add(
         format!(
             "-----BEGIN private key-----\n{}\n-----END private key-----",
@@ -189,7 +189,7 @@ pub(crate) fn canaries() -> Vec<(String, String)> {
         "CANARYPUTTY0004abcdefgh",
     );
 
-    // --- B2-09/B2-11: shape bands and error-body URL credentials ---
+    // --- shape bands and error-body URL credentials ---
     add("Bearer abcdefghijklmnopqrst".into(), "abcdefghijklmnopqrst");
     add(
         "Authorization: 0123456789abcdef0123456789abcdef".into(),
@@ -266,10 +266,10 @@ pub(crate) fn false_positives() -> Vec<(String, String)> {
     cases
 }
 
-/// Round-3 evasion canaries (78): the shapes security-review round 3 landed on six
-/// client surfaces — pretty-printed and escaped JSON, invisible-character and
-/// fullwidth obfuscation, bare cookie jars, percent-encoded DSNs and the
-/// daemon log's own spellings.
+/// Evasion canaries for the shapes six client surfaces must survive —
+/// pretty-printed and escaped JSON, invisible-character and fullwidth
+/// obfuscation, bare cookie jars, percent-encoded DSNs and the daemon log's
+/// own spellings.
 ///
 /// Values are synthetic and assembled at runtime where a vendor prefix could
 /// look like a committed credential.
@@ -277,7 +277,7 @@ pub(crate) fn round_3_canaries() -> Vec<(String, String)> {
     let mut cases: Vec<(String, String)> = Vec::new();
     let mut add = |raw: String, secret: &str| cases.push((raw, secret.to_string()));
 
-    // --- B3-01: a value on the line after its key/separator (14) ---
+    // --- a value on the line after its key/separator (14) ---
     add(
         "{\n  \"api_key\":\n    \"CANARY_E3E_MULTI01\"\n}".into(),
         "CANARY_E3E_MULTI01",
@@ -335,7 +335,7 @@ pub(crate) fn round_3_canaries() -> Vec<(String, String)> {
         "CANARY_E3E_MULTI14",
     );
 
-    // --- B3-02: escaped quotes, nesting, JSON inside JSON (12) ---
+    // --- escaped quotes, nesting, JSON inside JSON (12) ---
     add(
         "{\"detail\":\"{\\\"api_key\\\":\\\"CANARYJSONKEY0001\\\"}\"}".into(),
         "CANARYJSONKEY0001",
@@ -386,7 +386,7 @@ pub(crate) fn round_3_canaries() -> Vec<(String, String)> {
         "CANARY_E3E_NEST13",
     );
 
-    // --- B3-03: invisible/format characters (12) ---
+    // --- invisible/format characters (12) ---
     add("token\u{200b}=CANARY_E3E_LOG01".into(), "CANARY_E3E_LOG01");
     add(
         "api_\u{200b}key=CANARY_E3E_LOG02".into(), // gitleaks:allow
@@ -418,7 +418,7 @@ pub(crate) fn round_3_canaries() -> Vec<(String, String)> {
     add("token\u{200d}=CANARY_E3E_LOG11".into(), "CANARY_E3E_LOG11");
     add("token\u{200e}=CANARY_E3E_LOG12".into(), "CANARY_E3E_LOG12");
 
-    // --- B3-04: fullwidth separators (6) ---
+    // --- fullwidth separators (6) ---
     add("api_key＝CANARY_E3E_UNI01".into(), "CANARY_E3E_UNI01");
     add("api_key：CANARY_E3E_UNI02".into(), "CANARY_E3E_UNI02");
     add("token＝CANARY_E3E_UNI03".into(), "CANARY_E3E_UNI03");
@@ -432,7 +432,7 @@ pub(crate) fn round_3_canaries() -> Vec<(String, String)> {
         "CANARY_E3E_UNI06",
     );
 
-    // --- B3-05: bare cookie jars (10) ---
+    // --- bare cookie jars (10) ---
     add(
         "session=CANARY_E3E_COOKIE01abcdefghij; Path=/; HttpOnly".into(),
         "CANARY_E3E_COOKIE01",
@@ -474,7 +474,7 @@ pub(crate) fn round_3_canaries() -> Vec<(String, String)> {
         "CANARY_E3E_COOKIE10",
     );
 
-    // --- B3-06: percent-encoded URLs (6) ---
+    // --- percent-encoded URLs (6) ---
     add(
         "postgres%3A%2F%2Fu:CANARY_E3E_URL01@h/d".into(),
         "CANARY_E3E_URL01",
@@ -662,9 +662,8 @@ pub(crate) fn round_3_false_positives() -> Vec<(String, String)> {
     cases
 }
 
-/// The round-5 shapes: bracketed values, padded JSON keys, folded
-/// `Bearer`/`Basic` values and sibling name/value pairs
-/// (B5-01/B5-02/B5-04/E5-01).
+/// Further shapes: bracketed values, padded JSON keys, folded
+/// `Bearer`/`Basic` values and sibling name/value pairs.
 pub(crate) fn round_5_canaries() -> Vec<(String, String)> {
     let mut cases: Vec<(String, String)> = Vec::new();
     let mut add = |raw: String, secret: &str| cases.push((raw, secret.to_string()));
@@ -744,7 +743,7 @@ pub(crate) fn round_5_canaries() -> Vec<(String, String)> {
     cases
 }
 
-/// Prose the round-5 normalise fix must not touch (H-05/B5-07).
+/// Prose the normaliser must not touch.
 pub(crate) fn round_5_false_positives() -> Vec<(String, String)> {
     let mut cases: Vec<(String, String)> = Vec::new();
     let mut add = |raw: &str, keep: &str| cases.push((raw.to_string(), keep.to_string()));

@@ -1,4 +1,4 @@
-//! M2: the morning brief reads the Mac's local data instead of a parked
+//! The morning brief reads the Mac's local data instead of a parked
 //! Google connector.
 //!
 //! The calendar comes from the EventKit snapshot the Mac app already publishes
@@ -89,7 +89,7 @@ impl BriefSource for LocalBriefSource {
 
     fn calendar_today(&self, day: &str) -> Result<Vec<CalendarItem>, BriefSourceError> {
         // No private-mode guard here: the snapshot is encrypted local data and
-        // the brief makes no model call (B11).
+        // the brief makes no model call.
         let target = NaiveDate::parse_from_str(day, "%Y-%m-%d")
             .map_err(|_| BriefSourceError::Unavailable)?;
         // No snapshot, or one the owner did not authorize, means the local

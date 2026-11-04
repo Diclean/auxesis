@@ -1,11 +1,11 @@
-//! Private-mode iMessage answers, held in memory only (PRIV-IMSG, C12).
+//! Private-mode iMessage answers, held in memory only.
 //!
 //! | Method | Path | Answer |
 //! |---|---|---|
 //! | GET | `/v1/private/answers` | the held answers, newest first |
 //! | POST | `/v1/private/answers/{id}/dismiss` | removes one (204) |
 //!
-//! Private mode writes no chat rows (G1), so an answer to an owner text that
+//! Private mode writes no chat rows, so an answer to an owner text that
 //! came over Messages waits here for the app. It is never written to disk, a
 //! log, the ledger or the store; a restart, or any read after Private mode is
 //! switched off, drops it. The inbound text is not kept. The routes sit behind

@@ -1,4 +1,4 @@
-//! P2 regression for the one shared `config.toml` writer lock (#133).
+//! The one shared `config.toml` writer lock.
 //!
 //! `PUT /v1/settings` rewrites the whole file while `POST /v1/providers`
 //! appends to it. Without a single lock over both read-modify-write

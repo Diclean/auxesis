@@ -82,6 +82,11 @@ pub struct ShellTool {
     timeout: Duration,
     sandbox: ShellSandbox,
     memory_limit: u64,
+    /// Bounds on the post-exit leftover sweep; tests lower them to force the
+    /// incomplete-cleanup path. Production is [`MAX_SWEEP_PASSES`] /
+    /// [`MAX_SWEEP_TIME`].
+    sweep_passes: usize,
+    sweep_time: Duration,
 }
 
 impl Default for ShellTool {
@@ -90,6 +95,8 @@ impl Default for ShellTool {
             timeout: DEFAULT_TIMEOUT,
             sandbox: ShellSandbox::default(),
             memory_limit: sandbox::MAX_COMMAND_MEMORY_BYTES,
+            sweep_passes: MAX_SWEEP_PASSES,
+            sweep_time: MAX_SWEEP_TIME,
         }
     }
 }
@@ -914,6 +921,15 @@ fn kill_process_tree_with(
 const MAX_SWEEP_PASSES: usize = 50;
 const MAX_SWEEP_TIME: Duration = Duration::from_secs(2);
 
+/// Whether a leftover sweep proved nothing is left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sweep {
+    Clean,
+    /// A cap was reached with this many processes still found and signalled;
+    /// each may have forked between that scan and its SIGKILL.
+    Incomplete(usize),
+}
+
 /// SIGKILL what an exited command left behind: the members of its session
 /// (the kernel never reuses a session id while a member lives) and the
 /// processes holding its marker, each pid re-checked right before its
@@ -930,23 +946,37 @@ const MAX_SWEEP_TIME: Duration = Duration::from_secs(2);
 /// behind on unmodified main, 0/100 with this loop. A pass that finds
 /// nothing proves no live process is left in the session and none holds the
 /// marker, so nothing can fork anymore.
-fn sweep_leftovers(root: i32, marker: &Marker) {
-    sweep_leftovers_with(root, marker, &pid_ppid_uid_start, &|_pass| Vec::new());
+///
+/// Returns [`Sweep::Incomplete`] when a cap was hit before a pass proved
+/// clean: the caller must not report success and must keep its reaper armed.
+fn sweep_leftovers(root: i32, marker: &Marker) -> Sweep {
+    sweep_leftovers_with(
+        root,
+        marker,
+        &pid_ppid_uid_start,
+        &|_pass| Vec::new(),
+        MAX_SWEEP_PASSES,
+        MAX_SWEEP_TIME,
+    )
 }
 
 /// `extra_pids` is the test seam: pids injected into a given pass's scan,
 /// standing in for a child forked while the previous pass's kills were still
-/// landing.
+/// landing. `max_passes`/`max_time` are the production bound, lowered only by
+/// tests.
 fn sweep_leftovers_with(
     root: i32,
     marker: &Marker,
     lookup: StartLookup<'_>,
     extra_pids: &dyn Fn(usize) -> Vec<i32>,
-) {
+    max_passes: usize,
+    max_time: Duration,
+) -> Sweep {
     #[cfg(unix)]
     {
         let started = std::time::Instant::now();
-        for pass in 0..MAX_SWEEP_PASSES {
+        let mut survivors = 0usize;
+        for pass in 0..max_passes {
             let all = all_pids();
             // An empty listing means the syscall failed (this process itself
             // is always in it): it must not count as a clean pass.
@@ -956,6 +986,7 @@ fn sweep_leftovers_with(
                     .chain(orphan_pids_holding_marker(marker, 0, &all))
                     .chain(extra_pids(pass));
                 let mut found_any = false;
+                let mut signalled = 0usize;
                 for pid in found {
                     found_any = true;
                     let Some(tracked) = TrackedPid::of(pid) else {
@@ -964,6 +995,7 @@ fn sweep_leftovers_with(
                     if pid <= 1 || !tracked.still_same(lookup) {
                         continue;
                     }
+                    signalled = signalled.saturating_add(1);
                     // SAFETY: `kill` is the documented libc signal call; the
                     // pid was re-checked (same uid, same start time)
                     // immediately above.
@@ -972,17 +1004,22 @@ fn sweep_leftovers_with(
                     }
                 }
                 if !found_any {
-                    break;
+                    return Sweep::Clean;
                 }
+                survivors = signalled;
             }
-            if started.elapsed() >= MAX_SWEEP_TIME {
+            if started.elapsed() >= max_time {
                 break;
             }
             std::thread::yield_now();
         }
+        Sweep::Incomplete(survivors)
     }
     #[cfg(not(unix))]
-    let _ = (root, marker, lookup, extra_pids);
+    {
+        let _ = (root, marker, lookup, extra_pids, max_passes, max_time);
+        Sweep::Clean
+    }
 }
 
 /// Why waiting stopped.
@@ -1008,18 +1045,22 @@ enum Stop {
 /// and the double-fork/`setsid()` marker pass — so a cancelled turn can no
 /// longer leave an orphan behind. Owning the `Child` is what keeps the root
 /// unreaped while its group is signalled: reaping it would free the pgid for
-/// reuse. Normal completion runs [`sweep_leftovers`] and then disarms it:
-/// nothing a call started outlives the call (seal r1; no dev-server case).
+/// reuse. Normal completion runs [`sweep_leftovers`] and disarms it only when
+/// that sweep proves clean: an incomplete sweep leaves the guard armed, and
+/// its `Drop` retries the session/marker sweep before the call returns.
 struct TreeReaper {
     child: Option<tokio::process::Child>,
+    root: Option<i32>,
     marker: Marker,
     armed: bool,
 }
 
 impl TreeReaper {
     fn new(child: tokio::process::Child, marker: Marker) -> Self {
+        let root = child.id().map(|pid| pid as i32);
         Self {
             child: Some(child),
+            root,
             marker,
             armed: true,
         }
@@ -1056,7 +1097,19 @@ impl TreeReaper {
 impl Drop for TreeReaper {
     fn drop(&mut self) {
         if self.armed {
-            self.sweep_now();
+            // Still unreaped: the pgid is pinned, so the full tree kill runs.
+            // Already reaped (the normal wait) but not proven clean: the pgid
+            // is gone, but the session/marker scans still work, so retry the
+            // leftover sweep.
+            if self
+                .child
+                .as_ref()
+                .is_some_and(|child| child.id().is_some())
+            {
+                self.sweep_now();
+            } else if let Some(root) = self.root {
+                let _ = sweep_leftovers(root, &self.marker);
+            }
         }
         // `self.child` drops after the sweep above, so the group kill always
         // runs with the root still unreaped.
@@ -1235,15 +1288,37 @@ impl Tool for ShellTool {
             Stop::Exited(result) => {
                 // Nothing a call started outlives it (seal r1 P2-1): kill
                 // what the exited root left behind, `sleep 60 &` included.
-                if let Some(root) = child_pid {
-                    sweep_leftovers(root as i32, &reaper.marker);
+                let sweep = child_pid.map_or(Sweep::Clean, |root| {
+                    sweep_leftovers_with(
+                        root as i32,
+                        &reaper.marker,
+                        &pid_ppid_uid_start,
+                        &|_pass| Vec::new(),
+                        self.sweep_passes,
+                        self.sweep_time,
+                    )
+                });
+                if matches!(sweep, Sweep::Clean) {
+                    reaper.disarm();
                 }
-                reaper.disarm();
                 let status = result?;
                 let out = read_capture(&mut stdout_capture)?;
                 let err = read_capture(&mut stderr_capture)?;
                 push_capture(&mut content, "stdout", &out);
                 push_capture(&mut content, "stderr", &err);
+                if let Sweep::Incomplete(survivors) = sweep {
+                    // The direct child exited 0, but the tree is not proven
+                    // clean: report it like a timeout, never as a plain
+                    // success, and keep the reaper armed so its `Drop` retries
+                    // the sweep before the call returns.
+                    is_error = true;
+                    let note = format!(
+                        "[cleanup incomplete: sweep hit its {}-pass/{} ms cap with {survivors} process(es) still signalled]",
+                        self.sweep_passes,
+                        self.sweep_time.as_millis()
+                    );
+                    push_section(&mut content, &note);
+                }
                 if !status.success() {
                     is_error = true;
                     let note = match status.code() {
@@ -1934,7 +2009,7 @@ mod tests {
             let mut child = command.spawn().unwrap();
             let root = child.id().unwrap() as i32;
             let _status = child.wait().await.unwrap();
-            sweep_leftovers(root, &marker);
+            let _ = sweep_leftovers(root, &marker);
             (root, marker, launched.temp)
         }
 
@@ -1992,46 +2067,73 @@ mod tests {
         use std::os::unix::process::CommandExt;
         use std::process::Stdio;
 
+        /// Kills and reaps the test's own `sleep`s even when an assertion
+        /// below panics, so a failure cannot leak sleepers.
+        struct KillOnDrop(Vec<std::process::Child>);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                for child in &mut self.0 {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
         // The "root": alive for the whole sweep, in its own process group, so
         // it pins the (otherwise empty) session id and is never a target.
-        let mut root = std::process::Command::new("sleep")
+        let mut children = vec![std::process::Command::new("sleep")
             .arg("300")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0)
             .spawn()
-            .unwrap();
-        let root_pid = root.id() as i32;
+            .unwrap()];
         // Real live processes standing in for late-forked children.
-        let mut helpers = Vec::new();
-        let mut helper_pids = Vec::new();
         for _ in 0..3 {
-            let helper = std::process::Command::new("sleep")
-                .arg("300")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
-            helper_pids.push(helper.id() as i32);
-            helpers.push(helper);
+            children.push(
+                std::process::Command::new("sleep")
+                    .arg("300")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
         }
+        let root_pid = children[0].id() as i32;
+        let helper_pids: Vec<i32> = children[1..]
+            .iter()
+            .map(|child| child.id() as i32)
+            .collect();
+        let mut children = KillOnDrop(children);
 
-        sweep_leftovers_with(root_pid, &marker, &pid_ppid_uid_start, &|pass| {
-            if pass < helper_pids.len() {
-                vec![helper_pids[pass]]
-            } else {
-                Vec::new()
-            }
-        });
+        // This checks repetition, not ownership filtering: the injected pids
+        // are not in the root's session or marker. That the sweep targets only
+        // its own session/marker (never this process or launchd) is covered by
+        // `a_sweep_never_targets_this_process_or_launchd`.
+        let sweep = sweep_leftovers_with(
+            root_pid,
+            &marker,
+            &pid_ppid_uid_start,
+            &|pass| {
+                if pass < helper_pids.len() {
+                    vec![helper_pids[pass]]
+                } else {
+                    Vec::new()
+                }
+            },
+            MAX_SWEEP_PASSES,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Clean, "the sweep stopped before a clean pass");
 
         // Every injected child must be dead: pass 2's child included, which a
         // fixed two-pass sweep would have left alive. `try_wait` both detects
         // and reaps, so a killed-but-unreaped zombie does not count as alive.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        for (index, helper) in helpers.iter_mut().enumerate() {
+        for (index, helper) in children.0[1..].iter_mut().enumerate() {
             while helper.try_wait().unwrap().is_none() {
                 assert!(
                     std::time::Instant::now() < deadline,
@@ -2049,12 +2151,57 @@ mod tests {
             0,
             "the root must survive"
         );
+    }
 
-        for mut helper in helpers {
-            let _ = helper.kill();
+    /// SHELL-CLEANUP-1: a capped-out sweep must not report the direct child's
+    /// success, and the reaper must stay armed. The pass cap is forced to
+    /// zero, so only the still-armed reaper's `Drop` can kill the backgrounded
+    /// sleeper: a disarmed reaper leaves it alive. Production caps are
+    /// unchanged.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_exhausted_leftover_sweep_is_reported_and_keeps_the_reaper_armed() {
+        let dir = tempdir().unwrap();
+        let mut tool = test_tool(Duration::from_secs(10));
+        tool.sweep_passes = 0;
+        let output = tool
+            .run(
+                &json!({"command": "sleep 300 & echo $! > bg.pid; echo hi"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
+        let pid = raw.trim().parse::<i32>().unwrap();
+        // The sweep ran zero passes; only the reaper still being armed can kill
+        // what the command left behind. Wait, then clean up before asserting so
+        // a failure cannot leak the sleeper.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut reaper_swept = false;
+        while std::time::Instant::now() < deadline {
+            // SAFETY: signal 0 only probes existence of a process this test's
+            // command spawned.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                reaper_swept = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let _ = root.kill();
-        let _ = root.wait();
+        if !reaper_swept {
+            // SAFETY: best-effort SIGKILL of a process this test spawned.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+
+        assert!(
+            reaper_swept,
+            "leftover pid {pid} survived the call: the reaper did not stay armed"
+        );
+        assert!(
+            output.is_error && output.content.contains("cleanup incomplete"),
+            "incomplete cleanup must not be reported as success: {}",
+            head(&output.content, 400)
+        );
     }
 
     #[tokio::test]

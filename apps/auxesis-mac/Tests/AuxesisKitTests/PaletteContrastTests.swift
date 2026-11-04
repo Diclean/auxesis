@@ -12,11 +12,11 @@ import Testing
             light.raise, light.line, light.line2, light.ink, light.ink2, light.ink3,
             light.onBlue,
         ].map(\.hexString), [
-            "#1C1C1E", "#ECECEE", "#955300", "#FBF0E0",
-            "#2F7A3A", "#E5F2E6", "#B0251C", "#FBE8E6",
-            "#4B4FC4", "#E8E9FA", "#FFFFFF", "#F2F2F3", "#F5F5F6",
-            "#FFFFFF", "#E3E3E6", "#C9C9CE", "#1C1C1E", "#4C4C50", "#5C5C61",
-            "#FFFFFF",
+            "#2A2826", "#E9E5DE", "#8A5200", "#F9EEDC",
+            "#297034", "#E4EFE1", "#B0251C", "#F8E6E1",
+            "#4B4FC4", "#E9E8F6", "#F4F2EE", "#ECE9E3", "#EFECE6",
+            "#FBFAF7", "#DEDAD2", "#C9C4BA", "#2A2826", "#4F4B46", "#67625C",
+            "#F4F2EE",
         ])
         XCTAssertEqual([
             Palette.dark.blue, Palette.dark.blueSoft, Palette.dark.amber, Palette.dark.amberSoft,
@@ -55,8 +55,8 @@ import Testing
     }
 
     func testCompletionAndBubbleSurfacesAreNeutral() {
-        XCTAssertEqual(Palette.light.ownerBubble.hexString, "#E9E9EC")
-        XCTAssertEqual(Palette.light.agentBubble.hexString, "#FFFFFF")
+        XCTAssertEqual(Palette.light.ownerBubble.hexString, "#E7E3DC")
+        XCTAssertEqual(Palette.light.agentBubble.hexString, "#FBFAF7")
         XCTAssertEqual(Palette.dark.ownerBubble.hexString, "#ECECEE")
         XCTAssertEqual(Palette.dark.agentBubble.hexString, "#111113")
         for palette in [Palette.light, .dark] {
@@ -69,33 +69,35 @@ import Testing
     func testAccentIsNeutralInkAndMeaningHuesAreUntouched() {
         XCTAssertEqual(
             [Palette.light.blue, Palette.light.blueSoft, Palette.light.onBlue].map(\.hexString),
-            ["#1C1C1E", "#ECECEE", "#FFFFFF"])
+            ["#2A2826", "#E9E5DE", "#F4F2EE"])
         XCTAssertEqual(
             [Palette.dark.blue, Palette.dark.blueSoft, Palette.dark.onBlue].map(\.hexString),
             ["#F2F2F4", "#2C2C2E", "#1C1C1E"])
         XCTAssertEqual(
             [Palette.light.amber, Palette.light.green, Palette.light.red, Palette.light.out].map(\.hexString),
-            ["#955300", "#2F7A3A", "#B0251C", "#4B4FC4"])
+            ["#8A5200", "#297034", "#B0251C", "#4B4FC4"])
         XCTAssertEqual(
             [Palette.dark.amber, Palette.dark.green, Palette.dark.red, Palette.dark.out].map(\.hexString),
             ["#E8A94F", "#7BCB84", "#F27A6F", "#9A9DF5"])
-        for palette in [Palette.light, .dark] {
+        for (palette, spread) in [(Palette.light, 0.06), (.dark, 0.03)] {
             for colour in [palette.blue, palette.blueSoft, palette.selection, palette.onBlue, palette.hover] {
-                // No teal left: red, green and blue channels stay within a few steps.
-                XCTAssertLessThan(max(colour.red, colour.green, colour.blue) - min(colour.red, colour.green, colour.blue), 0.03)
+                // No teal left: red, green and blue channels stay within a few steps
+                // (light is warm paper, so it gets a little more room).
+                XCTAssertLessThan(max(colour.red, colour.green, colour.blue) - min(colour.red, colour.green, colour.blue), spread)
             }
         }
     }
 
     // SOBER-1 (owner 2026-10-30, "trop vert"): every surface, line and ink
-    // is a neutral grey; only the four meaning hues carry a colour.
+    // is neutral; only the four meaning hues carry a colour. Dark is a pure
+    // grey; light is warm paper (theme B), kept to a small warm tint.
     func testSurfacesLinesAndInksCarryNoHue() {
-        for palette in [Palette.light, .dark] {
+        for (palette, spread) in [(Palette.light, 0.06), (.dark, 0.03)] {
             for colour in [palette.work, palette.list, palette.raise, palette.hover, palette.selection,
                            palette.ink, palette.ink2, palette.ink3, palette.muted, palette.faint,
                            palette.line, palette.line2, palette.ownerBubble, palette.ownerInk, palette.agentBubble] {
                 XCTAssertLessThan(max(colour.red, colour.green, colour.blue) - min(colour.red, colour.green, colour.blue),
-                                  0.03, colour.hexString)
+                                  spread, colour.hexString)
             }
         }
     }
@@ -118,6 +120,38 @@ import Testing
             for (foreground, background, label) in pairs {
                 XCTAssertGreaterThanOrEqual(Contrast.ratio(foreground, background), 4.5, label)
             }
+        }
+    }
+
+    // Light theme B (warm paper): every text colour reads at 4.5:1 on every
+    // light surface it can sit on, and on its own soft fill where used as text.
+    func testLightTextColoursMeetAAOnEverySurface() {
+        let light = Palette.light
+        let surfaces: [(RGBA, String)] = [
+            (light.work, "work"), (light.list, "list"), (light.raise, "raise"), (light.selection, "selection"),
+        ]
+        let texts: [(RGBA, String)] = [
+            (light.ink, "ink"), (light.ink2, "ink2"), (light.ink3, "ink3"), (light.muted, "muted"),
+            (light.faint, "faint"), (light.green, "green"), (light.red, "red"), (light.amber, "amber"),
+            (light.out, "out"),
+        ]
+        for (text, name) in texts {
+            for (surface, surfaceName) in surfaces {
+                XCTAssertGreaterThanOrEqual(Contrast.ratio(text, surface), 4.5, "\(name) on \(surfaceName)")
+            }
+        }
+        let onOwnSoft: [(RGBA, RGBA, String)] = [
+            (light.green, light.greenSoft, "green on greenSoft"),
+            (light.red, light.redSoft, "red on redSoft"),
+            (light.amber, light.amberSoft, "amber on amberSoft"),
+            (light.out, light.outSoft, "out on outSoft"),
+            (light.blue, light.blueSoft, "accent on blueSoft"),
+            (light.ownerInk, light.ownerBubble, "ownerInk on ownerBubble"),
+            (light.ink, light.agentBubble, "ink on agentBubble"),
+            (light.onBlue, light.blue, "onBlue on accent"),
+        ]
+        for (text, surface, label) in onOwnSoft {
+            XCTAssertGreaterThanOrEqual(Contrast.ratio(text, surface), 4.5, label)
         }
     }
 

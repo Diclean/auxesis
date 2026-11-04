@@ -81,8 +81,8 @@ appears without a line there.
 
 The kernel is also a separate Rust project:
 [`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel).
-Its crates are a git dependency of this app, pinned to tag `v0.1.1` (commit
-`ad508f3`); the source is not vendored here.
+Its crates are a git dependency of this app, pinned to tag `v0.1.3` (commit
+`TBD`); the source is not vendored here.
 
 The kernel forbids `unsafe` code in the crates that opt into that ban. Cargo
 does not apply a dependency's lints to a git dependency, so the ban is enforced
@@ -192,13 +192,13 @@ if you set `AUXESIS_ALLOW_KEYCHAIN=1`.
 | `auxd` | The local daemon. Runs the agents and the scheduler, owns the store, and serves a loopback API. It keeps working while the app is closed. |
 | `aux` | The control CLI: chat, doctor, install, secrets, brief, mail, CRM, documents, skills, MCP and extensions. |
 | `apps/auxesis-mac` | The native SwiftUI app: Today, Waiting for you, Since you left, approvals, and settings. |
-| Kernel | The privacy kernel crates (`admit` and `Grant`, detectors, tokenisation, the encrypted vault and the egress client), a git dependency pinned to tag `v0.1.1` of [`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel). |
+| Kernel | The privacy kernel crates (`admit` and `Grant`, detectors, tokenisation, the encrypted vault and the egress client), a git dependency pinned to tag `v0.1.3` of [`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel). |
 | Connectors | `aux-mail` (IMAP/SMTP), the EventKit bridge in the app, `aux-google` (feature-gated), `aux-imessage`, and MCP. |
 
 Where to read more: [`docs/phase1.md`](docs/phase1.md) for the behaviour
 contract, [`docs/providers.md`](docs/providers.md) for providers and brains,
 [`docs/egress.md`](docs/egress.md) for every outbound HTTP client,
-[the kernel README](https://github.com/Diclean/auxesis-privacy-kernel/blob/v0.1.1/README.md) for the kernel, and
+[the kernel README](https://github.com/Diclean/auxesis-privacy-kernel/blob/v0.1.3/README.md) for the kernel, and
 [`docs/README.md`](docs/README.md) for the documentation index.
 
 ## Development

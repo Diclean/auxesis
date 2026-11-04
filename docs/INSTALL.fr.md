@@ -40,7 +40,7 @@ cargo metadata --locked --format-version 1 >/dev/null
 
 L'espace de travail Rust contient le démon (`auxd`), la CLI (`aux`) et le noyau de
 confidentialité. Les crates du noyau viennent du dépôt public `auxesis-privacy-kernel`, une
-dépendance git épinglée au tag `v0.1.1` ; Cargo récupère ce seul dépôt au moment de compiler.
+dépendance git épinglée au tag `v0.1.3` ; Cargo récupère ce seul dépôt au moment de compiler.
 
 ```sh
 cargo build --workspace --locked

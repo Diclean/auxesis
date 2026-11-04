@@ -65,17 +65,37 @@ public final class XCTestExpectation: NSObject {
     }
 }
 
+/// Thrown by a test that cannot run on this host. The runner reports it as a
+/// skip, never as a pass or a failure, so a host condition stays visible.
+public struct XCTSkip: Error, CustomNSError {
+    public let message: String
+    public static var errorDomain: String { "XCTSkip" }
+    public var errorCode: Int { 1 }
+    public var errorUserInfo: [String: Any] { [NSLocalizedDescriptionKey: message] }
+
+    public init(_ message: String = "") {
+        self.message = message
+    }
+}
+
 /// Failure recording shared by the assertion helpers below.
 public enum XCTestReport {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _executed = 0
     nonisolated(unsafe) private static var _failures = 0
+    nonisolated(unsafe) private static var _skipped = 0
     nonisolated(unsafe) private static var _currentTest = ""
 
     public static var failures: Int {
         lock.lock()
         defer { lock.unlock() }
         return _failures
+    }
+
+    public static var skipped: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _skipped
     }
 
     public static var executed: Int {
@@ -97,6 +117,14 @@ public enum XCTestReport {
         let test = _currentTest
         lock.unlock()
         print("FAIL [\(test)] \(file):\(line) \(message)")
+    }
+
+    static func recordSkip(_ message: String) {
+        lock.lock()
+        _skipped += 1
+        let test = _currentTest
+        lock.unlock()
+        print("SKIP [\(test)] \(message)")
     }
 
     static func run<T>(_ body: () -> T) -> T {
@@ -324,7 +352,9 @@ public enum XCTestRunner {
             }
         }
         let failures = XCTestReport.failures
-        print("Executed \(total) tests (\(asyncCount) async), \(failures) failure(s)")
+        let skipped = XCTestReport.skipped
+        let skippedSuffix = skipped == 0 ? "" : ", \(skipped) skipped"
+        print("Executed \(total) tests (\(asyncCount) async), \(failures) failure(s)\(skippedSuffix)")
         if total == 0 {
             print("FAIL: zero tests ran — refusing a green result (filter: \(filter ?? "none"))")
         }
@@ -357,8 +387,19 @@ public enum XCTestRunner {
             call(instance, selector, pointer)
         }
         if !succeeded, XCTestReport.failures == before {
+            if let error, let skip = skipMessage(for: error) {
+                XCTestReport.recordSkip(skip)
+                return
+            }
             XCTFail("\(suite).\(method.displayName) threw \(error?.localizedDescription ?? "an error")")
         }
+    }
+
+    /// A skipped test is neither a pass nor a failure: keep it visible in the
+    /// log and count it, so a host-condition skip can never hide a red suite.
+    private static func skipMessage(for error: NSError) -> String? {
+        guard error.domain == "XCTSkip" else { return nil }
+        return error.localizedDescription
     }
 
     /// `func testX() async` bridges to `- testXWithCompletionHandler:` whose
@@ -377,7 +418,12 @@ public enum XCTestRunner {
             let call = unsafeBitCast(implementation, to: AsyncThrowIMP.self)
             let block: @convention(block) (AnyObject?) -> Void = { error in
                 if let error {
-                    XCTFail("\(suite).\(method.displayName) threw \(error)")
+                    if let nsError = error as? NSError,
+                       let skip = skipMessage(for: nsError) {
+                        XCTestReport.recordSkip(skip)
+                    } else {
+                        XCTFail("\(suite).\(method.displayName) threw \(error)")
+                    }
                 }
                 completion.fulfill()
             }

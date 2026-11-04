@@ -392,8 +392,10 @@ pub(crate) fn create_sync(
     db_path: &Path,
     request: CreateAgentRequest,
 ) -> Result<(StatusCode, serde_json::Value), Response> {
+    let _guard = kernel_core::lock_recover(crate::agents::grants_lock());
     let validated = validate_create(home, request)?;
     let name = &validated.name;
+    validate_tool_ceiling(home, name, &validated.config)?;
     let expected_soul = validated
         .instructions
         .clone()
@@ -557,6 +559,7 @@ fn update_sync(
         }
     }
     validate_effective_selection(home, &config)?;
+    validate_tool_ceiling(home, id, &config)?;
 
     if let Some(instructions) = &instructions {
         let text = if instructions.trim().is_empty() {
@@ -678,6 +681,46 @@ fn validate_selection(
     };
     validate_effective_selection(home, &config)?;
     Ok(config)
+}
+
+/// CHIEF-BASE-1: a tools list names only tools the chief may use (its
+/// grants, its own tools list, its config deny rules). The run-time ceiling
+/// enforces the same every turn; this refuses early with a clear error.
+#[allow(clippy::result_large_err)]
+fn validate_tool_ceiling(home: &Path, id: &str, config: &AgentConfig) -> Result<(), Response> {
+    use aux_runtime::grants::CHIEF_AGENT;
+    let chief_like = id == CHIEF_AGENT || id == crate::agents::chief_id(home);
+    let Some(tools) = config.tools.as_ref().filter(|_| !chief_like) else {
+        return Ok(());
+    };
+    let agents = crate::agents::registry(home).map_err(|_| internal_error())?;
+    let chief = crate::agents::chief_grants(&agents);
+    let chief_tools = agent::config(home, CHIEF_AGENT)
+        .map_err(|_| internal_error())?
+        .tools;
+    let path = config_path(home);
+    let rules = if path.exists() {
+        aux_engine::config::load_rules(&path).map_err(|_| internal_error())?
+    } else {
+        Vec::new()
+    };
+    let chief_rules: Vec<_> = rules
+        .into_iter()
+        .filter(|r| r.agent == CHIEF_AGENT)
+        .collect();
+    let refused = tools.iter().any(|tool| {
+        let denied = kernel_broker::matching_rule(&chief_rules, CHIEF_AGENT, tool, false)
+            .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
+        denied
+            || chief.check_tool(CHIEF_AGENT, tool).is_err()
+            || chief_tools
+                .as_ref()
+                .is_some_and(|list| !list.contains(tool))
+    });
+    if refused {
+        return Err(crate::agents::exceeds_chief());
+    }
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]

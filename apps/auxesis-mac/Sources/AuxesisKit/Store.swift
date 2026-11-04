@@ -199,6 +199,9 @@ public final class Store: ObservableObject {
     /// resolve-failure re-fetch) reports their real state — never auto-resent.
     private var approvalsAwaitingResync: Set<String> = []
     private var aliases = ThreadAliases()
+    /// The caps last read on `/v1/usage`, by agent; `/v1/agents` carries none,
+    /// so a later snapshot keeps the ratio the usage read computed.
+    private var capsByName: [String: UsageCaps] = [:]
     private var version = ""
     /// True once this episode has tried to start the bundled service, so a
     /// child that exits immediately (port held) is never respawned in a loop.
@@ -696,7 +699,12 @@ public final class Store: ObservableObject {
     }
 
     private func upsert(agent agent: AgentSummary) {
-        let mapped = Mapper.agent(from: agent, live: liveStates[agent.name], language: language)
+        let mapped = Mapper.agent(
+            from: agent,
+            live: liveStates[agent.name],
+            language: language,
+            budget: capsByName[agent.name]
+        )
         stopEngaged = agent.stop
         if let index = agents.firstIndex(where: { $0.name == agent.name }) {
             var updated = mapped
@@ -706,6 +714,19 @@ public final class Store: ObservableObject {
             agents.append(mapped)
         }
         resortAgents()
+    }
+
+    /// Fill the per-agent budget slot from `GET /v1/usage`. A row without
+    /// caps, or an agent absent from the payload, keeps no bar.
+    public func applyUsage(_ day: UsageDay) {
+        var caps: [String: UsageCaps] = [:]
+        for row in day.agents {
+            if let rowCaps = row.caps, !rowCaps.isUnset { caps[row.agent] = rowCaps }
+            guard let index = agents.firstIndex(where: { $0.name == row.agent }) else { continue }
+            agents[index].budgetUsed = Mapper.budgetRatio(row.totals, caps: row.caps)
+            agents[index].budgetHit = Mapper.budgetHit(row.totals, caps: row.caps)
+        }
+        capsByName = caps
     }
 
     private func upsert(message: ChatMessage) {
@@ -1614,6 +1635,7 @@ public final class Store: ObservableObject {
                 // (a stale api.token), not a service key — same copy as
                 // `.unauthorized` so the two shapes stay consistent.
                 if status == 401 { return Self.localAccessRefused(language) }
+                if let refusal = auxd.budgetRefusal { return refusal.message(language) }
                 if auxd.apiErrorCode == "thread_busy" { return L10n.t(.errorThreadBusy, language) }
                 if status == 501, decision == .edit {
                     return L10n.t(.approvalEditSoon, language)

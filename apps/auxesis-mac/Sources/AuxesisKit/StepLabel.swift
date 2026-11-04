@@ -103,6 +103,77 @@ public enum StepLabel {
         "delegate": ("Asking an agent", "Demande à un agent"),
     ]
 
+    /// The base form of the same tool, for a decision sentence: "Aux was
+    /// allowed to read the privacy record". The table above is the gerund a
+    /// running step shows; a sentence needs the infinitive. A tool missing
+    /// here falls back to plain words in `LedgerText`, never to its id.
+    private static let actions: [String: (en: String, fr: String)] = [
+        // Mail
+        "mail_list": ("list mail", "lister les e-mails"),
+        "mail_search": ("search mail", "chercher dans les e-mails"),
+        "mail_thread": ("read the thread", "lire le fil"),
+        "mail_read": ("read mail", "lire les e-mails"),
+        "mail_fetch_attachments": ("fetch the attachments", "récupérer les pièces jointes"),
+        "mail_draft": ("draft a mail", "rédiger un brouillon"),
+        "mail_send": ("send mail", "envoyer un e-mail"),
+        "gmail_search": ("search mail", "chercher dans les e-mails"),
+        "gmail_read_message": ("read mail", "lire les e-mails"),
+        "gmail_list_threads": ("read the thread", "lire le fil"),
+        "google_gmail_search": ("search mail", "chercher dans les e-mails"),
+        "google_gmail_read_message": ("read mail", "lire les e-mails"),
+        "google_gmail_create_draft": ("draft a mail", "rédiger un e-mail"),
+        "google_gmail_send": ("send mail", "envoyer un e-mail"),
+        // Calendar
+        "apple_calendar_list_events": ("read your calendar", "lire votre agenda"),
+        "apple_calendar_create_event": ("create the event", "créer l'événement"),
+        "apple_calendar_update_event": ("change the event", "modifier l'événement"),
+        "apple_reminders_list": ("read your reminders", "lire vos rappels"),
+        "calendar_list_events": ("read your calendar", "lire votre agenda"),
+        "calendar_get_event": ("read the event", "lire l'événement"),
+        "calendar_update_event": ("move an event", "déplacer un événement"),
+        "google_calendar_list_events": ("read your calendar", "lire votre agenda"),
+        "google_calendar_get_event": ("read the event", "lire l'événement"),
+        "google_calendar_create_event": ("create the event", "créer l'événement"),
+        // Clients
+        "crm_list": ("list your clients", "lister vos clients"),
+        "crm_search": ("search your clients", "chercher parmi vos clients"),
+        "crm_get": ("read the client card", "lire la fiche client"),
+        "crm_today": ("read today's clients", "lire les clients du jour"),
+        "crm_create_followup": ("add a follow-up", "ajouter un suivi"),
+        "crm_log_interaction": ("write down the meeting", "saisir l'échange"),
+        "crm_add_note": ("write a note", "écrire une note"),
+        // Documents
+        "docs_ingest": ("collect your documents", "collecter vos documents"),
+        "docs_queue": ("read the documents queue", "lire la file des documents"),
+        // Memory
+        "remember": ("save to memory", "mémoriser"),
+        "recall": ("look in memory", "chercher en mémoire"),
+        "forget": ("forget a memory", "oublier une mémoire"),
+        "suggest_memory": ("propose a memory", "proposer une mémoire"),
+        // This Mac
+        "read_file": ("read a file", "lire un fichier"),
+        "write_file": ("write a file", "écrire un fichier"),
+        "shell": ("run a command", "lancer une commande"),
+        "http_fetch": ("read a page", "lire une page"),
+        "web_search": ("search the web", "chercher sur le web"),
+        "owner_profile": ("read your profile", "lire votre profil"),
+        "privacy_record_summary": ("read the privacy record", "lire le journal de confidentialité"),
+        "weather_forecast": ("read the weather", "lire la météo"),
+        "weather_geocode": ("find the place", "chercher le lieu"),
+        "watch": ("watch a web page", "surveiller une page web"),
+        // Handing work out
+        "delegate": ("ask an agent", "demander à un agent"),
+    ]
+
+    /// The base form of one tool id in the owner's words, or `nil` when this
+    /// build has no words for it. A dot is a word break (`mail.send`).
+    static func action(_ id: String, language: Language) -> String? {
+        let id = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: ".", with: "_")
+        guard let known = actions[id] else { return nil }
+        return language == .fr ? known.fr : known.en
+    }
+
     /// The words one step shows.
     /// - Parameters:
     ///   - raw: the daemon's step text ("running mail_read").

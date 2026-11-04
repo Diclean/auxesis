@@ -74,15 +74,20 @@ struct TestApi {
     _dir: tempfile::TempDir,
     addr: SocketAddr,
     token: String,
+    home: std::path::PathBuf,
     handle: Option<ApiHandle>,
 }
 
 impl TestApi {
     async fn start(options: ApiOptions) -> Self {
+        Self::start_with(options, CONFIG).await
+    }
+
+    async fn start_with(options: ApiOptions, config: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(config_path(&home), CONFIG).unwrap();
+        std::fs::write(config_path(&home), config).unwrap();
         std::fs::write(api::token_path(&home), format!("{TOKEN}\n")).unwrap();
         let _ = Store::open(&store_path(&home)).unwrap();
         let handle = api::spawn(&home, options).unwrap();
@@ -91,6 +96,7 @@ impl TestApi {
             _dir: dir,
             addr,
             token: TOKEN.to_string(),
+            home,
             handle: Some(handle),
         }
     }
@@ -898,6 +904,97 @@ async fn an_ask_grant_requires_an_approval_despite_a_global_allow() {
     t.stop();
 }
 
+/// A grants approval that went stale (the chief lost the access while the
+/// card waited) is refused, and the stream never shows it allowed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_grants_approval_is_refused_and_never_streams_allowed() {
+    let provider = Arc::new(FakeProvider::scripted("fakey", vec![]));
+    let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"");
+    let mut t = TestApi::start_with(options(provider), &config).await;
+    // The chief has no blanket MCP access; the owner grants it explicitly.
+    let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
+    chief.can_do.push(aux_runtime::grants::DoGrant {
+        skill: "mcp.access".to_string(),
+        level: aux_runtime::grants::ActionLevel::Auto,
+    });
+    auxd::agents::write_grants(&t.home, "main", &chief).unwrap();
+    let mut ws = ws_connect(t.addr, &t.token).await;
+    let before = t.get("/v1/agents/mail/grants").json();
+    let mut wider = before.clone();
+    let more = json!({"skill": "mcp.access", "level": "auto"});
+    wider["do"].as_array_mut().unwrap().push(more);
+    let put = t.put("/v1/agents/mail/grants", &wider.to_string());
+    assert_eq!(put.status, 200, "body: {}", put.body);
+    let id = put.json()["approval_id"].as_str().unwrap().to_string();
+    let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
+    chief.can_do.retain(|grant| grant.skill != "mcp.access");
+    auxd::agents::write_grants(&t.home, "main", &chief).unwrap();
+
+    let answer = t.post(
+        &format!("/v1/approvals/{id}"),
+        r#"{"decision":"allow_once"}"#,
+    );
+    assert_eq!(answer.status, 409, "body: {}", answer.body);
+    assert!(
+        answer.body.contains("grant_exceeds_chief"),
+        "{}",
+        answer.body
+    );
+    assert_eq!(t.get("/v1/agents/mail/grants").json(), before);
+    // The answer streams `resolved` then `updated`; both must say denied.
+    for kind in ["approval.resolved", "approval.updated"] {
+        let frame = wait_ws(&mut ws, Duration::from_secs(5), |value| {
+            value["type"] == kind && value["id"] == id.as_str()
+        })
+        .await
+        .unwrap_or_else(|| panic!("{kind} must stream"));
+        assert_eq!(frame["state"]["state"], "denied", "{frame}");
+    }
+    t.stop();
+}
+
+/// An older grants card approved after a newer one is refused: the newer set
+/// stays, the answer is `409 grants_changed`, and the stream says denied.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_older_grants_approval_never_overwrites_a_newer_set() {
+    let provider = Arc::new(FakeProvider::scripted("fakey", vec![]));
+    let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"");
+    let mut t = TestApi::start_with(options(provider), &config).await;
+    std::fs::create_dir_all(t.home.join("agents/mail")).unwrap();
+    let mut ws = ws_connect(t.addr, &t.token).await;
+    let before = t.get("/v1/agents/mail/grants").json();
+    let propose = |note: &str| {
+        let mut next = before.clone();
+        next["egress_note"] = json!(note);
+        next
+    };
+    let (older, newer) = (propose("older proposal"), propose("newer proposal"));
+    let put = |t: &TestApi, body: &serde_json::Value| {
+        let put = t.put("/v1/agents/mail/grants", &body.to_string());
+        assert_eq!(put.status, 200, "body: {}", put.body);
+        put.json()["approval_id"].as_str().unwrap().to_string()
+    };
+    let (old_id, new_id) = (put(&t, &older), put(&t, &newer));
+    let allow = r#"{"decision":"allow_once"}"#;
+    let answer = t.post(&format!("/v1/approvals/{new_id}"), allow);
+    assert_eq!(answer.status, 200, "body: {}", answer.body);
+    assert_eq!(t.get("/v1/agents/mail/grants").json(), newer);
+
+    let answer = t.post(&format!("/v1/approvals/{old_id}"), allow);
+    assert_eq!(answer.status, 409, "body: {}", answer.body);
+    assert!(answer.body.contains("grants_changed"), "{}", answer.body);
+    assert_eq!(t.get("/v1/agents/mail/grants").json(), newer);
+    for kind in ["approval.resolved", "approval.updated"] {
+        let frame = wait_ws(&mut ws, Duration::from_secs(5), |value| {
+            value["type"] == kind && value["id"] == old_id.as_str()
+        })
+        .await
+        .unwrap_or_else(|| panic!("{kind} must stream"));
+        assert_eq!(frame["state"]["state"], "denied", "{frame}");
+    }
+    t.stop();
+}
+
 /// #6: a grants change applies only through the approval it created.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_grants_change_requires_its_own_approved_approval() {
@@ -1082,6 +1179,85 @@ async fn a_builtin_tool_still_runs() {
         messages.contains("builtin works"),
         "a builtin tool must still run: {messages}"
     );
+    t.stop();
+}
+
+/// CHIEF-BASE-1: what the chief is denied, an agent is denied too, at run
+/// time and when the agent is created, whatever the agent's own rules say.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
+    let provider = Arc::new(FakeProvider::scripted(
+        "fakey",
+        vec![
+            tool_call("read_file", json!({"path":"note.txt"})),
+            ChatResponse::assistant("done"),
+        ],
+    ));
+    let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"")
+        + "\n[[rules]]\nagent = \"main\"\ntool = \"read_file\"\naction = \"deny\"\n";
+    let mut t = TestApi::start_with(options(provider), &config).await;
+    let workspace = aux_engine::workspace_dir(&t.home, "mail");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("note.txt"), "builtin works").unwrap();
+    let sent = t.post("/v1/threads/mail/messages", r#"{"content":"read it"}"#);
+    assert_eq!(sent.status, 200, "body: {}", sent.body);
+    let messages = t.get("/v1/threads/mail/messages").body;
+    assert!(!messages.contains("builtin works"), "{messages}");
+    assert!(messages.contains("denied"), "{messages}");
+
+    let scout = json!({"name": "scout", "tools": ["read_file"]});
+    let created = t.post("/v1/agents", &scout.to_string());
+    assert_eq!(created.status, 409, "body: {}", created.body);
+    assert!(
+        created.body.contains("grant_exceeds_chief"),
+        "{}",
+        created.body
+    );
+    assert!(!t.home.join("agents/scout").exists());
+    t.stop();
+}
+
+/// ACT-FREE still binds the chief: with every access and `approvals = auto`,
+/// a send still waits for a card and runs nothing before it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chief_send_still_creates_a_card_in_auto_mode() {
+    let provider = Arc::new(FakeProvider::scripted(
+        "fakey",
+        vec![
+            tool_call("mail_send", json!({"to": "nobody@example.test"})),
+            ChatResponse::assistant("done"),
+        ],
+    ));
+    let ran = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ran);
+    let tools: ToolRegistryHook = Arc::new(move |registry| {
+        let tool = TestTool::simple("mail_send", "sent", Arc::clone(&flag));
+        registry.register_native(Box::new(tool));
+    });
+    let config = CONFIG
+        .replace("default_agent = \"aux\"", "default_agent = \"main\"")
+        .replace("approvals = \"ask\"", "approvals = \"auto\"");
+    let options = ApiOptions {
+        tools: Some(tools),
+        ..options(provider)
+    };
+    let mut t = TestApi::start_with(options, &config).await;
+    let (addr, token) = (t.addr, t.token.clone());
+    let mut send = tokio::task::spawn_blocking(move || {
+        let body = json!({"content": "send it"}).to_string();
+        post(addr, "/v1/threads/main/messages", Some(&token), &body)
+    });
+    let pending = tokio::select! {
+        pending = wait_for_pending(&t, Duration::from_secs(10)) => pending,
+        sent = &mut send => panic!("the turn ended before a card: {:?}", sent.unwrap().status),
+    };
+    assert_eq!(pending["scope_tool"], "mail_send");
+    assert!(!ran.load(Ordering::SeqCst));
+    let id = pending["id"].as_str().unwrap();
+    let denied = t.post(&format!("/v1/approvals/{id}"), r#"{"decision":"deny"}"#);
+    assert_eq!(denied.status, 200, "body: {}", denied.body);
+    let _ = tokio::time::timeout(Duration::from_secs(10), send).await;
+    assert!(!ran.load(Ordering::SeqCst));
     t.stop();
 }
 

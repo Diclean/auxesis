@@ -1191,3 +1191,80 @@ exit 1"#;
         assert!(!logs.contains(leak), "{leak} leaked: {logs}");
     }
 }
+
+/// Switch the rig's home to Open mode: the turn then runs as a plain chat and
+/// its answer is the reply text (IMSG-SCRUB-1).
+fn open_mode(rig: &Rig) {
+    std::fs::write(
+        kernel_core::config_path(&rig.home),
+        "version = 1\n\n[privacy]\nmode = \"open\"\n",
+    )
+    .unwrap();
+}
+
+/// IMSG-SCRUB-1: an Open-mode reply is the assistant text, which can hold real
+/// values (rehydrated tokens, or what an injected mail made the model echo).
+/// None of a key, an IBAN, a card, a national ID or a health term reaches
+/// the text Messages is handed.
+#[tokio::test]
+async fn gateway_open_mode_reply_never_carries_a_key_an_iban_a_card_an_id_or_health_data() {
+    let key = format!(
+        "sk-proj-{}",
+        "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh3iJk6l"
+    ); // gitleaks:allow
+    let iban = "FR14 2004 1010 0505 0001 3M02 606";
+    let card = "4111 1111 1111 1111";
+    let nir = "1 85 05 78 006 084 91";
+    let health = "diabetes";
+    let answer = format!(
+        "Here you go. Key: {key}. Pay to {iban}, card {card}. NIR {nir}. \
+         The client has {health}."
+    );
+    let rig = rig(FakeProvider::repeating(
+        "fake",
+        ChatResponse::assistant(&answer),
+    ));
+    open_mode(&rig);
+    rig.answer_text().await;
+
+    let sent = rig.sender.sent();
+    assert_eq!(sent.len(), 1, "one reply: {sent:?}");
+    let (to, text) = &sent[0];
+    assert_eq!(to, OWNER);
+    assert!(
+        text.starts_with("Here you go."),
+        "the reply was not sent: {text}"
+    );
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    for value in [key.as_str(), iban, card, nir, health] {
+        let squeezed: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            !text.contains(value) && !compact.contains(&squeezed),
+            "{value} reached Messages: {text}"
+        );
+    }
+    assert!(
+        !text.contains("4111"),
+        "a card fragment reached Messages: {text}"
+    );
+    assert!(
+        !text.contains("Ab3dEf6h"),
+        "a key fragment reached Messages: {text}"
+    );
+}
+
+/// IMSG-SCRUB-1: a plain Open-mode answer goes out as written.
+#[tokio::test]
+async fn gateway_open_mode_plain_reply_goes_out_unchanged() {
+    let answer = "Done. Your meeting with Camille is moved to Thursday at 10:00.";
+    let rig = rig(FakeProvider::repeating(
+        "fake",
+        ChatResponse::assistant(answer),
+    ));
+    open_mode(&rig);
+    rig.answer_text().await;
+    assert_eq!(
+        rig.sender.sent(),
+        vec![(OWNER.to_string(), answer.to_string())]
+    );
+}

@@ -399,14 +399,26 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
             PlannedJob(id: 2, agent: "mail", name: "Check Exemple SARL's payment", schedule: "after Camille's reply", nextRunAt: nil),
             // One late and one failing job, so the health marks show in previews.
             PlannedJob(id: 3, agent: "documents", name: "File receipts", schedule: "daily 07:00", nextRunAt: stamp(-60),
-                       health: .late, reason: "File receipts did not run at 07:00"),
+                       health: .late, reason: "File receipts did not run at 07:00",
+                       reasonKind: .missed, reasonAt: "07:00"),
             PlannedJob(id: 4, agent: "mail", name: "Inbox sweep", schedule: "daily 07:30", nextRunAt: stamp(24 * 60 - 30),
-                       health: .failing, reason: "Inbox sweep failed at 07:32"),
+                       health: .failing, reason: "Inbox sweep failed at 07:32",
+                       reasonKind: .failed, reasonAt: "07:32"),
         ]
     }
 
     public func usageToday() async throws -> UsageDay {
-        UsageDay(day: "today", total: UsageTotals(tokensIn: 18_240, tokensOut: 2_115, usdCents: 4))
+        // One agent near its cap (95 %), so previews show the amber bar.
+        UsageDay(
+            day: "today",
+            total: UsageTotals(tokensIn: 18_240, tokensOut: 2_115, usdCents: 4),
+            agents: [
+                UsageAgent(agent: "mail", totals: UsageTotals(tokensIn: 18_000, tokensOut: 2_100, usdCents: 4),
+                           caps: UsageCaps(tokensIn: 2_000_000, tokensOut: 2_200, usdCents: 5)),
+                UsageAgent(agent: "aux", totals: UsageTotals(tokensIn: 240, tokensOut: 15, usdCents: 0),
+                           caps: UsageCaps(tokensIn: 2_000_000, tokensOut: 400_000, usdCents: 500)),
+            ]
+        )
     }
 
     public func providerList() async throws -> [ProviderSummary] {

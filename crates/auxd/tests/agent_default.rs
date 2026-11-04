@@ -254,10 +254,10 @@ async fn domain_agents_are_not_offered_the_shell_by_default() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_existing_config_keeps_the_agent_it_names() {
+async fn a_config_naming_main_runs_the_main_chief() {
     let rig = Rig::start(Some("default_dot = \"main\""), Recording::default(), None);
     assert_eq!(tokio::task::block_in_place(|| rig.text("hello")), "main");
-    assert!(!rig.calls()[0].1.iter().any(|name| name == "delegate"));
+    assert!(rig.calls()[0].1.iter().any(|name| name == "delegate"));
 }
 
 /// Aux asks Mail for the newest mail under the global `mode`, with `layers`

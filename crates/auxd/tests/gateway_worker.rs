@@ -583,3 +583,78 @@ async fn outside_a_sandbox_the_same_remote_gets_the_approval_and_the_brief() {
         "{remote_seen:?}"
     );
 }
+
+/// Runs one urgent alert and one brief through the real router and worker
+/// with Open mode and a paired remote; returns what the remote was handed.
+async fn remote_alert_and_brief(alert: &str, brief: &str) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let remote = Arc::new(RecordingRemote {
+        seen: Mutex::new(Vec::new()),
+    });
+    let local: Arc<dyn Gateway> = Arc::new(LocalGateway::new(Arc::new(FakeNotifier::new())));
+    let (sink, rx) = GatewaySink::channel();
+    let router = Arc::new(NotifyRouter::new(
+        Arc::new(sink),
+        NotifyPolicy::new(no_quiet()),
+        kernel_core::SandboxHome::open(dir.path()).unwrap(),
+        Arc::new(SystemClock),
+    ));
+    let remotes = vec![remote.clone() as Arc<dyn Gateway>];
+    let worker = tokio::spawn(run_worker(remotes, local, open_mode(), rx));
+    router.alert(Level::Urgent, alert).await;
+    router.brief(brief);
+    drop(router);
+    worker.await.unwrap();
+    let seen = remote.seen.lock().unwrap().clone();
+    seen
+}
+
+/// IMSG-SCRUB-1: an alert and a brief bound for a paired phone carry no key,
+/// IBAN, card, national ID or health term in Open mode.
+#[tokio::test]
+async fn gateway_remote_alert_and_brief_never_carry_a_key_an_iban_a_card_an_id_or_health_data() {
+    let key = format!(
+        "sk-proj-{}",
+        "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh3iJk6l"
+    ); // gitleaks:allow
+    let values = [
+        key.as_str(),
+        "FR14 2004 1010 0505 0001 3M02 606",
+        "4111 1111 1111 1111",
+        "1 85 05 78 006 084 91",
+        "diabetes",
+    ];
+    let text = format!(
+        "Alert. Key {}. Pay to {}, card {}. NIR {}. The client has {}.",
+        values[0], values[1], values[2], values[3], values[4]
+    );
+    let seen = remote_alert_and_brief(&text, &text.replacen("Alert.", "Brief.", 1)).await;
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen[0].starts_with("Alert."), "{seen:?}");
+    assert!(seen[1].starts_with("Brief."), "{seen:?}");
+    for sent in &seen {
+        let compact: String = sent.chars().filter(|c| !c.is_whitespace()).collect();
+        for value in values {
+            let squeezed: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(
+                !sent.contains(value) && !compact.contains(&squeezed),
+                "{value} reached the phone: {sent}"
+            );
+        }
+        assert!(
+            !sent.contains("4111") && !sent.contains("Ab3dEf6h"),
+            "{sent}"
+        );
+    }
+}
+
+/// IMSG-SCRUB-1: a plain alert and brief reach the phone as written.
+#[tokio::test]
+async fn gateway_remote_plain_alert_and_brief_go_out_unchanged() {
+    let alert = "Camille replied: the meeting moves to Thursday at 10:00.";
+    let brief = "Good morning. 2 meetings today, 3 unread mails.";
+    assert_eq!(
+        remote_alert_and_brief(alert, brief).await,
+        vec![alert.to_string(), brief.to_string()]
+    );
+}

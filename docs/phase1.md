@@ -63,6 +63,8 @@ EventKit (it cannot add them); the invite goes by mail with an `.ics` (`docs/mai
 `vision.ocr` args: `{sha256}` of a registry document; the app reads the bytes from `auxd`
 (`GET /v1/documents/{sha256}/bytes`, local token), runs `VNRecognizeTextRequest` (accurate, language
 correction on, languages `en-US, fr-FR`), and returns `{lines:[{text, confidence, box}], pages}`.
+An empty pass is retried once with the same accurate request, never a faster one; a second empty
+pass marks the document unread with the reason `no text could be read; it can be retried`.
 
 ## 4. Kernel changes
 
@@ -124,3 +126,11 @@ never by value (`no address for ⟦PERSON_1⟧`, `several addresses for ⟦PERSO
 The model's schema no longer contains a derived slot, so the model cannot invent one. Calls that name
 the derived slot get the resolved value. `send-invite.md` declares `email: { type: email, tier: C,
 from: contact(person) }`. Loader: `from:` naming a missing or non-H slot is a load error.
+
+## 8. Local API limits
+
+The local API is HTTP/1 on loopback only. It serves at most 64 connections at once; a peer past
+that waits in the listener backlog. A connection that sends no complete request head, or sits idle
+on keep-alive, is closed after 10 s. A running turn, a streaming response and the events socket are
+not cut.
+

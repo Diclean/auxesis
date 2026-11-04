@@ -26,6 +26,7 @@ public enum AuxdError: Error, LocalizedError, Equatable {
             // makes the app re-read that local access.
             return L10n.t(.errorLocalAccessRelaunch, language)
         case .http:
+            if let refusal = budgetRefusal { return refusal.message(language) }
             if apiErrorCode == "thread_busy" { return L10n.t(.errorThreadBusy, language) }
             return L10n.t(.errorServiceRefused, language)
         case .transport(let message):
@@ -65,6 +66,24 @@ public enum AuxdError: Error, LocalizedError, Equatable {
         apiErrorObject?["message"] as? String
     }
 
+    /// The daemon's `error.detail`: sanitized, actionable reason when it has one.
+    public var apiErrorDetail: String? {
+        (apiErrorObject?["detail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A `429 budget_denied` refusal, with the cap the daemon named.
+    ///
+    /// The detail is the kernel's reason, e.g. "agent `mail` reached its daily
+    /// tokens_out budget (400000/400000 on 2026-11-04)"; the chat names both.
+    public var budgetRefusal: BudgetRefusal? {
+        guard case .http(let status, _) = self,
+              status == 429,
+              apiErrorCode == "budget_denied",
+              let detail = apiErrorDetail
+        else { return nil }
+        return BudgetRefusal(detail: detail)
+    }
+
     /// The daemon's reason for refusing an edited card, when it refused one.
     ///
     /// The daemon answers `409` with the code `edited_card_unshowable` and a
@@ -99,6 +118,69 @@ public enum AuxdError: Error, LocalizedError, Equatable {
               let error = object["error"] as? [String: Any]
         else { return nil }
         return error
+    }
+}
+
+/// The parsed substance of a `budget_denied` turn refusal.
+public struct BudgetRefusal: Equatable {
+    public enum Cap: String, Equatable {
+        case tokensIn = "tokens_in"
+        case tokensOut = "tokens_out"
+        case usdCents = "usd_cents"
+
+        var labelKey: StringKey {
+            switch self {
+            case .tokensIn: return .capTokensIn
+            case .tokensOut: return .capTokensOut
+            case .usdCents: return .capUSD
+            }
+        }
+    }
+
+    public let agent: String
+    public let cap: Cap?
+    public let spent: UInt64?
+    public let limit: UInt64?
+
+    public init?(detail: String) {
+        guard let start = detail.firstIndex(of: "`") else { return nil }
+        let rest = detail[detail.index(after: start)...]
+        guard let end = rest.firstIndex(of: "`") else { return nil }
+        agent = String(rest[..<end])
+        guard !agent.isEmpty else { return nil }
+        if let start = detail.range(of: "reached its daily ")?.upperBound,
+           let end = detail.range(of: " budget", range: start..<detail.endIndex)?.lowerBound {
+            cap = Cap(rawValue: String(detail[start..<end]))
+        } else {
+            cap = nil
+        }
+        let amounts = Self.amounts(in: detail)
+        spent = amounts.first
+        limit = amounts.last
+    }
+
+    /// Which agent, which daily cap, how full it is, and the config key that
+    /// raises it (Settings has no cap editor yet).
+    public func message(_ language: Language) -> String {
+        let name = TeamMember.displayName(agent)
+        guard let cap, let spent, let limit else {
+            return L10n.f(.budgetDeniedOther, language, name, agent)
+        }
+        return L10n.f(
+            .budgetDeniedCap, language, name, L10n.t(cap.labelKey, language),
+            spent.formatted(.number.locale(Locale(identifier: language.localeIdentifier))),
+            limit.formatted(.number.locale(Locale(identifier: language.localeIdentifier))),
+            cap.rawValue, agent
+        )
+    }
+
+    /// "400000 spent + 20 reserved / 400000 on 2026-11-04" → [400000, 20, 400000].
+    private static func amounts(in detail: String) -> [UInt64] {
+        guard let open = detail.lastIndex(of: "("),
+              let close = detail[open...].firstIndex(of: ")") else { return [] }
+        let body = String(detail[detail.index(after: open)..<close])
+        let beforeDay = body.components(separatedBy: " on ").first ?? body
+        return beforeDay.split(whereSeparator: { !$0.isNumber }).compactMap { UInt64($0) }
     }
 }
 

@@ -8,7 +8,7 @@
 //! containers by text volume, paragraph count and link density. The page
 //! path does **not** model CSS visibility; see the crate docs. The mail path
 //! ([`extract_body_text`]) also drops what an element hides through its own
-//! attributes or inline style, never through a style sheet.
+//! attributes, its inline style or a simple `<style>` rule ([`Sheet`]).
 
 use html5ever::parse_document;
 use html5ever::tendril::{StrTendril, Tendril, TendrilSink};
@@ -16,6 +16,7 @@ use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::{Attribute, ExpandedName, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -49,7 +50,7 @@ pub fn extract_readable(html: &[u8]) -> Readable {
 /// not cancellable, so without this it would keep burning CPU after the
 /// caller has already received [`kernel_net::FetchError::Timeout`].
 pub(crate) fn extract_readable_before(html: &[u8], deadline: Instant) -> Readable {
-    extract_with_deadline(html, Deadline { limit: deadline }, Mode::Page)
+    extract_with_deadline(html, Deadline { limit: deadline }, false)
 }
 
 /// [`extract_readable`] for a mail body: no scorer, the same dropped elements
@@ -58,31 +59,33 @@ pub(crate) fn extract_readable_before(html: &[u8], deadline: Instant) -> Readabl
 /// is all content, so a greeting or a deadline next to a longer paragraph is
 /// never dropped like page chrome.
 ///
-/// Style sheets are not evaluated, so a `<style>` rule can still hide text
-/// from the reader: mail stays untrusted. `title` ignores visibility; mail
-/// callers use `text`.
+/// Only simple `<style>` rules are evaluated ([`Sheet`]), so another rule can
+/// still hide text from the reader: mail stays untrusted. `title` ignores
+/// visibility; mail callers use `text`.
 pub fn extract_body_text(html: &[u8]) -> Readable {
     let limit = Instant::now() + EXTRACT_WALL_BUDGET;
-    extract_with_deadline(html, Deadline { limit }, Mode::Mail)
+    extract_with_deadline(html, Deadline { limit }, true)
 }
 
 /// Which view of the document the walkers render.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
+#[derive(Clone, Copy)]
+enum Mode<'a> {
     /// A web page: the scorer's container, structure only.
     Page,
-    /// A mail body: the whole document, minus what elements hide inline.
-    Mail,
+    /// A mail body: the whole document, minus what its elements hide.
+    Mail(&'a Sheet),
 }
 
-fn extract_with_deadline(html: &[u8], deadline: Deadline, mode: Mode) -> Readable {
+fn extract_with_deadline(html: &[u8], deadline: Deadline, mail: bool) -> Readable {
     let (dom, parse_aborted) = parse(html, &deadline);
-    let root = match mode {
-        Mode::Page => choose_root(&dom.document, &deadline),
+    let sheet = mail.then(|| Sheet::of(&dom.document, &deadline));
+    let (root, mode) = match &sheet {
+        None => (choose_root(&dom.document, &deadline), Mode::Page),
         // `<html>`, not `<body>`: a hidden `<html>` hides the whole mail.
-        Mode::Mail => {
-            find_first(&dom.document, "html", 0, &deadline).unwrap_or_else(|| dom.document.clone())
-        }
+        Some(sheet) => (
+            find_first(&dom.document, "html", 0, &deadline).unwrap_or_else(|| dom.document.clone()),
+            Mode::Mail(sheet),
+        ),
     };
     let readable = Readable {
         title: title_of(&dom.document, &root, &deadline),
@@ -95,7 +98,8 @@ fn extract_with_deadline(html: &[u8], deadline: Deadline, mode: Mode) -> Readabl
         // visibly dropped (fail closed).
         truncated: parse_aborted
             || deadline.expired()
-            || depth_exceeds(&dom.document, &deadline, mode),
+            || depth_exceeds(&dom.document, &deadline, mode)
+            || sheet.as_ref().is_some_and(|sheet| sheet.overflow),
     };
     // Hostile pages can nest tens of thousands of elements; tear the DOM
     // down with an explicit stack so recursive `Drop` cannot overflow ours.
@@ -242,87 +246,125 @@ fn is_site_chrome(node: &Handle) -> bool {
 /// All three walkers (`scan`, `render_into`, `depth_exceeds`) share this
 /// predicate so a skip rule cannot be taught to only one of them.
 fn walker_skips(node: &Handle, tag: &str, mode: Mode) -> bool {
-    is_dropped(tag) || is_site_chrome(node) || (mode == Mode::Mail && hides_subtree(node))
+    is_dropped(tag)
+        || is_site_chrome(node)
+        || matches!(mode, Mode::Mail(sheet) if hides_subtree(node, sheet))
 }
 
 /// True when a mail client shows nothing of `node` or its subtree, whatever
-/// the children say: the `hidden` attribute, `aria-hidden="true"`, or an
-/// inline `display:none`, `opacity:0`, or a zero `height`/`width` (or their
-/// `max-` forms) with an `overflow` that clips.
-fn hides_subtree(node: &Handle) -> bool {
-    attr(node, "hidden").is_some()
+/// the children say: the `hidden` attribute, `aria-hidden="true"`, or a
+/// `display:none`, `opacity:0`, or a zero `height`/`width` (or their `max-`
+/// forms) with an `overflow` that clips, inline or from a [`Sheet`] rule.
+fn hides_subtree(node: &Handle, sheet: &Sheet) -> bool {
+    sheet.overflow
+        || attr(node, "hidden").is_some()
         || attr(node, "aria-hidden").is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
-        || inline_style(node).gone
+        || style(node, sheet, BASE_FONT_PX).gone
 }
+
+/// Font sizes in CSS px: the root size, and the smallest size whose text a
+/// reader is taken to see.
+const BASE_FONT_PX: f64 = 16.0;
+const MIN_FONT_PX: f64 = 6.0;
 
 /// Inherited text visibility in a mail body. Unlike [`hides_subtree`], CSS
 /// lets a descendant undo these with its own declaration: responsive mail
 /// layouts wrap whole columns in `font-size:0` and set the size again
 /// inside, so they hide text, not elements.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct Paint {
-    zero_font: bool,
+    font_px: f64,
     invisible: bool,
 }
 
 impl Paint {
     /// The paint inside `node`, an element.
-    fn under(self, node: &Handle) -> Paint {
-        let style = inline_style(node);
+    fn under(self, node: &Handle, sheet: &Sheet) -> Paint {
+        let style = style(node, sheet, self.font_px);
         Paint {
-            zero_font: style.zero_font.unwrap_or(self.zero_font),
+            font_px: style.font_px.unwrap_or(self.font_px),
             invisible: style.invisible.unwrap_or(self.invisible),
         }
     }
 }
 
-/// What one element's inline `style` says about visibility. Declarations are
-/// read literally: comments are skipped, but CSS escapes, `calc()` and
-/// `var()` are not evaluated. A hiding declaration beats a later one that
-/// shows (drop more, never less).
+/// What one element's inline `style` and the [`Sheet`] rules it matches say
+/// about visibility. Declarations are read literally: comments and strings
+/// are skipped, but CSS escapes, `calc()` and `var()` are not evaluated. A
+/// hiding declaration beats a later one that shows (drop more, never less).
 #[derive(Default)]
-struct InlineStyle {
+struct Style {
     /// See [`hides_subtree`].
     gone: bool,
-    /// `font-size`: `Some(true)` when zero, `Some(false)` for a size that
-    /// does not scale the parent's (`em`, `%`, `smaller` keep a zero).
-    zero_font: Option<bool>,
+    /// `font-size` in px, the smallest one declared.
+    font_px: Option<f64>,
     /// `visibility`: `Some(true)` for `hidden` or `collapse`.
     invisible: Option<bool>,
 }
 
-fn inline_style(node: &Handle) -> InlineStyle {
-    let mut style = InlineStyle::default();
-    let Some(css) = attr(node, "style") else {
+/// The [`Style`] of `node` inside a parent whose font size is `parent_px`.
+fn style(node: &Handle, sheet: &Sheet, parent_px: f64) -> Style {
+    let mut style = declarations(&clean(&attr(node, "style").unwrap_or_default()), parent_px);
+    if sheet.rules.is_empty() {
         return style;
-    };
-    let css = without_comments(&css.to_ascii_lowercase());
+    }
+    let tag = tag_name(node).unwrap_or_default();
+    let id = attr(node, "id").unwrap_or_default().to_ascii_lowercase();
+    let class = attr(node, "class").unwrap_or_default().to_ascii_lowercase();
+    let classes: HashSet<&str> = class.split_ascii_whitespace().collect();
+    for (selectors, rule) in &sheet.rules {
+        if selectors
+            .iter()
+            .any(|selector| selects(selector, tag, &id, &classes))
+        {
+            style.gone |= rule.gone;
+            style.font_px = smaller(style.font_px, rule.font_px);
+            style.invisible = style.invisible.max(rule.invisible);
+        }
+    }
+    style
+}
+
+/// The [`Style`] of one block of [`clean`]ed declarations. An escape or an
+/// entity in a property name or in a value read here, or a function in a
+/// `display`, `visibility` or `opacity` value, makes the element gone: a
+/// mail client may resolve it to a hiding value (fail closed).
+fn declarations(css: &str, parent_px: f64) -> Style {
+    let mut style = Style::default();
     let (mut zero_box, mut clipped) = (false, false);
     for declaration in css.split(';') {
-        let Some((name, value)) = declaration.split_once(':') else {
-            continue;
-        };
+        let (name, value) = declaration.split_once(':').unwrap_or((declaration, ""));
         let value = value.split('!').next().unwrap_or_default().trim();
+        let escaped = value.contains(['\\', '&']);
+        let opaque = escaped || value.contains('(');
         match name.trim() {
-            "display" => style.gone |= value == "none",
-            "opacity" => style.gone |= number(value).is_some_and(|(n, _)| n <= 0.0),
+            name if name.contains(['\\', '&']) => style.gone = true,
+            "display" => style.gone |= opaque || value == "none",
+            "opacity" => style.gone |= opaque || number(value).is_some_and(|(n, _)| n <= 0.0),
             "height" | "max-height" | "width" | "max-width" => {
-                zero_box |= number(value).is_some_and(|(n, _)| n == 0.0);
+                zero_box |= escaped || number(value).is_some_and(|(n, _)| n == 0.0);
             }
             "overflow" | "overflow-x" | "overflow-y" => {
-                clipped |= value
-                    .split_whitespace()
-                    .any(|word| matches!(word, "hidden" | "clip" | "auto" | "scroll"));
+                clipped |= escaped
+                    || value
+                        .split_whitespace()
+                        .any(|word| matches!(word, "hidden" | "clip" | "auto" | "scroll"));
             }
             "visibility" => match value {
+                _ if opaque => style.gone = true,
                 "hidden" | "collapse" => style.invisible = Some(true),
                 "visible" | "initial" => style.invisible = style.invisible.or(Some(false)),
                 _ => {}
             },
-            "font-size" => match font_zero(value) {
-                Some(true) => style.zero_font = Some(true),
-                shown => style.zero_font = style.zero_font.or(shown),
-            },
+            "font-size" if escaped => style.gone = true,
+            "font-size" => style.font_px = smaller(style.font_px, font_px(value, parent_px)),
+            "font" => {
+                // The shorthand's size is its first number with a unit, or a zero.
+                let mut words = value.split(|c: char| c.is_whitespace() || c == '/');
+                let size =
+                    words.find(|w| number(w).is_some_and(|(n, u)| n == 0.0 || !u.is_empty()));
+                style.font_px = smaller(style.font_px, size.and_then(|w| font_px(w, parent_px)));
+            }
             _ => {}
         }
     }
@@ -330,17 +372,48 @@ fn inline_style(node: &Handle) -> InlineStyle {
     style
 }
 
-/// `css` with every `/* … */` comment replaced by a space.
-fn without_comments(css: &str) -> String {
+fn smaller(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    a.into_iter().chain(b).reduce(f64::min)
+}
+
+/// `css` lowercased, with each comment replaced by a space and the inside of
+/// each string and unquoted `url(…)` by spaces, so that no `;`, brace, quote
+/// or `/*` in them ends a declaration or a rule. An escape keeps its `\`.
+fn clean(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
-    let mut rest = css;
-    while let Some(start) = rest.find("/*") {
-        out.push_str(&rest[..start]);
-        out.push(' ');
-        let comment = &rest[start + 2..];
-        rest = comment.find("*/").map_or("", |end| &comment[end + 2..]);
+    let mut rest = css.chars();
+    // The quote or `)` that ends the string or `url(` being read.
+    let mut close = None;
+    while let Some(c) = rest.next() {
+        let url = c == '(' && out.ends_with("url");
+        match close {
+            _ if c == '\\' => {
+                out.push_str(if close.is_some() { "  " } else { "\\_" });
+                rest.next();
+            }
+            Some(end) if c == end || (end != ')' && matches!(c, '\n' | '\r' | '\x0c')) => {
+                close = None;
+                out.push(c);
+            }
+            Some(_) => out.push(' '),
+            None if c == '"'
+                || c == '\''
+                || (url && !rest.as_str().trim_start().starts_with(['"', '\''])) =>
+            {
+                close = Some(if url { ')' } else { c });
+                out.push(c);
+            }
+            None if c == '/' && rest.as_str().starts_with('*') => {
+                out.push(' ');
+                let comment = &rest.as_str()[1..];
+                rest = comment
+                    .find("*/")
+                    .map_or("", |end| &comment[end + 2..])
+                    .chars();
+            }
+            None => out.push(c.to_ascii_lowercase()),
+        }
     }
-    out.push_str(rest);
     out
 }
 
@@ -349,21 +422,128 @@ fn number(value: &str) -> Option<(f64, &str)> {
     let end = value
         .find(|c: char| !matches!(c, '0'..='9' | '.' | '+' | '-'))
         .unwrap_or(value.len());
-    Some((value[..end].parse().ok()?, &value[end..]))
+    let n: f64 = value[..end].parse().ok()?;
+    n.is_finite().then_some((n, &value[end..]))
 }
 
-/// [`InlineStyle::zero_font`] for one `font-size` value.
-fn font_zero(value: &str) -> Option<bool> {
-    let Some((size, unit)) = number(value) else {
-        let absolute = value.ends_with("small") || value.ends_with("large");
-        return (absolute || matches!(value, "medium" | "initial")).then_some(false);
-    };
-    let scales = matches!(unit, "em" | "%" | "ex" | "ch" | "cap" | "ic" | "lh");
-    if size == 0.0 {
-        Some(true)
-    } else {
-        (size > 0.0 && !scales).then_some(false)
+/// One `font-size` value in px inside a parent of `parent_px`; `None` for
+/// `inherit`. A factor (`em`, `%`, `smaller`) scales at most
+/// [`BASE_FONT_PX`], so a large parent never makes it readable; an unknown
+/// unit, a bare number or a function is zero (fail closed).
+fn font_px(value: &str, parent_px: f64) -> Option<f64> {
+    let em = parent_px.min(BASE_FONT_PX);
+    Some(match (number(value), value) {
+        (Some((n, "px")), _) => n,
+        (Some((n, "pt")), _) => n * 4.0 / 3.0,
+        (Some((n, "rem")), _) => n * BASE_FONT_PX,
+        (Some((n, "em")), _) => n * em,
+        (Some((n, "%")), _) => n * em / 100.0,
+        (_, "xx-small" | "x-small") => 9.0,
+        (_, "small") => 13.0,
+        (_, "medium" | "large" | "x-large" | "xx-large" | "xxx-large" | "initial") => BASE_FONT_PX,
+        (_, "smaller") => em / 1.2,
+        (_, "larger") => em * 1.2,
+        (_, "inherit" | "unset" | "revert" | "revert-layer") => return None,
+        _ => 0.0,
+    })
+}
+
+/// The rules of a mail's `<style>` elements that hide what they select, read
+/// by a bounded, simple reader: top-level rules whose selectors are compounds
+/// of a tag (or `*`), `#id` and `.class`, in comma lists, matched regardless
+/// of case. At-rules (`@media`), combinators, pseudo-classes, attribute
+/// selectors, escapes, nesting and linked sheets are not read. Only what a
+/// rule hides counts: no rule shows text again.
+#[derive(Default)]
+struct Sheet {
+    rules: Vec<(Vec<String>, Style)>,
+    /// More than [`MAX_RULES`] hiding rules, or one with more than
+    /// [`MAX_SELECTORS`] selectors: all of the mail counts as hidden.
+    overflow: bool,
+}
+
+const MAX_RULES: usize = 500;
+const MAX_SELECTORS: usize = 20;
+
+impl Sheet {
+    /// The hiding rules of every `<style>` element in `document`.
+    fn of(document: &Handle, deadline: &Deadline) -> Sheet {
+        let mut sheet = Sheet::default();
+        let mut stack = vec![document.clone()];
+        while let Some(node) = stack.pop() {
+            if deadline.expired() {
+                break;
+            }
+            if tag_name(&node) == Some("style") {
+                sheet.read(&clean(&raw_text(&node, deadline)), deadline);
+            }
+            stack.extend(node.children.borrow().iter().cloned());
+        }
+        sheet
     }
+
+    /// Read one [`clean`]ed style sheet; HTML comment marks around it are
+    /// ignored.
+    fn read(&mut self, css: &str, deadline: &Deadline) {
+        let css = css.replace("<!--", " ").replace("-->", " ");
+        let mut rest = css.as_str();
+        while let Some(open) = rest.find('{') {
+            if deadline.expired() {
+                return;
+            }
+            // An at-rule statement (`@import …;`) ends at its `;`.
+            let prelude = rest[..open].rsplit(';').next().unwrap_or_default();
+            let block = &rest[open + 1..];
+            let mut depth = 0isize;
+            let end = block
+                .find(|c| {
+                    depth += (c == '{') as isize - (c == '}') as isize;
+                    depth < 0
+                })
+                .unwrap_or(block.len());
+            rest = block.get(end + 1..).unwrap_or_default();
+            let rule = declarations(&block[..end], BASE_FONT_PX);
+            let rule = Style {
+                font_px: rule.font_px.filter(|&px| px < MIN_FONT_PX),
+                invisible: rule.invisible.filter(|&hidden| hidden),
+                ..rule
+            };
+            // An at-rule's prelude starts with `@`, which no selector holds.
+            let selectors: Vec<String> = prelude
+                .split(',')
+                .map(str::trim)
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.chars()
+                            .all(|c| c.is_alphanumeric() || "-_#.*".contains(c))
+                })
+                .map(str::to_string)
+                .collect();
+            if selectors.is_empty()
+                || !(rule.gone || rule.font_px.is_some() || rule.invisible.is_some())
+            {
+                continue;
+            }
+            if self.rules.len() == MAX_RULES || selectors.len() > MAX_SELECTORS {
+                self.overflow = true;
+                return;
+            }
+            self.rules.push((selectors, rule));
+        }
+    }
+}
+
+/// True when the compound selector selects an element with this tag, id and
+/// classes, all lowercase.
+fn selects(compound: &str, tag: &str, id: &str, classes: &HashSet<&str>) -> bool {
+    let mut names = compound.split(['#', '.']);
+    let head = names.next().unwrap_or_default();
+    let mut kinds = compound.matches(['#', '.']);
+    (head.is_empty() || head == "*" || head == tag)
+        && names.all(|name| match kinds.next() {
+            Some("#") => !name.is_empty() && name == id,
+            _ => classes.contains(name),
+        })
 }
 
 /// Wall-clock budget for one whole extraction: feeding the parser, the
@@ -887,7 +1067,11 @@ fn ensure_paragraph(out: &mut String) {
 /// pipe-separated. In a mail body, text the [`Paint`] hides is left out.
 fn render(node: &Handle, deadline: &Deadline, mode: Mode) -> String {
     let mut out = String::new();
-    render_into(node, &mut out, 0, deadline, mode, Paint::default());
+    let paint = Paint {
+        font_px: BASE_FONT_PX,
+        invisible: false,
+    };
+    render_into(node, &mut out, 0, deadline, mode, paint);
     out
 }
 
@@ -903,7 +1087,7 @@ fn render_into(
         return;
     }
     match &node.data {
-        NodeData::Text { contents } if !paint.zero_font && !paint.invisible => {
+        NodeData::Text { contents } if !paint.invisible && paint.font_px >= MIN_FONT_PX => {
             out.push_str(&contents.borrow());
         }
         NodeData::Element { .. } => {
@@ -913,7 +1097,7 @@ fn render_into(
             }
             let paint = match mode {
                 Mode::Page => paint,
-                Mode::Mail => paint.under(node),
+                Mode::Mail(sheet) => paint.under(node, sheet),
             };
             if tag == "br" {
                 out.push('\n');
@@ -1109,8 +1293,8 @@ mod tests {
         );
     }
 
-    /// Elements a mail client hides without a style sheet, each around a
-    /// payload, in the spellings a sender can type.
+    /// Elements a mail client hides without a linked style sheet, each around
+    /// a payload, in the spellings a sender can type.
     pub(super) const HIDDEN_INLINE: &[&str] = &[
         "<div hidden>PAYLOAD</div>",
         r#"<span aria-hidden=" TRUE ">PAYLOAD</span>"#,
@@ -1124,6 +1308,16 @@ mod tests {
         r#"<div style="max-height:0px;overflow:hidden">PAYLOAD</div>"#,
         r#"<div style="display:none"><p style="display:block">PAYLOAD</p></div>"#,
         "<noembed>PAYLOAD</noembed>",
+        r#"<span style="font-size:0.2em">PAYLOAD</span>"#,
+        r#"<div style="font-size:0"><b style="font-size:5px">PAYLOAD</b></div>"#,
+        r#"<span style="font:italic 0/0 a">PAYLOAD</span>"#,
+        r#"<div style="d\69splay:n\6f ne">PAYLOAD</div>"#,
+        r#"<div style="display:n&amp;#111;ne">PAYLOAD</div>"#,
+        r#"<div style="background:url(a&quot;b);font-family:'/*';display:none">PAYLOAD</div>"#,
+        r#"<style>#x{display:none}</style><div id="x">PAYLOAD</div>"#,
+        r#"<style>.h{font-size:0}</style><p class="note h">PAYLOAD</p>"#,
+        r#"<style>@import url(a.css); <!-- b.q, #y{visibility:hidden} --></style><b class="Q">PAYLOAD</b>"#,
+        r#"<style>.n{font-family:"}";display:none}</style><i class="n">PAYLOAD</i>"#,
     ];
 
     #[test]
@@ -1143,15 +1337,39 @@ mod tests {
     }
 
     #[test]
+    fn body_text_hides_text_smaller_than_six_pixels() {
+        let shown = |size: &str, wrapper: &str| {
+            let html =
+                format!(r#"<div style="{wrapper}"><p style="font-size:{size}">Ok</p></div>"#);
+            !extract_body_text(html.as_bytes()).text.is_empty()
+        };
+        for size in [
+            "0.1px", "1px", "5px", "0.2em", "4pt", "0.3rem", "2vw", "12", "var(--s)", "\\30",
+        ] {
+            assert!(!shown(size, ""), "{size}");
+        }
+        for size in ["12px", "1em", "9pt", "80%", "small", "inherit"] {
+            assert!(shown(size, ""), "{size}");
+        }
+        // Under a zero wrapper only a readable size shows again: `1em` of zero is zero.
+        for (size, readable) in [("1px", false), ("1em", false), ("12px", true)] {
+            assert_eq!(shown(size, "font-size:0"), readable, "{size}");
+        }
+    }
+
+    #[test]
     fn body_text_keeps_text_a_descendant_shows_again() {
         // Responsive mail layouts zero the font size around inline-block
         // columns and set it again inside; `visibility` is undone the same way.
-        let html = r#"<body><div style="font-size:0px"><div style="font-size:13px">
+        // Rules that show, select nothing here, or sit in `@media` hide nothing.
+        let html = r#"<style>p{margin:0}.gone{display:none}@media (max-width:9px){.m{display:none}}</style>
+            <body><div style="font-size:0px"><div style="font-size:12px">
             Order 1042 ships on Monday.</div></div>
             <div style="visibility:hidden"><span style="visibility:visible">Total: 18 EUR</span></div>
+            <p class="m" style="font-family:'\5FAE\8F6F'">Agenda attached.</p>
             <p style="display:block;opacity:0.5;height:0">Kept: no clipping overflow.</p></body>"#;
         let text = extract_body_text(html.as_bytes()).text;
-        for shown in ["ships on Monday.", "Total: 18 EUR", "Kept: no clipping"] {
+        for shown in ["on Monday.", "18 EUR", "Agenda attached.", "no clipping"] {
             assert!(text.contains(shown), "{shown:?} missing from {text:?}");
         }
     }
@@ -1160,8 +1378,11 @@ mod tests {
     fn hostile_inline_styles_stay_within_the_budget() {
         // One huge style attribute with an unclosed comment, then deep
         // nesting of zero-size wrappers: no panic, and the deadline holds.
+        // The largest sheet the reader keeps comes first.
+        let sheet =
+            format!("{}.c{{display:none}}", ".c,".repeat(MAX_SELECTORS - 1)).repeat(MAX_RULES);
         let style = "display:block;/*".repeat(40_000);
-        let mut html = format!(r#"<p style="{style}">big</p>"#);
+        let mut html = format!(r#"<style>{sheet}</style><p class="a b" style="{style}">big</p>"#);
         html.push_str(&r#"<div style="font-size:0"><span aria-hidden="false">"#.repeat(20_000));
         html.push_str("TAIL");
         let started = Instant::now();
@@ -1170,6 +1391,14 @@ mod tests {
         assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
         assert!(readable.truncated);
         assert!(!readable.text.contains("TAIL"), "{:?}", readable.text);
+        // One hiding rule more than the reader keeps: all of the mail is hidden.
+        let html = format!(
+            "<style>{}</style><p>Visible</p>",
+            ".r{opacity:0}".repeat(MAX_RULES + 1)
+        );
+        let readable = extract_body_text(html.as_bytes());
+        assert!(readable.truncated);
+        assert_eq!(readable.text, "");
     }
 
     #[test]

@@ -191,10 +191,11 @@ struct ThreadList {
     threads: Vec<ThreadRef>,
 }
 
+/// A thread id only: Google builds a thread's snippet from the raw body,
+/// text hidden from the reader included, so it never reaches the model.
 #[derive(Serialize)]
 struct ThreadSummary {
     id: String,
-    snippet: String,
 }
 
 #[derive(Deserialize)]
@@ -204,8 +205,6 @@ struct Message {
     thread_id: Option<String>,
     #[serde(default)]
     payload: Option<MessagePart>,
-    #[serde(default)]
-    snippet: Option<String>,
     #[serde(rename = "internalDate")]
     internal_date: Option<String>,
 }
@@ -238,8 +237,6 @@ struct Header {
 #[derive(Deserialize)]
 struct ThreadRef {
     id: String,
-    #[serde(default)]
-    snippet: String,
 }
 
 #[derive(Serialize)]
@@ -252,7 +249,6 @@ struct MessageOutput {
     date: Option<String>,
     plain_text: String,
     attachments: Vec<AttachmentInfo>,
-    snippet: Option<String>,
     internal_date: Option<String>,
 }
 
@@ -428,7 +424,7 @@ impl Tool for GmailReadMessageTool {
 }
 
 const GMAIL_LIST_THREADS_DESCRIPTION: &str =
-    "List Gmail threads, optionally filtered by label. Thread snippets are untrusted content.";
+    "List Gmail thread ids, optionally filtered by label. Read a message for its content.";
 
 impl NativeTool for GmailListThreadsTool {
     fn native_name(&self) -> &'static str {
@@ -496,10 +492,7 @@ impl Tool for GmailListThreadsTool {
                 let output = result
                     .threads
                     .into_iter()
-                    .map(|thread| ThreadSummary {
-                        id: thread.id,
-                        snippet: thread.snippet,
-                    })
+                    .map(|thread| ThreadSummary { id: thread.id })
                     .collect::<Vec<_>>();
                 Ok(ToolOutput::ok(untrusted_json_output(&output)))
             }
@@ -1038,7 +1031,6 @@ fn parse_message(message: Message) -> Result<MessageOutput, GoogleApiError> {
         date: header("Date"),
         plain_text,
         attachments: body.attachments,
-        snippet: message.snippet,
         internal_date: message.internal_date,
     })
 }
@@ -1182,7 +1174,8 @@ mod tests {
 
     fn html_only(html: &str) -> Message {
         serde_json::from_value(json!({
-            "id":"msg-4","payload":{"mimeType":"text/html","body":{"data":encode(html)}}
+            "id":"msg-4","snippet":"PAYLOAD: the preview Google built from the hidden text",
+            "payload":{"mimeType":"text/html","body":{"data":encode(html)}}
         }))
         .unwrap()
     }

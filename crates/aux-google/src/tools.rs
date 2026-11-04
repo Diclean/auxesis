@@ -1120,6 +1120,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gmail_threads_never_pass_on_the_snippet_google_built_from_hidden_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/threads"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "threads":[{"id":"thread_1","snippet":"PAYLOAD: a hidden preheader","historyId":"7"}]
+            })))
+            .mount(&server)
+            .await;
+        let tools = toolset(&server, Arc::new(FakeAuth::new()), Budgets::default());
+        let result = tools
+            .tools()
+            .remove(2)
+            .run(&json!({}), &ctx())
+            .await
+            .unwrap();
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("thread_1"), "{}", result.content);
+        assert!(!result.content.contains("PAYLOAD"), "{}", result.content);
+    }
+
+    #[tokio::test]
     async fn calendar_query_encodes_every_value_and_requests_only_events_readonly() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))

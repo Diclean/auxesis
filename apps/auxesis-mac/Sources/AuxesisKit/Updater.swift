@@ -1,6 +1,6 @@
-// H4 — minimal secure updater (scripts/sign-release.sh, docs/releasing.md).
+// Minimal secure updater (scripts/sign-release.sh, docs/releasing.md).
 //
-// Decisions recorded here because the work order leaves them open:
+// Decisions this updater makes explicitly:
 //   * Detached signature: the sibling file `<manifest>.sig` holds the base64
 //     of the raw 64-byte Ed25519 signature over the exact manifest bytes.
 //   * The manifest bytes are verified BEFORE any JSON parsing, so a tampered
@@ -12,7 +12,7 @@
 //     reveals it in Finder. Nothing from the dmg is ever executed.
 //   * Privacy: one plain GET per file, `User-Agent: Auxesis/<version>`, no
 //     cookies, no bearer token, no personal data.
-//   * Bounded downloads (P2): the manifest and the detached signature are
+//   * Bounded downloads: the manifest and the detached signature are
 //     streamed and aborted past a hard cap (64 KiB / 1 KiB); a `Content-Length`
 //     larger than the cap is rejected before the body is read. The dmg is
 //     streamed straight to disk and the task is cancelled as soon as the
@@ -83,8 +83,8 @@ public enum UpdateError: Error, Equatable, Sendable {
 
 /// Bounded-download rejections are reported as `.network` messages: the
 /// exhaustive `UpdateError` switch that renders the alert lives in
-/// `AuxesisMac/CheckForUpdates.swift`, which this change's work order does not
-/// let us touch. The messages are the strings the alert shows verbatim.
+/// `AuxesisMac/CheckForUpdates.swift`. The messages are the strings the alert
+/// shows verbatim.
 enum UpdateLimit {
     static let manifestTooLarge: UpdateError =
         .network("The update manifest is larger than the 64 KiB limit, so it was rejected.")

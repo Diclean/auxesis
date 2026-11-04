@@ -1,7 +1,7 @@
 import XCTest
 @testable import AuxesisKit
 
-/// M5-4: the Documents page model over a fake client, and the real client's
+/// The Documents page model over a fake client, and the real client's
 /// three docs routes over `RecordingURLProtocol` (no socket). Fictional data.
 @objcMembers @MainActor final class DocumentsPageTests: XCTestCase {
     private static let list = #"""
@@ -34,7 +34,7 @@ import XCTest
         XCTAssertFalse(waiting.isRead)
     }
 
-    /// Fix r1: one date style for the table and the export fields, amounts as
+    /// One date style for the table and the export fields, amounts as
     /// local currency, and the unread row says so instead of dashes.
     func testDatesAmountsAndTheUnreadRowFollowTheLanguage() throws {
         let row = { (total: String?, status: String) in

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The Google connection shown in Réglages (G4): the service's last honest
+/// The Google connection shown in Réglages: the service's last honest
 /// answer, plus the sign-in this screen started and is still waiting on.
 ///
 /// `Store` owns one and forwards its changes, so a view that observes the
@@ -140,7 +140,7 @@ public enum GoogleFlow: Equatable {
     case failed
 }
 
-/// What the Réglages row « Google : … » shows (G4).
+/// What the Réglages row « Google : … » shows.
 ///
 /// The mapping is pure so the copy rule (one French phrase per state) is
 /// testable without a window or a service.

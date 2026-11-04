@@ -1,4 +1,4 @@
-// Clients import (WO-CRMIO-2): the request body and the answer's decoding, the
+// Clients import: the request body and the answer's decoding, the
 // presenter's helpers, and the import sheet's model (preview → confirm → reload)
 // against the in-memory fixture daemon. Fictional files and people only.
 import Foundation

@@ -92,7 +92,7 @@ import Testing
         XCTAssertEqual(TokenFile.read(at: path), .problem(.invalidEncoding))
     }
 
-    // MARK: F2 — fd guard, ownership, directory, race
+    // MARK: fd guard, ownership, directory, race
 
     func testTokenLongerThanTheCapIsRefused() throws {
         let dir = try tempDirectory()

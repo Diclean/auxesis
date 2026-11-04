@@ -1,4 +1,4 @@
-// M6-4: what the Plugins tab says about a catalog entry, a server and a preview.
+// What the Plugins tab says about a catalog entry, a server and a preview.
 // Words first, a monochrome glyph second; amber only on "Needs you", red on an error.
 import Foundation
 

@@ -19,7 +19,7 @@ import Testing
         for _ in 0..<ShellModel.undoSeconds { shell.tick() }
     }
 
-    /// The seal-B repro: edit Tuesday → Friday, Cancel, Send. The card shows
+    /// Editing Tuesday → Friday, Cancel, Send: the card shows
     /// Tuesday, so the daemon's own text must go, not Friday.
     func testCancelledEditIsNotWhatSendPosts() {
         let (shell, daemon, ask) = makeShell()

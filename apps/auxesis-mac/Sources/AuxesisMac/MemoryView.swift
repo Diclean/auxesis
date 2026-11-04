@@ -1,4 +1,4 @@
-// "What Aux knows" (MEM-UI-1): the sections, the suggestions on top, the
+// "What Aux knows": the sections, the suggestions on top, the
 // inline editor and the delete confirmation. Contract v3: hairlines between
 // rows, no cards, no colour as the only signal.
 import AuxesisKit

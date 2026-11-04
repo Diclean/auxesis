@@ -73,7 +73,7 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
     assert_eq!(class_of("legacy").as_deref(), Some("sensitive"));
     assert_eq!(class_of("datagouv-mcp").as_deref(), Some("public"));
 
-    // Item 6: the unknown transport is quarantined and still listed, and the
+    // The unknown transport is quarantined
     // GET is a 200 rather than a whole-file failure.
     let bad = listed["servers"]
         .as_array()
@@ -84,7 +84,7 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
     assert_eq!(bad["state"], "quarantined");
     assert_eq!(bad["reason"], "invalid_transport");
 
-    // Item 1 (keep): an id already owned by a quarantined entry is refused
+    // An id already owned by a quarantined entry
     // with its own code, and no twin is created. The existing check returned
     // 409 too, so the code is what matters here.
     let quarantined = call(
@@ -145,7 +145,7 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
     // Stdio policy: hard refusals are refused; an interpreter eval or a
     // package runner is accepted and stored unconfirmed (the confirmation
     // endpoint is the boundary for those). A wrapper or shell `argv[0]` is a
-    // hard refusal with the stable code `wrapper_launcher` (item 2).
+    // hard refusal with the stable code
     for (what, body, code) in [
         (
             "secret argument",
@@ -312,14 +312,14 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
     let preview: serde_json::Value = serde_json::from_str(&preview.body).unwrap();
     let hash = preview["hash"].as_str().unwrap().to_owned();
     assert_eq!(preview["command"], "/opt/homebrew/bin/npx");
-    // Item 6: the preview carries a warning **code**, never English copy; the
+    // The preview carries a warning
     // Mac app translates it into the system language.
     assert_eq!(preview["warning"], "mcp_stdio_confirmation");
     assert!(
         !preview["warning"].as_str().unwrap().contains(' '),
         "the warning must be a code, not a sentence"
     );
-    // Item 2 (downgraded P3): a non-catalog stdio server always carries the
+    // A non-catalog stdio server
     // generic "unverified program" warning, whatever `high_risk` says.
     assert_eq!(preview["high_risk"], "package_runner");
     assert_eq!(preview["unverified_program"], "stdio_unverified_program");
@@ -343,7 +343,7 @@ async fn mcp_management_refuses_each_policy_violation_with_its_code() {
         Some(format!("{{\"hash\":\"{hash}\"}}")),
     )
     .await;
-    // M6-HARDEN: the legacy confirm only re-confirms the launch of an already
+    // The legacy confirm only re-confirms
     // approved install. Without a valid install approval it refuses and mints
     // nothing, so the owner has to go through `/approve`.
     assert_refused(

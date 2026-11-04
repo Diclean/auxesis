@@ -1,4 +1,4 @@
-// DELEG-WHERE-COPY-1: the copy for a step the daemon marks `where: local`.
+// The copy for a step the daemon marks `where: local`.
 //
 // A `local` brain is reached over a loopback address, and the Mac cannot see
 // through it: the owner may have aliased a cloud model (`ollama cp

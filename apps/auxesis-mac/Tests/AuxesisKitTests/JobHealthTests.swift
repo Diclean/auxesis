@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AuxesisKit
 
-/// JOB-HEALTH-3b: the app words a job's reason itself when the daemon sends
+/// The app words a job's reason itself when the daemon sends
 /// the structured kind, and keeps the daemon's English sentence otherwise.
 @objcMembers @MainActor final class JobHealthTests: XCTestCase {
     private func decode(_ extra: String) throws -> PlannedJob {

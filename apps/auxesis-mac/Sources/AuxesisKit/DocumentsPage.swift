@@ -1,4 +1,4 @@
-// The Documents page (M5-4): the owner's receipts from `GET /v1/docs`, which
+// The Documents page: the owner's receipts from `GET /v1/docs`, which
 // client each belongs to, link or unlink one, and export a period. Only the
 // fields the list route returns are shown: no file name, no text, no issuer.
 import Foundation

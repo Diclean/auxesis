@@ -1,4 +1,4 @@
-// H4 — the "Check for Updates…" menu command and the opt-in daily check.
+// The "Check for Updates…" menu command and the opt-in daily check.
 // System alerts only: this slice ships no visual design.
 import AppKit
 import AuxesisKit

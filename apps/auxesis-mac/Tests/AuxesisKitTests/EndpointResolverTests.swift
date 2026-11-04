@@ -67,7 +67,7 @@ import Testing
         XCTAssertTrue(zero.source.contains("no endpoint"), zero.source)
     }
 
-    // MARK: - Sandbox (J-02 round 4)
+    // MARK: - Sandbox
 
     func testSandboxRefusesApiUrlsAndDefaultPort() throws {
         let home = try tempHome()
@@ -209,9 +209,9 @@ import Testing
         XCTAssertEqual(endpoint.baseURL?.absoluteString, "http://127.0.0.1:2893")
     }
 
-    // MARK: - Sandbox home comes from the environment (security review P1, J-02 r6)
+    // MARK: - Sandbox home comes from the environment
 
-    /// The security review's exact repro: Foundation keeps returning the real home even when
+    /// Foundation keeps returning the real home even when
     /// HOME is overridden. The sandbox home must come from env HOME /
     /// AUXESIS_HOME, and a fake real token must never be read.
     func testSandboxHomeComesFromEnvAndNeverFoundation() throws {
@@ -331,9 +331,9 @@ import Testing
         XCTAssertNil(endpoint.baseURL)
     }
 
-    // MARK: - Sandbox requires an explicit AUXESIS_HOME (security review r6 P1)
+    // MARK: - Sandbox requires an explicit AUXESIS_HOME
 
-    /// The security review's repro: flag + HOME + port 4123, AUXESIS_HOME unset — the app
+    /// Flag + HOME + port 4123, AUXESIS_HOME unset: the app
     /// must refuse (offline) and never read `<HOME>/.auxesis/api.token`.
     func testSandboxRequiresAuxesisHome() throws {
         let fakeReal = try tempHome()

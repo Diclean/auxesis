@@ -1,4 +1,4 @@
-//! AUX-EGRESS-TOOL: `privacy_record_summary`, the privacy record as counts.
+//! `privacy_record_summary`, the privacy record as counts.
 //!
 //! It reads the run receipts the sidebar footer counts (`GET /v1/receipts`,
 //! `read_receipts`) with the footer's rule: a run left the Mac when its day

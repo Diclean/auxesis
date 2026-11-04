@@ -1,7 +1,7 @@
 import XCTest
 @testable import AuxesisKit
 
-/// CAL-PAGE-1: the Calendar page, its sync line and the login-item toggle.
+/// The Calendar page, its sync line and the login-item toggle.
 /// Fake EventKit and a fake login item only: no real calendar, no macOS change.
 @objcMembers @MainActor final class CalendarPageTests: XCTestCase {
     private let iso = ISO8601DateFormatter()

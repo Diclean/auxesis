@@ -173,12 +173,12 @@ final class FakeGoogleClient: GoogleConnectionClient {
         transport.healthResult = .success(health(googleConnected: false))
         let store = makeStore(google, transport: transport)
 
-        XCTAssertEqual(store.googleState, .unknown)
-        store.connectGoogle()
+        XCTAssertEqual(store.google.state, .unknown)
+        store.google.connect()
         XCTAssertTrue(waitUntil { google.startCount == 1 })
         // The scripted transport never flips to connected, so the bounded wait
         // ends as an honest failure rather than a claim.
-        XCTAssertTrue(waitUntil { store.googleState == .failed })
+        XCTAssertTrue(waitUntil { store.google.state == .failed })
     }
 
     func testASecondClickNeverOpensASecondPage() {
@@ -186,17 +186,17 @@ final class FakeGoogleClient: GoogleConnectionClient {
         google.holdStart = true
         let store = makeStore(google)
 
-        store.connectGoogle()
+        store.google.connect()
         XCTAssertTrue(waitUntil { google.startCount == 1 })
-        XCTAssertEqual(store.googleState, .waitingForConsent)
+        XCTAssertEqual(store.google.state, .waitingForConsent)
 
         // The page is open; pressing the button again must not start a second
         // sign-in.
-        store.connectGoogle()
+        store.google.connect()
         XCTAssertEqual(google.startCount, 1)
 
         google.releaseStart()
-        XCTAssertTrue(waitUntil { store.googleState == .failed })
+        XCTAssertTrue(waitUntil { store.google.state == .failed })
     }
 
     func testTheRowTurnsConnectedWhenTheServiceReportsTheAuthorization() {
@@ -205,14 +205,14 @@ final class FakeGoogleClient: GoogleConnectionClient {
         transport.healthResult = .success(health(googleConnected: false))
         let store = makeStore(google, transport: transport)
 
-        store.connectGoogle()
-        XCTAssertTrue(waitUntil { store.googleState == .waitingForConsent })
+        store.google.connect()
+        XCTAssertTrue(waitUntil { store.google.state == .waitingForConsent })
 
         // The owner accepts in the browser; the service's status flips.
         transport.healthResult = .success(health(googleConnected: true))
-        XCTAssertTrue(waitUntil { store.googleState == .connected })
-        XCTAssertTrue(store.googleConnected)
-        XCTAssertFalse(store.googleState.canConnect)
+        XCTAssertTrue(waitUntil { store.google.state == .connected })
+        XCTAssertTrue(store.google.connected)
+        XCTAssertFalse(store.google.state.canConnect)
     }
 
     func testUpdatingPermissionsOnlyStartsFromTheUpdateStateAndReturnsToConnected() {
@@ -223,11 +223,11 @@ final class FakeGoogleClient: GoogleConnectionClient {
         let store = makeStore(google, transport: transport)
 
         store.refreshFirstRun()
-        XCTAssertTrue(waitUntil { store.googleState == .needsUpdate })
-        store.updateGooglePermissions()
+        XCTAssertTrue(waitUntil { store.google.state == .needsUpdate })
+        store.google.updatePermissions()
         XCTAssertTrue(waitUntil { google.updateCount == 1 })
-        XCTAssertTrue(waitUntil { store.googleState == .connected })
-        XCTAssertFalse(store.googleReconnectNeeded)
+        XCTAssertTrue(waitUntil { store.google.state == .connected })
+        XCTAssertFalse(store.google.reconnectNeeded)
     }
 
     func testAnAlreadyConnectedServiceIsNeverAskedToStartAgain() {
@@ -237,8 +237,8 @@ final class FakeGoogleClient: GoogleConnectionClient {
         let store = makeStore(google, transport: transport)
 
         store.refreshFirstRun()
-        XCTAssertTrue(waitUntil { store.googleState == .connected })
-        store.connectGoogle()
+        XCTAssertTrue(waitUntil { store.google.state == .connected })
+        store.google.connect()
         XCTAssertEqual(google.startCount, 0)
     }
 
@@ -248,19 +248,19 @@ final class FakeGoogleClient: GoogleConnectionClient {
         transport.healthResult = .success(health(googleConnected: true))
         let store = makeStore(google, transport: transport)
         store.refreshFirstRun()
-        XCTAssertTrue(waitUntil { store.googleState == .connected })
+        XCTAssertTrue(waitUntil { store.google.state == .connected })
 
         google.disconnectResult = .success(GoogleConnection(connected: false, started: false))
-        store.disconnectGoogle()
+        store.google.disconnect()
         XCTAssertTrue(waitUntil { google.disconnectCount == 1 })
-        XCTAssertTrue(waitUntil { store.googleState == .disconnected })
-        XCTAssertFalse(store.googleConnected)
+        XCTAssertTrue(waitUntil { store.google.state == .disconnected })
+        XCTAssertFalse(store.google.connected)
     }
 
     func testDisconnectIsNotOfferedWhenNothingIsConnected() {
         let google = FakeGoogleClient()
         let store = makeStore(google)
-        store.disconnectGoogle()
+        store.google.disconnect()
         XCTAssertEqual(google.disconnectCount, 0)
     }
 
@@ -269,9 +269,9 @@ final class FakeGoogleClient: GoogleConnectionClient {
         google.startResult = .failure(AuxdError.transport("down"))
         let store = makeStore(google)
 
-        store.connectGoogle()
-        XCTAssertTrue(waitUntil { store.googleState == .failed })
-        XCTAssertEqual(L10n.t(store.googleState.valueKey, .fr), "la connexion n'a pas abouti")
+        store.google.connect()
+        XCTAssertTrue(waitUntil { store.google.state == .failed })
+        XCTAssertEqual(L10n.t(store.google.state.valueKey, .fr), "la connexion n'a pas abouti")
     }
 
     private func health(googleConnected: Bool, reconnectNeeded: Bool = false) -> HealthResponse {

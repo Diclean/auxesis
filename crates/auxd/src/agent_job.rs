@@ -53,7 +53,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::agent::{self, AgentConfig, AgentState};
 use crate::mcp::{current as current_mcp, McpSlot};
 use crate::privacy_wiring::agent_mode_fn;
-use crate::scheduler::{Clock, JobRunner, SystemClock};
+use crate::scheduler::{JobRunner, NowFn};
 use crate::watch::{text_hash, WatchSpec, MAX_TEXTS_PER_DAY};
 
 /// Longest success summary kept for a run (characters).
@@ -180,8 +180,8 @@ pub struct AgentJobRunner {
     /// Contacts injected by a test. `None` reads the owner's store at each run,
     /// so a contact imported after boot is masked by the next private run.
     contacts: Option<aux_runtime::known_names::Contacts>,
-    /// Day boundary of a watcher's daily cap; tests inject their own.
-    clock: Arc<dyn Clock>,
+    /// Day boundary of a watcher's daily cap; tests pass their own.
+    now: Arc<NowFn>,
 }
 
 /// The model's answer to a watcher's question: `Some(true)` for exactly YES,
@@ -284,14 +284,14 @@ impl AgentJobRunner {
             notifier,
             mcp: None,
             contacts: None,
-            clock: Arc::new(SystemClock),
+            now: Arc::new(chrono::Utc::now),
         }
     }
 
-    /// Replace the clock that decides a watcher's calendar day.
+    /// Replace the time that decides a watcher's calendar day.
     #[cfg(test)]
-    fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
-        self.clock = clock;
+    fn with_now(mut self, now: Arc<NowFn>) -> Self {
+        self.now = now;
         self
     }
 
@@ -395,11 +395,7 @@ impl AgentJobRunner {
         let Some(met) = parse_verdict(answer) else {
             return "unclear answer; the page will be asked about again".to_string();
         };
-        let today = self
-            .clock
-            .now_utc()
-            .with_timezone(&chrono::Local)
-            .date_naive();
+        let today = (self.now)().with_timezone(&chrono::Local).date_naive();
         let mut next = watch.clone();
         let (mut carried, mut capped, mut when) = (0, false, "earlier");
         if met && !watch.stop_after_hit {
@@ -909,7 +905,7 @@ pub fn daemon_runner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheduler::{tick, StopSwitch, SystemClock, CLAIM_LEASE};
+    use crate::scheduler::{tick, StopSwitch, CLAIM_LEASE};
     use aux_notify::{FakeNotifier, StopSwitchNotifier};
     use aux_providers::{ChatMessage, ChatProvider, ChatRequest, ChatResponse, FakeProvider};
     use aux_store::{RUN_FAILED, RUN_OK};
@@ -1039,7 +1035,7 @@ mod tests {
 
         fn tick(&mut self, runner: &dyn JobRunner) -> crate::scheduler::TickReport {
             let stop = self.switch();
-            tick(&self.store, &SystemClock, runner, CLAIM_LEASE, &stop).unwrap()
+            tick(&self.store, &chrono::Utc::now, runner, CLAIM_LEASE, &stop).unwrap()
         }
     }
 
@@ -2451,7 +2447,7 @@ mod tests {
         clock.set_day(14);
         let runner = harness
             .runner(Arc::clone(&provider), vec![], &Budgets::default())
-            .with_clock(clock.clone());
+            .with_now(clock.reader());
         let args = json!({"url": server.uri(), "condition": "a place is free",
             "interval": "every 15m", "stop_after_hit": false});
         let answer: serde_json::Value = serde_json::from_str(&watch(&harness, args)).unwrap();
@@ -2532,9 +2528,15 @@ mod tests {
         }
     }
 
-    impl Clock for DayClock {
+    impl DayClock {
         fn now_utc(&self) -> chrono::DateTime<chrono::Utc> {
             *self.0.lock().unwrap()
+        }
+
+        /// A time source that follows this clock.
+        fn reader(self: &Arc<Self>) -> Arc<NowFn> {
+            let clock = Arc::clone(self);
+            Arc::new(move || clock.now_utc())
         }
     }
 
@@ -2550,7 +2552,7 @@ mod tests {
         clock.set_day(14);
         let runner = harness
             .runner(Arc::clone(&provider), vec![], &Budgets::default())
-            .with_clock(clock.clone());
+            .with_now(clock.reader());
         let args = json!({"url": server.uri(), "condition": "a place is free",
             "interval": "every 15m", "stop_after_hit": false});
         let answer: serde_json::Value = serde_json::from_str(&watch(&harness, args)).unwrap();

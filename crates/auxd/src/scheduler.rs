@@ -21,7 +21,7 @@
 //! return before claiming anything; the loop logs the pause once and resumes
 //! normally when the marker is removed.
 //!
-//! Time is injected through [`Clock`] so tests are deterministic.
+//! The current time is passed in as a [`NowFn`], so tests are deterministic.
 
 use crate::api::jobs::RoutineSchedule;
 use aux_store::{Job, Store, StoreError, RUN_FAILED, RUN_OK};
@@ -68,27 +68,9 @@ impl StopSwitch {
 /// runner or a giant error message.
 const MAX_SUMMARY_BYTES: usize = 4_096;
 
-/// Source of the current time. Injected so tests control the clock.
-pub trait Clock: Send + Sync + 'static {
-    /// Current UTC instant.
-    fn now_utc(&self) -> DateTime<Utc>;
-}
-
-/// The real clock.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now_utc(&self) -> DateTime<Utc> {
-        Utc::now()
-    }
-}
-
-impl<T: Clock + ?Sized> Clock for Arc<T> {
-    fn now_utc(&self) -> DateTime<Utc> {
-        (**self).now_utc()
-    }
-}
+/// Reads the current UTC instant. Production passes `Utc::now`; tests pass a
+/// closure over a fixed or movable instant.
+pub type NowFn = dyn Fn() -> DateTime<Utc> + Send + Sync;
 
 /// Where a [`FileStoreOpener`] opens its connections.
 #[derive(Debug, Clone)]
@@ -201,7 +183,7 @@ pub struct TickReport {
 #[cfg(test)]
 pub fn tick(
     store: &Arc<Mutex<Store>>,
-    clock: &dyn Clock,
+    now: &dyn Fn() -> DateTime<Utc>,
     runner: &dyn JobRunner,
     lease: std::time::Duration,
     stop: &StopSwitch,
@@ -213,10 +195,10 @@ pub fn tick(
         });
     }
 
-    let now = clock.now_utc();
-    let lease_until = now + lease_delta(lease);
+    let now_utc = now();
+    let lease_until = now_utc + lease_delta(lease);
     let claimed =
-        locked(store).claim_due_jobs(&format_timestamp(now), &format_timestamp(lease_until))?;
+        locked(store).claim_due_jobs(&format_timestamp(now_utc), &format_timestamp(lease_until))?;
 
     let mut report = TickReport {
         claimed: claimed.len(),
@@ -229,7 +211,7 @@ pub fn tick(
         if crate::agent::state(stop.home(), &job.agent).blocks_work() {
             continue;
         }
-        match execute(store, clock, runner, &job, None) {
+        match execute(store, now, runner, &job, None) {
             Ok(true) => report.succeeded += 1,
             Ok(false) => report.failed += 1,
             Err(error) => {
@@ -249,32 +231,27 @@ pub fn tick(
 /// long or blocked runner cannot stall ticks, STOP evaluation or shutdown.
 pub fn run_claimed_job(
     opener: &FileStoreOpener,
-    clock: Arc<dyn Clock>,
+    now: Arc<NowFn>,
     runner: &dyn JobRunner,
     lease: std::time::Duration,
     job: &Job,
 ) -> Result<bool, StoreError> {
-    run_claimed_job_with_interval(opener, clock, runner, lease, renewal_interval(lease), job)
+    run_claimed_job_with_interval(opener, now, runner, lease, renewal_interval(lease), job)
 }
 
 /// [`run_claimed_job`] with an explicit renewal cadence (tests use a short
 /// one; production derives `lease / 3`).
 fn run_claimed_job_with_interval(
     opener: &FileStoreOpener,
-    clock: Arc<dyn Clock>,
+    now: Arc<NowFn>,
     runner: &dyn JobRunner,
     lease: std::time::Duration,
     renewal_every: std::time::Duration,
     job: &Job,
 ) -> Result<bool, StoreError> {
     let store = Arc::new(Mutex::new(opener.open()?));
-    let renewer = match LeaseRenewer::start(
-        opener,
-        job.id,
-        lease,
-        renewal_every,
-        Arc::clone(&clock),
-    ) {
+    let renewer = match LeaseRenewer::start(opener, job.id, lease, renewal_every, Arc::clone(&now))
+    {
         Ok(renewer) => Some(renewer),
         Err(error) => {
             // Without a renewer a run longer than the lease could be claimed
@@ -283,7 +260,7 @@ fn run_claimed_job_with_interval(
             None
         }
     };
-    execute(&store, clock.as_ref(), runner, job, renewer)
+    execute(&store, now.as_ref(), runner, job, renewer)
 }
 
 /// Run the tick loop until the task is aborted. The first tick fires
@@ -298,23 +275,21 @@ fn run_claimed_job_with_interval(
 /// The kill switch is checked every tick. While it is engaged the loop logs
 /// the pause exactly once (no per-tick spam) and resumes with the normal log
 /// flow when the marker disappears.
-pub async fn run_loop<C, R>(
+pub async fn run_loop<R>(
     store: Arc<Mutex<Store>>,
     opener: Arc<FileStoreOpener>,
-    clock: C,
+    now: Arc<NowFn>,
     runner: R,
     tick_every: std::time::Duration,
     lease: std::time::Duration,
     stop: StopSwitch,
 ) -> !
 where
-    C: Clock,
     R: JobRunner,
 {
-    // The clock and the runner are shared with the blocking tasks that
+    // The time source and the runner are shared with the blocking tasks that
     // execute each job: engine turns block, so they must never run on an
     // async worker.
-    let clock: Arc<dyn Clock> = Arc::new(clock);
     let runner: Arc<dyn JobRunner> = Arc::new(runner);
     let mut ticker = tokio::time::interval(tick_every);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -335,9 +310,9 @@ where
 
         // Claim with the shared connection, then release the mutex; the
         // claim is a single short transaction and never runs a job.
-        let now = clock.now_utc();
-        let now_str = format_timestamp(now);
-        let lease_until = format_timestamp(now + lease_delta(lease));
+        let now_utc = now();
+        let now_str = format_timestamp(now_utc);
+        let lease_until = format_timestamp(now_utc + lease_delta(lease));
         let claim_store = Arc::clone(&store);
         let claimed = match tokio::task::spawn_blocking(move || {
             let mut store = kernel_core::lock_recover(&claim_store);
@@ -367,13 +342,13 @@ where
                 continue;
             }
             let opener = Arc::clone(&opener);
-            let clock = Arc::clone(&clock);
+            let now = Arc::clone(&now);
             let runner = Arc::clone(&runner);
             // Fire and forget: awaiting the job here would pause ticks for
             // its whole duration. Each task owns its connection and renews
             // its own lease.
             tokio::task::spawn_blocking(move || {
-                match run_claimed_job(opener.as_ref(), clock, runner.as_ref(), lease, &job) {
+                match run_claimed_job(opener.as_ref(), now, runner.as_ref(), lease, &job) {
                     Ok(succeeded) => {
                         tracing::debug!(job_id = job.id, succeeded, "scheduler: run finished")
                     }
@@ -403,7 +378,7 @@ impl LeaseRenewer {
         job_id: i64,
         lease: std::time::Duration,
         interval: std::time::Duration,
-        clock: Arc<dyn Clock>,
+        now: Arc<NowFn>,
     ) -> Result<Self, StoreError> {
         let store = opener.open()?;
         let (stop, wait) = mpsc::channel::<()>();
@@ -411,7 +386,7 @@ impl LeaseRenewer {
             match wait.recv_timeout(interval) {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let lease_until = format_timestamp(clock.now_utc() + lease_delta(lease));
+                    let lease_until = format_timestamp(now() + lease_delta(lease));
                     match store.renew_lease(job_id, &lease_until) {
                         Ok(true) => tracing::debug!(
                             job_id,
@@ -460,8 +435,11 @@ pub fn format_timestamp(instant: DateTime<Utc>) -> String {
 
 /// Mark runs left `running` by a previous process as interrupted. Call once
 /// at daemon startup, before the first tick.
-pub fn recover_interrupted_runs(store: &Store, clock: &dyn Clock) -> Result<usize, StoreError> {
-    store.interrupt_running_runs(&format_timestamp(clock.now_utc()))
+pub fn recover_interrupted_runs(
+    store: &Store,
+    now: &dyn Fn() -> DateTime<Utc>,
+) -> Result<usize, StoreError> {
+    store.interrupt_running_runs(&format_timestamp(now()))
 }
 
 /// Execute one claimed job. Returns `Ok(true)` on success, `Ok(false)` on a
@@ -474,12 +452,12 @@ fn locked(store: &Arc<Mutex<Store>>) -> std::sync::MutexGuard<'_, Store> {
 
 fn execute(
     store: &Arc<Mutex<Store>>,
-    clock: &dyn Clock,
+    now: &dyn Fn() -> DateTime<Utc>,
     runner: &dyn JobRunner,
     job: &Job,
     renewer: Option<LeaseRenewer>,
 ) -> Result<bool, StoreError> {
-    let started = clock.now_utc();
+    let started = now();
     let started_at = format_timestamp(started);
     let run = locked(store).start_run(job.id, &started_at)?;
 
@@ -488,7 +466,7 @@ fn execute(
         Err(error) => {
             // Unparseable schedules can never run: record the failure and
             // disable the job so it does not fail on every tick.
-            let finished_at = format_timestamp(clock.now_utc());
+            let finished_at = format_timestamp(now());
             let summary = cap_summary(&format!("invalid schedule: {error}"));
             let store_guard = locked(store);
             store_guard.finish_run(run.id, &finished_at, RUN_FAILED, Some(&summary))?;
@@ -514,7 +492,7 @@ fn execute(
         Err(message) => (RUN_FAILED, message, false),
     };
 
-    let finished_at = format_timestamp(clock.now_utc());
+    let finished_at = format_timestamp(now());
     let store_guard = locked(store);
     store_guard.finish_run(run.id, &finished_at, status, Some(&cap_summary(&summary)))?;
     let receipt_status = if status == RUN_OK {
@@ -542,10 +520,10 @@ fn execute(
 
     // Next occurrence from *now*: missed occurrences collapse into this
     // single catch-up run. A deleted job simply fails to reschedule.
-    let now = clock.now_utc();
+    let finished = now();
     let next = runner
-        .reschedule_at(job, now)
-        .unwrap_or_else(|| schedule.next_after_run(started, now));
+        .reschedule_at(job, finished)
+        .unwrap_or_else(|| schedule.next_after_run(started, finished));
     locked(store).reschedule_job(job.id, Some(&started_at), Some(&format_timestamp(next)))?;
     Ok(succeeded)
 }
@@ -605,7 +583,7 @@ mod tests {
     use chrono::{Local, NaiveTime, TimeZone};
     use tempfile::tempdir;
 
-    /// Clock the tests control.
+    /// The instant the tests control; read it through `now_utc`.
     struct FakeClock(Mutex<DateTime<Utc>>);
 
     impl FakeClock {
@@ -616,11 +594,15 @@ mod tests {
         fn set(&self, now: DateTime<Utc>) {
             *self.0.lock().unwrap() = now;
         }
-    }
 
-    impl Clock for FakeClock {
         fn now_utc(&self) -> DateTime<Utc> {
             *self.0.lock().unwrap()
+        }
+
+        /// A time source that follows this clock, for the shared-time APIs.
+        fn reader(self: &Arc<Self>) -> Arc<NowFn> {
+            let clock = Arc::clone(self);
+            Arc::new(move || clock.now_utc())
         }
     }
 
@@ -707,7 +689,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
         let runner = RecordingRunner::default();
 
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report, TickReport::default());
         assert!(runner.calls().is_empty());
     }
@@ -729,7 +711,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
         let runner = RecordingRunner::with_summary("beep");
 
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(
             report,
             TickReport {
@@ -812,7 +794,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
         let runner = RecordingRunner::default();
 
-        tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 1);
         assert_eq!(
             store
@@ -828,13 +810,13 @@ mod tests {
 
         // 5 minutes later: still leased / not due.
         clock.set(utc(2026, 10, 3, 8, 5, 0));
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 0);
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 1);
 
         // 15 minutes later: due again.
         clock.set(utc(2026, 10, 3, 8, 15, 0));
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 1);
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 2);
         assert_eq!(
@@ -868,7 +850,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 9, 0, 0));
         let runner = RecordingRunner::default();
 
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 1);
         let runs = store.lock().unwrap().runs_for_job(job.id).unwrap();
         assert_eq!(runs.len(), 1, "missed occurrences must not replay");
@@ -904,7 +886,7 @@ mod tests {
         let clock = FakeClock::new(local(2026, 10, 3, 10, 0, 0));
         let runner = RecordingRunner::default();
 
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 1);
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 1);
 
@@ -939,7 +921,7 @@ mod tests {
         let clock = FakeClock::new(now);
         let runner = RecordingRunner::default();
 
-        tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
 
         let next = store
             .lock()
@@ -976,7 +958,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 5, 8, 0, 0));
         let runner = RecordingRunner::default();
 
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!((report.claimed, report.failed), (1, 0));
 
         let stored = store.lock().unwrap().job_by_id(job.id).unwrap().unwrap();
@@ -1007,7 +989,14 @@ mod tests {
             .unwrap();
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
 
-        let report = tick(&store, &clock, &FailingRunner, LEASE, &switch_off()).unwrap();
+        let report = tick(
+            &store,
+            &|| clock.now_utc(),
+            &FailingRunner,
+            LEASE,
+            &switch_off(),
+        )
+        .unwrap();
         assert_eq!(report.claimed, 1);
         assert_eq!(report.failed, 1);
 
@@ -1043,7 +1032,14 @@ mod tests {
             .unwrap();
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
 
-        let report = tick(&store, &clock, &PanickingRunner, LEASE, &switch_off()).unwrap();
+        let report = tick(
+            &store,
+            &|| clock.now_utc(),
+            &PanickingRunner,
+            LEASE,
+            &switch_off(),
+        )
+        .unwrap();
         assert_eq!(report.failed, 1);
 
         let runs = store.lock().unwrap().runs_for_job(job.id).unwrap();
@@ -1080,7 +1076,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
         let runner = RecordingRunner::default();
 
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.failed, 1);
         assert!(runner.calls().is_empty(), "an unparseable job must not run");
 
@@ -1096,7 +1092,7 @@ mod tests {
         assert!(!stored.enabled, "job must be disabled so it stops failing");
 
         // Next tick: nothing to claim.
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 0);
     }
 
@@ -1126,7 +1122,7 @@ mod tests {
         let runner = RecordingRunner::default();
         // The lease still holds: no duplicate run.
         assert_eq!(
-            tick(&store, &clock, &runner, LEASE, &switch_off())
+            tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off())
                 .unwrap()
                 .claimed,
             0
@@ -1136,7 +1132,7 @@ mod tests {
         // Once the lease expires, the job comes back and runs.
         clock.set(utc(2026, 10, 3, 8, 10, 0));
         assert_eq!(
-            tick(&store, &clock, &runner, LEASE, &switch_off())
+            tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off())
                 .unwrap()
                 .claimed,
             1
@@ -1182,7 +1178,7 @@ mod tests {
 
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 5, 0));
         let runner = RecordingRunner::default();
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 0);
         assert!(runner.calls().is_empty(), "no second run may start");
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 1);
@@ -1190,10 +1186,10 @@ mod tests {
         // Crash recovery still works: the startup sweep marks the leftover
         // run `interrupted`, and the job is re-claimable afterwards.
         assert_eq!(
-            recover_interrupted_runs(&store.lock().unwrap(), &clock).unwrap(),
+            recover_interrupted_runs(&store.lock().unwrap(), &|| clock.now_utc()).unwrap(),
             1
         );
-        let report = tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
         assert_eq!(report.claimed, 1);
         assert_eq!(runner.calls(), vec!["slow".to_string()]);
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 2);
@@ -1220,7 +1216,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                tick(&store, &clock, &runner, LEASE, &switch_off())
+                tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off())
                     .unwrap()
                     .claimed,
                 1
@@ -1232,7 +1228,7 @@ mod tests {
         {
             let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
             assert_eq!(
-                tick(&store, &clock, &runner, LEASE, &switch_off())
+                tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off())
                     .unwrap()
                     .claimed,
                 0
@@ -1242,7 +1238,7 @@ mod tests {
             // …and the next occurrence still fires after the restart.
             clock.set(utc(2026, 10, 3, 8, 15, 0));
             assert_eq!(
-                tick(&store, &clock, &runner, LEASE, &switch_off())
+                tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off())
                     .unwrap()
                     .claimed,
                 1
@@ -1281,7 +1277,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 30, 0));
 
         assert_eq!(
-            recover_interrupted_runs(&store.lock().unwrap(), &clock).unwrap(),
+            recover_interrupted_runs(&store.lock().unwrap(), &|| clock.now_utc()).unwrap(),
             1
         );
 
@@ -1301,7 +1297,7 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
         let runner = RecordingRunner::with_summary(&"x".repeat(50_000));
 
-        tick(&store, &clock, &runner, LEASE, &switch_off()).unwrap();
+        tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off()).unwrap();
 
         let summary = store.lock().unwrap().runs_for_job(job.id).unwrap()[0]
             .summary
@@ -1351,7 +1347,7 @@ mod tests {
         let runner = RecordingRunner::default();
 
         assert_eq!(
-            tick(&store, &clock, &runner, LEASE, &switch_off())
+            tick(&store, &|| clock.now_utc(), &runner, LEASE, &switch_off())
                 .unwrap()
                 .claimed,
             0
@@ -1383,7 +1379,14 @@ mod tests {
         let clock = FakeClock::new(utc(2026, 10, 3, 8, 0, 0));
         let runner = RecordingRunner::with_summary("must not run");
 
-        let report = tick(&store, &clock, &runner, LEASE, &StopSwitch::new(&home)).unwrap();
+        let report = tick(
+            &store,
+            &|| clock.now_utc(),
+            &runner,
+            LEASE,
+            &StopSwitch::new(&home),
+        )
+        .unwrap();
         assert_eq!(report.claimed, 1);
         assert!(runner.calls().is_empty(), "a paused agent must not run");
         assert_eq!(store.lock().unwrap().runs_for_job(job.id).unwrap().len(), 0);
@@ -1403,7 +1406,14 @@ mod tests {
         // Kill behaves the same way.
         crate::agent::set_marker(&home, "scout", crate::agent::KILLED_MARKER).unwrap();
         clock.set(utc(2026, 10, 3, 8, 20, 0));
-        let report = tick(&store, &clock, &runner, LEASE, &StopSwitch::new(&home)).unwrap();
+        let report = tick(
+            &store,
+            &|| clock.now_utc(),
+            &runner,
+            LEASE,
+            &StopSwitch::new(&home),
+        )
+        .unwrap();
         assert_eq!(report.claimed, 1);
         assert!(runner.calls().is_empty());
     }
@@ -1431,7 +1441,7 @@ mod tests {
         let runner = RecordingRunner::default();
         let stop = StopSwitch::new(&home);
 
-        let report = tick(&store, &clock, &runner, LEASE, &stop).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &stop).unwrap();
 
         assert!(report.stopped, "the tick must report the pause");
         assert_eq!(report.claimed, 0);
@@ -1481,13 +1491,17 @@ mod tests {
         let stop = StopSwitch::new(&home);
 
         // Engaged: nothing happens, the job's due time is preserved.
-        assert!(tick(&store, &clock, &runner, LEASE, &stop).unwrap().stopped);
+        assert!(
+            tick(&store, &|| clock.now_utc(), &runner, LEASE, &stop)
+                .unwrap()
+                .stopped
+        );
         assert!(runner.calls().is_empty());
 
         assert!(kernel_core::killswitch::release(&home).unwrap());
 
         // Released: the next tick catches the job up immediately.
-        let report = tick(&store, &clock, &runner, LEASE, &stop).unwrap();
+        let report = tick(&store, &|| clock.now_utc(), &runner, LEASE, &stop).unwrap();
         assert!(!report.stopped);
         assert_eq!(report.claimed, 1);
         assert_eq!(report.succeeded, 1);
@@ -1573,7 +1587,7 @@ mod tests {
         let handle = tokio::spawn(run_loop(
             Arc::clone(&store),
             Arc::clone(&opener),
-            Arc::clone(&clock),
+            clock.reader(),
             Arc::clone(&runner),
             std::time::Duration::from_millis(10),
             LEASE,
@@ -1622,7 +1636,7 @@ mod tests {
         let handle = tokio::spawn(run_loop(
             Arc::clone(&store),
             Arc::clone(&opener),
-            Arc::clone(&clock),
+            clock.reader(),
             Arc::clone(&runner),
             std::time::Duration::from_millis(10),
             LEASE,
@@ -1725,7 +1739,7 @@ mod tests {
             hold: std::time::Duration::from_millis(1_200),
             calls: Mutex::new(0),
         });
-        let clock_dyn: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
+        let clock_dyn = clock.reader();
         let job_clone = claimed[0].clone();
         let runner_thread = Arc::clone(&runner);
         let handle = std::thread::spawn(move || {
@@ -1828,7 +1842,7 @@ mod tests {
         let handle = tokio::spawn(run_loop(
             Arc::clone(&store),
             Arc::clone(&opener),
-            SystemClock,
+            Arc::new(Utc::now),
             Arc::clone(&runner),
             std::time::Duration::from_millis(25),
             std::time::Duration::from_secs(60),

@@ -23,7 +23,7 @@ use auxd::gateway::Gateway;
 use auxd::lock::InstanceLock;
 use auxd::logging;
 use auxd::scheduler;
-use auxd::scheduler::{FileStoreOpener, StopSwitch, SystemClock, CLAIM_LEASE, TICK_INTERVAL};
+use auxd::scheduler::{FileStoreOpener, StopSwitch, CLAIM_LEASE, TICK_INTERVAL};
 use auxd::shutdown;
 use clap::Parser;
 use kernel_core::{config_path, ensure_home, killswitch, Config};
@@ -448,7 +448,7 @@ fn prepare_jobs(
             "daemon.started",
             &format!(r#"{{"version":"{}"}}"#, kernel_core::VERSION),
         )?;
-        let interrupted = scheduler::recover_interrupted_runs(&store, &SystemClock)?;
+        let interrupted = scheduler::recover_interrupted_runs(&store, &chrono::Utc::now)?;
         if interrupted > 0 {
             tracing::warn!(interrupted, "marked runs left by a previous process");
         }
@@ -533,7 +533,7 @@ async fn serve(
     let scheduler_handle = tokio::spawn(scheduler::run_loop(
         Arc::clone(&store),
         Arc::new(FileStoreOpener::from_verified(verified.clone())),
-        SystemClock,
+        Arc::new(chrono::Utc::now),
         job_runner,
         TICK_INTERVAL,
         CLAIM_LEASE,

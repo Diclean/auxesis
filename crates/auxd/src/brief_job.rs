@@ -1,8 +1,8 @@
 //! Morning-brief job wiring on the existing job scheduler.
 
-use aux_brief::{cap_chars, BriefClock, BriefResult, BriefSource, SystemBriefClock};
+use aux_brief::{cap_chars, BriefResult, BriefSource};
 use aux_store::{Job, Store};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use kernel_core::Config;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -84,7 +84,8 @@ pub struct DispatchJobRunner {
     config: Config,
     source: Arc<dyn BriefSource>,
     router: Arc<NotifyRouter>,
-    clock: Arc<dyn BriefClock>,
+    /// Local time of the run; tests pass their own.
+    now: Arc<dyn Fn() -> DateTime<Local> + Send + Sync>,
     home: std::path::PathBuf,
 }
 
@@ -101,14 +102,14 @@ impl DispatchJobRunner {
             config,
             source,
             router,
-            clock: Arc::new(SystemBriefClock),
+            now: Arc::new(Local::now),
             home,
         }
     }
 
     #[cfg(test)]
-    fn with_clock(mut self, clock: Arc<dyn BriefClock>) -> Self {
-        self.clock = clock;
+    fn with_now(mut self, now: Arc<dyn Fn() -> DateTime<Local> + Send + Sync>) -> Self {
+        self.now = now;
         self
     }
 
@@ -151,7 +152,7 @@ impl JobRunner for DispatchJobRunner {
             &self.source,
             self.router.as_ref(),
             &brief_store,
-            self.clock.now_local(),
+            (self.now)(),
             || self.is_stopped(),
             BriefTrigger::Scheduled,
         );
@@ -213,10 +214,10 @@ mod tests {
     use crate::agent_job::NoProviderRunner;
     use crate::gateway::policy::{NotifyPolicy, PolicyConfig};
     use crate::gateway::router::{Clock as RouterClock, NotifyRouter, Pending, QueueFull, Sink};
-    use crate::scheduler::{tick, Clock, StopSwitch};
-    use aux_brief::{run_once, BriefClock, FakeBriefSource};
+    use crate::scheduler::{tick, StopSwitch};
+    use aux_brief::{run_once, FakeBriefSource};
     use aux_notify::FakeNotifier;
-    use chrono::{Local, Timelike};
+    use chrono::Timelike;
     use std::sync::Mutex;
     use tempfile::tempdir;
 
@@ -260,15 +261,19 @@ mod tests {
         }
     }
 
-    impl Clock for FixedClock {
+    impl FixedClock {
         fn now_utc(&self) -> DateTime<Utc> {
             *self.0.lock().unwrap()
         }
-    }
 
-    impl BriefClock for FixedClock {
-        fn now_local(&self) -> chrono::DateTime<Local> {
+        fn now_local(&self) -> DateTime<Local> {
             self.now_utc().with_timezone(&Local)
+        }
+
+        /// A local time source that follows this clock.
+        fn local_reader(self: &Arc<Self>) -> Arc<dyn Fn() -> DateTime<Local> + Send + Sync> {
+            let clock = Arc::clone(self);
+            Arc::new(move || clock.now_local())
         }
     }
 
@@ -364,13 +369,13 @@ mod tests {
             router.clone(),
             home.clone(),
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         let stop = StopSwitch::new(&home);
 
         assert_eq!(
             tick(
                 &store,
-                clock.as_ref(),
+                &|| clock.now_utc(),
                 &dispatch,
                 std::time::Duration::from_secs(600),
                 &stop
@@ -383,7 +388,7 @@ mod tests {
         assert_eq!(
             tick(
                 &store,
-                clock.as_ref(),
+                &|| clock.now_utc(),
                 &dispatch,
                 std::time::Duration::from_secs(600),
                 &stop
@@ -415,11 +420,11 @@ mod tests {
             router.clone(),
             home,
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         assert_eq!(
             tick(
                 &reopened,
-                clock.as_ref(),
+                &|| clock.now_utc(),
                 &restarted,
                 std::time::Duration::from_secs(600),
                 &stop
@@ -488,13 +493,13 @@ mod tests {
             router.clone(),
             home.clone(),
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         let stop = StopSwitch::new(&home);
 
         clock.set_local(23, 0);
         let deferred = tick(
             &store,
-            clock.as_ref(),
+            &|| clock.now_utc(),
             &dispatch,
             std::time::Duration::from_secs(600),
             &stop,
@@ -518,7 +523,7 @@ mod tests {
         clock.set_next_local_day(7, 0);
         let delivered = tick(
             &store,
-            clock.as_ref(),
+            &|| clock.now_utc(),
             &dispatch,
             std::time::Duration::from_secs(600),
             &stop,
@@ -586,7 +591,7 @@ mod tests {
             router.clone(),
             home,
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         let job = store
             .lock()
             .unwrap()
@@ -623,7 +628,7 @@ mod tests {
             router.clone(),
             home,
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         let job = store
             .lock()
             .unwrap()
@@ -661,7 +666,7 @@ mod tests {
             router.clone(),
             home,
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         let job = store
             .lock()
             .unwrap()
@@ -780,11 +785,11 @@ mod tests {
             router,
             home.clone(),
         )
-        .with_clock(clock.clone());
+        .with_now(clock.local_reader());
         let stop = StopSwitch::new(&home);
         let report = tick(
             &store,
-            clock.as_ref(),
+            &|| clock.now_utc(),
             &dispatch,
             std::time::Duration::from_secs(600),
             &stop,

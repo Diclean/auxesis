@@ -1,9 +1,7 @@
 //! `aux brief now` — today's brief from the running daemon, or the offline
 //! M0 fixture with `--offline`.
 
-use aux_brief::{
-    run_once, BriefClock, BriefResult, FakeBriefSource, SystemBriefClock, MAX_SOURCE_READS,
-};
+use aux_brief::{now_local, run_once, BriefResult, FakeBriefSource, MAX_SOURCE_READS};
 use aux_notify::{system_notifier, Notification, Notifier, StopSwitchNotifier};
 use aux_store::Store;
 use clap::{Args, Subcommand};
@@ -509,7 +507,7 @@ fn run_offline_inner() -> Result<String, Box<dyn std::error::Error>> {
         &FakeBriefSource::default(),
         &gate,
         &config,
-        SystemBriefClock.now_local(),
+        now_local(),
         MAX_SOURCE_READS,
         || kernel_core::killswitch::is_stopped(&home),
     )?;

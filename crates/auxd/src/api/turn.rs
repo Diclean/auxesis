@@ -2101,6 +2101,7 @@ impl EngineTurnRunner {
             &registry,
             StoreHandle::Shared(Arc::clone(&store)).audit_sink(),
             Some(run_id.clone()),
+            // WO-BUD-1: the judge's call is `agent`'s spend, on this run.
             self.shell_judge(
                 &config,
                 agent,
@@ -2108,7 +2109,16 @@ impl EngineTurnRunner {
                 Arc::clone(&shared),
                 &contacts,
                 &sent,
-            ),
+            )
+            .map(|judge| {
+                judge.with_budget(aux_engine::judge::JudgeBudget {
+                    store: Arc::clone(&store),
+                    agent: agent.to_string(),
+                    run_id: Some(run_id.clone()),
+                    budgets: config.budgets.clone(),
+                    prices: config.prices.clone(),
+                })
+            }),
         );
 
         // E-11: one current-thread runtime per blocking worker thread,

@@ -1091,6 +1091,91 @@ mod tests {
         }
     }
 
+    /// WO-BUD-1: one shell ask judged with its call metered as `main`'s on run
+    /// `run-judge-1` under `budgets`, `spent` input tokens already used today;
+    /// the decision, the card's asks, the provider's call count and the store.
+    async fn metered(
+        budgets: kernel_core::budget::Budgets,
+        spent: u64,
+        answer: aux_providers::ChatResponse,
+    ) -> (bool, Vec<ApprovalRequest>, usize, aux_store::Store) {
+        let store = aux_store::Store::open_in_memory().unwrap();
+        let day = store.local_day().unwrap();
+        let tokens_in = kernel_core::budget::UsageKind::TokensIn;
+        store
+            .record_usage_at("main", tokens_in, spent, "tokens", &day)
+            .unwrap();
+        let store = Arc::new(std::sync::Mutex::new(store));
+        let fake = Arc::new(aux_providers::FakeProvider::scripted("fakey", vec![answer]));
+        let provider = Arc::clone(&fake) as Arc<dyn aux_providers::ChatProvider>;
+        let budget = crate::judge::JudgeBudget {
+            store: Arc::clone(&store),
+            agent: "main".to_string(),
+            run_id: Some("run-judge-1".to_string()),
+            budgets,
+            prices: kernel_core::budget::PriceTable::default(),
+        };
+        let judge = judge(provider, open(), "list the files").with_budget(budget);
+        let (allow, asked, _) = judged(judge, &[], ls()).await;
+        let store = Arc::into_inner(store).unwrap().into_inner().unwrap();
+        (allow, asked, fake.request_count(), store)
+    }
+
+    #[tokio::test]
+    async fn a_capped_agent_never_reaches_the_judges_provider_and_keeps_the_card() {
+        // A zero cap reads as unset: "capped" is a cap `main` already spent
+        // today, set for everyone or for `main` alone.
+        let cap = kernel_core::budget::BudgetCaps {
+            tokens_in: Some(5),
+            ..Default::default()
+        };
+        let mut own = kernel_core::budget::Budgets::default();
+        own.agents.insert("main".to_string(), cap);
+        let everyone = kernel_core::budget::Budgets {
+            default: cap,
+            ..Default::default()
+        };
+        for budgets in [everyone, own] {
+            let answer = aux_providers::ChatResponse::assistant(ALLOW);
+            let (allow, asked, calls, store) = metered(budgets, 5, answer).await;
+            assert_eq!(calls, 0, "no provider call on a denied budget");
+            assert!(!allow && asked.len() == 1, "the owner gets the card");
+            assert_eq!(asked[0].arguments["judge"], "no answer (budget)");
+            assert_eq!(store.event_count("budget.denied").unwrap(), 1, "audited");
+            assert_eq!(store.reservation_count().unwrap(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_allowed_judge_call_is_settled_on_the_turns_run_with_its_tokens() {
+        let usage = aux_providers::Usage {
+            prompt_tokens: 120,
+            completion_tokens: 9,
+            ..Default::default()
+        };
+        let mut unlimited = kernel_core::budget::Budgets::default();
+        unlimited.default.unlimited = true;
+        for budgets in [kernel_core::budget::Budgets::default(), unlimited] {
+            let answer = aux_providers::ChatResponse::assistant(ALLOW).with_usage(usage);
+            let (allow, asked, calls, store) = metered(budgets, 0, answer).await;
+            assert!(allow && asked.is_empty() && calls == 1, "{asked:?}");
+            let run = store.usage_totals_for_run("run-judge-1").unwrap();
+            assert_eq!((run.tokens_in, run.tokens_out), (120, 9), "{run:?}");
+            let day = store.local_day().unwrap();
+            let main = store.usage_totals("main", &day).unwrap();
+            assert_eq!(
+                (main.tokens_in, main.tokens_out),
+                (120, 9),
+                "the agent's own"
+            );
+            assert_eq!(store.reservation_count().unwrap(), 0, "settled");
+            assert_eq!(
+                store.usage_call_totals(Some("main"), &day).unwrap().calls,
+                1
+            );
+        }
+    }
+
     #[tokio::test]
     async fn private_mode_sends_a_name_as_written_and_tokenises_an_email_for_the_judge() {
         let fake = Arc::new(aux_providers::FakeProvider::scripted(

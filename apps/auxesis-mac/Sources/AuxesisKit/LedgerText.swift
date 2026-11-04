@@ -214,29 +214,18 @@ public enum LedgerText {
         return "\(agent) \(agent == "Clients" ? "were" : "was") allowed to \(action) — \(byYou ? "you said yes" : "no approval needed")"
     }
 
+    /// The tool in the base form a decision sentence needs. Known tools reuse
+    /// the step cards' own words; an unknown one is humanised, never left as a
+    /// raw id ("Aux was allowed to privacy record summary").
     private static func toolAction(_ tool: String, _ language: Language) -> String {
-        if language == .fr {
-            switch tool {
-            case "read_file": return "lire un fichier"
-            case "mail_list": return "lister les e-mails"
-            case "mail_search": return "chercher dans les e-mails"
-            case "mail_read": return "lire les e-mails"
-            case "calendar_list": return "lister les événements du calendrier"
-            case "crm_get": return "lire une fiche client"
-            case "recall": return "consulter"
-            default: return tool.replacingOccurrences(of: "_", with: " ")
-            }
-        }
-        switch tool {
-        case "read_file": return "read a file"
-        case "mail_list": return "list mail"
-        case "mail_search": return "search mail"
-        case "mail_read": return "read mail"
-        case "calendar_list": return "list calendar events"
-        case "crm_get": return "read a client card"
-        case "recall": return "recall"
-        default: return tool.replacingOccurrences(of: "_", with: " ")
-        }
+        if let action = StepLabel.action(tool, language: language) { return action }
+        let words = tool
+            .lowercased()
+            .replacingOccurrences(of: ".", with: "_")
+            .split(whereSeparator: { $0 == "_" || $0 == "-" })
+            .joined(separator: " ")
+        guard !words.isEmpty else { return language == .fr ? "utiliser un outil" : "use a tool" }
+        return language == .fr ? "utiliser \(words)" : "use \(words)"
     }
 
     private static func answered(_ agent: String, _ input: Any?, _ output: Any?, _ language: Language) -> String {

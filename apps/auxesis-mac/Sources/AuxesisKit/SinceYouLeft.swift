@@ -25,7 +25,9 @@ public enum SinceYouLeftFilter: String, CaseIterable, Identifiable {
 public enum SinceYouLeftPresentation {
     /// True for a ledger row the owner can review: an action or a send. The
     /// conversation itself — every `message.*` row is the thread's transcript —
-    /// is not work that ran while they were away.
+    /// is not work that ran while they were away. An automatic allow is not
+    /// work either: a read-only default, an allow rule, or the auto policy's
+    /// own answer showed no card and asked the owner nothing.
     ///
     /// A `run.finished` row is one chat turn's receipt. The turn the owner
     /// started is their own message, and its tools, skills and sends have their
@@ -34,11 +36,61 @@ public enum SinceYouLeftPresentation {
     /// nothing, so it stays.
     public static func isWork(_ entry: LedgerEntry) -> Bool {
         if entry.kind.hasPrefix("message.") { return false }
+        if isAutomaticAllow(entry) { return false }
         guard entry.kind == "run.finished", let payload = LedgerText.payload(entry.summary) else {
             return true
         }
         guard let trigger = payload["trigger"] as? String else { return true }
         return trigger != "owner_message"
+    }
+
+    /// True for a decision row that records an allow no one was asked about:
+    /// the broker's read-only default, a matching allow rule, or the auto
+    /// approver's own yes. The owner has nothing to review.
+    public static func isAutomaticAllow(_ entry: LedgerEntry) -> Bool {
+        switch entry.kind {
+        case "approval.answered", "tool.decision":
+            if let payload = LedgerText.payload(entry.summary) {
+                return isAutomaticAllow(payload)
+            }
+            return isAutomaticPlainDecision(entry.summary)
+        default:
+            return false
+        }
+    }
+
+    private static func isAutomaticAllow(_ payload: [String: Any]) -> Bool {
+        let decision = ((payload["decision"] as? String) ?? (payload["outcome"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard decision == "allow" || decision == "allowed" else { return false }
+        if let by = (payload["by"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !by.isEmpty {
+            // "you" is the owner's answer; policy and judge answered on their own.
+            return by != "you"
+        }
+        // An auto answer always names the tool; a row without one is the
+        // owner's answer shape, which stays.
+        guard (payload["tool"] as? String) != nil else { return false }
+        if (payload["approved"] as? Bool) == true { return false }
+        return !hasAskMarker((payload["reason"] as? String) ?? "")
+    }
+
+    /// The daemon flattens `tool.decision` to "tool allowed — reason".
+    private static func isAutomaticPlainDecision(_ summary: String) -> Bool {
+        guard let match = summary.range(
+            of: #"^([A-Za-z][A-Za-z0-9_]*)\s+(allowed|denied|ask:approved|ask:denied)\s+—\s+(.+)$"#,
+            options: .regularExpression
+        ) else { return false }
+        let fields = String(summary[match]).components(separatedBy: " ")
+        guard fields.count >= 4, fields[1].lowercased() == "allowed" else { return false }
+        let reason = fields.dropFirst(3).joined(separator: " ").lowercased()
+        return !hasAskMarker(reason)
+    }
+
+    /// "ask, approved", "ask:approved", or a cut "ask, appr…" all mean a card
+    /// was asked; only a reason with no "ask" word is a direct allow.
+    private static func hasAskMarker(_ reason: String) -> Bool {
+        reason.range(of: #"\bask\b"#, options: .regularExpression) != nil
     }
 
     public static func entries(_ entries: [LedgerEntry], filter: SinceYouLeftFilter = .all) -> [LedgerEntry] {

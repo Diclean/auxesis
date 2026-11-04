@@ -102,14 +102,14 @@ import XCTest
             summary: "recall ask:denied — no matching rule (default ask)")
         let policyDenial = LedgerEntry(at: "", kind: "tool.decision", agent: "clients",
             summary: "recall denied — rule 4 matched: deny")
-        XCTAssertEqual(LedgerText.what(approvedAsk, language: .en), "Clients were allowed to recall — you said yes")
-        XCTAssertEqual(LedgerText.what(approvedAsk, language: .fr), "Clients ont été autorisés à consulter · vous avez dit oui")
-        XCTAssertEqual(LedgerText.what(approvedAskOutcome, language: .en), "Clients were allowed to recall — you said yes")
-        XCTAssertEqual(LedgerText.what(approvedAskOutcome, language: .fr), "Clients ont été autorisés à consulter · vous avez dit oui")
-        XCTAssertEqual(LedgerText.what(deniedAskOutcome, language: .en), "Clients could not recall — denied")
-        XCTAssertEqual(LedgerText.what(deniedAskOutcome, language: .fr), "Clients ne peuvent pas consulter · refusé")
-        XCTAssertEqual(LedgerText.what(policyDenial, language: .en), "Clients could not recall — denied by policy")
-        XCTAssertEqual(LedgerText.what(policyDenial, language: .fr), "Clients ne peuvent pas consulter · refusé par la règle")
+        XCTAssertEqual(LedgerText.what(approvedAsk, language: .en), "Clients were allowed to look in memory — you said yes")
+        XCTAssertEqual(LedgerText.what(approvedAsk, language: .fr), "Clients ont été autorisés à chercher en mémoire · vous avez dit oui")
+        XCTAssertEqual(LedgerText.what(approvedAskOutcome, language: .en), "Clients were allowed to look in memory — you said yes")
+        XCTAssertEqual(LedgerText.what(approvedAskOutcome, language: .fr), "Clients ont été autorisés à chercher en mémoire · vous avez dit oui")
+        XCTAssertEqual(LedgerText.what(deniedAskOutcome, language: .en), "Clients could not look in memory — denied")
+        XCTAssertEqual(LedgerText.what(deniedAskOutcome, language: .fr), "Clients ne peuvent pas chercher en mémoire · refusé")
+        XCTAssertEqual(LedgerText.what(policyDenial, language: .en), "Clients could not look in memory — denied by policy")
+        XCTAssertEqual(LedgerText.what(policyDenial, language: .fr), "Clients ne peuvent pas chercher en mémoire · refusé par la règle")
     }
 
     func testKnownStructuredLedgerKindsHaveSpecificBilingualLines() {
@@ -197,6 +197,62 @@ import XCTest
     func testLoadedEmptySinceYouLeftCopyDoesNotClaimNothingHappened() {
         XCTAssertEqual(L10n.ui(.ledgerEmpty, .en), "No actions or sends since you left.")
         XCTAssertEqual(L10n.ui(.ledgerEmpty, .fr), "Aucune action ni aucun envoi depuis votre départ.")
+    }
+
+    /// The owner read "Aux was allowed to privacy record summary — no approval
+    /// needed" in Today. A read-only default allow ran without a card: no one
+    /// was asked, so the row is not something to review. An automatic answer
+    /// from the policy is the same: no card, nothing the owner decided.
+    func testAutomaticAllowsWithNoApprovalAskedAreNotSinceYouLeftItems() {
+        let read = LedgerEntry(at: "2026-11-05 09:00:00", kind: "tool.decision", agent: "aux",
+                               summary: "privacy_record_summary allowed — no matching rule (read-only tool, default allow): allow")
+        XCTAssertFalse(SinceYouLeftPresentation.isWork(read))
+        XCTAssertTrue(SinceYouLeftPresentation.previewEntries([read]).isEmpty)
+        XCTAssertEqual(SinceYouLeftPresentation.emptyLine(.loaded([read]), language: .en), L10n.ui(.ledgerEmpty, .en))
+
+        let autoAnswered = LedgerEntry(
+            at: "2026-11-05 09:00:01", kind: "approval.answered", agent: "aux",
+            summary: #"{"agent":"aux","tool":"privacy_record_summary","decision":"allow","by":"policy","always":false,"class":"read"}"#
+        )
+        XCTAssertFalse(SinceYouLeftPresentation.isWork(autoAnswered))
+        XCTAssertEqual(LedgerText.what(autoAnswered, language: .en),
+                       "Aux was allowed to read the privacy record — no approval needed")
+
+        let ownerAnswered = LedgerEntry(
+            at: "2026-11-05 09:00:02", kind: "approval.answered", agent: "aux",
+            summary: #"{"id":"a1","decision":"allow","by":"you","always":false}"#
+        )
+        XCTAssertTrue(SinceYouLeftPresentation.isWork(ownerAnswered))
+    }
+
+    /// A send the owner approved is still an item, and its sentence is
+    /// grammatical in both languages instead of "allowed to mail send".
+    func testOwnerApprovedSendStaysAndReadsAsASentence() {
+        let asked = LedgerEntry(at: "2026-11-05 09:01:00", kind: "tool.decision", agent: "aux",
+                                summary: "mail_send allowed — no matching rule (default ask): ask, approved")
+        XCTAssertTrue(SinceYouLeftPresentation.isWork(asked))
+        XCTAssertEqual(SinceYouLeftPresentation.previewEntries([asked]).map(\.kind), ["tool.decision"])
+        XCTAssertEqual(LedgerText.what(asked, language: .en), "Aux was allowed to send mail — you said yes")
+        XCTAssertEqual(LedgerText.what(asked, language: .fr), "Aux a été autorisé à envoyer un e-mail · vous avez dit oui")
+    }
+
+    /// A known tool id reads as the same plain words the steps cards use;
+    /// an unknown one is humanised, never left as an id.
+    func testDecisionToolNamesReadAsPlainWordsInBothLanguages() {
+        let read = LedgerEntry(at: "", kind: "tool.decision", agent: "aux",
+                               summary: "privacy_record_summary allowed — no matching rule (read-only tool, default allow): allow")
+        XCTAssertEqual(LedgerText.what(read, language: .en),
+                       "Aux was allowed to read the privacy record — no approval needed")
+        XCTAssertEqual(LedgerText.what(read, language: .fr),
+                       "Aux a été autorisé à lire le journal de confidentialité · sans demande")
+        XCTAssertFalse(LedgerText.what(read, language: .en).contains("privacy_record_summary"))
+
+        let unknown = LedgerEntry(at: "", kind: "tool.decision", agent: "aux",
+                                  summary: "frobnicate_widget allowed — no matching rule (read-only tool, default allow): allow")
+        XCTAssertEqual(LedgerText.what(unknown, language: .en),
+                       "Aux was allowed to use frobnicate widget — no approval needed")
+        XCTAssertFalse(LedgerText.what(unknown, language: .en).contains("_"))
+        XCTAssertFalse(LedgerText.what(unknown, language: .fr).contains("_"))
     }
 
     /// Only a loaded ledger may say there is nothing to review. A read that

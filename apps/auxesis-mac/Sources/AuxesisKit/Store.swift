@@ -509,11 +509,9 @@ public final class Store: ObservableObject {
     /// Why the last connect failed; nil while connecting / online.
     @Published public private(set) var offlineCause: OfflineCause?
     @Published public private(set) var phase: Phase = .idle
-    @Published public private(set) var firstRun: Bool = false
-    @Published public private(set) var firstRunKnown = false
-    /// First-run setup screen state (service picker + key + test).
-    @Published public private(set) var firstRunSetupState: FirstRunSetupState = .loading
-    @Published public private(set) var firstRunTestState: FirstRunTestState = .idle
+    /// First-run setup (the gate, service picker, key, test, first agent).
+    /// Its changes redraw this store's observers too.
+    public let setup: FirstRunModel
     /// Google connection (G4): the service's last honest answer and any
     /// sign-in in flight. Its changes redraw this store's observers too.
     public let google: GoogleConnectionModel
@@ -522,7 +520,6 @@ public final class Store: ObservableObject {
     /// the supervisor's live state, never a live network probe, so it can never
     /// claim a service the app did not start.
     @Published public private(set) var serviceState: ServiceSupervisor.State = .stopped
-    @Published public private(set) var providerChoices: [ProviderChoice] = []
     @Published public private(set) var mcpCatalog: [McpCatalogEntry] = []
     @Published public private(set) var mcpPacks: [McpPack] = []
     @Published public private(set) var mcpServers: [McpServerView] = []
@@ -543,11 +540,6 @@ public final class Store: ObservableObject {
     /// preview and says so; Approve waits for a new yes, never an automatic one.
     @Published public private(set) var pluginPreviewChanged = false
     private var pluginStage = 0
-    @Published public private(set) var createdAgentName: String?
-    @Published public var selectedProviderID: String?
-    /// The key field. Bound to a `SecureField`, cleared after every submit and
-    /// never logged, echoed, or persisted by the app.
-    @Published public var providerKeyInput = ""
     @Published public private(set) var agents: [Agent] = []
     @Published public private(set) var messages: [ChatMessage] = []
     /// The agent's previous session, shown above a current thread that has no
@@ -628,10 +620,8 @@ public final class Store: ObservableObject {
     public static let receiptLimit = 100
 
     private let transport: AuxdTransport
-    /// Non-nil when the transport also speaks the first-run routes (the real
-    /// `AuxdClient` does); tests inject a scripted one.
-    private let firstRunClient: FirstRunClient?
     private var googleChanges: AnyCancellable?
+    private var setupChanges: AnyCancellable?
     private let sleeper: (TimeInterval) async -> Void
     /// How often a live session re-reads pending approvals (WAITING-ROW-DELEGATE).
     private let approvalPollInterval: TimeInterval
@@ -682,7 +672,7 @@ public final class Store: ObservableObject {
     ) {
         self.transport = transport
         self.approvalPollInterval = approvalPollInterval
-        self.firstRunClient = firstRunClient ?? (transport as? FirstRunClient)
+        self.setup = FirstRunModel(client: firstRunClient ?? (transport as? FirstRunClient))
         self.sleeper = sleeper
         // Non-nil client when the transport also speaks the Google routes (the
         // real `AuxdClient` does); tests inject a scripted one.
@@ -712,6 +702,9 @@ public final class Store: ObservableObject {
         }
         googleChanges = google.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
+        setupChanges = setup.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+        setup.onFinished = { [weak self] in self?.refreshFirstRun() }
     }
 
     // MARK: Lifecycle
@@ -923,8 +916,7 @@ public final class Store: ObservableObject {
 
     private func apply(_ snapshot: Snapshot) {
         version = snapshot.health.version
-        firstRun = snapshot.health.firstRun
-        firstRunKnown = true
+        setup.record(firstRun: snapshot.health.firstRun)
         google.apply(
             connected: snapshot.health.googleConnected,
             reconnectNeeded: snapshot.health.googleReconnectNeeded
@@ -1992,8 +1984,7 @@ public final class Store: ObservableObject {
             guard let self else { return }
             do {
                 let health = try await self.transport.health()
-                self.firstRun = health.firstRun
-                self.firstRunKnown = true
+                self.setup.record(firstRun: health.firstRun)
                 self.version = health.version
                 self.google.apply(
                     connected: health.googleConnected,
@@ -2010,211 +2001,6 @@ public final class Store: ObservableObject {
             throw AuxdError.transport(L10n.t(.appleEventKitUnavailable, language))
         }
         try await client.publishAppleEventKit(snapshot)
-    }
-
-    // MARK: First-run setup (service + key + test + first agent)
-
-    /// The picker entry the owner selected, if any.
-    public var selectedProviderChoice: ProviderChoice? {
-        guard let id = selectedProviderID else { return nil }
-        return providerChoices.first { $0.id == id }
-    }
-
-    /// A configured service already has its key on disk; a service the daemon
-    /// lists but that has no key (`key_present:false`, or a failed lookup)
-    /// still asks the owner to paste one.
-    public func providerNeedsKey(_ choice: ProviderChoice) -> Bool {
-        choice.keyRequired && !choice.configured
-    }
-
-    /// The Test button is enabled only when the form is idle (no test in
-    /// flight or already shown) and the key the service needs is present.
-    public var canTestProvider: Bool {
-        guard firstRunSetupState == .ready, firstRunTestState == .idle else { return false }
-        guard let choice = selectedProviderChoice else { return false }
-        if providerNeedsKey(choice) {
-            return !providerKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        return true
-    }
-
-    /// Load `GET /v1/providers` + `GET /v1/first-run` and build the picker.
-    /// Any failure is shown as a plain offline card with a Retry.
-    public func beginFirstRunSetup() {
-        firstRunSetupState = .loading
-        firstRunTestState = .idle
-        Task { [weak self] in
-            guard let self else { return }
-            guard let client = self.firstRunClient else {
-                self.firstRunSetupState = .failed(.localService)
-                return
-            }
-            do {
-                let providers = try await client.providers()
-                let runStatus = try await client.firstRunStatus()
-                self.applyFirstRunSetup(providers: providers, status: runStatus)
-            } catch {
-                self.firstRunSetupState = .failed(FirstRunFailure(error: error))
-            }
-        }
-    }
-
-    /// Retry re-reads the daemon state; the key field stays cleared.
-    public func retryFirstRunSetup() {
-        beginFirstRunSetup()
-    }
-
-    /// Dismiss an inline Test error so the owner can paste the key again.
-    public func clearProviderTestError() {
-        if case .failed = firstRunTestState {
-            firstRunTestState = .idle
-        }
-    }
-
-    private func applyFirstRunSetup(providers: [ProviderSummary], status: FirstRunStatus) {
-        var choices: [ProviderChoice] = []
-        var seen = Set<String>()
-        for provider in providers {
-            choices.append(ProviderChoice(
-                id: provider.id,
-                title: provider.name,
-                baseURL: provider.baseURL,
-                model: provider.model,
-                kind: provider.kind,
-                keyRequired: provider.keyRequired,
-                // Derive readiness from the daemon's key presence: a service
-                // that exists without a key is not ready and must show the key
-                // field. A service that needs no key is ready either way.
-                configured: provider.keyPresent == true || !provider.keyRequired,
-                knownToDaemon: true
-            ))
-            seen.insert(provider.id)
-        }
-        // The daemon is the truth; when it has nothing yet, offer the built-in
-        // suggestions so a fresh install can still finish here.
-        for suggestion in FirstRunCatalog.suggestions where !seen.contains(suggestion.id) {
-            choices.append(suggestion)
-            seen.insert(suggestion.id)
-        }
-        providerChoices = choices
-
-        if !status.firstRun, status.agentCreated {
-            let agent = status.agent ?? FirstRunCatalog.defaultAgentID
-            createdAgentName = agent
-            firstRunSetupState = .done(agent: agent)
-            return
-        }
-
-        if selectedProviderID == nil || !choices.contains(where: { $0.id == selectedProviderID }) {
-            let preferred = status.provider.flatMap { id in choices.first { $0.id == id }?.id }
-            selectedProviderID = preferred ?? choices.first?.id
-        }
-        firstRunSetupState = .ready
-    }
-
-    /// Press Test: one spend-free check, then save + create the first agent on
-    /// success. The key field is cleared as soon as the check returns.
-    public func testProviderKey() {
-        guard firstRunTestState == .idle else { return }
-        guard let client = firstRunClient, let choice = selectedProviderChoice else {
-            firstRunSetupState = .failed(.localService)
-            return
-        }
-        let key = providerKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        let needsKey = providerNeedsKey(choice)
-        if needsKey, key.isEmpty {
-            firstRunTestState = .failed(.missingKey)
-            return
-        }
-        firstRunTestState = .testing
-        Task { [weak self] in
-            guard let self else { return }
-            // A service the daemon already lists but that has no key gets the
-            // pasted key through the update route first, so the daemon's test
-            // reads the key that was really stored (not an inline copy).
-            if needsKey, choice.knownToDaemon {
-                do {
-                    _ = try await client.updateProviderKey(name: choice.id, apiKey: key)
-                } catch {
-                    self.providerKeyInput = ""
-                    self.firstRunTestState = .failed(FirstRunFailure(error: error))
-                    return
-                }
-            }
-            let payload = ProviderTestRequest(
-                name: choice.id,
-                kind: choice.kind,
-                baseURL: choice.baseURL,
-                model: choice.model,
-                apiKey: (needsKey && !choice.knownToDaemon) ? key : nil
-            )
-            do {
-                let result = try await client.testProvider(payload)
-                self.providerKeyInput = ""
-                if result.ok {
-                    self.firstRunTestState = .ok(FirstRunCopy.successKey(for: result))
-                    await self.finishFirstRunSetup(choice: choice, key: (needsKey && !choice.knownToDaemon) ? key : nil)
-                } else {
-                    self.firstRunTestState = .failed(FirstRunFailure(test: result))
-                }
-            } catch {
-                self.providerKeyInput = ""
-                self.firstRunTestState = .failed(FirstRunFailure(error: error))
-            }
-        }
-    }
-
-    /// Save the service (new one only), create the first agent through
-    /// `POST /v1/agents`, then clear the gate through `POST /v1/first-run/complete`.
-    private func finishFirstRunSetup(choice: ProviderChoice, key: String?) async {
-        guard let client = firstRunClient else {
-            firstRunSetupState = .failed(.localService)
-            return
-        }
-        firstRunSetupState = .working
-        do {
-            // Only a built-in suggestion is saved. A service the daemon already
-            // lists is never re-created: its missing key (if any) was already
-            // written through the update route before the test ran.
-            if !choice.knownToDaemon {
-                do {
-                    _ = try await client.saveProvider(CreateProviderRequest(
-                        name: choice.id,
-                        kind: choice.kind,
-                        baseURL: choice.baseURL,
-                        model: choice.model,
-                        apiKey: key
-                    ))
-                } catch let auxd as AuxdError where auxd.daemonErrorCode == "provider_exists" {
-                    // Already saved by an earlier attempt: carry on. Any other
-                    // 409 (a key-slot conflict, a future code) is a real
-                    // failure and falls through to the card below.
-                }
-            }
-            do {
-                _ = try await client.createAgent(CreateAgentRequest(
-                    name: FirstRunCatalog.defaultAgentID,
-                    provider: choice.id,
-                    model: choice.model,
-                    role: nil
-                ))
-            } catch let auxd as AuxdError where auxd.httpStatus == 409 {
-                // The agent already exists (a previous attempt): the complete
-                // call below is idempotent, so keep going.
-            }
-            let complete = try await client.completeFirstRun(FirstRunCompleteRequest(
-                provider: choice.id,
-                model: choice.model,
-                role: nil
-            ))
-            createdAgentName = complete.agent.name
-            firstRunSetupState = .done(agent: complete.agent.name)
-            // The gate is derived from health: re-reading it flips the shell
-            // from the setup screen to the conversation.
-            refreshFirstRun()
-        } catch {
-            firstRunSetupState = .failed(FirstRunFailure(error: error))
-        }
     }
 
     // MARK: Copy helpers (plain words, no jargon)

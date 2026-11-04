@@ -471,8 +471,8 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
         XCTAssertTrue(launcher.plans.isEmpty)
         XCTAssertEqual(
             ShellPresentation.screen(
-                firstRunKnown: store.firstRunKnown,
-                firstRun: store.firstRun,
+                firstRunKnown: store.setup.firstRunKnown,
+                firstRun: store.setup.firstRun,
                 connection: store.connection,
                 hasLoadedContent: !store.agents.isEmpty
             ),

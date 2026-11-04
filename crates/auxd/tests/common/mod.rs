@@ -7,7 +7,7 @@
 
 #![allow(dead_code)]
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
@@ -209,13 +209,22 @@ fn send_raw(addr: SocketAddr, request: Vec<u8>, read_timeout: Duration) -> HttpR
     });
 
     let mut raw = Vec::new();
-    let _ = stream.read_to_end(&mut raw);
+    let read = stream.read_to_end(&mut raw);
     let _ = writer.join();
 
     let text = String::from_utf8_lossy(&raw);
-    let (head, body) = text
-        .split_once("\r\n\r\n")
-        .unwrap_or_else(|| panic!("no HTTP header terminator in {text:?}"));
+    // Without a full head, say which side stopped: the socket timeout means
+    // this client gave up first, an EOF means the server closed the socket.
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or_else(|| {
+        let why = match &read {
+            Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                format!("the client gave up: no response within its {read_timeout:?} read timeout")
+            }
+            Err(err) => format!("reading the response failed ({err})"),
+            Ok(_) => "the server closed the connection without a response head".to_string(),
+        };
+        panic!("{why}; got {text:?}")
+    });
     let status = head
         .lines()
         .next()

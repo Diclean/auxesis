@@ -13,7 +13,7 @@
 //! *now*, never by replaying the missed ones.
 //!
 //! Each claimed job executes on its **own store connection** (see
-//! [`StoreOpener`]), never while the shared store mutex is held: scheduler
+//! [`FileStoreOpener`]), never while the shared store mutex is held: scheduler
 //! ticks, STOP checks and daemon shutdown stay responsive even when a turn
 //! blocks for minutes.
 //!
@@ -23,8 +23,8 @@
 //!
 //! Time is injected through [`Clock`] so tests are deterministic.
 
+use crate::api::jobs::RoutineSchedule;
 use aux_store::{Job, Store, StoreError, RUN_FAILED, RUN_OK};
-use auxd::api::jobs::RoutineSchedule;
 use chrono::{DateTime, Duration, Utc};
 use kernel_core::killswitch;
 use std::path::{Path, PathBuf};
@@ -90,53 +90,49 @@ impl<T: Clock + ?Sized> Clock for Arc<T> {
     }
 }
 
+/// Where a [`FileStoreOpener`] opens its connections.
+#[derive(Debug, Clone)]
+enum StoreLocation {
+    /// The process's verified home; every open re-checks it.
+    Verified(kernel_core::SandboxHome),
+    /// A direct path, for unit tests that build a temporary database.
+    #[cfg(test)]
+    Path(PathBuf),
+}
+
 /// Opens independent connections to the daemon's store.
 ///
 /// Jobs run on their own connection so a blocking turn never holds the
-/// shared store mutex; tests can substitute a factory over an in-memory or
-/// temporary database.
-pub trait StoreOpener: Send + Sync + 'static {
-    /// Open a fresh connection (same database, same busy timeout).
-    fn open(&self) -> Result<Store, StoreError>;
-}
-
-/// A [`StoreOpener`] over one store file.
-///
-/// In production the opener holds the **verified home handle** and every
+/// shared store mutex. Production holds the **verified home handle** and every
 /// re-open goes through [`Store::open_verified`] (re-verify + fd-real path +
-/// post-open inode check). The legacy `path` form exists for unit tests that
-/// build temporary databases directly.
+/// post-open inode check); unit tests can point it at a temporary database.
 #[derive(Debug, Clone)]
 pub struct FileStoreOpener {
-    path: Option<PathBuf>,
-    verified: Option<kernel_core::SandboxHome>,
+    location: StoreLocation,
 }
 
 impl FileStoreOpener {
-    /// Open connections to the store at `path` (tests / legacy callers).
+    /// Open connections to the store at `path` (tests only).
     #[cfg(test)]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
-            path: Some(path.into()),
-            verified: None,
+            location: StoreLocation::Path(path.into()),
         }
     }
 
     /// Open connections through the process's verified home (production).
     pub fn from_verified(home: kernel_core::SandboxHome) -> Self {
         Self {
-            path: None,
-            verified: Some(home),
+            location: StoreLocation::Verified(home),
         }
     }
-}
 
-impl StoreOpener for FileStoreOpener {
-    fn open(&self) -> Result<Store, StoreError> {
-        match (&self.verified, &self.path) {
-            (Some(home), _) => Store::open_verified(home),
-            (None, Some(path)) => Store::open(path),
-            (None, None) => unreachable!("FileStoreOpener needs a path or a verified home"),
+    /// Open a fresh connection (same database, same busy timeout).
+    pub fn open(&self) -> Result<Store, StoreError> {
+        match &self.location {
+            StoreLocation::Verified(home) => Store::open_verified(home),
+            #[cfg(test)]
+            StoreLocation::Path(path) => Store::open(path),
         }
     }
 }
@@ -230,7 +226,7 @@ pub fn tick(
         // A paused/killed agent's job is claimed but not run: the claim
         // already moved `next_run_at` forward, so it stays scheduled and
         // runs when the agent resumes (B-API v3).
-        if auxd::agent::state(stop.home(), &job.agent).blocks_work() {
+        if crate::agent::state(stop.home(), &job.agent).blocks_work() {
             continue;
         }
         match execute(store, clock, runner, &job, None) {
@@ -252,7 +248,7 @@ pub fn tick(
 /// no longer shares the scheduler's store connection (or its mutex), so a
 /// long or blocked runner cannot stall ticks, STOP evaluation or shutdown.
 pub fn run_claimed_job(
-    opener: &dyn StoreOpener,
+    opener: &FileStoreOpener,
     clock: Arc<dyn Clock>,
     runner: &dyn JobRunner,
     lease: std::time::Duration,
@@ -264,7 +260,7 @@ pub fn run_claimed_job(
 /// [`run_claimed_job`] with an explicit renewal cadence (tests use a short
 /// one; production derives `lease / 3`).
 fn run_claimed_job_with_interval(
-    opener: &dyn StoreOpener,
+    opener: &FileStoreOpener,
     clock: Arc<dyn Clock>,
     runner: &dyn JobRunner,
     lease: std::time::Duration,
@@ -304,7 +300,7 @@ fn run_claimed_job_with_interval(
 /// flow when the marker disappears.
 pub async fn run_loop<C, R>(
     store: Arc<Mutex<Store>>,
-    opener: Arc<dyn StoreOpener>,
+    opener: Arc<FileStoreOpener>,
     clock: C,
     runner: R,
     tick_every: std::time::Duration,
@@ -367,7 +363,7 @@ where
             // A paused/killed agent's job is not executed (B-API v3). The
             // claim lease already pushed `next_run_at`, so it stays
             // scheduled and runs after a resume — no failed-run noise.
-            if auxd::agent::state(stop.home(), &job.agent).blocks_work() {
+            if crate::agent::state(stop.home(), &job.agent).blocks_work() {
                 continue;
             }
             let opener = Arc::clone(&opener);
@@ -403,7 +399,7 @@ impl LeaseRenewer {
     /// Open a connection and start renewing `job_id`'s lease every
     /// `interval`.
     fn start(
-        opener: &dyn StoreOpener,
+        opener: &FileStoreOpener,
         job_id: i64,
         lease: std::time::Duration,
         interval: std::time::Duration,
@@ -502,7 +498,7 @@ fn execute(
                 &job.agent,
                 &started_at,
                 &finished_at,
-                auxd::api::receipt::ReceiptStatus::Failed,
+                crate::api::receipt::ReceiptStatus::Failed,
             );
             store_guard.set_job_enabled(job.id, false)?;
             drop(store_guard);
@@ -522,13 +518,13 @@ fn execute(
     let store_guard = locked(store);
     store_guard.finish_run(run.id, &finished_at, status, Some(&cap_summary(&summary)))?;
     let receipt_status = if status == RUN_OK {
-        auxd::api::receipt::ReceiptStatus::Done
+        crate::api::receipt::ReceiptStatus::Done
     } else if summary.to_ascii_lowercase().contains("budget")
         || summary.to_ascii_lowercase().contains("capped")
     {
-        auxd::api::receipt::ReceiptStatus::StoppedBudget
+        crate::api::receipt::ReceiptStatus::StoppedBudget
     } else {
-        auxd::api::receipt::ReceiptStatus::Failed
+        crate::api::receipt::ReceiptStatus::Failed
     };
     persist_run_receipt(
         &store_guard,
@@ -560,9 +556,9 @@ fn persist_run_receipt(
     agent: &str,
     started: &str,
     finished: &str,
-    status: auxd::api::receipt::ReceiptStatus,
+    status: crate::api::receipt::ReceiptStatus,
 ) {
-    use auxd::api::receipt::{build_receipt, ReceiptEvent};
+    use crate::api::receipt::{build_receipt, ReceiptEvent};
     let receipt_run_id = format!("job-{run_id}");
     let receipt = build_receipt(&[
         ReceiptEvent::Run {
@@ -580,7 +576,7 @@ fn persist_run_receipt(
     ]);
     if let Ok(payload) = serde_json::to_string(&receipt) {
         match store.log_run_finished_once(&receipt_run_id, &payload) {
-            Ok(_) => auxd::api::receipt::prune_receipts(store),
+            Ok(_) => crate::api::receipt::prune_receipts(store),
             Err(err) => tracing::warn!(run_id, error = %err, "could not persist run receipt"),
         }
     }
@@ -772,7 +768,7 @@ mod tests {
                 "main",
                 "2026-10-03 08:00:00",
                 "2026-10-03 08:00:01",
-                auxd::api::receipt::ReceiptStatus::Done,
+                crate::api::receipt::ReceiptStatus::Done,
             );
         }
         persist_run_receipt(
@@ -781,7 +777,7 @@ mod tests {
             "main",
             "2026-10-03 08:01:00",
             "2026-10-03 08:01:01",
-            auxd::api::receipt::ReceiptStatus::Done,
+            crate::api::receipt::ReceiptStatus::Done,
         );
 
         assert_eq!(
@@ -789,7 +785,7 @@ mod tests {
             2,
             "the retry must be a no-op and a different run must still write"
         );
-        let receipts = auxd::api::receipt::read_receipts(&db_path, None, 10).unwrap();
+        let receipts = crate::api::receipt::read_receipts(&db_path, None, 10).unwrap();
         let ids: Vec<&str> = receipts.iter().map(|r| r.run_id.as_str()).collect();
         assert_eq!(
             ids.iter().filter(|id| **id == "job-7").count(),
@@ -1370,7 +1366,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(home.join("agents").join("scout")).unwrap();
-        auxd::agent::set_marker(&home, "scout", auxd::agent::PAUSED_MARKER).unwrap();
+        crate::agent::set_marker(&home, "scout", crate::agent::PAUSED_MARKER).unwrap();
 
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
         let job = store
@@ -1405,7 +1401,7 @@ mod tests {
         );
 
         // Kill behaves the same way.
-        auxd::agent::set_marker(&home, "scout", auxd::agent::KILLED_MARKER).unwrap();
+        crate::agent::set_marker(&home, "scout", crate::agent::KILLED_MARKER).unwrap();
         clock.set(utc(2026, 10, 3, 8, 20, 0));
         let report = tick(&store, &clock, &runner, LEASE, &StopSwitch::new(&home)).unwrap();
         assert_eq!(report.claimed, 1);
@@ -1516,7 +1512,7 @@ mod tests {
     }
 
     /// Shared store + opener over one file-backed database.
-    fn file_store(dir: &tempfile::TempDir) -> (Arc<Mutex<Store>>, Arc<dyn StoreOpener>) {
+    fn file_store(dir: &tempfile::TempDir) -> (Arc<Mutex<Store>>, Arc<FileStoreOpener>) {
         let path = dir.path().join("store.db");
         (
             Arc::new(Mutex::new(Store::open(&path).unwrap())),

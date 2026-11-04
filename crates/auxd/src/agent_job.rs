@@ -31,6 +31,7 @@
 //! from a non-async thread: the scheduler does exactly that with
 //! `spawn_blocking`.
 
+use aux_brief::cap_chars;
 use aux_engine::{
     load_rules, select_provider, validate_agent, ChatError, ChatSession, ChatSetup, MarkerStop,
     ModeChangeStop, StopCheck, TurnOutcome,
@@ -49,11 +50,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::agent::{self, AgentConfig, AgentState};
+use crate::mcp::{current as current_mcp, McpSlot};
+use crate::privacy_wiring::agent_mode_fn;
 use crate::scheduler::{Clock, JobRunner, SystemClock};
-use auxd::agent::{self, AgentConfig, AgentState};
-use auxd::mcp::{current as current_mcp, McpSlot};
-use auxd::privacy_wiring::agent_mode_fn;
-use auxd::watch::{text_hash, WatchSpec, MAX_TEXTS_PER_DAY};
+use crate::watch::{text_hash, WatchSpec, MAX_TEXTS_PER_DAY};
 
 /// Longest success summary kept for a run (characters).
 pub const MAX_SUMMARY_CHARS: usize = 2_000;
@@ -362,11 +363,11 @@ impl AgentJobRunner {
             .ok_or("web reads are unavailable")?;
         // Approved for the stored URL's origin only: a redirect elsewhere fails.
         let egress =
-            auxd::watch::scheduled_egress(url).ok_or("the watcher's address is invalid")?;
+            crate::watch::scheduled_egress(url).ok_or("the watcher's address is invalid")?;
         let ctx =
             kernel_broker::ToolCtx::new(job.agent.clone(), self.home.clone()).with_egress(egress);
         let args = serde_json::json!({ "url": url });
-        let out = auxd::turn_runtime::block_on(fetch.run(&args, &ctx))
+        let out = crate::turn_runtime::block_on(fetch.run(&args, &ctx))
             .map_err(|err| err.to_string())?
             .map_err(|err| err.to_string())?;
         if out.is_error {
@@ -495,10 +496,10 @@ impl AgentJobRunner {
         );
         // WO-09: load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
-        auxd::agent_skills::load_agent_skills(&self.home, &job.agent, store);
+        crate::agent_skills::load_agent_skills(&self.home, &job.agent, store);
         // E-11: the current-thread runtime is cached per blocking worker
         // thread, not rebuilt per run.
-        let outcome = auxd::turn_runtime::block_on(async {
+        let outcome = crate::turn_runtime::block_on(async {
             let mut session = ChatSession::start(ChatSetup {
                 mode: agent_mode_fn(&self.home, &job.agent),
                 contacts,
@@ -530,7 +531,7 @@ impl AgentJobRunner {
         // in the local run record, so it is rehydrated here, on the Mac.
         let mut outcome = outcome;
         if mode == PrivacyMode::Private {
-            outcome.text = auxd::privacy_wiring::rehydrate_local(session.id, &outcome.text);
+            outcome.text = crate::privacy_wiring::rehydrate_local(session.id, &outcome.text);
         }
         Ok((outcome, approver.denied()))
     }
@@ -823,17 +824,6 @@ fn success_summary(home: &Path, text: &str, denied: usize) -> String {
         ));
     }
     summary
-}
-
-/// Truncate to at most `max` characters, ending with `…` when cut.
-fn cap_chars(text: &str, max: usize) -> String {
-    let len = text.chars().count();
-    if len <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 /// Runner used when the daemon has no usable provider configuration.
@@ -1492,7 +1482,7 @@ mod tests {
         // tool even when a global rule allows it — the path that runs
         // unattended every night.
         let mut harness = Harness::new();
-        auxd::agent::write_config(
+        crate::agent::write_config(
             &harness.home,
             "main",
             &AgentConfig {
@@ -1566,7 +1556,7 @@ mod tests {
                     tools,
                     skills: Vec::new(),
                 };
-                auxd::agent::write_config(&harness.home, agent, &config).unwrap();
+                crate::agent::write_config(&harness.home, agent, &config).unwrap();
             }
             let call =
                 aux_providers::ToolCall::new("call_1", "shell", json!({"command": "echo ran"}));
@@ -2022,7 +2012,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        auxd::agent::write_config(
+        crate::agent::write_config(
             &harness.home,
             "main",
             &AgentConfig {
@@ -2058,7 +2048,7 @@ mod tests {
         let harness = Harness::new();
         let provider = Arc::new(FakeProvider::echo("fake"));
         let runner = harness.runner(Arc::clone(&provider), vec![], &Budgets::default());
-        auxd::agent::set_marker(&harness.home, "main", auxd::agent::PAUSED_MARKER).unwrap();
+        crate::agent::set_marker(&harness.home, "main", crate::agent::PAUSED_MARKER).unwrap();
         let job = harness
             .store()
             .create_job("main", "paused", "every 15m", &job_payload("ping"), None)
@@ -2350,7 +2340,7 @@ mod tests {
         use wiremock::{matchers::method, Mock, ResponseTemplate};
         let page = ResponseTemplate::new(200).set_body_raw(html.to_string(), "text/html");
         let mock = Mock::given(method("GET")).respond_with(page);
-        auxd::turn_runtime::block_on(async {
+        crate::turn_runtime::block_on(async {
             server.reset().await;
             mock.mount(server).await;
         })
@@ -2361,9 +2351,9 @@ mod tests {
     fn watch(harness: &Harness, args: serde_json::Value) -> String {
         use kernel_broker::Tool;
         std::fs::create_dir_all(aux_engine::agent_dir(&harness.home, "main")).unwrap();
-        let tool = auxd::watch::WatchTool::new(harness.home.clone(), Arc::clone(&harness.store));
+        let tool = crate::watch::WatchTool::new(harness.home.clone(), Arc::clone(&harness.store));
         let ctx = kernel_broker::ToolCtx::new("main", harness.home.clone());
-        let out = auxd::turn_runtime::block_on(tool.run(&args, &ctx)).unwrap();
+        let out = crate::turn_runtime::block_on(tool.run(&args, &ctx)).unwrap();
         let out = out.unwrap();
         assert!(!out.is_error, "{}", out.content);
         out.content
@@ -2385,7 +2375,7 @@ mod tests {
     #[test]
     fn a_watcher_asks_the_model_only_on_change_and_notifies_once() {
         let mut harness = Harness::new();
-        let server = auxd::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
+        let server = crate::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
         serve(&server, "<p>Course A is sold out.</p>");
         let replies = ["NO", "YES"].map(ChatResponse::assistant);
         let provider = Arc::new(FakeProvider::scripted("fake", replies.to_vec()));
@@ -2425,7 +2415,7 @@ mod tests {
         let mut harness = Harness::new();
         let config = kernel_core::config_path(&harness.home);
         std::fs::write(config, "version = 1\nprivacy.mode = \"private\"\n").unwrap();
-        let server = auxd::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
+        let server = crate::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
         let email = "camille.exemple@example.invalid";
         serve(&server, &format!("<p>Write to {email}: 1 place left.</p>"));
         let reply = ChatResponse::assistant("YES");
@@ -2438,7 +2428,7 @@ mod tests {
 
         watch_tick(&mut harness, &runner, id);
 
-        let fetched = auxd::turn_runtime::block_on(server.received_requests()).unwrap();
+        let fetched = crate::turn_runtime::block_on(server.received_requests()).unwrap();
         assert_eq!(fetched.unwrap().len(), 1, "the page was fetched");
         let wire = serde_json::to_string(&provider.requests()).unwrap();
         assert!(wire.contains("place") && !wire.contains(email), "{wire}");
@@ -2453,7 +2443,7 @@ mod tests {
     #[test]
     fn a_watcher_with_a_full_skip_counter_does_not_overflow() {
         let mut harness = Harness::new();
-        let server = auxd::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
+        let server = crate::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
         serve(&server, "<p>Course A: 1 place left.</p>");
         let reply = ChatResponse::assistant("YES");
         let provider = Arc::new(FakeProvider::scripted("fake", vec![reply]));
@@ -2486,7 +2476,7 @@ mod tests {
     #[test]
     fn a_watcher_needs_exactly_yes_or_no_and_asks_again_after_an_unclear_answer() {
         let mut harness = Harness::new();
-        let server = auxd::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
+        let server = crate::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
         serve(&server, "<p>Course A: 1 place left.</p>");
         let replies = ["Yes, probably", "YES: one place", "**YES**"];
         let replies = replies.map(ChatResponse::assistant).to_vec();
@@ -2551,7 +2541,7 @@ mod tests {
     #[test]
     fn a_repeating_watcher_texts_three_times_a_day_then_says_what_it_skipped() {
         let mut harness = Harness::new();
-        let server = auxd::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
+        let server = crate::turn_runtime::block_on(wiremock::MockServer::start()).unwrap();
         let provider = Arc::new(FakeProvider::scripted(
             "fake",
             vec![ChatResponse::assistant("YES"); 6],
@@ -2589,12 +2579,12 @@ mod tests {
     fn a_watcher_never_follows_a_redirect_to_another_origin() {
         use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
         let mut harness = Harness::new();
-        let (a, b) = auxd::turn_runtime::block_on(async {
+        let (a, b) = crate::turn_runtime::block_on(async {
             (MockServer::start().await, MockServer::start().await)
         })
         .unwrap();
         let hop = format!("http://127.0.0.1:{}/final", b.address().port());
-        auxd::turn_runtime::block_on(async {
+        crate::turn_runtime::block_on(async {
             let redirect = ResponseTemplate::new(302).insert_header("location", hop.as_str());
             Mock::given(method("GET"))
                 .respond_with(redirect)
@@ -2614,7 +2604,7 @@ mod tests {
         watch_tick(&mut harness, &runner, id);
 
         let count = |server: &MockServer| {
-            auxd::turn_runtime::block_on(server.received_requests())
+            crate::turn_runtime::block_on(server.received_requests())
                 .unwrap()
                 .unwrap()
                 .len()

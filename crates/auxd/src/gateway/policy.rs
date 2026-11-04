@@ -15,6 +15,8 @@ pub const MAX_NOTICE_BYTES: usize = 4096;
 
 use serde::{Deserialize, Serialize};
 
+use super::truncate_utf8;
+
 /// How urgent a notice is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Level {
@@ -211,17 +213,6 @@ fn hold(state: &mut PolicyState, now: i64, notice: Notice) {
         state.window_start = Some(now);
     }
     state.batched.push(notice);
-}
-
-fn truncate_utf8(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_owned();
-    }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
 }
 
 fn roll_day(state: &mut PolicyState, now: i64) {

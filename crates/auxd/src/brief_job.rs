@@ -1,15 +1,15 @@
 //! Morning-brief job wiring on the existing job scheduler.
 
-use aux_brief::{BriefClock, BriefResult, BriefSource, SystemBriefClock};
+use aux_brief::{cap_chars, BriefClock, BriefResult, BriefSource, SystemBriefClock};
 use aux_store::{Job, Store};
 use chrono::{DateTime, Utc};
 use kernel_core::Config;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
+use crate::api::brief::{run_brief_traced, BriefNowError, BriefTrigger};
+use crate::gateway::router::NotifyRouter;
 use crate::scheduler::JobRunner;
-use auxd::api::brief::{run_brief_traced, BriefNowError, BriefTrigger};
-use auxd::gateway::router::NotifyRouter;
 
 const BRIEF_JOB: &str = "morning-brief";
 const BRIEF_PAYLOAD: &str = r#"{"kind":"morning-brief","name":"morning-brief"}"#;
@@ -18,15 +18,6 @@ const MAX_FAILURE_CHARS: usize = 240;
 /// The scrubbed reason goes to the run history only.
 const BRIEF_FAILED_TITLE: &str = "Morning brief";
 const BRIEF_FAILED_BODY: &str = "Today's brief could not be made. Open Auxesis for details.";
-
-fn cap_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        return value.to_string();
-    }
-    let mut output: String = value.chars().take(max.saturating_sub(1)).collect();
-    output.push('…');
-    output
-}
 
 /// Keep the config-owned brief job in sync with the existing `jobs` table.
 /// Fresh configs do not create a runnable job because `[brief].enabled` is
@@ -132,8 +123,8 @@ impl JobRunner for DispatchJobRunner {
             serde_json::from_str(&job.payload).map_err(|_| "invalid job payload".to_string())?;
         // B3: the periodic CRM timeline refresh reads mail headers and the
         // EventKit snapshot locally; no model is involved.
-        if payload.get("kind").and_then(Value::as_str) == Some(auxd::crm::TIMELINE_JOB) {
-            return auxd::crm::run_job(&self.home, store);
+        if payload.get("kind").and_then(Value::as_str) == Some(crate::crm::TIMELINE_JOB) {
+            return crate::crm::run_job(&self.home, store);
         }
         if payload.get("kind").and_then(Value::as_str) != Some("morning-brief") {
             return self.agent.run(store, job);
@@ -220,11 +211,11 @@ impl JobRunner for DispatchJobRunner {
 mod tests {
     use super::*;
     use crate::agent_job::NoProviderRunner;
+    use crate::gateway::policy::{NotifyPolicy, PolicyConfig};
+    use crate::gateway::router::{Clock as RouterClock, NotifyRouter, Pending, QueueFull, Sink};
     use crate::scheduler::{tick, Clock, StopSwitch};
     use aux_brief::{run_once, BriefClock, FakeBriefSource};
     use aux_notify::FakeNotifier;
-    use auxd::gateway::policy::{NotifyPolicy, PolicyConfig};
-    use auxd::gateway::router::{Clock as RouterClock, NotifyRouter, Pending, QueueFull, Sink};
     use chrono::{Local, Timelike};
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -775,7 +766,7 @@ mod tests {
             Store::open(&dir.path().join("timeline.sqlite")).unwrap(),
         ));
         let now = Utc::now();
-        auxd::crm::sync_job(&store.lock().unwrap(), now).unwrap();
+        crate::crm::sync_job(&store.lock().unwrap(), now).unwrap();
         let job = store.lock().unwrap().list_jobs().unwrap().remove(0);
 
         let clock = Arc::new(FixedClock(Mutex::new(now + chrono::Duration::minutes(5))));

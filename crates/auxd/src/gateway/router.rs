@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use super::policy::{Action, Level, Notice, NotifyPolicy, PolicyState};
+use super::truncate_utf8;
 use super::{imessage, ApprovalBody, ApprovalCard, Gateway, GatewayError, OutboundText, SendCause};
 
 /// Low-priority lane capacity: info/normal drop the oldest past it.
@@ -155,17 +156,6 @@ impl Pending {
             }
         }
     }
-}
-
-fn truncate_utf8(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_owned();
-    }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
 }
 
 /// Notices a full queue dropped, for the next brief.

@@ -405,7 +405,7 @@ pub fn set_named_in_env_file(
         let mut text = lines.join("\n");
         text.push('\n');
 
-        // J-02 write gateway: the `.env` file is written relative to the
+        // The `.env` file is written relative to the
         // verified home directory fd, never through the home path string; the
         // atomic temp+rename never leaves a half-written file, and the open
         // refuses a symlink at the file name.
@@ -925,7 +925,7 @@ AUX_KEY_OTHER=keep-me
         assert!(text.contains("AUX_KEY_OLD=keep-me"), "{text}");
     }
 
-    /// Security review P2: two writers each doing their own read-modify-write of `.env`
+    /// Two writers each doing their own read-modify-write of `.env`
     /// in parallel must not erase each other's keys. Two threads that open
     /// their own lock descriptor are enough to exercise `flock` (the lock is
     /// per open file description, not per process).

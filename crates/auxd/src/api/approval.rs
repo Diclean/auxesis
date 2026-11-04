@@ -41,9 +41,9 @@ pub const DEFAULT_APPROVAL_TIMEOUT: Duration =
 pub const APPROVAL_UNDO_WINDOW: Duration = Duration::from_secs(10);
 
 /// What the phone is told about waiting approvals: a count and a pointer to
-/// the app, never a tool, an argument, an address or a name (NOTIFY-2). The
+/// the app, never a tool, an argument, an address or a name. The
 /// details stay on the approval card in the app. The local display gets the
-/// same counts-only phrase when no gateway is paired (APPROVAL-NO-GATEWAY).
+/// same counts-only phrase when no gateway is paired.
 pub fn phone_notice(waiting: usize, lang: Lang) -> Notification {
     let body = match (waiting <= 1, lang) {
         (true, Lang::En) => "1 approval is waiting. Open Auxesis to see it.".to_string(),
@@ -258,15 +258,14 @@ pub struct PendingApproval {
     pub id: String,
     /// Id of the `approval.pending` journal row, or `0` when the audit row
     /// could not be written. `0` is never a real event id (SQLite ids start
-    /// at 1) and keeps the frame decodable for the app's required `u64`
-    /// (RV2-03).
+    /// at 1) and keeps the frame decodable for the app's required `u64`.
     pub audit_id: u64,
     /// Agent that wants to run the tool.
     pub agent: String,
     /// Session the turn belongs to.
     pub thread_id: i64,
     /// The chief's session when a delegate asks: that turn waits on this card
-    /// too (TURN2-HANG). `None` for the chief's own asks.
+    /// too. `None` for the chief's own asks.
     pub root_thread: Option<i64>,
     /// Tool name.
     pub tool: String,
@@ -447,7 +446,7 @@ struct Inner {
     waiters: HashMap<String, oneshot::Sender<Resolution>>,
     /// Ids whose claim outlived the turn: the timeout grace expiry marked
     /// them, so a late [`ClaimedApproval::complete_with`] must not wake the
-    /// turn or publish an `allowed` frame (RV2-01). A turn that ends also
+    /// turn or publish an `allowed` frame. A turn that ends also
     /// marks its own claimed ids.
     abandoned: HashSet<String>,
     /// Ids currently claimed by an in-flight answer, mapped to their session
@@ -670,7 +669,7 @@ impl ApprovalRegistry {
     }
 
     /// True when a card asked by `thread_id`'s turn, or by an agent it
-    /// delegated to, still waits for the owner (TURN2-HANG).
+    /// delegated to, still waits for the owner.
     pub fn holds_thread(&self, thread_id: i64) -> bool {
         self.cards_holding(thread_id) > 0
     }
@@ -958,7 +957,7 @@ impl ApiApprover {
     }
 
     /// Log one journal row, returning its id (`None` when the store is
-    /// unwritable; the frame then carries the `0` sentinel, RV2-03).
+    /// unwritable; the frame then carries the `0` sentinel.
     fn audit(&self, kind: &str, payload: serde_json::Value) -> Option<u64> {
         let path = kernel_core::store_path(&self.home);
         match Store::open(&path).and_then(|store| store.log_event_id(kind, &payload.to_string())) {
@@ -984,7 +983,7 @@ impl Approver for ApiApprover {
     async fn decide(&self, request: &ApprovalRequest) -> Result<ApprovalDecision, ApproverError> {
         let raw_args =
             serde_json::to_string(&request.arguments).unwrap_or_else(|_| "null".to_string());
-        // M4-0: a card never hides part of what it approves. Arguments too long
+        // A card never hides part of what it approves. Arguments too long
         // to show whole are refused before any card, so what runs (a skill's
         // mail or `.ics` text included) is what was shown. A mail body is
         // shown whole and scrolls in the app, so it has its own cap.
@@ -1069,7 +1068,7 @@ impl Approver for ApiApprover {
         // The audit row is attempted before the approval becomes visible, so
         // a listed approval carries its real `audit_id` whenever the store is
         // writable; otherwise it carries the documented `0` sentinel (the
-        // app's model requires a number, RV2-03). The turn's `run_id` rides on
+        // app's model requires a number. The turn's `run_id` rides on
         // the row so a receipt can attribute the ask by identity.
         let mut audit_payload = serde_json::json!({
             "id": pending.id,
@@ -1142,7 +1141,7 @@ impl Approver for ApiApprover {
                                 // The grace expired: the turn is denied now.
                                 // Mark the claim abandoned so a completion
                                 // that lands later cannot wake the turn or
-                                // publish an `allowed` frame (RV2-01), then
+                                // publish an `allowed` frame, then
                                 // re-check the channel: `complete_with` and
                                 // `abandon` are serialized by the registry
                                 // lock, so a resolution found here really was
@@ -1464,7 +1463,7 @@ mod tests {
         }
     }
 
-    /// M4-0: a send whose text does not fit on a card is refused before any
+    /// A send whose text does not fit on a card is refused before any
     /// card; one that fits is shown whole.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_send_too_long_for_the_card_is_refused_and_a_short_one_shown_whole() {
@@ -1936,7 +1935,7 @@ mod tests {
 
     #[test]
     fn an_unsandboxed_frame_says_so_and_still_decodes() {
-        // WS-C round 7: the card carries `unsandboxed: true` and the
+        // The card carries `unsandboxed: true` and the
         // why/scope strings the owner reads; the app model ignores the new
         // field (no `deny_unknown_fields`) and keeps decoding.
         let value = serde_json::to_value(
@@ -2104,7 +2103,7 @@ mod tests {
 
     #[test]
     fn abandon_thread_retires_pending_and_claimed_ids_of_one_session() {
-        // P2-1: when a turn ends (cancel, timeout or normal), its session's
+        // When a turn ends (cancel, timeout or normal), its session's
         // approvals are retired — pending ones disappear, claimed ones become
         // unabandonable answers.
         let registry = ApprovalRegistry::new(Duration::from_secs(1));

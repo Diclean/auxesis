@@ -848,7 +848,7 @@ mod tests {
             .is_err());
     }
 
-    /// Break-It C: an MCP tool or an unknown connector whose name carries a
+    /// An MCP tool or an unknown connector whose name carries a
     /// domain word does not inherit the chief's domain grants; only an
     /// explicit per-tool, per-server or bucket grant opens it.
     #[test]

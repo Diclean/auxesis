@@ -3,7 +3,7 @@
 //! It speaks the same wire protocol the client does, binds `127.0.0.1:0`, and
 //! records every command line it receives so a test can assert *what was asked
 //! for*. It answers the read path (`ENVELOPE`, flags, size, `BODY.PEEK[]`) and
-//! the MA3 pieces (`BODYSTRUCTURE`, `BODY.PEEK[part]`).
+//! the pieces (`BODYSTRUCTURE`, `BODY.PEEK[part]`).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -84,7 +84,7 @@ pub(super) struct Shared {
     pub(super) overlong_written: AtomicUsize,
     pub(super) tasks: Mutex<Vec<JoinHandle<()>>>,
     /// The spawned behaviour, so the protocol handler can tell when to ignore a
-    /// `<0.N>` partial (MA3's `IgnorePartial`).
+    /// `<0.N>` partial (the `IgnorePartial` form).
     pub(super) behavior: Behavior,
 }
 

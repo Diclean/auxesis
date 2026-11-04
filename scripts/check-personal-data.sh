@@ -15,12 +15,12 @@
 #     runners have generic accounts (`runner`, `root`, `ubuntu`, ...) and CI
 #     cannot know the owner's username, so there it runs ONLY the fixed
 #     machine-path patterns below — scanning for `runner` matches scheduler
-#     code and QA logs, not personal data (rh-1-2). The same skip applies to
+#     code and QA logs, not personal data. The same skip applies to
 #     any generic or very short local account name. The owner's username is
 #     scrubbed from the whole tree, so the check passes on CI as well.
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 # Optional path argument: scan that directory instead of this repository's
 # tracked tree. Without an argument the tracked tree is scanned, as before.

@@ -5,7 +5,7 @@
 # AUXESIS_API_PORT=0; the unflagged runs set no AUXESIS_* variable at all, and
 # `security` resolves to the shim. No run ever uses the caller's real HOME.
 set -euo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/aux-nokeychain-test.XXXXXX")"

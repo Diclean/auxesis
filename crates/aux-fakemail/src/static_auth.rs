@@ -1,6 +1,6 @@
 //! A fixed in-process credential source for tests. Fictional values only.
 //!
-//! The production source (slice MA3) reads `~/.auxesis/.env`; tests must never
+//! The production source reads `~/.auxesis/.env`; tests must never
 //! touch it, so this implements [`Credentials`] over a small map.
 
 use std::collections::HashMap;

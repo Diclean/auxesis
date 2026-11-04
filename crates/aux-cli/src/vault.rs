@@ -3,7 +3,7 @@
 //! committed). Values are read from stdin, so they never appear in shell
 //! history or process arguments.
 //!
-//! There is no Keychain *write* path (P2/KC-01): `security
+//! There is no Keychain *write* path: `security
 //! add-generic-password` took the value on the command line and created
 //! items readable by any process (`-A`), so `aux secret set` never touches
 //! the Keychain. Keychain *reads* exist only for the `check --keychain`
@@ -99,7 +99,7 @@ pub fn set_in_env_file(
 
         let mut text = lines.join("\n");
         text.push('\n');
-        // J-02 write gateway: the `.env` file is written relative to the
+        // The `.env` file is written relative to the
         // verified home directory fd, never through the home path string;
         // `O_NOFOLLOW` refuses a symlink at the file name. The write is an
         // atomic replace (temp file + rename): a crash mid-write never leaves
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600, "the .env must be 0600");
     }
 
-    /// Security review P2: the CLI writer (`aux secret set`) and the daemon writer
+    /// The CLI writer (`aux secret set`) and the daemon writer
     /// (`aux_providers::set_in_env_file`, the provider key path) share the
     /// same `<home>/.config.lock`. Two threads that each open their own lock
     /// descriptor exercise `flock` (per open file description, not per

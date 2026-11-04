@@ -382,7 +382,7 @@ mod tests {
 
     /// CAL-PRIMARY-1: an Apple calendar titled `primary` may be
     /// shared, so a create on it keeps the card. A blank name on an update
-    /// still names a calendar: #397 kept that rule.
+    /// still names a calendar: that rule holds.
     #[test]
     fn an_apple_calendar_titled_primary_or_blank_keeps_its_card_on_an_update() {
         let create = json!({ "title": "Focus", "calendar": "primary" });

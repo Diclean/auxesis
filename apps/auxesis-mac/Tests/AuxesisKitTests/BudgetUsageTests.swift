@@ -1,4 +1,4 @@
-// WO-BUD-4: `/v1/usage` caps feed the per-agent bar, and a `429 budget_denied`
+// `/v1/usage` caps feed the per-agent bar, and a `429 budget_denied`
 // names the agent and the cap instead of "the service refused".
 import XCTest
 @testable import AuxesisKit

@@ -75,7 +75,7 @@ pub fn fixture_mailbox(n: usize) -> Vec<RawMessage> {
         .collect()
 }
 
-/// One multipart message with a text part and a PDF attachment (slice MA3).
+/// One multipart message with a text part and a PDF attachment.
 pub fn fixture_multipart_with_pdf() -> RawMessage {
     const TEXT_PART: &str = "Please find the invoice attached.\r\n";
     const PDF_PART: &str = "%PDF-1.4 fake invoice\r\n";

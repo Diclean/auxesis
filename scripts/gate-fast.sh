@@ -11,7 +11,7 @@
 # build at a time, warm shared target. Else plain cargo. Emergencies only:
 # git push --no-verify.
 set -euo pipefail
-source "$(git rev-parse --show-toplevel)/scripts/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(git rev-parse --show-toplevel)/scripts/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 cd "$(git rev-parse --show-toplevel)"
 start=$SECONDS

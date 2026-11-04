@@ -407,7 +407,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, security review R4 P2 A): the allow guards lived only in the
+    /// Regression: the allow guards lived only in the
     /// views. A direct `store.resolve` must not be a way around them: an over-long
     /// unknown id with `allowOnce`, or any unknown id with `allowAlways`, sends
     /// nothing, leaves the ask pending and answerable, and shows the card's own
@@ -466,7 +466,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, security review R5 P2): `Store.resolve` refused `.allowAlways`
+    /// Regression: `Store.resolve` refused `.allowAlways`
     /// only for an unknown tool, while the card also refuses tainted,
     /// unsandboxed and shell asks. A direct call must not be a wider door than
     /// the button: the same `alwaysAllowed` gate applies, nothing is sent, the
@@ -612,7 +612,7 @@ import Testing
 
     // MARK: F5 — the shell refusal is case-insensitive
 
-    /// Regression (PR #104, GLM r3 P2): the shell refusal was matched
+    /// Regression: the shell refusal was matched
     /// case-sensitively, while the known-tool table lowercases. So `Shell`,
     /// `SHELL` and `SHELL.exec` were known tools that slipped past the refusal —
     /// `alwaysAllowed` returned true. The gate must lowercase too, and a direct
@@ -661,7 +661,7 @@ import Testing
 
     // MARK: F5 — the whole command class refuses Always, whatever the alias
 
-    /// Regression (PR #104, security review R5 P2 A): the known-tool table labels
+    /// Regression: the known-tool table labels
     /// `run_command`, `run`, `bash` and `exec` "lancer une commande" like
     /// `shell`, but the Always gate only refused a `shell` prefix — so those
     /// aliases could be widened to a permanent rule. The refusal now follows the
@@ -724,7 +724,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, security review R8 P2): the Always gate only inspected the
+    /// Regression: the Always gate only inspected the
     /// approval, then forwarded the caller's `scope` unchecked. A direct
     /// `resolve(.allowAlways)` on a healthy `mail.send` ask with a scope naming
     /// another tool (`run`, or an unknown id) could save a permanent command
@@ -774,7 +774,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, security review R9 P2): `.allowAlways` forwarded the caller's
+    /// Regression: `.allowAlways` forwarded the caller's
     /// `scope` as-is. With a nil scope the server chose the rule's perimeter;
     /// with a matching tool the caller could still pick another agent or resource.
     /// "Always" must always send the perimeter the card builds from the

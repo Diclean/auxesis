@@ -212,7 +212,7 @@ fn a_replaced_prompt_word_does_not_hide_a_leak() {
     }
 }
 
-/// Seal r1 P3: a name inside an identifier still counts. Digits, `@`, `/`,
+/// A name inside an identifier still counts. Digits, `@`, `/`,
 /// `_` and `.` bound it; case and NFKC width do not hide it.
 #[test]
 fn a_name_inside_an_identifier_is_a_leak() {
@@ -233,7 +233,7 @@ fn a_name_inside_an_identifier_is_a_leak() {
     }
 }
 
-/// Seal r1 P3: tool-call arguments and ids, tool results and reasoning are
+/// Tool-call arguments and ids, tool results and reasoning are
 /// scanned too, not only message contents.
 #[test]
 fn a_name_outside_message_content_is_a_leak() {

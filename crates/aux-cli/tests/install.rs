@@ -2,9 +2,9 @@
 //!
 //! macOS-only: launchd and `~/Library/LaunchAgents` do not exist on Linux, so
 //! this whole integration file is compiled away on other platforms (CI runs
-//! on Linux; these tests run locally on macOS and in the security-review rounds).
+//! on Linux; these tests run locally on macOS).
 //!
-//! Security review J02-2-BI2-04: a sandboxed `aux install` used to resolve the *real*
+//! A sandboxed `aux install` used to resolve the *real*
 //! `~/Library/LaunchAgents` through `$HOME` and bootstrap a real agent. Now
 //! install/uninstall/status refuse while the guard is active. Every test uses
 //! a fake `$HOME` plus a fake `AUXESIS_LAUNCHCTL` and asserts the refusal

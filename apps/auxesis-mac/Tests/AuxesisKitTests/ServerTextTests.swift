@@ -49,7 +49,7 @@ import Testing
         XCTAssertEqual(ServerText.escaped(String(repeating: "\u{0301}", count: 10_000), maxLength: 200).unicodeScalars.count, 200)
     }
 
-    /// Regression (PR #104, security review R3 P2 B): the escape rule is driven by
+    /// Regression: the escape rule is driven by
     /// `generalCategory`, not by a closed list. Line and paragraph separators,
     /// format characters the old list missed, zero-width spaces and a C1 control
     /// are all escaped, so a server field can never cut the card into rows.
@@ -86,7 +86,7 @@ import Testing
         XCTAssertEqual(ServerText.escaped("\u{10FFFF}", maxLength: 200), "\\u{10FFFF}")
     }
 
-    /// Regression (PR #104, security review R5 P2 B): the strict escape spelling uses a
+    /// Regression: the strict escape spelling uses a
     /// backslash, so the strict rule must escape the ASCII backslash itself
     /// (doubling it). Otherwise a literal `\u{200B}` renders like a real U+200B.
     /// The category rule used by known labels is unchanged.

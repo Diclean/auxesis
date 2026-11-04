@@ -13,7 +13,7 @@
 //! disagree about a secret: both go through
 //! [`snapshot::message_json_scrubbed`].
 //!
-//! User and assistant content stay verbatim by design (RV2-04, tracked): the
+//! User and assistant content stay verbatim by design: the
 //! user may ask about a credential on purpose, and redacting the model's own
 //! answer can mangle legitimate text. That channel is therefore **not**
 //! guaranteed credential-free at the daemon. The transient `message.delta`
@@ -273,9 +273,8 @@ pub fn agent_state(agent: &str, state: &str) -> Value {
 
 /// The app's `Approval` shape (`model.rs`), field for field.
 ///
-/// `audit_id` is always present because the app's model requires a `u64`
-/// (RV2-03). It is the id of the `approval.pending` journal row, or `0` when
-/// that row could not be written (unwritable store): `0` is not a real event
+/// `audit_id` is always present because the app's model requires a `u64`.
+/// When the `approval.pending` row could not be written (unwritable store), `0` is not a real event
 /// id (SQLite ids start at 1) and the app only ever displays it, so the
 /// degraded frame is both decodable and honest.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -743,7 +742,7 @@ mod tests {
     fn message_new_scrubs_every_role_content_like_tool_end() {
         let home = Path::new("/Users/secret/.auxesis");
         let raw = "top secret: sk-live-SECRET0123456789\nfrom /Users/secret/.auxesis/agents";
-        // P2-5: every role is display-scrubbed; the stored row stays raw.
+        // Every role is display-scrubbed; the stored row stays raw.
         for role in ["tool", "user", "assistant"] {
             let frame = message_new(home, "main", &message(9, 3, role, raw));
             let text = frame["message"]["blocks"][0]["text"].as_str().unwrap();

@@ -9,14 +9,14 @@
 //! (`GET /v1/threads/{id}/messages`), and the final `message.new`/`message.done`
 //! frames close the message.
 //!
-//! # Secret safety (WF-1 redesign)
+//! # Secret safety
 //!
 //! The streamed text must be **byte-identical to the whole-buffer scrub of
 //! the same text** ([`kernel_broker::scrub_external_preview`], the same function
 //! every other surface and the persisted `message.new` use), for every split
-//! point. Six security-review rounds showed that holding back *spellings* — teaching
-//! the hold about `:`, `%NN`, `0x`, base64 padding, … — kept missing families
-//! (round 5 colon hexdump, round 6 percent escapes and a dropped base64 tail),
+//! point. Holding back *spellings* — teaching the hold about `:`, `%NN`, `0x`,
+//! base64 padding, … — kept missing families (colon hexdumps, percent escapes,
+//! a dropped base64 tail),
 //! so this module no longer recognises any spelling:
 //!
 //! - The full accumulated raw text is kept per message ([`State::raw`]).
@@ -34,7 +34,7 @@
 //! - `finish` emits the whole-buffer scrub's remainder, so the concatenation
 //!   of all deltas equals the scrub exactly.
 //!
-//! # Registry changes after emission (R7-1)
+//! # Registry changes after emission
 //!
 //! The exact-value registry can change while a stream is live: the daemon
 //! re-resolves keys (`providers.rs`), the LRU cap evicts, or a sibling
@@ -110,7 +110,7 @@ const MAX_WINDOW_BYTES: usize = 4096;
 
 /// The visible placeholder a stream emits when the known-secret registry is
 /// saturated (at its hard ceiling with every value pinned): unscrubbed text
-/// must not be published, so the whole remaining message fails closed (R8).
+/// must not be published, so the whole remaining message fails closed.
 const SATURATED_PLACEHOLDER: &str = "<redacted>";
 
 /// Mutable state of one stream.
@@ -151,7 +151,7 @@ struct State {
     /// least once (the inherent, documented limit).
     diverged: bool,
     /// The registry was saturated when this stream emitted: the whole
-    /// remaining message was replaced by a visible placeholder (R8).
+    /// remaining message was replaced by a visible placeholder.
     masked_whole: bool,
 }
 
@@ -328,8 +328,8 @@ impl DeltaStream {
         if kernel_broker::scrub::registry_saturated() || kernel_broker::scrub::registry_oversized()
         {
             // The registry cannot prove every spelling covered: it is at its
-            // hard ceiling with every value pinned (R8), or a value's variant
-            // closure exceeded its budget (R10). Fail closed with one visible
+            // hard ceiling with every value pinned, or a value's variant
+            // closure exceeded its budget. Fail closed with one visible
             // placeholder instead of leaking.
             if !state.masked_whole {
                 state.masked_whole = true;
@@ -542,7 +542,7 @@ impl Drop for DeltaStream {
 ///
 /// No size cap is requested: the whole accumulated buffer may span several
 /// frames, and passing the shared scrubber's head/tail cap would silently
-/// drop the middle (security review H-02); the release is chunked here instead.
+/// drop the middle; the release is chunked here instead.
 fn scrub(home: &Path, text: &str) -> String {
     kernel_broker::scrub_external_preview(home, text, usize::MAX)
 }
@@ -1213,7 +1213,7 @@ mod tests {
         assert_eq!(frames[0]["seq"], 1);
     }
 
-    /// H-02 (P1 gate): every documented secret shape, split at **every** char
+    /// Every documented secret shape, split at **every** char
     /// boundary with a real flush in between, must never surface a window of
     /// the value on the WS and must reproduce the whole-buffer scrub exactly.
     #[test]
@@ -1457,7 +1457,7 @@ mod tests {
         }
     }
 
-    /// Security review R6-1 (B6-1): the all-byte `%NN` spelling of a *registered* secret
+    /// The all-byte `%NN` spelling of a *registered* secret
     /// streams raw at 55/59 split boundaries under the old hold. The output
     /// must equal the whole-buffer scrub at every boundary, including the
     /// report's `[1, 25]` cuts and the `x…x` probe with a flush after five
@@ -1707,7 +1707,7 @@ mod tests {
         seg_scrub[from..].to_string()
     }
 
-    /// R7-1 (a security review): a secret registered *after* its raw bytes were already
+    /// A secret registered *after* its raw bytes were already
     /// emitted must not panic and must not garble, duplicate or drop text:
     /// the stream continues with the scrub of the remaining raw suffix. The
     /// already-published prefix cannot be recalled — the documented inherent
@@ -1752,7 +1752,7 @@ mod tests {
         );
     }
 
-    /// R7-1 (GLM): the same for a run-heavy body (the first flush cut is
+    /// The same for a run-heavy body (the first flush cut is
     /// moved to the run start), with the registration in the middle of the
     /// stream.
     #[test]
@@ -1781,7 +1781,7 @@ mod tests {
         assert!(!rest.contains(&canary), "{rest:?}");
     }
 
-    /// R7-1 (sibling stream): a value registered by *another* stream while
+    /// A value registered by *another* stream while
     /// this one is live takes the same deterministic path.
     #[test]
     fn r7_sibling_stream_registration_after_emission_is_well_formed() {
@@ -1811,7 +1811,7 @@ mod tests {
         assert!(!rest.contains(&canary), "{rest:?}");
     }
 
-    /// R7-1 (encoded spelling): the flush cut lands *inside* a colon-hex
+    /// The flush cut lands *inside* a colon-hex
     /// spelling of a value that is registered afterwards. The already
     /// emitted part is raw (the inherent limit), the remaining spelling is
     /// covered by one mask token, and the continuation matches the
@@ -1863,7 +1863,7 @@ mod tests {
         );
     }
 
-    /// R7-4: the `\uNNNN` / `\UNNNNNNNN` / `\u{…}` spelling of a registered
+    /// The `\uNNNN` / `\UNNNNNNNN` / `\u{…}` spelling of a registered
     /// value is masked by the whole-buffer scrub, and the stream matches that
     /// scrub at every split boundary (contiguous and separated forms).
     #[test]
@@ -1911,7 +1911,7 @@ mod tests {
         }
     }
 
-    /// R8 (1): NFKC-compatibility spellings of registered values — ligatures,
+    /// NFKC-compatibility spellings of registered values — ligatures,
     /// fullwidth, superscripts, decomposed combining sequences — must match
     /// the whole-buffer scrub at every split.
     #[test]
@@ -1958,7 +1958,7 @@ mod tests {
         }
     }
 
-    /// R8 (2): JSON surrogate-pair escapes of a non-BMP character in a
+    /// JSON surrogate-pair escapes of a non-BMP character in a
     /// registered value must match the whole-buffer scrub at every split.
     #[test]
     fn r8_surrogate_pair_spelling_matches_the_whole_buffer_at_every_split() {
@@ -2016,7 +2016,7 @@ mod tests {
         }
     }
 
-    /// R9 (1): full canonical NFKC — Hangul Jamo composition and canonically
+    /// Full canonical NFKC — Hangul Jamo composition and canonically
     /// reordered combining marks — must match the whole-buffer scrub at every
     /// split.
     #[test]
@@ -2059,7 +2059,7 @@ mod tests {
         }
     }
 
-    /// R9 (2): every pair of transforms composed on a registered value must
+    /// Every pair of transforms composed on a registered value must
     /// match the whole-buffer scrub at every split (base64-of-hex,
     /// hex-of-base64, percent-of-base64, percent-of-hex, HTML-of-…, …).
     #[test]

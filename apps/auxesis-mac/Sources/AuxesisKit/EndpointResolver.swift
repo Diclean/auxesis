@@ -139,8 +139,8 @@ public enum EndpointResolver {
                     home = custom
                 }
             } else {
-                // Sandbox mode REQUIRES an explicit AUXESIS_HOME (security review r6
-                // P1): never fall back to <HOME>/.auxesis.
+                // Sandbox mode REQUIRES an explicit AUXESIS_HOME
+                // Never fall back to <HOME>/.auxesis.
                 homeRefused = true
                 home = fallbackHome
                 noEndpoint = true

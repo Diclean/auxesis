@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn the_script_goes_on_stdin_and_never_on_argv() {
-        // P1 regression (security-review round 4): the one-time code used to be an
+        // The one-time code used to be an
         // argv item of a program resolved through PATH. The only program is
         // the absolute system osascript, argv is exactly `-`, and the
         // title/body (code included) live in the stdin script only.
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn a_planted_osascript_in_path_is_never_selected() {
-        // P1 regression (security-review round 4): a fake `osascript` placed first
+        // A fake `osascript` placed first
         // in PATH must not be reachable: the spec always names the absolute
         // system binary, and the child environment does not even carry PATH.
         struct PathGuard(Option<std::ffi::OsString>);
@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_default_notifier_runs_only_the_system_osascript() {
-        // P1 regression (security-review round 4): no environment variable may
+        // No environment variable may
         // redirect the notifier. The program is fixed at construction and this
         // module never reads the environment; the test seam is chosen only by
         // `system_notifier`.
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn maps_nonzero_exit_and_sanitizes_stderr() {
-        // Round 3 made the shared sanitiser drop ANSI sequences as units
+        // The shared sanitiser drops ANSI sequences as units
         // (`strip_ansi`): colouring must not survive even as its parameter
         // residue (`[31m`). The old expectation (`[31mpermission
         // denied[0m`) encoded the previous, leakier `sanitize_text`-only

@@ -80,7 +80,7 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub base_url: String,
     /// Default model for this provider. Empty for `kind = "acp"`: the ACP
-    /// agent picks its own default in A0.
+    /// agent picks its own default.
     #[serde(default)]
     pub model: String,
     /// Keychain account, e.g. `deepseek`. Omit for local endpoints that need

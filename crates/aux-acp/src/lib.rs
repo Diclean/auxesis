@@ -23,7 +23,7 @@
 //!   [`ledger::TurnHost`].
 //!
 //! Everything ships behind `[acp] enabled = false` (config-only, no UI,
-//! until the security review passes).
+//! until the security review signs it off).
 
 pub mod backend;
 pub mod client;

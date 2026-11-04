@@ -494,7 +494,7 @@ fn a_term_trapping_notifier_fork_is_swept_with_the_group() {
     let sandbox = Sandbox::new();
 
     // Replace the default shim: trap TERM, fork an escapee from the trap,
-    // record its pid and exit. This is the breaker's exact A3L shape.
+    // record its pid and exit. This is the exact shape a process uses to escape a ppid walk.
     let shim = sandbox.shim_dir.join("osascript");
     std::fs::write(
         &shim,
@@ -628,8 +628,8 @@ fn a_second_daemon_refuses_to_start() {
     shutdown(&mut first, EXIT_TIMEOUT);
 }
 
-/// H-03/J-02: a `.auxesis` under the *sandbox* HOME is exactly the
-/// invocation the tripwire recommends — `auxd` must start (the pre-J-02 test
+/// A `.auxesis` under the *sandbox* HOME is exactly the
+/// invocation the tripwire recommends — `auxd` must start (the old test
 /// pinned the inverted behaviour). Refusing the real `~/.auxesis` is
 /// unit-tested in `kernel_core::paths`; no daemon is ever pointed at it here.
 #[test]

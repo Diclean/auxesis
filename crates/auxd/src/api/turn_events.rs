@@ -49,7 +49,7 @@ pub struct ApiTurnEvents {
     /// the report is its only category evidence. The largest count (never the
     /// sum across rounds) keeps resent history from counting twice.
     reported_values: std::sync::Mutex<std::collections::BTreeMap<String, u32>>,
-    /// DELEG-WHERE-1: set on a delegated turn (`brain.where` per round).
+    /// Set on a delegated turn (`brain.where` per round).
     egress: Option<EgressWatch>,
 }
 
@@ -193,7 +193,7 @@ impl ApiTurnEvents {
         })
     }
 
-    /// DELEG-WHERE-1: report where each provider round ran (`brain.where`).
+    /// Report where each provider round ran (`brain.where`).
     pub fn with_egress_watch(
         mut self: Arc<Self>,
         provider: Arc<dyn aux_providers::ChatProvider>,
@@ -501,7 +501,7 @@ impl TurnEvents for ApiTurnEvents {
     }
 
     fn read_check(&self, _session_id: i64, domain: &str, retried: bool) {
-        // CAL-NO-TOOL-GUESS: the receipt shows the retry and the replaced guess.
+        // The receipt shows the retry and the replaced guess.
         let detail = if retried {
             format!("answered about {domain} without a tool; asked to check once")
         } else {

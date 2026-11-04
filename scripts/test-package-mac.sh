@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PKG="$SCRIPT_DIR/package-mac.sh"
 # shellcheck source=lib/guard.sh
-source "$SCRIPT_DIR/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$SCRIPT_DIR/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 VERSION="9.9.9"
 BUILD="4242"

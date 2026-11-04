@@ -21,7 +21,7 @@ pct() { df -P "$VOL" | awk 'NR==2{gsub("%","",$5);print $5}'; }
 free_gb() { df -Pk "$VOL" | awk 'NR==2{printf "%d",$4/1048576}'; }
 
 
-# Orphaned test spawns (a sandbox/breaker test once left `yes` pegging a core for 26 min):
+# Orphaned test spawns (a sandbox test once left `yes` pegging a core for 26 min):
 # kill `yes` processes whose parent is launchd (orphans) and that ran for more than 5 minutes.
 reap_strays() {
   ps -axo pid=,ppid=,etime=,comm= 2>/dev/null | while read -r pid ppid et comm; do

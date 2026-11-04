@@ -2374,7 +2374,7 @@ mod tests {
         }
     }
 
-    /// Security-review B: an Open turn whose tool call lands after the owner switched
+    /// An Open turn whose tool call lands after the owner switched
     /// to private must not store the tool's raw output.
     #[tokio::test]
     async fn a_tool_result_that_lands_after_a_switch_to_private_is_not_stored_raw() {

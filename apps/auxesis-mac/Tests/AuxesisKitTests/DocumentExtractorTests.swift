@@ -2,8 +2,31 @@
 // device with no socket anywhere in the path.
 import XCTest
 @testable import AuxesisKit
+import CoreGraphics
 import Foundation
 import PDFKit
+
+/// A scripted OCR seam: no Vision call and no real pause.
+private final class ScriptedOCRRecognizer: OCRRecognizer {
+    private let answers: [String?]
+    private(set) var attempts = 0
+    private(set) var pauses = 0
+
+    init(_ answers: [String?]) {
+        self.answers = answers
+    }
+
+    func text(in image: CGImage) -> String? { next() }
+    func text(in data: Data) -> String? { next() }
+
+    func pauseBeforeRetry() { pauses += 1 }
+
+    private func next() -> String? {
+        defer { attempts += 1 }
+        guard !answers.isEmpty else { return nil }
+        return answers[min(attempts, answers.count - 1)]
+    }
+}
 
 @objcMembers @MainActor final class DocumentExtractorTests: XCTestCase {
     func testNativeTextPDFReturnsPDFTextWithTheExpectedWords() throws {
@@ -23,6 +46,29 @@ import PDFKit
         let normalized = output.text.uppercased().replacingOccurrences(of: " ", with: "")
         XCTAssertTrue(normalized.contains("TOTAL"), "got: \(output.text)")
         XCTAssertTrue(normalized.contains("EUR"), "got: \(output.text)")
+    }
+
+    func testEmptyAccuratePassIsRetriedOnceAndItsTextIsUsed() throws {
+        let recognizer = ScriptedOCRRecognizer(["", "TOTAL TTC 42,00 EUR"])
+        let data = try DocsFixtures.textPNG("ignored")
+        let output = DocumentExtractor(recognizer: recognizer)
+            .extract(data: data, mime: "image/png")
+
+        XCTAssertEqual(output.extractor, .ocr)
+        XCTAssertEqual(output.text, "TOTAL TTC 42,00 EUR")
+        XCTAssertEqual(recognizer.attempts, 2, "one fresh accurate retry, after the empty pass")
+        XCTAssertEqual(recognizer.pauses, 1)
+    }
+
+    func testTwoEmptyAccuratePassesLeaveNoExtractionAfterExactlyTwoAttempts() throws {
+        let recognizer = ScriptedOCRRecognizer(["   ", "\n"])
+        let data = try DocsFixtures.textPNG("ignored")
+        let output = DocumentExtractor(recognizer: recognizer)
+            .extract(data: data, mime: "image/png")
+
+        XCTAssertEqual(output, .none)
+        XCTAssertEqual(recognizer.attempts, 2, "never a third attempt, never .fast")
+        XCTAssertEqual(recognizer.pauses, 1)
     }
 
     func testScannedPDFWithNoNativeTextFallsBackToOCR() throws {

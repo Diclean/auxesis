@@ -494,12 +494,12 @@ fn empty_extraction(extractor: Extractor) -> Extracted {
         Check {
             name: "totals".to_string(),
             state: CheckState::Unknown,
-            reason: "no text was extracted".to_string(),
+            reason: "the OCR returned nothing".to_string(),
         },
         Check {
             name: "vat".to_string(),
             state: CheckState::Unknown,
-            reason: "no text was extracted".to_string(),
+            reason: "the OCR returned nothing".to_string(),
         },
     ];
     Extracted { fields, checks }

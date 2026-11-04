@@ -1,4 +1,4 @@
-//! PRIVATE-CONTEXT: in Private mode a message sent with no thread id continues
+//! In Private mode a message sent with no thread id continues
 //! the agent's current thread, as in Open mode. Turn 2 reaches the model with
 //! turn 1's masked exchange, under the same session and the same tokens.
 
@@ -103,7 +103,7 @@ async fn a_private_second_message_without_a_thread_id_keeps_the_first_in_context
     }
 
     // The store keeps the private exchange as the model read it, tokens and
-    // all, and the token's value in the session's table (PRIVATE-TRANSCRIPT).
+    // all, and the token's value in the session's table.
     let store = Store::open(&store_path(&home)).unwrap();
     let stored = store.list_messages(thread_1).unwrap();
     assert_eq!(stored.len(), 4, "{stored:?}");

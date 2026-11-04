@@ -1,4 +1,4 @@
-//! `GET /v1/first-run` and `POST /v1/first-run/complete` (B-API v4, gap 2).
+//! `GET /v1/first-run` and `POST /v1/first-run/complete`.
 //!
 //! The guided flow the Swift app renders: save a provider, test it, create the
 //! default `main` agent. This module owns the step state and the idempotent

@@ -328,7 +328,7 @@ async fn a_private_recall_result_reaches_the_provider_as_a_token_and_the_reply_r
         carrying.contains('⟦'),
         "the recall result was not tokenised: {carrying}"
     );
-    // NAMES-OFF (owner, 2026-10-19): the name passes, the address does not.
+    // The name passes, the address does not.
     assert!(carrying.contains("Camille Exemple"), "{carrying}");
     assert!(
         !carrying.contains("camille@exemple.fr"),

@@ -1,4 +1,4 @@
-//! Delegations (D33, WO E0): one chief handing one task to one domain agent.
+//! Delegations: one chief handing one task to one domain agent.
 //!
 //! A delegation is a durable record — task, agent, state, steps, result — so
 //! the chief's thread can show it live and the owner can resume it after a
@@ -116,9 +116,9 @@ pub struct Delegation {
     pub caller_mode: PrivacyMode,
 }
 
-/// v24: the `delegations` and `thread_reads` tables (D33, WO E0).
+/// v24: the `delegations` and `thread_reads` tables.
 ///
-/// B1 holds v22 and C2b holds v23, so the daemon's delegation work is v24. Both tables are purely additive
+/// The daemon's delegation work is v24, after the migrations that reached v22 and v23. Both tables are purely additive
 /// `CREATE TABLE IF NOT EXISTS`; `state` is constrained to the six documented
 /// values, and the rest is free text the API layer already sanitized.
 /// `apply_migration_with_version` records v23 in the same transaction.

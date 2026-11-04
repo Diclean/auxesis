@@ -1,4 +1,4 @@
-// Clients → Import… (WO-CRMIO-2): the owner picks one vCard or CSV file on
+// Clients → Import…: the owner picks one vCard or CSV file on
 // this Mac, the daemon reads it with a dry run, and the sheet shows what the
 // file would do. Only the owner's Import writes. The sheet shows counts, column
 // names and reasons, never a contact value. Nothing leaves this Mac: the green

@@ -119,7 +119,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[test]
 fn the_real_binary_cannot_complete_trust_without_the_notified_code() {
-    // P1 regression (security-review round 3): the `shell` tool runs owner commands,
+    // The `shell` tool runs owner commands,
     // and `aux` is on the owner's PATH. Running the real binary must not
     // clear the mark: without the code it only repeats the pending request
     // (here rate-limited), wrong guesses fail, and only the code from the
@@ -239,7 +239,7 @@ fn trust_refuses_paths_that_are_not_agent_workspaces() {
 
 #[test]
 fn the_cli_accepts_the_code_on_stdin_without_echoing_it() {
-    // P1 regression (security-review round 4): the code is never a command-line
+    // The code is never a command-line
     // argument. `--code -` reads it from the pipe, and the binary echoes
     // neither the code nor a prompt into stdout/stderr.
     let s = sandbox();
@@ -323,7 +323,7 @@ fn the_legacy_literal_prints_a_warning_and_still_completes() {
 
 #[test]
 fn trust_is_refused_while_the_shell_can_run_unsandboxed() {
-    // P1 regression (security-review round 5): with `[shell] sandbox = false` +
+    // With `[shell] sandbox = false` +
     // `allow_unsandboxed = true`, the CLI must refuse the trust action,
     // audit `workspace.trust_refused`, and never issue a code. Tightening
     // the sandbox re-enables the owner action.
@@ -394,7 +394,7 @@ fn trust_is_refused_while_the_shell_can_run_unsandboxed() {
 
 #[test]
 fn a_planted_osascript_in_path_is_never_executed_by_the_cli() {
-    // P1 regression (security-review round 4): a fake `osascript` placed first on
+    // A fake `osascript` placed first on
     // PATH must never run as part of the trust flow. The code is piped on
     // stdin and completes normally while the plant stays untouched.
     let s = sandbox();

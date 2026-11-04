@@ -1,4 +1,4 @@
-//! DELEGATION-SOURCE-1: the delegated ask's row says who wrote it. The app
+//! The delegated ask's row says who wrote it. The app
 //! matches on that field, never on the ask's words.
 
 use super::*;

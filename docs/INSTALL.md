@@ -97,6 +97,9 @@ Keychain, no prompt. This is a local build from your own source, not a published
 5. The app shows a setup screen on the first launch. It asks for nothing until you press a
    button. Section 10 lists the permissions.
 
+The app is in English and French. It follows the first language in System Settings, General,
+Language and Region; any other language gets English. Settings, General shows the one in use.
+
 ## 7. First run
 
 1. Try it in a throwaway home first. Nothing of yours is read, and the temporary folder is

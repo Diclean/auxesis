@@ -260,6 +260,7 @@ impl ChatParts<'_> {
             &mut registry,
             &mut rules,
         );
+        auxd::api::constrain_non_api_turn(&self.home, &self.agent, &registry, &mut rules);
         ChatSession::start(ChatSetup {
             mode: Arc::new(move || mode),
             contacts: Arc::clone(&self.contacts),
@@ -506,7 +507,7 @@ mod tests {
 
         let requests = provider.requests();
         let last = serde_json::to_string(&requests.last().unwrap().messages).unwrap();
-        // A name is no hidden value (NAMES-OFF, owner 2026-10-19).
+        // A name is no hidden value.
         assert!(
             !last.contains("camille@exemple.fr"),
             "the private turn sent raw text: {last}"

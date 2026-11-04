@@ -1,5 +1,5 @@
 // Theme — v4 contract tokens. Legacy property names remain at call sites:
-// blue=accent (neutral ink since UI-V4-3), green=local, red=bad, amber=wait.
+// blue=accent (neutral ink), green=local, red=bad, amber=wait.
 // Completion is neutral.
 import CoreGraphics
 import Foundation

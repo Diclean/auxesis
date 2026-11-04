@@ -389,7 +389,7 @@ pub fn set_named_in_env_file(
     // (the daemon's API, the CLI `aux secret set`) with the shared
     // `<home>/.config.lock` file lock: without it a writer that read the file
     // before another saved a key would rewrite the stale text and erase that
-    // key (security review P2).
+    // key.
     kernel_core::with_config_lock(home, || {
         let mut lines: Vec<String> = read_env_text(home)?
             .map(|text| text.lines().map(str::to_string).collect())
@@ -405,7 +405,7 @@ pub fn set_named_in_env_file(
         let mut text = lines.join("\n");
         text.push('\n');
 
-        // J-02 write gateway: the `.env` file is written relative to the
+        // The `.env` file is written relative to the
         // verified home directory fd, never through the home path string; the
         // atomic temp+rename never leaves a half-written file, and the open
         // refuses a symlink at the file name.
@@ -925,7 +925,7 @@ AUX_KEY_OTHER=keep-me
         assert!(text.contains("AUX_KEY_OLD=keep-me"), "{text}");
     }
 
-    /// Security review P2: two writers each doing their own read-modify-write of `.env`
+    /// Two writers each doing their own read-modify-write of `.env`
     /// in parallel must not erase each other's keys. Two threads that open
     /// their own lock descriptor are enough to exercise `flock` (the lock is
     /// per open file description, not per process).

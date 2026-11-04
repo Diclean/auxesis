@@ -1,4 +1,4 @@
-// The owner's Google connection screen (G4), entirely offline: a scripted
+// The owner's Google connection screen, entirely offline: a scripted
 // client drives the Store's state machine and the French/English copy. No
 // network, no browser, no real `~/.auxesis`, and no secret in any assertion.
 import Testing

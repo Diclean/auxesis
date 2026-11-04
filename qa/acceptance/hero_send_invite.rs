@@ -1,4 +1,4 @@
-//! Hero acceptance test: the invite skill end to end, rewired for MA4 to
+//! Hero acceptance test: the invite skill end to end, against
 //! **fake SMTP plus the fake EventKit bridge**. Every GIVEN / WHEN / THEN of
 //! the flow is an assertion below.
 //!
@@ -77,7 +77,7 @@ const SKILL_TOOL: &str = "skill__send-invite";
 const MAIL_SEND_TOOL: &str = "mail_send";
 const EVENTKIT_TOOL: &str = "apple_calendar_create_event";
 /// The substrings the provider must never receive in Private mode.
-/// What a private provider never receives; names pass (NAMES-OFF, 2026-10-19).
+/// What a private provider never receives; names pass.
 const PRIVATE_VALUES: [&str; 1] = ["camille@exemple.fr"];
 
 // ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ enum Script {
     /// Fill `send-invite` from the owner's message.
     Hero,
     /// Fill `send-invite` on every round, even after a result: a model that
-    /// keeps retrying the skill (F2).
+    /// keeps retrying the skill.
     AlwaysInvite,
     /// Call `mail.send` directly from a plain conversation.
     PlainSend,
@@ -1309,7 +1309,7 @@ async fn plain_mail_send_is_refused_by_the_broker(mode: PrivacyMode) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// F2: a forced `/invite` runs its skill at most once per turn.
+/// A forced `/invite` runs its skill at most once per turn.
 async fn invite_runs_at_most_once_per_turn(brain: &Brain, mode: PrivacyMode) {
     let rig = rig().await;
     let record = Arc::new(StdMutex::new(CardRecord::default()));

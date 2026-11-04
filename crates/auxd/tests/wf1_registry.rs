@@ -1,4 +1,4 @@
-//! WF-1 rounds 7–8: registry changes while a delta stream is live.
+//! Registry changes while a delta stream is live.
 //!
 //! Process-isolated from the `auxd` unit tests so the LRU-cap probes can fill
 //! the known-secret registry without racing another test's canaries. The
@@ -104,7 +104,7 @@ async fn a_value_registered_mid_stream_is_masked_from_its_registration_on() {
     assert!(text.contains(MASK), "{text:?}");
 }
 
-/// R10: an oversized value's closure cannot cover every spelling; the value
+/// An oversized value's closure cannot cover every spelling; the value
 /// is still registered (its raw form matches) but live streams fail closed
 /// with the visible placeholder instead of publishing it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -130,7 +130,7 @@ async fn oversized_registry_masks_the_whole_message() {
     kernel_broker::scrub::clear_known_secrets();
 }
 
-/// R8 (3), the security review's repro: with every value pinned the registry grows to its
+/// The security review's repro: with every value pinned the registry grows to its
 /// hard ceiling and then refuses new values; the pinned target is never
 /// evicted, and a live stream fails closed with a visible placeholder
 /// instead of publishing the target verbatim.

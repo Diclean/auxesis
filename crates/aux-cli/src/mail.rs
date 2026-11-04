@@ -387,7 +387,7 @@ fn resolve_account<'a>(
 }
 
 /// The configured mail service, or `None` when this home has no mailbox:
-/// `aux skill run` reads mail through it for `docs.ingest` (M5-3).
+/// `aux skill run` reads mail through it for `docs.ingest`.
 pub(crate) fn configured_service(home: &Path) -> Option<MailService> {
     let config = load_config(home).ok()?;
     (!config.accounts.is_empty()).then(|| service(home, &config))
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn a_mail_config_error_never_quotes_the_file() {
-        // CONFIG-ERR-ECHO-1 round 1: a key typed as a field name, a bad
+        // A key typed as a field name, a bad
         // value, and an id the account check would have quoted.
         for account in [
             "id = \"owner\"\nsk-abc = 1\n",

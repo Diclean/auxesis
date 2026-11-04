@@ -1,4 +1,4 @@
-// WO COPY-SNAPSHOT-1: a golden file locks every effective user-visible string
+// A golden file locks every effective user-visible string
 // in both languages, so any copy change shows up in review as a fixture diff.
 //
 // Regenerate only on purpose, then review and commit the fixture diff:

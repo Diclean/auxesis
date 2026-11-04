@@ -1,6 +1,6 @@
-//! TOK-DELEGATE seal r1: in Private only the owner-account tools named in the
-//! engine's allowlist get real values. An MCP tool (B13), a web tool (B6) and
-//! a known owner-account name mounted on another path keep the tokens.
+//! In Private only the owner-account tools named in the engine's allowlist get
+//! real values. An MCP tool, a web tool and a known owner-account name mounted
+//! on another path keep the tokens.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ use kernel_privacy::ContactIndex;
 use serde_json::{json, Value};
 
 const NAME: &str = "Camille Exemple";
-/// Names pass in Private since NAMES-OFF (2026-10-19); the address is the value.
+/// Names pass in Private; the address is the value.
 const ADDRESS: &str = "camille@exemple.fr";
 
 type Seen = Arc<Mutex<Vec<(String, Value)>>>;

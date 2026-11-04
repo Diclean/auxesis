@@ -61,7 +61,7 @@ impl InstanceLock {
     /// A stale file from a dead process is not an obstacle: `flock` only
     /// conflicts with a live holder.
     pub fn acquire(path: &Path) -> Result<Self, LockError> {
-        // SANDBOX-GATEWAY-EXEMPT: flock instance lock; the lock is an OS primitive and must be path-based.
+        // The flock instance lock; the lock is an OS primitive and must be path-based.
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)

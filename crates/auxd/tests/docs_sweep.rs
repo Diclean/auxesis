@@ -1,4 +1,4 @@
-//! CLOSURE-4: the daemon reads a document that lands in the registry, with no
+//! The daemon reads a document that lands in the registry, with no
 //! app request and no app process.
 //!
 //! Before this test, the extractor chain ran only when the Mac app polled

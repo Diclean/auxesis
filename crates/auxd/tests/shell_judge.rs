@@ -180,13 +180,12 @@ async fn with_the_judge_off_the_card_stays() {
     assert!(!rig.requests().iter().any(is_judge), "the judge was asked");
 }
 
-/// Seal r1 P2-1: a delegated child runs a task the chief wrote, not the
-/// owner's words, so its shell call keeps the card and the judge is never
-/// asked.
+/// A delegated child runs a task the chief wrote, not the owner's words, so
+/// its shell call keeps the card and the judge is never asked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_delegated_childs_shell_call_never_reaches_the_judge() {
     let task = json!({ "agent": "mail", "task": "List the files in your workspace." });
-    // Mail asks for the shell in its agent.md (MAIL-NO-SHELL: not offered otherwise).
+    // Mail asks for the shell in its agent.md; it is not offered otherwise.
     let seed = |home: &std::path::Path| {
         let dir = home.join("agents").join("mail");
         std::fs::create_dir_all(&dir).unwrap();
@@ -214,10 +213,9 @@ async fn a_delegated_childs_shell_call_never_reaches_the_judge() {
     assert!(!rig.requests().iter().any(is_judge), "the judge was asked");
 }
 
-/// MAIL-NO-SHELL, seal r1: under a global `allow shell`, a domain agent with
-/// no `tools` opt-in is not offered the shell, and a forced call is denied
-/// before it runs: on its own thread and as a delegated child. The chief
-/// keeps the shell.
+/// Under a global `allow shell`, a domain agent with no `tools` opt-in is not
+/// offered the shell, and a forced call is denied before it runs: on its own
+/// thread and as a delegated child. The chief keeps the shell.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_domain_agents_forced_shell_call_is_denied_under_a_global_allow() {
     let head =

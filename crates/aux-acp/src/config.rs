@@ -5,7 +5,7 @@
 //! computes the per-agent scratch workspace:
 //!
 //! `<home>/agents/<agent>/acp-workspace` — never the repo, never `~/.auxesis`
-//! itself (owner decision for A0). The agent gets a private `HOME`/`TMPDIR`
+//! itself. The agent gets a private `HOME`/`TMPDIR`
 //! inside that scratch dir and no other writable surface.
 
 use std::path::{Path, PathBuf};
@@ -26,7 +26,7 @@ pub struct AcpAgentSpec {
     /// Arguments passed verbatim after the executable.
     pub args: Vec<String>,
     /// Model label recorded for the run (the agent picks its own default in
-    /// A0; session model selection is a fast follow).
+    /// this build; session model selection is a fast follow).
     pub model: String,
     /// Authentication mode.
     pub auth: kernel_core::config::AcpAuthMode,

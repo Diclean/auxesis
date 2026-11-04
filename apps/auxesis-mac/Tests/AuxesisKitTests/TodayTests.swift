@@ -1,4 +1,4 @@
-// Today (M2): the brief of the day. Events by time, the brief's degradation
+// Today: the brief of the day. Events by time, the brief's degradation
 // lines kept, the empty state when today has no brief, and the run button
 // against the fixture daemon. No network.
 import Foundation

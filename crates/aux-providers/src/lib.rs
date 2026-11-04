@@ -1,9 +1,9 @@
 //! Provider adapters for Auxesis — chat providers (OpenAI-compatible + fake).
 //!
-//! Slice A of M1. The interface contract lives in `docs/providers.md`.
+//! The interface contract lives in `docs/providers.md`.
 //!
 //! The crate is built around the object-safe [`ChatProvider`] trait. Two
-//! adapters ship in M1:
+//! adapters ship:
 //!
 //! - [`OpenAiCompat`] — the OpenAI `chat/completions` wire, used for DeepSeek,
 //!   LM Studio, OpenRouter and every other OpenAI-compatible

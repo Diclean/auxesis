@@ -101,7 +101,10 @@ pub use snapshot::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MESSAGE_MAX_BYTES};
 use tokio::sync::broadcast;
 #[cfg(any(test, feature = "test-util"))]
 pub use turn::ToolRegistryHook;
-pub use turn::{EngineTurnRunner, FailingTurnRunner, TurnError, TurnRecord, TurnRunner};
+pub use turn::{
+    apply_chief_ceiling, constrain_non_api_turn, EngineTurnRunner, FailingTurnRunner, TurnError,
+    TurnRecord, TurnRunner,
+};
 use turn_cancels::TurnCancels;
 
 /// Port the local API listens on by default (T9 for `auxd`: 2-8-9-3).
@@ -151,7 +154,7 @@ pub struct ApiState {
     /// Pending approvals + their waiters (in-memory).
     pub(crate) approvals: Arc<ApprovalRegistry>,
     /// Cancellation tokens of in-flight turns, keyed by agent: pause/kill and
-    /// stop-all fire them so the turn aborts now (B-API v3 × E-18).
+    /// stop-all fire them so the turn aborts now.
     pub(crate) turn_cancels: Arc<TurnCancels>,
     /// Owner notification channel for trust requests: the one-time code is
     /// delivered here and nowhere else (osascript in production, a fake in

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use aux_runtime::grants::{
     AccessLevel, ActionLevel, AgentGrants, DoGrant, SeeGrant, CHIEF_AGENT, DOMAIN_AGENTS,
+    LEGACY_CHIEF,
 };
 use kernel_core::SandboxHome;
 use serde::{Deserialize, Serialize};
@@ -110,6 +111,12 @@ pub enum RegistryError {
     /// The id is not one of the seeded agents.
     #[error("no such agent `{0}`")]
     UnknownAgent(String),
+    /// The proposed permissions exceed the chief's ceiling.
+    #[error("the agent would have access beyond the chief")]
+    ExceedsChief,
+    /// The grants changed since the proposal was made.
+    #[error("the grants changed since this change was proposed")]
+    GrantsChanged,
 }
 
 /// `agents.toml`: the whole seed, strict.
@@ -270,7 +277,16 @@ pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
     let path = seed_path(home);
     let text = match read_private(home, Path::new("agents.toml")) {
         Ok(Some(text)) => text,
-        Ok(None) => return Ok(built_in_seed()),
+        Ok(None) => {
+            let mut agents = built_in_seed();
+            // An older install keeps its chief, `aux`, exactly as before.
+            if chief_id(home) == LEGACY_CHIEF {
+                agents[0].id = LEGACY_CHIEF.to_string();
+                agents[0].grants = aux_runtime::grants::default_grants(LEGACY_CHIEF)
+                    .expect("the legacy chief has grants");
+            }
+            return Ok(agents);
+        }
         Err(err) => return Err(err),
     };
     let _ = path;
@@ -318,6 +334,39 @@ pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
 /// One agent's definition, or `None`.
 pub fn definition(home: &Path, id: &str) -> Result<Option<AgentDef>, RegistryError> {
     Ok(registry(home)?.into_iter().find(|agent| agent.id == id))
+}
+
+/// The chief: `aux` when `config.toml` names it (older installs; also the
+/// kernel default and an unreadable config), else `main`. No side effects.
+pub fn chief_id(home: &Path) -> &'static str {
+    #[derive(Deserialize)]
+    struct Head {
+        #[serde(alias = "default_dot")]
+        default_agent: Option<String>,
+    }
+    let named = match read_private(home, Path::new("config.toml")) {
+        Ok(Some(text)) => toml::from_str::<Head>(&text)
+            .ok()
+            .map(|head| head.default_agent),
+        _ => Some(None),
+    };
+    let fallback = || kernel_core::Config::default().default_agent;
+    match named.map(|name| name.unwrap_or_else(fallback)) {
+        Some(name) if name != LEGACY_CHIEF => CHIEF_AGENT,
+        _ => LEGACY_CHIEF,
+    }
+}
+
+/// The ceiling every added agent stays under: the `main` chief's grants, or
+/// its shipped grants when this home does not list it (an older install).
+pub fn chief_grants(agents: &[AgentDef]) -> AgentGrants {
+    agents
+        .iter()
+        .find(|agent| agent.id == CHIEF_AGENT)
+        .map(|agent| agent.grants.clone())
+        .unwrap_or_else(|| {
+            aux_runtime::grants::default_grants(CHIEF_AGENT).expect("the chief has grants")
+        })
 }
 
 /// One agent's grants: the seed, overlaid by `agents/<id>/grants.toml`.
@@ -540,10 +589,97 @@ fn redacted(err: &toml::de::Error, file: &str, text: &str) -> RegistryError {
 
 /// Write one agent's grants atomically (`0600`).
 pub fn write_grants(home: &Path, id: &str, grants: &AgentGrants) -> Result<(), RegistryError> {
+    let _guard = kernel_core::lock_recover(grants_lock());
+    write_grants_locked(home, id, grants)
+}
+
+/// Apply an approved proposal, only if the agent's grants are still the set
+/// it was made against: an older card never overwrites a newer set.
+pub fn apply_proposal(home: &Path, proposal: &GrantsProposal) -> Result<(), RegistryError> {
+    let _guard = kernel_core::lock_recover(grants_lock());
+    if grants_hash(&grants(home, &proposal.agent)?) != proposal.base {
+        return Err(RegistryError::GrantsChanged);
+    }
+    write_grants_locked(home, &proposal.agent, &proposal.grants)
+}
+
+fn write_grants_locked(home: &Path, id: &str, grants: &AgentGrants) -> Result<(), RegistryError> {
     definition(home, id)?.ok_or_else(|| RegistryError::UnknownAgent(id.to_string()))?;
+    validate_grants(home, id, grants)?;
     let text = toml::to_string(&GrantsFile::from(grants))
         .map_err(|err| RegistryError::Config(format!("could not serialize grants: {err}")))?;
     write_private(home, &grants_rel(id), text.as_bytes())
+}
+
+/// Serializes grants writes and agent creation, so a ceiling check and the
+/// write it allows cannot interleave with a concurrent change.
+pub(crate) fn grants_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
+/// Probe tools, one per scope and verb, that compare two grant sets the way
+/// the runtime resolves them (scope fallbacks included).
+const PROBE_TOOLS: &str = "mail_read mail_draft mail_send mail_unknown calendar_list \
+    calendar_write calendar_unknown clients_read clients_note clients_unknown documents_read \
+    documents_file documents_unknown mcp__server__unknown google_unknown";
+
+/// True when `child` grants nothing beyond `chief`: every scope, skill and
+/// probe tool at most at the chief's level, and every chief `never` kept.
+fn subset(child: &AgentGrants, chief: &AgentGrants) -> bool {
+    use aux_runtime::grants::GrantLevel;
+    let see = |level| match level {
+        AccessLevel::Off => 0,
+        AccessLevel::Ask => 1,
+        AccessLevel::Read => 2,
+    };
+    let act = |level| match level {
+        ActionLevel::Off => 0,
+        ActionLevel::Ask => 1,
+        ActionLevel::Auto => 2,
+    };
+    let tool = |grants: &AgentGrants, name: &str| match grants.action_for_tool("agent", name) {
+        Err(_) => 0,
+        Ok(GrantLevel::Ask) => 1,
+        Ok(GrantLevel::Allow) => 2,
+    };
+    child.see.iter().all(|grant| {
+        let own = chief.see.iter().filter(|own| own.scope == grant.scope);
+        see(grant.level) <= own.map(|own| see(own.level)).min().unwrap_or(0)
+    }) && child.can_do.iter().all(|grant| {
+        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
+        act(grant.level) <= own.map(|own| act(own.level)).min().unwrap_or(0)
+    }) && PROBE_TOOLS
+        .split_whitespace()
+        .all(|name| tool(child, name) <= tool(chief, name))
+        // Exact entries: a shorter prefix (`m` for `mail`) would not refuse
+        // what the chief's entry refuses (its scope), so it never replaces it.
+        && chief
+            .never
+            .iter()
+            .all(|denied| child.never.iter().any(|own| own == denied))
+}
+
+/// The chief ceiling, checked when a change is proposed and again when it is
+/// applied (an approval can wait while the chief changes). Narrowing the
+/// chief below an existing agent is refused too: nothing is lost silently.
+pub fn validate_grants(home: &Path, id: &str, proposed: &AgentGrants) -> Result<(), RegistryError> {
+    let agents = registry(home)?;
+    if id == CHIEF_AGENT {
+        let below = |agent: &&AgentDef| agent.id != id && agent.id != LEGACY_CHIEF;
+        if agents
+            .iter()
+            .filter(below)
+            .any(|a| !subset(&a.grants, proposed))
+        {
+            return Err(RegistryError::ExceedsChief);
+        }
+        return Ok(());
+    }
+    if !subset(proposed, &chief_grants(&agents)) {
+        return Err(RegistryError::ExceedsChief);
+    }
+    Ok(())
 }
 
 /// A grants change waiting for the owner's approval.
@@ -553,6 +689,8 @@ pub struct GrantsProposal {
     pub agent: String,
     /// Hash of the proposed grants.
     pub hash: String,
+    /// Hash of the agent's grants when the change was proposed.
+    pub base: String,
     /// The proposed grants.
     pub grants: AgentGrants,
 }
@@ -571,13 +709,14 @@ pub fn grants_hash(grants: &AgentGrants) -> String {
 }
 
 /// Remember a proposed grants change under `approval_id`.
-pub fn propose_grants(approval_id: &str, agent: &str, grants: AgentGrants) -> String {
+pub fn propose_grants(approval_id: &str, agent: &str, base: String, grants: AgentGrants) -> String {
     let hash = grants_hash(&grants);
     kernel_core::lock_recover(proposals()).insert(
         approval_id.to_string(),
         GrantsProposal {
             agent: agent.to_string(),
             hash: hash.clone(),
+            base,
             grants,
         },
     );
@@ -949,18 +1088,24 @@ pub async fn grants_update(
         Ok(file) => file,
         Err(_) => return bad_json("the body must be `{see, do, never, egress_note}`"),
     };
-    let home = state.home.clone();
-    let id_for_check = id.clone();
-    let known = tokio::task::spawn_blocking(move || definition(&home, &id_for_check)).await;
-    match known {
-        Ok(Ok(Some(_))) => {}
-        Ok(Ok(None)) => return agent_not_found(),
+    let grants = AgentGrants::from(file);
+    let (home, id_for_check, proposed) = (state.home.clone(), id.clone(), grants.clone());
+    let checked = tokio::task::spawn_blocking(move || {
+        definition(&home, &id_for_check)?
+            .ok_or_else(|| RegistryError::UnknownAgent(id_for_check.clone()))?;
+        validate_grants(&home, &id_for_check, &proposed)?;
+        self::grants(&home, &id_for_check).map(|current| grants_hash(&current))
+    })
+    .await;
+    let base = match checked {
+        Ok(Ok(base)) => base,
+        Ok(Err(RegistryError::UnknownAgent(_))) => return agent_not_found(),
+        Ok(Err(RegistryError::ExceedsChief)) => return exceeds_chief(),
         Ok(Err(err)) => return registry_error(&err),
         Err(err) => return internal(&err.to_string()),
-    }
-    let grants = AgentGrants::from(file);
+    };
     let approval_id = state.approvals.next_id();
-    let hash = propose_grants(&approval_id, &id, grants);
+    let hash = propose_grants(&approval_id, &id, base, grants);
     // The card is built by the shared builder, like every other ask: the
     // proposal it carries is one of its fields.
     let arguments = serde_json::json!({
@@ -1219,6 +1364,17 @@ fn agent_not_found() -> Response {
     )
 }
 
+/// `409 grant_exceeds_chief`: the shared refusal for any change that would
+/// give an agent more than the chief has.
+pub(crate) fn exceeds_chief() -> Response {
+    error::error_response(
+        StatusCode::CONFLICT,
+        "grant_exceeds_chief",
+        "the agent would have access beyond the chief",
+        None,
+    )
+}
+
 fn registry_error(err: &RegistryError) -> Response {
     error::error_response(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -1246,6 +1402,49 @@ fn internal(detail: &str) -> Response {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_scope_fallback_must_not_bypass_the_chiefs_specific_off_grant() {
+        let mut chief = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        let send = chief.can_do.iter_mut().find(|g| g.skill == "mail.send");
+        send.unwrap().level = ActionLevel::Off;
+        let mut child = aux_runtime::grants::default_grants("mail").unwrap();
+        child.can_do.retain(|g| g.skill != "mail.send");
+        assert!(!subset(&child, &chief));
+        let full = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        let fits = |id| subset(&aux_runtime::grants::default_grants(id).unwrap(), &full);
+        assert!(DOMAIN_AGENTS.iter().all(|id| fits(id)));
+    }
+
+    /// Break-It B: a child never replaces a chief `never` with a shorter
+    /// prefix (`m` for `mail`); only the exact entry (or more) keeps it.
+    #[test]
+    fn a_child_never_keeps_each_chief_never_exactly() {
+        let mut chief = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        chief.never.push("mail".to_string());
+        let mut child = aux_runtime::grants::default_grants("documents").unwrap();
+        child.never = vec!["m".to_string()];
+        assert!(!subset(&child, &chief));
+        child.never = vec!["mail".to_string(), "m".to_string()];
+        assert!(subset(&child, &chief));
+    }
+
+    #[test]
+    fn an_older_install_keeps_aux_and_a_main_home_caps_every_agent() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        assert_eq!(registry(home).unwrap()[0].id, LEGACY_CHIEF);
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        assert_eq!(registry(home).unwrap()[0].id, CHIEF_AGENT);
+        let mut wider = aux_runtime::grants::default_grants("mail").unwrap();
+        wider.can_do[0].skill = "payments.send".to_string();
+        let refused = write_grants(home, "mail", &wider);
+        assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+        let mut narrow = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        narrow.can_do.retain(|g| g.skill != "mail.read");
+        let refused = write_grants(home, CHIEF_AGENT, &narrow);
+        assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+    }
 
     fn calendar_file(home: &Path, file: &str) -> Option<Vec<u8>> {
         std::fs::read(home.join("agents").join("calendar").join(file)).ok()

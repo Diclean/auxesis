@@ -1,4 +1,4 @@
-// An edited skill-run card never shows the run's payload (2026-10-30):
+// An edited skill-run card never shows the run's payload:
 // the editor holds the text of the run's one send, the edited card shows that
 // text, and the yes posts the run rebuilt from the version the owner edited.
 import Foundation

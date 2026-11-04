@@ -39,7 +39,7 @@ crates/auxd/src/delegation/where_tests.rs | fs::write( | cfg(test) fake-home fix
 crates/auxd/src/lock.rs | OpenOptions::new( | flock instance lock; an OS primitive that must be path-based
 crates/aux-engine/src/config.rs | fs::copy( | legacy engine config backup (caller-supplied path); the daemon uses Config::load_or_create_verified
 
-# ACP-A0 (#28) — merge delta. The home-level paths route through the verified
+# The home-level paths route through the verified
 # home gateway (workspace creation in the auxd hook, real home via
 # aux_core::real_user_home); the rest are the test-only stdio fixture, static
 # env-name lists, and workspace-relative helpers whose paths are canonicalised
@@ -54,7 +54,7 @@ crates/aux-acp/src/supervisor.rs | fs::create_dir_all( | private .acp-home/.acp-
 crates/aux-acp/src/supervisor.rs | "HOME" | sets the sandboxed child's private HOME env var; not a home read
 crates/aux-engine/src/layout.rs | fs::rename( | WO-07 one-time move of the legacy dots/ folder to agents/: both names are direct children of the verified home, the destination is checked absent before the rename, and SandboxHome has no rename API (kernel untouched).
 
-# WO-13b — extensions slice 1. Every write is inside the Auxesis home
+# Extensions. Every write is inside the Auxesis home
 # (~/.auxesis/extensions/ and ~/.auxesis/catalog/), 0600/0700, and is the
 # reviewed debt for the SandboxHome gateway follow-up.
 crates/aux-runtime/src/extensions/catalog.rs | fs::create_dir_all( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
@@ -71,7 +71,7 @@ crates/aux-runtime/src/extensions/session.rs | "HOME" | sets the sandboxed child
 
 crates/aux-fakemail/src/serve.rs | fs::create_dir_all( | dev-only mail simulator (not shipped, not a dep of auxd/aux-cli): creates its own --dir and outbox/, never the Auxesis home
 crates/aux-fakemail/src/serve.rs | fs::write( | dev-only mail simulator (not shipped): writes its self-signed cert/key (key 0600) and outbox .eml files inside its own --dir
-# WO-M2-OWNERSETUP-1 (#38) — the simulator's pid file, inside its own --dir
+# The simulator's pid file, inside its own --dir
 # (scripts/brief-setup.sh points --dir at $AUXESIS_HOME/fakemail, a 0700 dir it creates).
 crates/aux-fakemail/src/bin/aux-fakemail.rs | fs::write( | dev-only mail simulator (not shipped): writes its own pid into <--dir>/pid after bind so brief-setup.sh can tell the port is ours
 crates/aux-fakemail/src/bin/aux-fakemail.rs | fs::remove_file( | dev-only mail simulator (not shipped): removes its own <--dir>/pid on exit

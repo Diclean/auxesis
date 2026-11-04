@@ -1,4 +1,4 @@
-//! WO-11 round 2: the runtime skills of one chat turn.
+//! The runtime skills of one chat turn.
 //!
 //! The engine loads an agent's runtime skills, advertises one `skill__<name>`
 //! tool per skill, and routes a model call named `skill__<name>` to
@@ -28,8 +28,8 @@ use kernel_privacy::safetext::{Gate, GateError};
 #[derive(Default, Clone)]
 pub struct SessionTokenStore {
     by_token: BTreeMap<String, String>,
-    /// TOK-CONSISTENT-1: a token this session minted → the carried token that
-    /// already stood for its value, put back every time (`handoff::carry`).
+    /// A token this session minted maps to the carried token that already
+    /// stood for its value, put back every time (`handoff::carry`).
     pub(crate) aliases: BTreeMap<String, String>,
 }
 

@@ -3,9 +3,9 @@
 //! The chat input and event feed (C7) is Disabled in private mode, so the feed
 //! sees only the gated copy and no session title or system row is written. The
 //! chat history store (G1) is allowed: the local SQLCipher store keeps each row
-//! as the gated copy the provider saw, and the session's token table beside it
-//! (PRIVATE-TRANSCRIPT), so the owner's page shows the values and a restart
-//! re-sends the same tokens. Within the process a private conversation goes on
+//! as the gated copy the provider saw, and the session's token table beside it,
+//! so the owner's page shows the values and a restart re-sends the same tokens.
+//! Within the process a private conversation goes on
 //! from the gated messages it sent (with its taint and private-data flag), kept
 //! here, keyed by home and session id.
 

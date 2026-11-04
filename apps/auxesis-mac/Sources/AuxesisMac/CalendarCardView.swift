@@ -1,4 +1,4 @@
-// The calendar card under a Calendar answer (UI-V5-RICH-2a). Neutral ink only:
+// The calendar card under a Calendar answer. Neutral ink only:
 // a free row says "Free" in words, never a hue. Rules live in `CalendarCard`.
 import AuxesisKit
 import SwiftUI

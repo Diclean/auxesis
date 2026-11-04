@@ -1,4 +1,4 @@
-//! PRIV-IMSG: the in-memory Private-mode answers and their two routes.
+//! The in-memory Private-mode answers and their two routes.
 
 mod common;
 

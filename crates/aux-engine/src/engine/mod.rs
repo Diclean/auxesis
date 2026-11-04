@@ -11,6 +11,7 @@
 
 mod approvals;
 mod budget;
+pub(crate) use budget::{admit, call_estimate, day_denied, request_model, usage_actual};
 mod context;
 mod privacy;
 mod session;
@@ -123,7 +124,7 @@ pub enum ChatError {
 /// Everything needed to start one chat session.
 pub struct ChatSetup<'a> {
     /// Store to read rules context from and persist to. `Borrowed` keeps the
-    /// CLI/job path zero-cost; the daemon passes a shared handle (E-18).
+    /// CLI/job path zero-cost; the daemon passes a shared handle.
     pub store: StoreHandle<'a>,
     /// Chat backend.
     pub provider: &'a dyn ChatProvider,
@@ -160,9 +161,9 @@ pub struct ChatSetup<'a> {
     /// chat) runs to completion; scheduled work passes a
     /// [`MarkerStop`](crate::stop::MarkerStop).
     pub stop: Option<Arc<dyn StopCheck>>,
-    /// Optional cancellation token (E-18): checked between steps and raced
+    /// Optional cancellation token: checked between steps and raced
     /// against provider/tool awaits. A cancelled turn returns
-    /// [`ChatError::Cancelled`] and leaves every WS-C taint mark untouched.
+    /// [`ChatError::Cancelled`] and leaves every taint mark untouched.
     pub cancel: Option<Arc<TurnCancel>>,
     /// Append the turn to this existing session instead of creating a new
     /// one. The session must exist ([`ChatError::SessionMissing`] otherwise)
@@ -196,7 +197,7 @@ pub struct ChatSession<'a> {
     agent: String,
     session: Session,
     /// Shared conversation buffer: every round's [`ChatRequest`] shares it
-    /// (no per-round deep clone, E-13) and it is bounded by
+    /// (no per-round deep clone) and it is bounded by
     /// [`ContextConfig`]. Only gated messages live here; the raw text stays
     /// in the store.
     messages: Arc<Vec<SafeMessage>>,
@@ -207,7 +208,7 @@ pub struct ChatSession<'a> {
     store: StoreHandle<'a>,
     registry: Arc<RwLock<ToolRegistry>>,
     broker: Broker,
-    /// Conversation taint state (WS-C). Sticky once an untrusted-output tool
+    /// Conversation taint state. Sticky once an untrusted-output tool
     /// has run; rebuilt from persisted history when a session is resumed, so
     /// a new turn can never launder earlier untrusted content.
     taint: Taint,
@@ -245,13 +246,13 @@ pub struct ChatSession<'a> {
     current_owner_row_id: Option<i64>,
     /// Owner words inherited for one non-owner turn; never included in prompts.
     inherited_owner_words: Option<String>,
-    /// DELEGATION-SOURCE-1: who wrote this turn's input (`delegation` for a
-    /// task the chief handed to an agent). Stamped on the turn's own input
-    /// row, so a reader tells a delegated ask from the owner's words.
+    /// Who wrote this turn's input (`delegation` for a task the chief handed
+    /// to an agent). Stamped on the turn's own input row, so a reader tells a
+    /// delegated ask from the owner's words.
     input_source: Option<String>,
     /// The last memory-only row id handed out. Negative, so it never meets a store id.
     local_rows: std::sync::atomic::AtomicI64,
-    /// Canonical key of this agent's workspace (WS-C redesign). Dispatching an
+    /// Canonical key of this agent's workspace. Dispatching an
     /// untrusted-class tool marks the workspace under this key, and every
     /// conversation that starts there is tainted; the owner clears it via
     /// `aux workspace trust`.
@@ -299,7 +300,7 @@ pub struct ChatSession<'a> {
     skill_recipients: Option<Arc<dyn RecipientDirectory>>,
     /// The session's minted `(token, value)` pairs, for local rehydration.
     skill_tokens: Arc<Mutex<SessionTokenStore>>,
-    /// TOK-DELEGATE: the task's tokens, kept whole, and this run's handoff.
+    /// The task's tokens, kept whole, and this run's handoff.
     inherited: Option<Arc<std::collections::BTreeSet<String>>>,
     handoff: crate::handoff::Handoff,
     /// Test seam: when set, budget checks read the day from here instead of

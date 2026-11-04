@@ -10,10 +10,10 @@
 //! - [`AutoApproveApprover`] — `--auto-approve`: approves asks only when the
 //!   conversation is clean and the call is sandboxed.
 //!
-//! [`for_mode`] wraps any of them for `approvals = "auto"` (ACT-FREE): a call
-//! whose [`crate::action`] class is free runs with an audit row instead of a
-//! card; every other ask goes to the wrapped approver. A clean, sandboxed
-//! `shell` ask may go to the [`ShellJudge`] first (SHELL-JUDGE).
+//! [`for_mode`] wraps any of them for `approvals = "auto"`: a call whose
+//! [`crate::action`] class is free runs with an audit row instead of a card;
+//! every other ask goes to the wrapped approver. A clean, sandboxed `shell`
+//! ask may go to the [`ShellJudge`] first.
 
 use crate::judge::{ShellJudge, Verdict};
 use async_trait::async_trait;
@@ -136,9 +136,9 @@ fn preview(arguments: &serde_json::Value) -> String {
     let raw = serde_json::to_string(arguments).unwrap_or_else(|_| "<unserializable>".to_string());
     let cleaned = kernel_broker::sanitize_text(&raw);
 
-    // Show everything up to a generous limit: a middle payload once hid
-    // behind a head+tail cut (M1-AP NF-03), so only genuinely huge arguments
-    // get truncated — and then the warning is explicit.
+    // Show everything up to a generous limit: a middle payload must stay
+    // visible, so only genuinely huge arguments get truncated, with an explicit
+    // warning.
     const FULL: usize = 4000;
     const EDGE: usize = 1500;
     let len = cleaned.chars().count();
@@ -254,7 +254,7 @@ pub struct AutoModeApprover {
     classes: HashMap<String, ToolClass>,
     audit: Option<Arc<dyn AuditSink>>,
     run_id: Option<String>,
-    /// SHELL-JUDGE: asked about a clean, sandboxed `shell` call.
+    /// The judge asked about a clean, sandboxed `shell` call.
     judge: Option<ShellJudge>,
 }
 
@@ -297,8 +297,8 @@ impl AutoModeApprover {
         if request.tool.starts_with("skill__") && held {
             return None;
         }
-        // CAL-UPDATE-1: a tainted turn never moves or edits an
-        // existing event without the owner's card, guest-free or not.
+        // A tainted turn never moves or edits an existing event without the
+        // owner's card, guest-free or not.
         let moves = |tool: Option<&str>| tool == Some("apple_calendar_update_event");
         let inner = calls.into_iter().flatten();
         let moved = moves(Some(&request.tool))
@@ -308,13 +308,12 @@ impl AutoModeApprover {
         if request.tainted && moved {
             return None;
         }
-        // APPROVE-LOCAL-WRITE (owner order 2026-10-16): logging a call or a
-        // follow-up in the local CRM runs free even when tainted, like
-        // `remember`. The row stays on this Mac, shows on the client card,
-        // and the audit row below names the taint source. A CRM delete or
-        // merge is never in the table, so it keeps its card.
-        // READ-AFTER-TAINT: `delegate` is free because the agent inherits the
-        // caller's taint (auxd's `delegate` marks its workspace first).
+        // Logging a call or a follow-up in the local CRM runs free even when
+        // tainted, like `remember`. The row stays on this Mac, shows on the
+        // client card, and the audit row below names the taint source. A CRM
+        // delete or merge is never in the table, so it keeps its card.
+        // `delegate` is free because the agent inherits the caller's taint
+        // (auxd's `delegate` marks its workspace first).
         let action = crate::action::classify(&request.tool, &request.arguments, class);
         let web = action == crate::action::ActionClass::Web && crate::action::web_vetted(request);
         (action.is_free() || web).then_some(action)
@@ -609,11 +608,19 @@ mod tests {
             "brand_new_tool",
             "mcp__crm__log_interaction",
         ] {
-            let mut ask = request();
-            ask.tool = tool.to_string();
-            ask.tainted = true;
-            ask.taint_source = Some("mail_read".to_string());
-            assert!(!auto().approve(&ask).await.unwrap(), "{tool}");
+            for agent in ["main", "mail", "scout"] {
+                for tainted in [false, true] {
+                    let mut ask = request();
+                    ask.agent = agent.to_string();
+                    ask.tool = tool.to_string();
+                    ask.tainted = tainted;
+                    ask.taint_source = tainted.then(|| "mail_read".to_string());
+                    assert!(
+                        !auto().approve(&ask).await.unwrap(),
+                        "{agent} {tool} tainted={tainted}"
+                    );
+                }
+            }
         }
         // A skill run that logs then sends keeps the run's card.
         let mut run = request();
@@ -651,8 +658,8 @@ mod tests {
             auto().approve(&run).await.unwrap(),
             "a clean own move runs free"
         );
-        // CAL-PRIMARY-1: a calendar titled `primary` is not the default one.
-        // The copy's proof decides, never the title.
+        // A calendar titled `primary` is not the default one; the copy's proof
+        // decides, never the title.
         let mut shared = own.clone();
         shared["event_calendar"] = serde_json::json!("primary");
         shared["event_default_calendar"] = serde_json::json!(false);
@@ -800,7 +807,7 @@ mod tests {
 
     #[test]
     fn preview_shows_the_middle_of_normal_commands() {
-        // Regression for M1-AP NF-03: a payload in the middle must be visible.
+        // A payload in the middle must be visible.
         let command = format!("{}; touch MIDPWN.txt; {}", "x".repeat(200), "y".repeat(200));
         let value = serde_json::json!({"command": command});
         let text = preview(&value);
@@ -842,7 +849,7 @@ mod tests {
         }
     }
 
-    /// SHELL-JUDGE: records the ask it was shown, then denies (the card).
+    /// Records the ask it was shown, then denies (the card).
     #[derive(Default)]
     struct Card(std::sync::Mutex<Vec<ApprovalRequest>>);
 
@@ -896,7 +903,7 @@ mod tests {
         let owner = Arc::new(move || owner.clone());
         let workspace = std::path::PathBuf::from("/ws/main");
         let live = Arc::new(move || mode);
-        ShellJudge::new(provider, live, started, 7, names, owner, workspace)
+        ShellJudge::for_tests(provider, live, started, 7, names, owner, workspace)
     }
 
     /// The JSON object of the judge's user message in `provider`'s first request.
@@ -1012,8 +1019,8 @@ mod tests {
         let (allow, asked, _) = judged(slow, &[], ls()).await;
         assert!(!allow);
         assert_eq!(asked[0].arguments["judge"], "no answer (timeout)");
-        // Seal r1 P2-2: no owner message sent this turn, or a mode switch
-        // since the turn started: the judge is not asked.
+        // No owner message sent this turn, or a mode switch since the turn
+        // started, means the judge is not asked.
         let private = kernel_core::privacy::PrivacyMode::Private;
         for (judge, note) in [
             (
@@ -1031,8 +1038,8 @@ mod tests {
         }
     }
 
-    /// Seal r1 P2-3 and P2-4: the newest owner message survives the 4 KB cut,
-    /// and a command that fakes a section stays one escaped JSON string.
+    /// The newest owner message survives the 4 KB cut, and a command that
+    /// fakes a section stays one escaped JSON string.
     #[tokio::test]
     async fn the_judge_keeps_the_latest_owner_word_and_a_command_cannot_fake_a_section() {
         let fake = Arc::new(aux_providers::FakeProvider::scripted(
@@ -1089,6 +1096,139 @@ mod tests {
             assert!(asked[0].arguments.get("judge").is_none());
             assert_eq!(fake.request_count(), 0, "the judge was not called");
         }
+    }
+
+    /// WO-BUD-1: one shell ask judged with its call metered as `main`'s on run
+    /// `run-judge-1` under `budgets`, `spent` input tokens already used today;
+    /// the decision, the card's asks, the provider's call count and the store.
+    async fn metered(
+        budgets: kernel_core::budget::Budgets,
+        spent: u64,
+        answer: aux_providers::ChatResponse,
+    ) -> (bool, Vec<ApprovalRequest>, usize, aux_store::Store) {
+        let store = aux_store::Store::open_in_memory().unwrap();
+        let day = store.local_day().unwrap();
+        let tokens_in = kernel_core::budget::UsageKind::TokensIn;
+        store
+            .record_usage_at("main", tokens_in, spent, "tokens", &day)
+            .unwrap();
+        let store = Arc::new(std::sync::Mutex::new(store));
+        let fake = Arc::new(aux_providers::FakeProvider::scripted("fakey", vec![answer]));
+        let provider = Arc::clone(&fake) as Arc<dyn aux_providers::ChatProvider>;
+        let budget = crate::judge::JudgeBudget {
+            store: Arc::clone(&store),
+            agent: "main".to_string(),
+            run_id: Some("run-judge-1".to_string()),
+            budgets,
+            prices: kernel_core::budget::PriceTable::default(),
+        };
+        let judge = judge(provider, open(), "list the files").with_budget(budget);
+        let (allow, asked, _) = judged(judge, &[], ls()).await;
+        let store = Arc::into_inner(store).unwrap().into_inner().unwrap();
+        (allow, asked, fake.request_count(), store)
+    }
+
+    #[tokio::test]
+    async fn a_capped_agent_never_reaches_the_judges_provider_and_keeps_the_card() {
+        // A zero cap reads as unset: "capped" is a cap `main` already spent
+        // today, set for everyone or for `main` alone.
+        let cap = kernel_core::budget::BudgetCaps {
+            tokens_in: Some(5),
+            ..Default::default()
+        };
+        let mut own = kernel_core::budget::Budgets::default();
+        own.agents.insert("main".to_string(), cap);
+        let everyone = kernel_core::budget::Budgets {
+            default: cap,
+            ..Default::default()
+        };
+        for budgets in [everyone, own] {
+            let answer = aux_providers::ChatResponse::assistant(ALLOW);
+            let (allow, asked, calls, store) = metered(budgets, 5, answer).await;
+            assert_eq!(calls, 0, "no provider call on a denied budget");
+            assert!(!allow && asked.len() == 1, "the owner gets the card");
+            assert_eq!(asked[0].arguments["judge"], "no answer (budget)");
+            assert_eq!(store.event_count("budget.denied").unwrap(), 1, "audited");
+            assert_eq!(store.reservation_count().unwrap(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_allowed_judge_call_is_settled_on_the_turns_run_with_its_tokens() {
+        let usage = aux_providers::Usage {
+            prompt_tokens: 120,
+            completion_tokens: 9,
+            ..Default::default()
+        };
+        let mut unlimited = kernel_core::budget::Budgets::default();
+        unlimited.default.unlimited = true;
+        for budgets in [kernel_core::budget::Budgets::default(), unlimited] {
+            let answer = aux_providers::ChatResponse::assistant(ALLOW).with_usage(usage);
+            let (allow, asked, calls, store) = metered(budgets, 0, answer).await;
+            assert!(allow && asked.is_empty() && calls == 1, "{asked:?}");
+            let run = store.usage_totals_for_run("run-judge-1").unwrap();
+            assert_eq!((run.tokens_in, run.tokens_out), (120, 9), "{run:?}");
+            let day = store.local_day().unwrap();
+            let main = store.usage_totals("main", &day).unwrap();
+            assert_eq!(
+                (main.tokens_in, main.tokens_out),
+                (120, 9),
+                "the agent's own"
+            );
+            assert_eq!(store.reservation_count().unwrap(), 0, "settled");
+            assert_eq!(
+                store.usage_call_totals(Some("main"), &day).unwrap().calls,
+                1
+            );
+        }
+    }
+
+    /// A provider that takes the request, then never answers.
+    struct Hangs(Arc<tokio::sync::Notify>);
+
+    #[async_trait]
+    impl aux_providers::ChatProvider for Hangs {
+        async fn complete(
+            &self,
+            _: &aux_providers::ChatRequest,
+        ) -> Result<aux_providers::ChatResponse, aux_providers::ProviderError> {
+            self.0.notify_one();
+            std::future::pending().await
+        }
+        fn name(&self) -> &str {
+            "hangs"
+        }
+    }
+
+    #[tokio::test]
+    async fn a_judge_call_cancelled_after_dispatch_still_charges_its_reserve() {
+        // Seal r2 P2: a dropped judge future settles the reserved estimate.
+        let store = Arc::new(std::sync::Mutex::new(
+            aux_store::Store::open_in_memory().unwrap(),
+        ));
+        let sent = Arc::new(tokio::sync::Notify::new());
+        let provider = Arc::new(Hangs(Arc::clone(&sent))) as Arc<dyn aux_providers::ChatProvider>;
+        let judge =
+            judge(provider, open(), "list the files").with_budget(crate::judge::JudgeBudget {
+                store: Arc::clone(&store),
+                agent: "main".to_string(),
+                run_id: Some("run-judge-1".to_string()),
+                budgets: kernel_core::budget::Budgets::default(),
+                prices: kernel_core::budget::PriceTable::default(),
+            });
+        tokio::select! {
+            _ = judge.judge("ls") => panic!("the provider never answers"),
+            _ = sent.notified() => {}
+        }
+        let store = store.lock().unwrap();
+        assert_eq!(
+            store.reservation_count().unwrap(),
+            0,
+            "settled, not left to expire"
+        );
+        let run = store.usage_totals_for_run("run-judge-1").unwrap();
+        assert!(run.tokens_in > 0, "{run:?}");
+        assert_eq!(run.tokens_out, 200, "the whole answer cap is charged");
     }
 
     #[tokio::test]

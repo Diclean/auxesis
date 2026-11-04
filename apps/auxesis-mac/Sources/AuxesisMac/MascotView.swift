@@ -1,4 +1,4 @@
-// Agent mascots (MASCOT-1, direction A "line"): pure
+// Agent mascots, the "line" family: pure
 // SwiftUI Shapes on a 232-unit grid, no bitmap. The tint draws the body, the
 // clay dot is the one accent and never changes. 28 pt in the sidebar, 20 pt
 // on the chat author line, 16 pt (all ink3) on handoff lines.

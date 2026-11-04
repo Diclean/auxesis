@@ -394,7 +394,7 @@ async fn drive(
     session.taint().forces_ask()
 }
 
-/// Seal #91 r2: a skill's connector replies are untrusted, so a clean turn
+/// A skill's connector replies are untrusted, so a clean turn
 /// that ran one is tainted before the model sees them; a CRM write the model
 /// makes next keeps its card.
 #[tokio::test]
@@ -417,7 +417,7 @@ async fn client_brief_in_private_mode_sends_the_name_and_a_token_for_the_address
         "the skill is offered: {offered:?}"
     );
     let seen = provider.seen.lock().unwrap().join("\n");
-    // NAMES-OFF (owner, 2026-10-19): the party's name passes as written.
+    // The party's name passes as written.
     assert!(seen.contains("Camille Exemple"), "{seen}");
     assert!(
         !seen.contains("camille@exemple.test"),

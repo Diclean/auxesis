@@ -224,7 +224,7 @@ fn expected(world: &[StoredMail], email: &str) -> (usize, usize) {
     (mine.len(), mine.iter().filter(newest_is_owner).count())
 }
 
-/// M3-TIMELINE-1 acceptance: the fictional world, its clients imported from a
+/// The fictional world, its clients imported from a
 /// vCard, one refresh: one row per thread, sent mails read from Sent. A second
 /// refresh over a narrower window adds no row.
 #[test]

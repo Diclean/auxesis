@@ -135,7 +135,7 @@ enum Since {
 /// Run `aux activity`, printing errors to stderr and mapping them to an exit code.
 pub fn run(args: ActivityArgs) -> ExitCode {
     let home = auxesis_home();
-    // F-03/F-04: the CLI process has its own (empty) scrubber registry;
+    // The CLI process has its own (empty) scrubber registry;
     // register the same known secrets the daemon holds so `aux activity`
     // redacts a key in prose exactly like the API surfaces do.
     kernel_broker::scrub::register_known_secrets_from_home(&home);
@@ -354,8 +354,8 @@ fn read_events(
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(agent) = agent {
         // `CASE` guarantees `json_extract` only sees valid JSON, so one junk
-        // payload can never fail the whole query. Rows written before WO-07 carry
-        // the agent under `dot`, so both keys match.
+        // payload can never fail the whole query. Rows written before the rename
+        // carry the agent under `dot`, so both keys match.
         sql.push_str(
             " AND (CASE WHEN json_valid(payload) THEN COALESCE(json_extract(payload, '$.agent'), json_extract(payload, '$.dot')) END) = ?",
         );
@@ -496,7 +496,7 @@ fn payload_agent(home: &Path, payload: &str) -> Option<String> {
     (!agent.is_empty()).then_some(agent)
 }
 
-/// One-line digest of an event (B3-08: the CLI applies the same shared
+/// One-line digest of an event: the CLI applies the same shared
 /// scrubber as the API, including the structured pass over the payload tree).
 fn event_summary(home: &Path, kind: &str, payload: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(payload) else {
@@ -519,7 +519,7 @@ fn event_summary(home: &Path, kind: &str, payload: &str) -> String {
         }
         "daemon.started" => match value.get("version").and_then(|v| v.as_str()) {
             Some(version) if !version.trim().is_empty() => {
-                // P1-2: scrub the version *before* gluing the `v` marker —
+                // Scrub the version *before* gluing the `v` marker —
                 // scrubbing after the glue hides every prefixed shape behind
                 // a non-boundary leading character.
                 let cleaned = scrub_cli_field(home, version);
@@ -799,7 +799,7 @@ mod tests {
     fn agent_filter_still_finds_rows_written_before_the_rename() {
         let (dir, store) = home_with_store();
         let home = dir.path().join("home");
-        // Pre-WO-07 shape: the kind and the payload key both say `dot`.
+        // The old shape: the kind and the payload key both say `dot`.
         store.log_event("dot.created", r#"{"dot":"main"}"#).unwrap();
         store
             .log_event("agent.created", r#"{"agent":"main"}"#)
@@ -1322,7 +1322,7 @@ mod tests {
         assert!(matches!(err, ActivityError::StoreKey { .. }), "got {err}");
     }
 
-    // ---- B3-08: the CLI scrubs like the API ----
+    // ---- The CLI scrubs like the API ----
 
     #[test]
     fn activity_scrubs_secrets_like_the_api() {
@@ -1448,7 +1448,7 @@ mod tests {
         }
     }
 
-    // ---- B4-01/B4-02: `--json` keeps number lexemes and key order ----
+    // ---- `--json` keeps number lexemes and key order ----
 
     #[test]
     fn activity_json_keeps_number_lexemes_and_key_order() {

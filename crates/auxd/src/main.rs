@@ -70,11 +70,11 @@ fn main() -> ExitCode {
     let result = runtime.block_on(run());
     // A task abandoned by the runtime can have spawned a child process (a
     // hung `osascript`, a shell tool command): terminate the whole descendant
-    // tree before the process exits, so SIGTERM never orphans it (NEW-A3).
+    // tree before the process exits, so SIGTERM never orphans it.
     // The sweep runs twice around the runtime's grace: work that *finishes*
     // during the grace spawns its notifier after the first snapshot, so only
     // the post-grace sweep can collect it (NEW-A3R). It also sweeps the
-    // daemon's process group (NEW-A3L).
+    // daemon's process group.
     shutdown::shutdown_everything(std::process::id(), group, move || {
         // Never await a blocking job on shutdown: give the runtime a short
         // grace, then abandon it and let the process exit.

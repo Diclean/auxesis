@@ -240,7 +240,7 @@ pub fn classify(value: &Value) -> Incoming {
     }
 }
 
-/// ACP client→agent requests used by A0.
+/// ACP client→agent requests this client uses.
 pub mod method {
     /// Handshake.
     pub const INITIALIZE: &str = "initialize";

@@ -1,4 +1,4 @@
-//! WATCH-1: "tell me when…" watchers: routines with a `{"kind":"watch","url",
+//! "Tell me when…" watchers: routines with a `{"kind":"watch","url",
 //! "condition","stop_after_hit","last_hash"}` payload. The chief's `watch` tool
 //! adds, lists and cancels them through the `POST /v1/jobs` checks; a run is
 //! `AgentJobRunner::run` (fetch, skip the model while the hash is unchanged,

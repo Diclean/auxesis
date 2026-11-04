@@ -1,4 +1,4 @@
-//! Live turn events for embedding frontends (B-API v2).
+//! Live turn events for embedding frontends.
 //!
 //! The engine persists every message as it happens; a [`TurnEvents`] sink
 //! additionally observes the same stream so a UI can follow a turn without
@@ -23,7 +23,7 @@ pub struct ToolEndOutcome<'a> {
 /// Sink for one turn's live events, in insertion order.
 pub trait TurnEvents: Send + Sync {
     /// The gated conversation about to go to the model, once per round, just
-    /// before the request (SHELL-JUDGE reads the owner's messages from it).
+    /// before the request (the judge reads the owner's messages from it).
     /// The default ignores it.
     fn sent(&self, messages: &[SafeMessage]) {
         let _ = messages;

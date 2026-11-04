@@ -671,7 +671,7 @@ pub(crate) fn sensitive_web_ask(url: &str) -> String {
     )
 }
 
-// ---- WS-C redesign round 2: write-ahead + workspace taint ----
+// ---- Write-ahead and workspace taint ----
 
 pub(crate) fn shell_call(id: &str, command: &str) -> ToolCall {
     ToolCall::new(id, "shell", json!({ "command": command }))
@@ -682,7 +682,7 @@ pub(crate) fn workspace_taint_key(harness: &Harness) -> String {
     key.to_string_lossy().into_owned()
 }
 
-// ---- WS-C round 5: `[shell]` config reaches the registry ----
+// ---- The `[shell]` config reaches the registry ----
 
 /// Content of the last tool-result message of `session_id`.
 pub(crate) fn last_tool_content(harness: &Harness, session_id: i64) -> String {

@@ -1,5 +1,5 @@
-//! SHELL-JUDGE: a second model look at a `shell` call that `auto` cannot
-//! approve on its own.
+//! A second model look at a `shell` call that `auto` cannot approve on its
+//! own.
 //!
 //! The judge sees only the owner's messages this turn sent to the model, the
 //! proposed command and the workspace root, as one JSON object: no tool
@@ -9,12 +9,21 @@
 //! the agent's own provider. Anything but a well-formed `allow` is a card.
 //! It is not a guarantee: the sandbox and the runtime caps still bound the
 //! command.
+//!
+//! WO-BUD-1: the judge's call is a paid call of the agent it judges. Every
+//! judge holds a [`JudgeBudget`]: it reserves through the same admission as a
+//! chat round and settles after, on the turn's run; a denied budget never
+//! calls the provider and keeps the card.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aux_providers::{ChatMessage, ChatProvider, ChatRequest, ChatRole, GatedChat, SafeMessage};
+use aux_providers::{
+    ChatMessage, ChatProvider, ChatRequest, ChatResponse, ChatRole, GatedChat, SafeMessage,
+};
+use aux_store::{Store, StoreHandle};
+use kernel_core::budget::{Budgets, PriceTable, Reservation, UsageActual};
 use kernel_core::privacy::{admit_call, Destination, ModeFn, PathId, PrivacyMode};
 use kernel_privacy::safetext::Gate;
 use kernel_privacy::NameDictionary;
@@ -75,6 +84,134 @@ pub struct ShellJudge {
     owner: OwnerMessages,
     workspace: PathBuf,
     timeout: Duration,
+    budget: JudgeBudget,
+}
+
+/// Where the judge's spend is reserved and recorded: the turn's store, the
+/// agent whose shell call it judges, the turn's run, and the daily caps and
+/// prices the turn runs under.
+pub struct JudgeBudget {
+    pub store: Arc<Mutex<Store>>,
+    pub agent: String,
+    pub run_id: Option<String>,
+    pub budgets: Budgets,
+    pub prices: PriceTable,
+}
+
+impl JudgeBudget {
+    /// Reserve the judge's prompt plus its answer cap, the same atomic
+    /// admission as a chat round. An unlimited agent's caps admit it, so its
+    /// call is still recorded. A clamped output becomes the `max_tokens`.
+    fn reserve(
+        &self,
+        provider: &dyn ChatProvider,
+        request: &mut ChatRequest,
+    ) -> Result<Reservation, crate::ChatError> {
+        let store = StoreHandle::Shared(Arc::clone(&self.store));
+        let caps = self.budgets.caps_for(&self.agent);
+        let day = store
+            .with(|store| store.local_day())
+            .map_err(|err| crate::engine::day_denied(&store, &self.agent, err))?;
+        let model = crate::engine::request_model(provider, request);
+        let estimate =
+            crate::engine::call_estimate(request, model, &self.prices, u64::from(JUDGE_MAX_TOKENS));
+        let reservation = crate::engine::admit(
+            &store,
+            self.run_id.as_deref(),
+            &self.agent,
+            &day,
+            &caps,
+            &estimate,
+        )?;
+        if reservation.caps.tokens_out.is_some() {
+            let cap = u32::try_from(reservation.estimate.tokens_out).unwrap_or(u32::MAX);
+            request.max_tokens = Some(cap.min(JUDGE_MAX_TOKENS));
+        }
+        Ok(reservation)
+    }
+
+    /// Settle what the call cost: the provider's counts, or the estimate when
+    /// it reported none; a failed call settles its prompt estimate, as a chat
+    /// round does.
+    fn settle(
+        &self,
+        provider: &dyn ChatProvider,
+        reservation: &Reservation,
+        request: &ChatRequest,
+        response: Option<&ChatResponse>,
+    ) -> Result<(), crate::ChatError> {
+        let store = StoreHandle::Shared(Arc::clone(&self.store));
+        let model = crate::engine::request_model(provider, request);
+        let empty = ChatResponse::assistant("");
+        let answered = response.unwrap_or(&empty);
+        let actual = crate::engine::usage_actual(request, answered, model, &self.prices);
+        store.with(|store| store.settle_reservation(reservation, &actual))?;
+        // INFER-COST-1: the judge's brain call row, index 0 (rounds count from 1).
+        let Some(response) = response else {
+            return Ok(());
+        };
+        let usage = response.usage;
+        let call = aux_store::UsageCall {
+            run_id: self.run_id.as_deref(),
+            agent: &self.agent,
+            provider: provider.name(),
+            model,
+            call_index: 0,
+            prompt_tokens: usage.map(|usage| usage.prompt_tokens),
+            cached_tokens: usage.and_then(|usage| usage.cached_prompt_tokens),
+            completion_tokens: usage.map(|usage| usage.completion_tokens),
+        };
+        if let Err(err) = store.with(|store| store.record_usage_call(&call)) {
+            tracing::warn!(error = %err, "could not record the judge call's token counts");
+        }
+        Ok(())
+    }
+}
+
+/// A judge reservation not yet settled. Settled explicitly on every normal
+/// exit; dropped unsettled (the judge future cancelled while the provider
+/// already had the prompt), it settles the reserved estimate, prompt plus the
+/// full answer cap, synchronously, so spend the provider may bill is never
+/// released as headroom.
+struct Pending<'b> {
+    budget: &'b JudgeBudget,
+    reservation: Option<Reservation>,
+}
+
+impl Pending<'_> {
+    fn settle(
+        mut self,
+        provider: &dyn ChatProvider,
+        request: &ChatRequest,
+        response: Option<&ChatResponse>,
+    ) -> Result<(), crate::ChatError> {
+        match self.reservation.take() {
+            Some(reservation) => self
+                .budget
+                .settle(provider, &reservation, request, response),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        let Some(reservation) = self.reservation.take() else {
+            return;
+        };
+        let reserved = reservation.estimate;
+        let actual = UsageActual {
+            tokens_in: reserved.tokens_in,
+            tokens_in_estimated: true,
+            tokens_out: reserved.tokens_out,
+            tokens_out_estimated: true,
+            usd_cents: reserved.usd_cents,
+        };
+        let store = StoreHandle::Shared(Arc::clone(&self.budget.store));
+        if let Err(err) = store.with(|store| store.settle_reservation(&reservation, &actual)) {
+            tracing::warn!(error = %err, "could not settle a cancelled judge call");
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -85,10 +222,69 @@ struct Answer {
 }
 
 impl ShellJudge {
-    /// A judge on `provider` under the live `mode` (the turn started in
-    /// `started`), gating with the session's key and `names`, reading the
-    /// owner's messages from `owner`.
+    /// A judge on `provider` under the live `mode` (the turn starts in the
+    /// mode it reads now), gating with the session's key and `names`, reading
+    /// the owner's messages from `owner`. Its call is always reserved and
+    /// recorded in `budget`: there is no unmetered judge outside tests.
+    ///
+    /// ```
+    /// use aux_engine::judge::{JudgeBudget, OwnerMessages, ShellJudge};
+    /// use std::{path::PathBuf, sync::Arc};
+    /// let _: fn(
+    ///     Arc<dyn aux_providers::ChatProvider>,
+    ///     kernel_core::privacy::ModeFn,
+    ///     i64,
+    ///     Arc<kernel_privacy::NameDictionary>,
+    ///     OwnerMessages,
+    ///     PathBuf,
+    ///     JudgeBudget,
+    /// ) -> ShellJudge = ShellJudge::new;
+    /// ```
+    ///
+    /// Without a budget, no judge can be built (WO-BUD-1):
+    ///
+    /// ```compile_fail,E0308
+    /// use aux_engine::judge::{OwnerMessages, ShellJudge};
+    /// use std::{path::PathBuf, sync::Arc};
+    /// let _: fn(
+    ///     Arc<dyn aux_providers::ChatProvider>,
+    ///     kernel_core::privacy::ModeFn,
+    ///     i64,
+    ///     Arc<kernel_privacy::NameDictionary>,
+    ///     OwnerMessages,
+    ///     PathBuf,
+    /// ) -> ShellJudge = ShellJudge::new;
+    /// ```
+    ///
+    /// ```compile_fail,E0599
+    /// let _ = aux_engine::judge::ShellJudge::for_tests;
+    /// ```
     pub fn new(
+        provider: Arc<dyn ChatProvider>,
+        mode: ModeFn,
+        session_id: i64,
+        names: Arc<NameDictionary>,
+        owner: OwnerMessages,
+        workspace: PathBuf,
+        budget: JudgeBudget,
+    ) -> Self {
+        Self {
+            provider,
+            started: mode(),
+            mode,
+            session_id,
+            names,
+            owner,
+            workspace,
+            timeout: JUDGE_TIMEOUT,
+            budget,
+        }
+    }
+
+    /// A judge whose turn started in `started`, metered as `main`'s in a
+    /// throwaway in-memory store under the default caps (tests only).
+    #[cfg(test)]
+    pub(crate) fn for_tests(
         provider: Arc<dyn ChatProvider>,
         mode: ModeFn,
         started: PrivacyMode,
@@ -97,16 +293,23 @@ impl ShellJudge {
         owner: OwnerMessages,
         workspace: PathBuf,
     ) -> Self {
-        Self {
-            provider,
-            mode,
-            started,
-            session_id,
-            names,
-            owner,
-            workspace,
-            timeout: JUDGE_TIMEOUT,
-        }
+        let store = Store::open_in_memory().expect("an in-memory store");
+        let budget = JudgeBudget {
+            store: Arc::new(Mutex::new(store)),
+            agent: "main".to_string(),
+            run_id: None,
+            budgets: Budgets::default(),
+            prices: PriceTable::default(),
+        };
+        let judge = Self::new(provider, mode, session_id, names, owner, workspace, budget);
+        Self { started, ..judge }
+    }
+
+    /// The same judge, metered in `budget` instead (tests).
+    #[cfg(test)]
+    pub(crate) fn with_budget(mut self, budget: JudgeBudget) -> Self {
+        self.budget = budget;
+        self
     }
 
     /// The same judge with another deadline (tests).
@@ -125,11 +328,29 @@ impl ShellJudge {
         if owner.is_empty() {
             return Verdict::Failed("no owner message");
         }
-        let Some(request) = self.request(&owner, command) else {
+        let Some(mut request) = self.request(&owner, command) else {
             return Verdict::Failed("privacy gate refused");
         };
-        let gated = GatedChat::new(self.provider.as_ref(), Arc::clone(&self.mode));
-        match tokio::time::timeout(self.timeout, gated.complete(&request)).await {
+        let provider = self.provider.as_ref();
+        // A denied budget (or a ledger that cannot answer) never reaches the
+        // provider: the ask keeps its card.
+        let Ok(reservation) = self.budget.reserve(provider, &mut request) else {
+            return Verdict::Failed("budget");
+        };
+        // Dropped before the explicit settle (the turn cancelled mid-call),
+        // the guard settles the whole reserved estimate.
+        let pending = Pending {
+            budget: &self.budget,
+            reservation: Some(reservation),
+        };
+        let gated = GatedChat::new(provider, Arc::clone(&self.mode));
+        let outcome = tokio::time::timeout(self.timeout, gated.complete(&request)).await;
+        let response = outcome.as_ref().ok().and_then(|done| done.as_ref().ok());
+        if let Err(err) = pending.settle(provider, &request, response) {
+            tracing::warn!(error = %err, "could not settle the judge call");
+            return Verdict::Failed("budget");
+        }
+        match outcome {
             Err(_) => Verdict::Failed("timeout"),
             Ok(Err(_)) => Verdict::Failed("provider error"),
             Ok(Ok(response)) => parse(&response.message.content),
@@ -212,8 +433,8 @@ mod tests {
 
     #[test]
     fn the_judge_keeps_the_newest_owner_message_within_four_kilobytes() {
-        // Seal r1 P2-3: nine messages in conversation order, the last one the
-        // newest restriction; it survives the cut, the oldest go.
+        // Nine messages in conversation order: the newest restriction survives
+        // the cut, the oldest go.
         let mut conversation: Vec<String> =
             (0..8).map(|n| format!("{n}{}", "x".repeat(999))).collect();
         conversation.push("never delete anything".to_string());

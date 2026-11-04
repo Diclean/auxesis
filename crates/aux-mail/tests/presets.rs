@@ -1,4 +1,4 @@
-//! M1: the preset table and its golden fixture. Offline, no socket.
+//! The preset table and its golden fixture. Offline, no socket.
 
 use aux_mail::config::{ImapSettings, Security, SmtpSettings};
 use aux_mail::presets::{all_presets, fixture_json, preset};

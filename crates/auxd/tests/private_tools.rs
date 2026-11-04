@@ -1,4 +1,4 @@
-//! TOK-3: the daily tools work in a private chat. `read_file`, `write_file`,
+//! The daily tools work in a private chat. `read_file`, `write_file`,
 //! `shell`, `http_fetch` and
 //! the weather tools mount in private mode. The local tools (`read_file`,
 //! `write_file`, `shell`) get their session tokens restored on the Mac before
@@ -216,7 +216,7 @@ fn a_private_read_file_reaches_the_provider_tokenised() {
     assert_eq!(sent.len(), 2, "one request, then the tool result");
     let result = &sent[1];
     assert!(result.contains("Compte"), "the tool ran: {result}");
-    // A name is no hidden value (NAMES-OFF, owner 2026-10-19).
+    // A name is not a hidden value.
     for raw in [IBAN, PHONE] {
         assert!(
             !result.contains(raw),

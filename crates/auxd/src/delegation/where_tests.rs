@@ -1,4 +1,4 @@
-//! DELEG-WHERE-1: each step says where it ran, from the child turn's provider
+//! Each step says where it ran, from the child turn's provider
 //! contact record, never from the tool name or the brain config.
 
 use super::*;
@@ -202,7 +202,7 @@ async fn a_call_refused_before_any_contact_is_unknown() {
     assert!(steps.iter().all(|s| s["where"] != "out"), "{steps:?}");
 }
 
-/// Seal B P1: the cloud gets every round's request before it times out, so
+/// The cloud gets every round's request before it times out, so
 /// every round is `out` although the local brain answers; tool steps stay
 /// unknown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -234,7 +234,7 @@ async fn a_later_round_that_falls_back_from_cloud_to_local_is_out() {
     assert_eq!(place(&steps, "wrote its answer"), ["out"], "{steps:?}");
 }
 
-/// Seal B r1: the save guard drops the cloud's reply without a message and
+/// The save guard drops the cloud's reply without a message and
 /// asks again; the re-asked round keeps the first mark, so the cloud
 /// attempt still counts and both steps are `out`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -256,7 +256,7 @@ async fn a_round_a_guard_re_asks_keeps_its_cloud_attempt() {
     assert!(steps.iter().all(|s| s["where"] != "local"), "{steps:?}");
 }
 
-/// Seal B r1: Stop lands while the cloud holds the request; the dropped hop
+/// Stop lands while the cloud holds the request; the dropped hop
 /// was logged before it was sent, so the step is never `local`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hop_stopped_in_flight_is_on_record() {

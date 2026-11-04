@@ -366,12 +366,11 @@ fn sigterm_exits_promptly_while_a_job_is_blocked() {
     );
 }
 
-/// NEW-A3R (P3) regression, real daemon: the pre-grace sweep used to run
-/// before the 500 ms shutdown grace, so a run that *finished during the
-/// grace* spawned its notifier after the sweep and the child survived the
-/// daemon. Here the provider is held until the daemon has already left its
-/// run loop ("auxd stopping" on stdout), then released: the turn finishes
-/// inside the grace and its `osascript` shim must be swept before exit.
+/// Real daemon: a run that finishes during the 500 ms shutdown grace must
+/// still have its notifier swept, so no child survives the daemon. Here the
+/// provider is held until the daemon has already left its run loop ("auxd
+/// stopping" on stdout), then released: the turn finishes inside the grace
+/// and its `osascript` shim must be swept before exit.
 /// An unrelated sibling process must survive.
 #[test]
 #[ignore = "obsolete: job notifications now go through NotifyRouter, and the osascript shim runs only when the gateway worker drains its channel (60 s flush), so no blocked run can be observed; needs a new blocking seam"]
@@ -484,7 +483,7 @@ fn a_notifier_spawned_during_the_shutdown_grace_is_not_orphaned() {
     );
 }
 
-/// NEW-A3L regression, real daemon: the `osascript` shim traps SIGTERM,
+/// Real daemon: the `osascript` shim traps SIGTERM,
 /// forks a `sleep 60` from its trap and exits. The forked child is
 /// reparented to launchd, so the ppid walk cannot see it — but the daemon
 /// took a private process group at startup and every child inherits it, so
@@ -495,7 +494,7 @@ fn a_term_trapping_notifier_fork_is_swept_with_the_group() {
     let sandbox = Sandbox::new();
 
     // Replace the default shim: trap TERM, fork an escapee from the trap,
-    // record its pid and exit. This is the breaker's exact A3L shape.
+    // record its pid and exit. This is the exact shape a process uses to escape a ppid walk.
     let shim = sandbox.shim_dir.join("osascript");
     std::fs::write(
         &shim,
@@ -579,7 +578,7 @@ fn a_second_daemon_refuses_to_start() {
     let sandbox = Sandbox::new();
     let mut first = sandbox.spawn_with_stdout();
 
-    // FLAKY-03: wait on the daemon's own readiness line, never on a store
+    // Wait on the daemon's own readiness line, never on a store
     // poll. Polling `sandbox.store()` in a tight loop opens and drops a
     // connection repeatedly, so the closing connection unlinks the
     // `store.db-wal`/`store.db-shm` sidecars; the daemon's startup symlink
@@ -629,8 +628,8 @@ fn a_second_daemon_refuses_to_start() {
     shutdown(&mut first, EXIT_TIMEOUT);
 }
 
-/// H-03/J-02: a `.auxesis` under the *sandbox* HOME is exactly the
-/// invocation the tripwire recommends — `auxd` must start (the pre-J-02 test
+/// A `.auxesis` under the *sandbox* HOME is exactly the
+/// invocation the tripwire recommends — `auxd` must start (the old test
 /// pinned the inverted behaviour). Refusing the real `~/.auxesis` is
 /// unit-tested in `kernel_core::paths`; no daemon is ever pointed at it here.
 #[test]
@@ -836,7 +835,7 @@ fn start_and_stop(sandbox: &Sandbox) {
     shutdown(&mut child, EXIT_TIMEOUT);
 }
 
-/// CAL-AGENT-INSTALL: a home made before the invite shipped holds only the
+/// A home made before the invite shipped holds only the
 /// Calendar agent's soul. At start the daemon adds the shipped agent.md and
 /// send-invite skill, so the agent offers `skill__send-invite`; the soul stays
 /// byte-identical, and a later start keeps an edited agent.md as it is.

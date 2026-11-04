@@ -12,7 +12,7 @@
 //! used to be the only caller of [`aux_docs::sweep_unprocessed`], and a
 //! closed app meant an `[unread]` receipt forever. XML is still parsed here in
 //! Rust; every other format is queued for the on-device PDFKit/Vision bridge,
-//! exactly as before (D25/D26). No path row, gate or egress rule changes.
+//! the same way. No path row, gate or egress rule changes.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

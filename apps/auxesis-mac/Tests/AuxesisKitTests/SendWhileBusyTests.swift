@@ -1,6 +1,6 @@
-// SEND-WHILE-BUSY-1: a message sent while a turn runs is accepted at once,
+// A message sent while a turn runs is accepted at once,
 // shown as "Queued", and sent once when the turn ends; Stop marks it "Not
-// sent"; a `thread_busy` refusal keeps it queued. CHAT-DUP-BUBBLE-1: the
+// sent"; a `thread_busy` refusal keeps it queued. The
 // owner's words show once, and Aux's ask in a domain thread is the handoff
 // row, never an owner bubble.
 import XCTest

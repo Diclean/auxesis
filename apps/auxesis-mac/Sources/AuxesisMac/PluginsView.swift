@@ -1,4 +1,4 @@
-// Settings › Plugins (M6-4): see what a plugin may read, write and reach before any
+// Settings › Plugins: see what a plugin may read, write and reach before any
 // Install, then one preview and one yes. Browsing only reads lists: nothing starts.
 import AuxesisKit
 import SwiftUI
@@ -143,7 +143,7 @@ struct PreviewSheet: View {
         .frame(width: 520)
         .background(palette.work.color)
     }
-    /// r1 (#532 P2): the agent that gets the tools, in words, with the team list to change it.
+    /// The agent that gets the tools, in words, with the team list to change it.
     /// The sentence keeps its order in each language: the picker stands where %@ is.
     private func target(_ copy: Copy) -> some View {
         let parts = copy(.pluginGivesTo).components(separatedBy: "%@").map { $0.trimmingCharacters(in: .whitespaces) }

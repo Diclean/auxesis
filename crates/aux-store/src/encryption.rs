@@ -20,7 +20,7 @@
 //! KDF runs on each open. A wrong or missing master key refuses the open and
 //! leaves the store bytes alone.
 //!
-//! # Migration from the pre-WO-06c layout
+//! # Migration from the old key layout
 //!
 //! The old layout kept a random KEK (`keys/store.kek`) wrapping a random DEK
 //! (`keys/store.dek`) that keyed the database. When those files are present the
@@ -82,7 +82,7 @@ const DAMAGED_MASTER_REASON: &str = "master.key is empty or the wrong length bes
 const LEGACY_BACKUP_REASON: &str = "a legacy store backup is present beside an empty store; refusing to continue (une sauvegarde héritée est présente à côté d'un store vide ; arrêt)";
 /// The advisory lock that serializes a first open and the one-time migrations.
 const LOCK_FILE: &str = ".store.lock";
-/// The pre-WO-06c key layout, read only to migrate it.
+/// The old key layout, read only to migrate it.
 const LEGACY_KEYS_DIR: &str = "keys";
 const LEGACY_KEK_FILE: &str = "store.kek";
 const LEGACY_DEK_FILE: &str = "store.dek";
@@ -172,7 +172,7 @@ pub fn vault_key(home: &Path) -> Result<Key, StoreError> {
     Ok(derive(&read_master(home)?, VAULT_INFO))
 }
 
-/// The derived key for evidence blobs at rest (`auxesis/evidence/v1`, DOC-SAFE-1).
+/// The derived key for evidence blobs at rest (`auxesis/evidence/v1`).
 pub fn evidence_key(home: &Path) -> Result<Key, StoreError> {
     Ok(derive(&read_master(home)?, EVIDENCE_INFO))
 }
@@ -277,7 +277,7 @@ pub(super) fn lock_for_open(path: &Path) -> Result<OpenLock, StoreError> {
 
 /// Open the store at `path` as a keyed connection, creating or migrating it.
 /// The caller holds the [`OpenLock`] for `path`. Creates `master.key` on first
-/// use. A plaintext store or the pre-WO-06c key layout is migrated once.
+/// use. A plaintext store or the old key layout is migrated once.
 pub(super) fn open_encrypted(path: &Path) -> Result<Connection, StoreError> {
     let home = parent_of(path);
     // A legacy backup beside an empty store means an earlier migration never finished.
@@ -483,7 +483,7 @@ fn write_new_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Migration from the pre-WO-06c key layout
+// Migration from the old key layout
 // ---------------------------------------------------------------------------
 
 fn legacy_keys_dir_of(path: &Path) -> PathBuf {
@@ -1483,7 +1483,7 @@ mod tests {
         key
     }
 
-    /// Write the pre-WO-06c layout: `keys/store.kek` and `keys/store.dek`
+    /// Write the old layout: `keys/store.kek` and `keys/store.dek`
     /// wrapping a fresh random DEK. Returns the DEK the store must be keyed with.
     fn write_legacy_layout(path: &Path) -> Key {
         let keys = legacy_keys_dir_of(path);

@@ -1,5 +1,5 @@
-//! J-02 round 7: shell scripts must not touch the real home in a
-//! contradictory sandbox environment.
+//! Shell scripts must not touch the real home in a contradictory sandbox
+//! environment.
 //!
 //! * Every script under `scripts/` or `apps/*/scripts/` that mentions
 //!   `$HOME`, `~/Library` or `.auxesis` must source `scripts/lib/guard.sh`
@@ -179,8 +179,8 @@ fn guard_refuses_and_allows_the_right_environments() {
     assert!(text(&inert).contains("reached"));
 }
 
-/// Security review r6 P1: `TMPDIR=<real home>` must make the macOS launcher refuse
-/// before it creates anything or builds Swift.
+/// `TMPDIR=<real home>` must make the macOS launcher refuse before it creates
+/// anything or builds Swift.
 #[test]
 fn mac_launcher_refuses_real_home_inputs() {
     let root = workspace_root();

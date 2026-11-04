@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The release half of the CI build lock (CI-LOCK-RMDIR).
+# The release half of the CI build lock.
 #
 # The acquire side stays in the workflows: `mkdir /tmp/auxesis-build.lock`,
 # then the job writes its `$GITHUB_JOB-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT`

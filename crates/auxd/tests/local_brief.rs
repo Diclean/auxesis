@@ -1,4 +1,4 @@
-//! M2 acceptance: one brief run reads the local EventKit snapshot and the
+//! One brief run reads the local EventKit snapshot and the
 //! configured mailbox, writes the full brief, and sends a counts-only
 //! notification that carries no title, sender or subject.
 //!

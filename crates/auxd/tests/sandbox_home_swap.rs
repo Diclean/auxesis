@@ -1,4 +1,4 @@
-//! GLM-P1-1 regression (J-02 round 4): after `auxd` verified its home, a
+//! After `auxd` verified its home, a
 //! same-uid actor renames the home and plants a symlink to a decoy. Every
 //! state re-open (kill switch, audit, config, store) must re-verify the
 //! identity and fail closed — the decoy must gain **no** `store.db`,
@@ -43,7 +43,7 @@ fn a_home_swap_after_start_never_redirects_state_writes() {
         .expect("auxd must announce its API port");
     let token = std::fs::read_to_string(home.join("api.token")).expect("api.token");
 
-    // The breaker's swap: the verified home is renamed and replaced by a
+    // The escape test's swap: the verified home is renamed and replaced by a
     // symlink to an empty decoy (never the real home).
     let decoy = dir.path().join("decoy");
     std::fs::create_dir_all(&decoy).unwrap();

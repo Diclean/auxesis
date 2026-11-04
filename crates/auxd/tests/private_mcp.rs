@@ -54,20 +54,30 @@ fn home_with_server(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
         script.display(),
         tmp.display()
     );
-    let parsed = kernel_mcp::McpConfig::parse("mcp.toml", &server).unwrap();
-    let hash = parsed.server[0]
-        .confirmation_binding(token.as_bytes())
-        .unwrap();
-    std::fs::write(
-        home.join("mcp.toml"),
-        server.replace(
-            "enabled = true",
-            &format!("enabled = true\nstdio_confirmed = true\nstdio_confirmation = \"{hash}\""),
-        ),
-    )
-    .unwrap();
+    std::fs::write(home.join("mcp.toml"), owner_approved(&server, token)).unwrap();
     write_mode(&home, mode);
     (dir, home, tmp)
+}
+
+/// `server` (one `[[server]]` entry) with the two records the owner's one
+/// approval mints: the launch confirmation and the install approval, both
+/// keyed by the daemon token. Since kernel v0.1.2 a confirmation alone is not
+/// an install approval, so a real approved server always carries both.
+fn owner_approved(server: &str, token: &str) -> String {
+    let parsed = kernel_mcp::McpConfig::parse("mcp.toml", server).unwrap();
+    let confirmation = parsed.server[0]
+        .confirmation_binding(token.as_bytes())
+        .unwrap();
+    let approval = parsed.server[0]
+        .approval_binding(token.as_bytes(), None)
+        .unwrap();
+    server.replace(
+        "enabled = true",
+        &format!(
+            "enabled = true\nstdio_confirmed = true\nstdio_confirmation = \"{confirmation}\"\n\
+             approval = \"{approval}\""
+        ),
+    )
 }
 
 fn write_mode(home: &Path, mode: &str) {
@@ -289,20 +299,7 @@ async fn a_privacy_rebuild_cannot_resurrect_a_server_revoked_mid_discovery() {
         script_path.display(),
         tmp.display()
     );
-    let parsed = kernel_mcp::McpConfig::parse("mcp.toml", &server).unwrap();
-    let confirmation = parsed.server[0]
-        .confirmation_binding(token.as_bytes())
-        .unwrap();
-    std::fs::write(
-        home.join("mcp.toml"),
-        server.replace(
-            "enabled = true",
-            &format!(
-                "enabled = true\nstdio_confirmed = true\nstdio_confirmation = \"{confirmation}\""
-            ),
-        ),
-    )
-    .unwrap();
+    std::fs::write(home.join("mcp.toml"), owner_approved(&server, token)).unwrap();
     write_mode(&home, "open");
 
     let web = kernel_core::WebConfig::default();

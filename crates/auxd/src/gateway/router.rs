@@ -122,7 +122,7 @@ impl Pending {
     }
 
     /// The notice a dropped pending message reports in the next brief.
-    // TODO(NOTIFY-2 P3): an approval headline folds into a later brief if `NotifyRouter::approval` ever gets a caller.
+    // TODO: an approval headline folds into a later brief if `NotifyRouter::approval` ever gets a caller.
     fn into_notice(self) -> Notice {
         match self {
             Pending::Alert { level, text } => Notice { level, text },
@@ -559,17 +559,48 @@ async fn deliver(
         return BriefOutcome::Held;
     }
     if paired.is_empty() {
-        return deliver_one(local, pending, mode).await;
+        return deliver_one(local, pending, mode, false).await;
     }
     let mut best = BriefOutcome::Held;
     for gateway in paired {
-        best = best.max(deliver_one(gateway, pending.clone(), mode).await);
+        best = best.max(deliver_one(gateway, pending.clone(), mode, true).await);
     }
     best
 }
 
-async fn deliver_one(gateway: &Arc<dyn Gateway>, pending: Pending, mode: &ModeFn) -> BriefOutcome {
+/// Free text bound for a remote gateway with every secret and prohibited value
+/// masked; [`MESSAGE_HELD_NOTICE`] when the scrub fails. The
+/// local display stays on the Mac and keeps the text as written.
+fn owner_text(remote: bool, text: String) -> String {
+    if !remote {
+        return text;
+    }
+    super::scrub_for_owner(std::path::Path::new(""), &text).unwrap_or_else(|| {
+        tracing::warn!("outbound scrub failed; notice sent instead");
+        MESSAGE_HELD_NOTICE.to_string()
+    })
+}
+
+/// Sent to a remote gateway instead of an alert or brief whose scrub failed.
+pub const MESSAGE_HELD_NOTICE: &str = "Message held on your Mac, open Auxesis to read it.";
+
+async fn deliver_one(
+    gateway: &Arc<dyn Gateway>,
+    pending: Pending,
+    mode: &ModeFn,
+    remote: bool,
+) -> BriefOutcome {
     let mode_now = mode();
+    let pending = match pending {
+        Pending::Alert { level, text } => Pending::Alert {
+            level,
+            text: owner_text(remote, text),
+        },
+        Pending::Brief { text } => Pending::Brief {
+            text: owner_text(remote, text),
+        },
+        other => other,
+    };
     match pending {
         Pending::Alert { level, text } => {
             match OutboundText::admitted_at(

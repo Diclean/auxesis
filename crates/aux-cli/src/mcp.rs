@@ -62,15 +62,15 @@ fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
 }
 
 /// Discover the enabled servers, applying the same web deny-domain gate as the
-/// daemon, plus its stdio confirmation and M6-2 install-approval policy, and
-/// its sandbox (item 13).
+/// daemon, plus its stdio confirmation and install-approval policy, and
+/// its sandbox.
 ///
 /// The CLI is read-only, but it must not spawn a `stdio` server or contact an
 /// `http` one that the daemon would refuse: a server is listed only when it
 /// carries the owner's approval, checked by the daemon's own predicate in
 /// [`kernel_mcp::McpServerConfig::is_install_approved`]. A `stdio` server also
 /// needs its launch confirmation. If the daemon token cannot be read, nothing
-/// is approved or confirmed (item 5, fail closed). Never fails: a runtime that
+/// is approved or confirmed (fail closed). Never fails: a runtime that
 /// cannot start yields an empty report.
 fn discover(home: &Path, config: &McpConfig) -> McpRuntime {
     discover_with(home, config, true)
@@ -110,7 +110,7 @@ fn discover_with(home: &Path, config: &McpConfig, network_guard: bool) -> McpRun
 }
 
 /// The daemon's per-server gate, in the daemon's order: the old uncurated
-/// `stdio` confirmation first, then the M6-2 install approval, then the `[web]`
+/// `stdio` confirmation first, then the install approval, then the `[web]`
 /// egress gate.
 ///
 /// The approval predicate is `kernel_mcp`'s, not a copy, and the catalog pin
@@ -259,7 +259,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         // No daemon token: nothing can be confirmed, so the stdio server is
-        // never spawned (item 13, fail closed).
+        // never spawned (fail closed).
         let config = McpConfig::parse(
             "t",
             "[[server]]\nid = \"stdio-one\"\ntransport = \"stdio\"\n\

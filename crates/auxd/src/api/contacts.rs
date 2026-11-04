@@ -1,4 +1,4 @@
-//! Import clients from a contacts file (WO-CRMIO-1).
+//! Import clients from a contacts file.
 //!
 //! | Method | Path | Answer |
 //! |---|---|---|

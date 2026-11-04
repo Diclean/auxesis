@@ -6,8 +6,7 @@ license.workspace = true
 authors.workspace = true
 description = "Native IMAP/SMTP mailbox Connector: bounded reads, drafts-only sends, rustls only"
 # Never published until the owner gives the go. The licence is
-# PolyForm-Noncommercial-1.0.0; `deny.toml` allows it for this crate by name
-# (see audit I-05).
+# PolyForm-Noncommercial-1.0.0; `deny.toml` allows it for this crate by name.
 publish = false
 
 [lib]

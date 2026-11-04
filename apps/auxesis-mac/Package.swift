@@ -22,7 +22,7 @@ let package = Package(
         .package(path: "../../packages/AuxesisShared"),
     ],
     targets: [
-        // Offline release-manifest signer (H4): a dev tool, never bundled in
+        // Offline release-manifest signer: a dev tool, never bundled in
         // the app. `scripts/sign-release.sh` drives it.
         .executableTarget(name: "ReleaseSigner"),
         // CLT-only test runner (see header). Not a product.

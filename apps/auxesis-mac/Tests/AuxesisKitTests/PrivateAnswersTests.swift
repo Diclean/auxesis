@@ -1,4 +1,4 @@
-// Private answers (PRIV-ANSWERS-UI): the JSON shape, newest first, hidden when
+// Private answers: the JSON shape, newest first, hidden when
 // empty, dismiss removes on 204 and on 404 and keeps a failure visible, and
 // nothing is persisted. No network: the model is fed by a fake source.
 import Foundation

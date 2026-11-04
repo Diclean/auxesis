@@ -1,4 +1,4 @@
-//! One current-thread runtime per worker thread, reused across turns (E-11).
+//! One current-thread runtime per worker thread, reused across turns.
 //!
 //! The engine's futures are `!Send`-friendly by design (the broker is
 //! authenticated through a store handle, and one turn stays one task), so
@@ -20,7 +20,7 @@ thread_local! {
 
 /// Stack for the runtime's blocking pool, which runs delegated turns: the
 /// std default on macOS/Linux. Pinned so a lowered `RUST_MIN_STACK` cannot
-/// shrink it under a delegated turn (CROSS-AGENT-SIGSEGV: 256 KiB overflowed
+/// shrink it under a delegated turn (a 256 KiB stack overflowed
 /// 20/20 runs in a `tokio-rt-worker`, while 2 MiB always passed).
 const BLOCKING_STACK: usize = 2 * 1024 * 1024;
 

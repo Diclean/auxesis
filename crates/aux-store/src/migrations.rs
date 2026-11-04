@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS budget_stops (
 );
 "#;
 
-/// v7: session kind (BAPIV2-08).
+/// v7: session kind.
 ///
 /// `chat` is a conversation; `job` is a scheduled-run transcript. The agent's
 /// advertised `thread_id` and the agent-name POST/GET only ever resolve to
@@ -152,7 +152,7 @@ UPDATE sessions SET kind = 'job'
    );
 "#;
 
-/// v9: taint marks (WS-C redesign round 2).
+/// v9: taint marks.
 ///
 /// `workspace_taint` is the sticky, workspace-level mark: dispatching an
 /// untrusted-class tool in a workspace records that outside content touched
@@ -161,13 +161,12 @@ UPDATE sessions SET kind = 'job'
 /// the canonical workspace path, so one store can hold several agents' marks.
 /// `session_taint` records a conversation's taint *before* its untrusted
 /// call runs: a turn that is cancelled, killed or crashes before producing a
-/// result row still resumes tainted. The v9 tables replace the round-1
-/// per-file snapshot ledger; `file_taint` is dropped.
+/// result row still resumes tainted. The v9 tables replace the old per-file
+/// snapshot ledger; `file_taint` is dropped.
 ///
-/// Historical note: this migration was edited in place during the redesign
-/// (the `ws-c-2` v9 created `file_taint` + `workspace_taint`; the `ws-c-3` v9
-/// created `workspace_taint` + `session_taint`). Stores that recorded the
-/// earlier v9 never ran the `session_taint` creation; v10 repairs them.
+/// An earlier v9 created `file_taint` + `workspace_taint`, and another
+/// created `workspace_taint` + `session_taint`. Stores that recorded the
+/// first never ran the `session_taint` creation; v10 repairs them.
 pub(crate) const MIGRATION_V9: &str = r#"
 CREATE TABLE IF NOT EXISTS workspace_taint (
     workspace TEXT PRIMARY KEY,
@@ -185,10 +184,10 @@ DROP TABLE IF EXISTS file_taint;
 
 /// v10: repair the amended-in-place v9 and add the owner trust ledger.
 ///
-/// A store that recorded a `ws-c-1`/`ws-c-2`/early-`ws-c-3` schema version 9
-/// considers itself up to date and never gets `session_taint`; every chat
-/// then fails with `no such table: session_taint`. The `CREATE TABLE IF NOT
-/// EXISTS` below is the repair, and `file_taint` (the round-1 ledger) is
+/// A store that recorded an earlier schema version 9 considers itself up to
+/// date and never gets `session_taint`; every chat then fails with `no such
+/// table: session_taint`. The `CREATE TABLE IF NOT EXISTS` below is the
+/// repair, and `file_taint` (the old per-file ledger) is
 /// dropped for stores that still carry it. `trust_requests` backs the
 /// owner-presence proof for `aux workspace trust`: one pending request per
 /// canonical workspace path, holding a salted KDF hash of the one-time code —
@@ -435,7 +434,7 @@ WHEN old.state = 'quarantined' AND new.state <> 'quarantined'
 BEGIN SELECT RAISE(ABORT, 'quarantined memory is immutable'); END;
 "#;
 
-/// v17: the invoices/tickets evidence ledger (slice I1).
+/// v17: the invoices/tickets evidence ledger.
 ///
 /// Three new tables and nothing else: a migration added here never alters or
 /// drops an existing table or row, so a populated v15/v16 store upgrades in
@@ -575,8 +574,7 @@ BEGIN
 END;
 "#;
 
-/// v19: the `dot` → `agent` rename, and the removal of the v17 invoice ledger
-/// (invoices left the app in #200).
+/// v19: the `dot` → `agent` rename, and the removal of the v17 invoice ledger.
 ///
 /// Columns are renamed in place, so every row and every index survives; the
 /// index names follow their columns. The four invoice tables are dropped
@@ -1022,7 +1020,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_suggestions_pending
 
 /// v33: the sticky per-session "this chat ran in Private mode" mark.
 ///
-/// CONV-PRIVATE-MIX: a chat that ever ran a Private turn is never listed in
+/// A chat that ever ran a Private turn is never listed in
 /// Conversations. The old rule — a Private turn writes no system row, so a
 /// chat without one is private — fails both ways: an Open chat that later
 /// takes a Private turn keeps its system row and stays listed, and a Private
@@ -1352,24 +1350,24 @@ impl Store {
             self.apply_v22()?;
         }
         if version < 23 {
-            // C2b: the extracted document fields and the durable bridge queue.
+            // The extracted document fields and the durable bridge queue.
             // Purely additive DDL.
             self.apply_migration_with_version(MIGRATION_V23, 23)?;
         }
         if version < 24 {
-            // E0: the delegation record and the thread-read marker (D33).
+            // The delegation record and the thread-read marker.
             self.apply_migration_with_version(delegation::MIGRATION_V24, 24)?;
         }
         if version < 25 {
-            // The caller's mode at handoff on each delegation (DELEGATE-MODE-PIN).
+            // The caller's mode at handoff on each delegation.
             delegation::apply_v25(&mut self.conn)?;
         }
         if version < 26 {
-            // PRIVATE-TRANSCRIPT: each private session's token table.
+            // Each private session's token table.
             self.apply_migration_with_version(MIGRATION_V26, 26)?;
         }
         if version < 27 {
-            // CRM-TIMELINE-1: direction column on interaction.
+            // Direction column on interaction.
             let tx = self
                 .conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -1794,7 +1792,7 @@ mod tests {
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
 
-    /// CONV-PRIVATE-MIX: v33 adds the sticky per-session Private mark
+    /// v33 adds the sticky per-session Private mark
     /// without rewriting a row's meaning: every session the migration found
     /// keeps its fields, and every chat that existed before it is marked,
     /// because we cannot prove an old chat was never Private.

@@ -1,4 +1,4 @@
-//! The EventKit snapshot route against the real `auxd` binary (B11, P2-2).
+//! The EventKit snapshot route against the real `auxd` binary.
 //!
 //! Both modes keep the snapshot encrypted at rest and never a plaintext copy;
 //! a legacy plaintext file is removed in either. The sandbox home holds only a config and the

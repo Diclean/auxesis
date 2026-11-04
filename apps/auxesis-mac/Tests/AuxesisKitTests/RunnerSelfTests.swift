@@ -1,4 +1,4 @@
-// Self-tests for the in-repo CLT runner (F6).
+// Self-tests for the in-repo CLT runner.
 //
 // The runner discovers tests through the ObjC runtime. Async test methods
 // bridge to ObjC as `testXWithCompletionHandler:` and are run for real; if a

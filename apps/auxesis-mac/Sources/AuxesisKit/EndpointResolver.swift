@@ -7,7 +7,7 @@
 //   4. config.toml in the Auxesis home — an optional `api_port = N` key;
 //   5. the documented default: http://127.0.0.1:2893.
 //
-// J-02 round 6 (security review P1): while the sandbox guard is active
+// While the sandbox guard is active
 // (`AUXESIS_SANDBOX=1`, or an environment `HOME` different from the OS user
 // database home) **Foundation is never trusted for the home**: macOS
 // `FileManager.homeDirectoryForCurrentUser` / `NSHomeDirectory` / `getpwuid`
@@ -139,8 +139,8 @@ public enum EndpointResolver {
                     home = custom
                 }
             } else {
-                // Sandbox mode REQUIRES an explicit AUXESIS_HOME (security review r6
-                // P1): never fall back to <HOME>/.auxesis.
+                // Sandbox mode REQUIRES an explicit AUXESIS_HOME
+                // Never fall back to <HOME>/.auxesis.
                 homeRefused = true
                 home = fallbackHome
                 noEndpoint = true

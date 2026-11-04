@@ -638,7 +638,7 @@ fn kind_is_local(kind: ProviderKind) -> bool {
 /// still parse and the provider section must satisfy the loader. The whole
 /// read-modify-write runs under the shared `<home>/.config.lock` file lock so
 /// a CLI or settings writer in another process cannot be lost to a stale
-/// read (security review P2).
+/// read.
 fn append_provider_config(home: &Path, provider: &ProviderConfig) -> Result<(), String> {
     kernel_core::with_config_lock(home, || {
         // Create the default config first so a fresh home has a valid file.
@@ -1152,7 +1152,7 @@ fn key_info(home: &Path, provider: &ProviderConfig) -> KeyInfo {
     if let Some(account) = account {
         match KeychainStore::new().get(KEYCHAIN_SERVICE, account) {
             Ok(Some(secret)) if !secret.is_empty() => {
-                // H-04/L-1: whatever key this process resolves is registered
+                // Whatever key this process resolves is registered
                 // with the exact-value scrubber (the value is never logged).
                 kernel_broker::scrub::register_known_secret(&secret);
                 return KeyInfo {
@@ -1427,7 +1427,7 @@ mod tests {
         assert!(!result.ok);
         let error = result.error.unwrap();
         assert!(!error.contains("CANARYE2EERR13"), "{error}");
-        // CONFIG-ERR-ECHO-2: an unparsable URL is not shown at all, only why.
+        // An unparsable URL is not shown at all, only why.
         assert!(error.contains("base_url is not a valid URL"), "{error}");
     }
 
@@ -1793,7 +1793,7 @@ mod tests {
         aux_store::Store::open(&db).unwrap();
         let canary = "sk-canary-unit-late-0123456789abcdef";
 
-        // The provider is configured with a key_user but no key: the P1 dead
+        // The provider is configured with a key_user but no key: the dead
         // end the update route fixes.
         std::fs::write(
             kernel_core::config_path(home),

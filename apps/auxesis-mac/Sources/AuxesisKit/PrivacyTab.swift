@@ -5,7 +5,7 @@
 // Mac is recorded (the sidebar footer's rule). It ran on this Mac only when
 // its receipt was read without error and lists hosts, all on this Mac. A
 // receipt read without error that lists no host at all "recorded no outside
-// host": no evidence either way, never drawn as on this Mac (SOBER-1). An
+// host": no evidence either way, never drawn as on this Mac. An
 // error receipt's place is not known. A receipt lists hosts, not every request.
 import Foundation
 

@@ -654,7 +654,7 @@ const PARSE_CHUNK_WORK_TARGET: usize = 1_000_000;
 /// button-scope `<p>` search calls [`TreeSink::elem_name`] once per open
 /// element, and the adoption agency / formatting reconstruction call
 /// [`TreeSink::same_node`] and [`TreeSink::create_element`] per step.
-/// html5ever also has super-linear paths that never reach the sink (RV3-01);
+/// html5ever also has super-linear paths that never reach the sink;
 /// this counter cannot see them, and [`EXTRACT_WALL_BUDGET`] is responsible
 /// for bounding them.
 struct BoundedDom {

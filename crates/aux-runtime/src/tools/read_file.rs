@@ -78,7 +78,7 @@ impl Tool for ReadFileTool {
         // Atomic open: O_NOFOLLOW refuses a final-component symlink even if
         // it appeared after the path checks; O_NONBLOCK makes a raced-in FIFO
         // fail instead of hanging; the fstat below validates the opened file
-        // itself, not the path (NEW2-02).
+        // itself, not the path.
         #[cfg(unix)]
         let file = {
             use std::os::unix::fs::OpenOptionsExt;

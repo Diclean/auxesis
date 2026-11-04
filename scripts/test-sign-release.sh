@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for scripts/sign-release.sh (H4): signs, verifies, refuses a 0644
+# Self-test for scripts/sign-release.sh: signs, verifies, refuses a 0644
 # key, and leaves no key material behind. Throwaway keys live in a mktemp dir.
 set -euo pipefail
 

@@ -4,8 +4,8 @@
 // one approval for display: who drafted it, with which skill, and the mail
 // draft when the preview is a mail.
 //
-// Until E0's approval fields (`kind`, `preview{to,subject,body}`, `trail`) are
-// on main, the draft is read from the preview text: `To:` / `Subject:` /
+// When the approval fields (`kind`, `preview{to,subject,body}`, `trail`) are
+// absent, the draft is read from the preview text: `To:` / `Subject:` /
 // `Attachment:` header lines, a blank line, then the body. A preview without
 // those lines is shown as plain text.
 import Foundation

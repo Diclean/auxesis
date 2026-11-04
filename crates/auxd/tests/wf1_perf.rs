@@ -1,4 +1,4 @@
-//! WF-1 performance budgets, process-isolated from the `auxd` unit tests.
+//! Performance budgets, process-isolated from the `auxd` unit tests.
 //!
 //! The unit-test binary accumulates every test's registered canaries in the
 //! process-global known-secret registry, so a 1 MiB scrub there searches an
@@ -72,7 +72,7 @@ fn thread_cpu_time() -> Duration {
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
-/// Security review H-02: one 1 MiB provider delta must stream out whole and fast — and
+/// One 1 MiB provider delta must stream out whole and fast — and
 /// equal the whole-buffer scrub.
 #[test]
 fn a_one_mib_delta_streams_out_fully_and_fast() {

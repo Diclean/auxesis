@@ -1,4 +1,4 @@
-//! WO-CRMIO-1 acceptance: a sandboxed daemon previews, then imports, a contacts
+//! A sandboxed daemon previews, then imports, a contacts
 //! file through `POST /v1/contacts/import`, and the answer carries counts and
 //! column names only.
 //!

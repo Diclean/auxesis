@@ -41,7 +41,7 @@ pub const CHANNEL: &str = "imessage";
 
 /// Kind of the throwaway session a private owner text runs in. It is not
 /// `chat`, so it never becomes an agent's current thread, even when a crash
-/// leaves it behind with the rows its turn stored (PRIVATE-TRANSCRIPT).
+/// leaves it behind with the rows its turn stored.
 pub const PRIVATE_SESSION_KIND: &str = "imessage-private";
 
 /// The interim kernel egress row; see the module note.
@@ -68,6 +68,10 @@ pub const PRIVATE_FAILURE_NOTICE: &str = "Couldn't answer in private mode. Open 
 pub fn private_failure_notice(mode: PrivacyMode) -> Result<OutboundText, Refused> {
     OutboundText::admitted(NOTICE_PATH, mode, Level::Normal, PRIVATE_FAILURE_NOTICE)
 }
+
+/// Sent in Open mode instead of a reply whose scrub failed. A
+/// constant, so nothing of the held text can reach it.
+pub const REPLY_HELD_NOTICE: &str = "Reply held on your Mac, open Auxesis to read it.";
 
 /// The only text sent over Messages for the morning brief in Private mode. A
 /// constant: no mail content, name or count; the full brief stays in the app.
@@ -547,8 +551,15 @@ pub async fn answer_inbound<F>(
             tracing::warn!("imessage private turn gave no answer");
             private_failure_notice(mode)
         }
+        // The stored answer can hold real values (rehydrated
+        // tokens, or what an injected mail made the model echo); mask them,
+        // and send the fixed notice when the scrub itself fails.
         (false, Some(reply)) => {
-            OutboundText::admitted(gateway.egress_path(), mode, Level::Normal, reply)
+            let text = super::scrub_for_owner(home, &reply).unwrap_or_else(|| {
+                tracing::warn!("imessage reply scrub failed; notice sent instead");
+                REPLY_HELD_NOTICE.to_string()
+            });
+            OutboundText::admitted(gateway.egress_path(), mode, Level::Normal, text)
         }
         (false, None) => return,
     };

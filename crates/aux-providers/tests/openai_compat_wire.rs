@@ -489,7 +489,7 @@ async fn connection_refused_is_mapped_to_request_error() {
 }
 
 // ---------------------------------------------------------------------------
-// streaming (WS-F1)
+// streaming
 // ---------------------------------------------------------------------------
 
 /// Collects the sink's deltas in order.
@@ -1035,7 +1035,7 @@ async fn streaming_client_errors_other_than_refusals_surface_untouched() {
 
 #[tokio::test]
 async fn a_genuine_400_is_never_re_sent_as_a_fallback() {
-    // H-10: a 400 that never mentions streaming is a real request error. It
+    // A 400 that never mentions streaming is a real request error. It
     // must surface untouched and never be re-sent through `complete()`.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1069,7 +1069,7 @@ async fn a_genuine_400_is_never_re_sent_as_a_fallback() {
 
 #[tokio::test]
 async fn streaming_decodes_a_utf8_bom_at_the_head() {
-    // F-07: the most common gateway BOM is glued to the first `data:` line;
+    // The most common gateway BOM is glued to the first `data:` line;
     // without a strip the first delta is silently dropped.
     let server = MockServer::start().await;
     let sse = format!(
@@ -1154,7 +1154,7 @@ fn sse_server(events: Vec<String>, gap: Duration) -> u16 {
 }
 
 /// Like [`sse_server`], but keeps the socket open for `hold` after the last
-/// event: a keep-alive endpoint that never closes after `[DONE]` (F-08).
+/// event: a keep-alive endpoint that never closes after `[DONE]`.
 fn sse_server_with_hold(events: Vec<String>, gap: Duration, hold: Duration) -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1186,7 +1186,7 @@ fn sse_server_with_hold(events: Vec<String>, gap: Duration, hold: Duration) -> u
 
 /// A keep-alive endpoint that dribbles one byte inside every idle window and
 /// never closes: `read_timeout` alone can never fire, only the overall
-/// deadline can (F-08).
+/// deadline can.
 fn trickle_server() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1217,7 +1217,7 @@ fn sse_content_event(text: &str) -> String {
 
 #[tokio::test]
 async fn empty_data_heartbeats_are_skipped_not_failed() {
-    // GLM-P3: `data:` with an empty or whitespace-only payload is a
+    // `data:` with an empty or whitespace-only payload is a
     // spec-legal heartbeat/keep-alive (servers send these between chunks);
     // it must be skipped, not parsed as JSON and failed.
     let events = vec![
@@ -1253,7 +1253,7 @@ async fn empty_data_heartbeats_are_skipped_not_failed() {
 
 #[tokio::test]
 async fn a_stream_longer_than_the_request_timeout_keeps_streaming() {
-    // H-10: `DEFAULT_TIMEOUT` (here 1 s) must be an *idle* timeout on the
+    // `DEFAULT_TIMEOUT` (here 1 s) must be an *idle* timeout on the
     // streaming path. Eight events 200 ms apart run for ~1.8 s, well past
     // the old total timeout, while no single gap comes near the idle budget.
     let timeout = Duration::from_secs(1);
@@ -1298,7 +1298,7 @@ async fn a_stream_longer_than_the_request_timeout_keeps_streaming() {
 
 #[tokio::test]
 async fn a_stalled_stream_fails_when_the_idle_timeout_expires() {
-    // H-10 keeps the failure direction too: no total timeout does not mean no
+    // The failure direction holds too: no total timeout does not mean no
     // bound at all. One event, then silence longer than the idle budget.
     let timeout = Duration::from_millis(300);
     let port = sse_server(
@@ -1331,12 +1331,12 @@ async fn a_stalled_stream_fails_when_the_idle_timeout_expires() {
 }
 
 // ---------------------------------------------------------------------------
-// F-08: [DONE] ends the read loop; a trickle is bounded overall
+// [DONE] ends the read loop; a trickle is bounded overall
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn a_terminator_returns_without_waiting_for_the_socket_to_close() {
-    // F-08/F-15: a keep-alive endpoint holds the connection open after
+    // A keep-alive endpoint holds the connection open after
     // `[DONE]`. The complete answer must return immediately, not wait out
     // the idle timeout and then be discarded — for every terminator shape,
     // including one that arrives as the final line with no line terminator
@@ -1348,7 +1348,7 @@ async fn a_terminator_returns_without_waiting_for_the_socket_to_close() {
         "data: [DONE]\n\n",
         "data: [DONE]\n",
         "data: [DONE]\r\n",
-        // F-15: no trailing line terminator, CR only, trailing spaces, BOM.
+        // No trailing line terminator, CR only, trailing spaces, BOM.
         "data: [DONE]",
         "data: [DONE]\r",
         "data: [DONE]   ",
@@ -1437,7 +1437,7 @@ async fn a_terminator_returns_without_waiting_for_the_socket_to_close() {
 
 #[tokio::test]
 async fn a_trickling_stream_is_bounded_by_the_overall_deadline() {
-    // F-08: `read_timeout` resets on every byte, so a server dribbling inside
+    // `read_timeout` resets on every byte, so a server dribbling inside
     // the idle window used to hold the turn forever. Each request carries
     // `timeout × STREAM_TOTAL_TIMEOUT_FACTOR` as an overall budget.
     let timeout = Duration::from_millis(100);
@@ -1471,12 +1471,12 @@ async fn a_trickling_stream_is_bounded_by_the_overall_deadline() {
 }
 
 // ---------------------------------------------------------------------------
-// F-11/F-14: the fallback decision is structured
+// The fallback decision is structured
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn genuine_errors_are_never_re_sent_as_a_fallback() {
-    // F-11: every one of these used to be doubled by `contains("stream")`.
+    // Every one of these used to be doubled by `contains("stream")`.
     let bodies = [
         r#"{"error":{"message":"upstream connect error"}}"#,
         r#"{"error":{"message":"Invalid api key: 'stream'"}}"#,
@@ -1679,7 +1679,7 @@ async fn gated_canary_never_reaches_the_wire_on_either_path() {
     }
 }
 
-/// Security-review round 2, P2: a 3xx from the configured origin is surfaced as a
+/// A 3xx from the configured origin is surfaced as a
 /// provider error and the redirect target receives nothing.
 #[tokio::test]
 async fn a_redirect_is_not_followed_and_the_target_gets_nothing() {

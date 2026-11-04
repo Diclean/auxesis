@@ -9,7 +9,7 @@
 //     the small functions at the bottom.
 //
 // Unknown JSON fields are ignored; unknown `kind`s/`type`s become `.other`
-// so a newer daemon never breaks decoding (WF-1's `message.delta` included).
+// so a newer daemon never breaks decoding (the `message.delta` frame included).
 import Foundation
 
 // MARK: - Health / agents (GET /v1/health, GET /v1/agents)
@@ -116,7 +116,7 @@ public struct McpServerView: Decodable, Equatable, Identifiable {
     public let reason: String?; public let highRisk: String?
     enum CodingKeys: String, CodingKey { case id, enabled, state, transport, auth, tools, agents, dots, reason; case dataClass = "data_class"; case highRisk = "high_risk" }
 
-    /// `agents` is the current key; the pre-WO-07 `dots` spelling is still read
+    /// `agents` is the current key; the older `dots` spelling is still read
     /// for one release, so an older daemon keeps decoding.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,7 +153,7 @@ public struct McpTestBody: Encodable { let url: String }
 public struct McpAddBody: Encodable { let id: String; let catalogID: String; let agent: String; enum CodingKeys: String, CodingKey { case id, agent; case catalogID = "catalog_id" } }
 public struct McpEnabledBody: Encodable { let enabled: Bool }
 public struct McpToolsBody: Encodable { let tools: [String] }
-// M6-2 (#527): the install preview from `POST /servers` (flat, beside `ok`) or `GET /servers/{id}/approval`.
+// The install preview from `POST /servers` (flat, beside `ok`) or `GET /servers/{id}/approval`.
 public struct McpApprovalPreview: Decodable, Equatable, Identifiable {
     public struct Tool: Decodable, Equatable, Identifiable { public let name: String; public let risk: String; public let access: String; public var id: String { name } }
     public let id: String; public let transport: String; public let enabled: Bool; public let network: Bool
@@ -278,7 +278,7 @@ public struct AgentSummary: Decodable, Equatable, Identifiable {
     /// The agent's current session id as a string, or nil when it has no
     /// session yet (auxd resolves the agent name to this session).
     public let threadId: String?
-    /// D33 (NEW, E0): the brain this agent runs with, as `model` (or the
+    /// The brain this agent runs with, as `model` (or the
     /// provider id when no model is named). Absent before the agents runtime.
     public let brain: String?
     /// MODE-CHIP-TRUTH: the mode the daemon last reported for this agent.
@@ -1528,7 +1528,12 @@ public struct Agent: Identifiable, Equatable {
 
 public enum Mapper {
     /// `AgentJson` + the latest live state → `Agent` (same rules as live.rs).
-    public static func agent(from agent: AgentSummary, live: AgentState?, language: Language = .default) -> Agent {
+    public static func agent(
+        from agent: AgentSummary,
+        live: AgentState?,
+        language: Language = .default,
+        budget caps: UsageCaps? = nil
+    ) -> Agent {
         let state: AgentState
         if agent.killed {
             state = .killed
@@ -1554,8 +1559,8 @@ public enum Mapper {
             status: status,
             statusShort: agent.runningJob != nil ? "running" : nil,
             waiting: 0,
-            budgetUsed: budgetRatio(agent.usageToday),
-            budgetHit: budgetHit(agent.usageToday),
+            budgetUsed: budgetRatio(agent.usageToday, caps: caps),
+            budgetHit: budgetHit(agent.usageToday, caps: caps),
             threadKey: agent.name,
             lastActive: Timestamps.unixMillis(from: agent.lastActivity?.at).flatMap { $0 > 0 ? $0 : nil },
             runningJob: agent.runningJob,
@@ -1590,16 +1595,25 @@ public enum Mapper {
         return message
     }
 
-    static func budgetRatio(_ usage: UsageTotals) -> Double {
-        // S0 has no caps endpoint in the snapshot; usage exists but no cap.
-        // The ring stays at 0 until /v1/usage is wired (S3+).
-        _ = usage
-        return 0
+    /// The tightest capped direction, as a 0…1 bar; no caps reads as 0 (no bar).
+    static func budgetRatio(_ usage: UsageTotals, caps: UsageCaps?) -> Double {
+        min(1, fractions(usage, caps: caps).max() ?? 0)
     }
 
-    static func budgetHit(_ usage: UsageTotals) -> Bool {
-        _ = usage
-        return false
+    /// True when any capped direction has spent its limit: the daemon would
+    /// refuse the next turn.
+    static func budgetHit(_ usage: UsageTotals, caps: UsageCaps?) -> Bool {
+        fractions(usage, caps: caps).contains { $0 >= 1 }
+    }
+
+    private static func fractions(_ usage: UsageTotals, caps: UsageCaps?) -> [Double] {
+        guard let caps, !caps.isUnset else { return [] }
+        return [(usage.tokensIn, caps.tokensIn), (usage.tokensOut, caps.tokensOut), (usage.usdCents, caps.usdCents)]
+            .compactMap { spent, limit in
+                guard let limit else { return nil }
+                // A zero cap is a cap: no headroom, never a division by zero.
+                return limit > 0 ? Double(spent) / Double(limit) : 1
+            }
     }
 }
 
@@ -1854,7 +1868,7 @@ public struct FirstRunComplete: Decodable, Equatable {
     }
 }
 
-// MARK: - Contacts import (POST /v1/contacts/import, WO-CRMIO-2)
+// MARK: - Contacts import (POST /v1/contacts/import)
 
 /// The party kind every row of an import becomes. `none` sends no tag.
 public enum ContactsImportTag: String, CaseIterable, Equatable {

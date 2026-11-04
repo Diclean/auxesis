@@ -1,6 +1,6 @@
-//! APPROVAL-MODES acceptance: `approvals = "auto"` (the default) runs the
+//! Approval modes: `approvals = "auto"` (the default) runs the
 //! chief's `delegate` and local writes without a card, tainted or not, marked
-//! `policy` in the audit trail with their class (ACT-FREE). After a tainted
+//! `policy` in the audit trail with their class. After a tainted
 //! mail read, reads, memory, workspace writes and an own event still run free;
 //! sends, invites, deletes, unknown tools, an IBAN-carrying fetch, the shell
 //! and owner ask rules keep the card, and `approvals = "ask"` cards every ask.
@@ -262,7 +262,7 @@ async fn t3_auto_still_shows_a_card_for_a_send() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t4_a_tainted_local_write_runs_free_and_keeps_its_taint() {
     // An owner-allowed web page brings outside content into the turn; the
-    // next write still runs without a card (ACT-FREE), audited as tainted.
+    // next write still runs without a card, audited as tainted.
     let head = "default_agent = \"main\"\n\n[[rules]]\nagent = \"main\"\ntool = \"web_page\"\n\
                 action = \"allow\"";
     let script = vec![note(), call("web_page", json!({})), note(), done()];
@@ -341,7 +341,7 @@ async fn t7_the_audit_marks_an_auto_approved_call_as_auto() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_shell_always_asks_even_for_a_plain_read() {
-    // `auto` alone never runs the shell; the judge (SHELL-JUDGE) is off here.
+    // `auto` alone never runs the shell; the judge is off here.
     let rm = call("shell", json!({ "command": "rm -rf notes" }));
     let redirect = call("shell", json!({ "command": "cat x > y" }));
     let rig = Rig::run(
@@ -372,7 +372,7 @@ async fn a_delegated_result_taints_the_chiefs_next_write() {
     ));
     script.push(done());
     let rig = Rig::run("default_agent = \"aux\"", "aux", script);
-    // The write runs free (ACT-FREE) but the delegate's result tainted it.
+    // The write runs free but the delegate's result tainted it.
     assert_eq!(rig.auto(), ["delegate", "write_file"]);
     assert!(rig.cards().is_empty(), "{:?}", rig.cards());
     assert_eq!(rig.rows("tool.decision").last().unwrap()["tainted"], true);
@@ -395,7 +395,7 @@ fn bare(name: &str) -> ChatResponse {
 
 const AUX: &str = "default_agent = \"aux\"";
 
-/// CAL-BLANK-CREATE: the calendar agent definition the one-call skill needs.
+/// The calendar agent definition the one-call skill needs.
 const CREATE_ONLY_AGENT: &str = "---
 name: calendar
 tools: [calendar.create_event]
@@ -403,7 +403,7 @@ tools: [calendar.create_event]
 Create test agent.
 ";
 
-/// CAL-BLANK-CREATE: a one-call create skill, so `auto` answers the run card
+/// A one-call create skill, so `auto` answers the run card
 /// by the create's own class.
 const CREATE_ONLY_SKILL: &str = "---
 name: create-focus
@@ -487,7 +487,7 @@ async fn a2b_an_owner_deny_beats_the_generated_calendar_write_ask() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a2c_a_blank_calendar_on_a_create_is_the_default_and_stays_card_free() {
-    // CAL-BLANK-CREATE: the Calendar create is skill-only, so the run card is
+    // The Calendar create is skill-only, so the run card is
     // the one `auto` answers by the create's class. An absent or blank
     // `calendar` means the default; a named calendar keeps the card.
     let run = |calendar: Option<&str>| {
@@ -621,7 +621,7 @@ async fn a5_logging_a_call_runs_free_after_outside_content_and_a_send_still_asks
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r1_the_chief_reads_a_local_file_without_a_card() {
-    // ACT-FREE-REGRESS-1: "Aux may read a file — allow…" on 2026-10-28.
+    // A local file read needs no card.
     let read = call("read_file", json!({ "path": "note.txt" }));
     let rig = Rig::seeded(AUX, "aux", vec![read, done()], |_, home| {
         let workspace = aux_engine::soul::workspace_dir(home, "aux");
@@ -739,7 +739,7 @@ fn cancel_at_card(message: &str, refuses: bool) {
         assert_eq!(answers[0]["id"], card["id"], "{message}: not denied");
         assert_eq!(answers[0]["decision"], "deny", "{message}: {answers:?}");
     } else {
-        // CARD-NEVER-BLOCKS: anything else is a normal turn beside the card.
+        // Anything else is a normal turn beside the card.
         assert_eq!(response.status, 200, "{message}: {}", response.body);
         assert!(
             response.body.contains("Noted."),
@@ -796,7 +796,7 @@ async fn cancel_at_card_withdraws_the_waiting_card_at_once() {
     cancel_at_card("send it", false);
 }
 
-/// CARD-NEVER-BLOCKS: a Calendar thread whose skill run waits on its card
+/// A Calendar thread whose skill run waits on its card
 /// ("Work" keeps the card), then `after` for the turns that follow.
 fn skill_card(after: Vec<ChatResponse>) -> (Arc<Rig>, std::thread::JoinHandle<u16>, Value) {
     let mut script = vec![ChatResponse::assistant("Hello.")];

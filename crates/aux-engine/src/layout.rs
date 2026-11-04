@@ -1,4 +1,4 @@
-//! One-time move of the pre-WO-07 `dots/` folder to `agents/`.
+//! One-time move of the legacy `dots/` folder to `agents/`.
 //!
 //! Runs at daemon and CLI startup, before anything creates `agents/`. The move
 //! is one same-filesystem `rename`, so it is atomic. When both folders exist,

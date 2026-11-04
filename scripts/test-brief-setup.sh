@@ -141,7 +141,7 @@ status="$(cli brief status 2>&1)" || red "aux brief status failed: $status"
 STEP="brief"
 brief="$(cli brief now 2>"$WORK/brief.err")" || red "aux brief now failed: $(head -c 300 "$WORK/brief.err")"
 # The mail section counts the unread mails of the simulated mailbox. The
-# wording is BriefUnreadMany ("{0} unread"), changed by #245 from
+# wording is BriefUnreadMany ("{0} unread"), changed from
 # "new message(s)."; the demo set holds twelve mails, four of them read.
 grep -qxF "$EXPECT_UNREAD unread" <<<"$brief" || red "no mail section: $(head -c 300 <<<"$brief")"
 # The mail line itself, sender and all: the name alone could also come from

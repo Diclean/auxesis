@@ -154,7 +154,7 @@ enum AppEnvironment {
         let client = AuxdClient(endpoint: endpoint)
         let userHome = EndpointResolver.osHomeDirectory() ?? FileManager.default.homeDirectoryForCurrentUser
         let service = ServiceSupervisor(bundleURL: Bundle.main.bundleURL, home: endpoint.home, userHome: userHome)
-        // English only for now (owner, 2026-10-11); French slots fall back.
+        // English only for now; French slots fall back.
         let store = Store(transport: client, language: .en, defaults: .standard, endpoint: endpoint, service: service)
         // On by default (no settings flag exists yet). `start()` itself refuses
         // a non-loopback endpoint, so a hostile resolver can never point the

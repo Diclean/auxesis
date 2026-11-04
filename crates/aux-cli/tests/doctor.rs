@@ -546,12 +546,12 @@ fn doctor_survives_closed_stdout() {
 }
 
 #[test]
-fn doctor_hints_at_the_chief_for_a_bare_legacy_main() {
+fn doctor_gives_no_legacy_hint_now_that_main_is_the_chief() {
     let dir = tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(home.join("config.toml"), "default_dot = \"main\"\n").unwrap();
     let stdout = String::from_utf8_lossy(&doctor(&home, dead_port()).stdout).into_owned();
     let hint = "default agent: main — your default agent is 'main'; set default_agent = \"aux\"";
-    assert!(stdout.contains(hint), "{stdout}");
+    assert!(!stdout.contains(hint), "{stdout}");
 }

@@ -6,9 +6,9 @@
 //! cancellation token. Cancellation sends `session/cancel` (which makes every
 //! pending broker handler answer `cancelled`) and then kills the process tree.
 //!
-//! A0 note: the streaming `message.delta` adapter lands with PR #22; until
-//! then the client accumulates `agent_message_chunk` text and the backend
-//! emits one final assistant message (`TODO(streaming-1)` in `backend.rs`).
+//! The streaming `message.delta` adapter is not here yet; until then the
+//! client accumulates `agent_message_chunk` text and the backend emits one
+//! final assistant message.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -271,7 +271,7 @@ impl AcpClient {
                         method::SESSION_CANCEL,
                         json!({"sessionId": session_id}),
                     );
-                    // P2-1: a final burst that raced the cancel is still
+                    // A final burst that raced the cancel is still
                     // observed before the turn is reported over.
                     self.drain_queued_updates(&state, &mut prompt_state, output_cap, observer);
                     return Err(AcpError::Cancelled);
@@ -1105,7 +1105,7 @@ mod tests {
         assert!(turn_state.is_tainted());
     }
 
-    /// The streaming port contract (WF-1): for every split of the registered
+    /// The streaming port contract: for every split of the registered
     /// canary — raw, hex, percent-encoded and zero-width-interleaved — the
     /// concatenation of the emitted prefixes and the final flush is exactly
     /// the whole-buffer scrub of the accumulated text.

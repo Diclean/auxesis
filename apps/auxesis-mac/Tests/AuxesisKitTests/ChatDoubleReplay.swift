@@ -1,4 +1,4 @@
-// CHAT-DOUBLE-1: a sandbox auxd's real frames and send responses (cloud test brain), renamed to scout/7.
+// A sandbox auxd's real frames and send responses (cloud test brain), renamed to scout/7.
 enum ChatDoubleReplay {
     static let plainFrames = #"""
 {"type":"message.new","agent":"scout","message":{"id":"1","thread_id":"7","author":{"kind":"you"},"ts":1792413661000,"blocks":[{"kind":"text","text":"Hi Aux, say hello in one short sentence."}],"streaming":false,"pending":false,"run_id":"turn-1-58932-1792413661240014000-0"}}

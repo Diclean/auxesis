@@ -1,4 +1,4 @@
-//! The skill loader (WO-09).
+//! The skill loader.
 //!
 //! A skill is a Markdown file with YAML front matter under
 //! `<agent dir>/skills/`. This module reads `agent.md` (with the `soul.md` /

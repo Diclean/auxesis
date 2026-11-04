@@ -1,4 +1,4 @@
-//! The Clients destination (WO E3).
+//! The Clients destination.
 //!
 //! | Method | Path | Answer |
 //! |---|---|---|

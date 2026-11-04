@@ -1,4 +1,4 @@
-// Today (M2): the live client's `GET /v1/brief/today` and the Today state on a
+// Today: the live client's `GET /v1/brief/today` and the Today state on a
 // daemon without that route, over a stubbed URL protocol. No socket, no
 // fixture daemon, no real token: the token file lives in a temp home.
 import Foundation

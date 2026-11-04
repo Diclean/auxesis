@@ -26,7 +26,7 @@ import Testing
         XCTAssertEqual(health.version, "0.1.0")
         XCTAssertEqual(health.pid, 4242)
         XCTAssertTrue(health.firstRun)
-        // The fixture predates G4: a service without the field reads as not
+        // A service without the Google connection field reads as not
         // connected instead of failing the whole snapshot.
         XCTAssertFalse(health.googleConnected)
     }
@@ -188,7 +188,7 @@ import Testing
         }
     }
 
-    // MARK: Wire tolerance defaults (breaker survivor M4)
+    // MARK: Wire tolerance defaults
 
     func testAgentSummaryMissingEnabledDefaultsToEnabled() throws {
         let data = Data(#"{"name":"solo"}"#.utf8)

@@ -3,7 +3,7 @@ import XCTest
 @testable import AuxesisKit
 
 /// A chat send waiting on an approval card must outlast the daemon's turn cap:
-/// a 30 s client give-up cancelled the turn and cleared the card (TOOL-HANG).
+/// a 30 s client give-up cancelled the turn and cleared the card.
 @objcMembers @MainActor final class ChatSendTimeoutTests: XCTestCase {
     func testChatSendOutlastsTheDaemonTurnCapWhileOtherCallsStayShort() throws {
         let home = FileManager.default.temporaryDirectory

@@ -1,6 +1,6 @@
 //! Deterministic, offline-first morning brief generation.
 //!
-//! M0 deliberately ships only fake sources. The closed [`BriefSource`] seam
+//! This crate deliberately ships only fake sources. The closed [`BriefSource`] seam
 //! keeps calendar, weather and mail-header reads replaceable when real
 //! integrations arrive. Source text is data: this crate has no tool loop,
 //! prompt, network client or write-capable action.
@@ -41,7 +41,7 @@ pub struct WeatherSummary {
     pub temperature_c: Option<i16>,
 }
 
-/// Mail headers only; no body field exists in the M0 contract.
+/// Mail headers only; no body field exists in this contract.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailHeader {
     pub sender: String,
@@ -89,7 +89,7 @@ pub fn now_local() -> DateTime<Local> {
     Local::now()
 }
 
-/// Fixed offline fixtures used by M0, tests, and `aux brief now`.
+/// Fixed offline fixtures used by tests and `aux brief now`.
 #[derive(Debug, Clone, Default)]
 pub struct FakeBriefSource {
     /// Optional source name to fail, useful in tests (`calendar`, `weather`,
@@ -178,7 +178,7 @@ impl BriefError {
 }
 
 /// Run one brief with a source, a notifier and the caller's local `now`.
-/// `source_read_budget` is clamped to the M0 maximum of three source calls.
+/// `source_read_budget` is clamped to the maximum of three source calls.
 pub fn run_once<F>(
     store: &Store,
     source: &dyn BriefSource,

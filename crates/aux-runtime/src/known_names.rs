@@ -1,8 +1,8 @@
 //! The owner's contacts, as the privacy gate and the skill recipient policy see them.
 //!
 //! One [`ContactIndex`] feeds both consumers: [`names_dictionary`] compiles the
-//! names a gate matches (since 2026-10-19 a private gate drops those matches and
-//! hides no name, and the local name model is no longer mounted), and the same index is the
+//! names a gate matches (a private gate drops those matches and hides no name,
+//! and the local name model is no longer mounted), and the same index is the
 //! `known-contacts` directory of a skill run. A session reads the index once, at
 //! start, so a session never mixes two versions of the contacts.
 //!
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_known_contact_name_passes_in_private_and_its_address_is_masked() {
-        // NAMES-OFF (owner, 2026-10-19): a private gate hides no name.
+        // A private gate hides no name.
         let mut contacts = ContactIndex::new();
         contacts.add_from_header("Camille Exemple", "camille.exemple@example.invalid");
         let names = names_dictionary(&contacts).unwrap();

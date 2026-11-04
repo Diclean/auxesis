@@ -228,6 +228,19 @@ public enum JobHealth: String, Equatable {
     }
 }
 
+/// What kind of problem a job's health reason describes. Older daemons send
+/// no kind; an unknown or missing value reads as `nil` so the app falls back
+/// to the daemon's own sentence.
+public enum JobReasonKind: String, Equatable {
+    case missed, failed, hung, interrupted
+
+    public init?(raw: String?) {
+        let kind = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let kind, let parsed = JobReasonKind(rawValue: kind) else { return nil }
+        self = parsed
+    }
+}
+
 /// One `GET /v1/jobs` row: the Ledger's Planned tab.
 public struct PlannedJob: Equatable, Decodable, Identifiable {
     public let id: Int
@@ -237,11 +250,17 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
     public let enabled: Bool
     public let nextRunAt: String?
     public let health: JobHealth
-    /// The daemon's own words, e.g. "Morning brief failed at 07:02".
+    /// The daemon's own words, e.g. "Morning brief failed at 07:02". Kept as
+    /// the fallback for daemons that send no structured reason.
     public let reason: String?
+    /// The structured kind; nil on older daemons or for an unknown value.
+    public let reasonKind: JobReasonKind?
+    /// Local `HH:MM` the reason refers to; nil when it has no time.
+    public let reasonAt: String?
 
     public init(id: Int, agent: String, name: String, schedule: String, enabled: Bool = true, nextRunAt: String? = nil,
-                health: JobHealth = .unknown, reason: String? = nil) {
+                health: JobHealth = .unknown, reason: String? = nil,
+                reasonKind: JobReasonKind? = nil, reasonAt: String? = nil) {
         self.id = id
         self.agent = agent
         self.name = name
@@ -250,11 +269,15 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
         self.nextRunAt = nextRunAt
         self.health = health
         self.reason = reason
+        self.reasonKind = reasonKind
+        self.reasonAt = reasonAt
     }
 
     enum CodingKeys: String, CodingKey {
         case id, agent, name, schedule, enabled, health, reason
         case nextRunAt = "next_run_at"
+        case reasonKind = "reason_kind"
+        case reasonAt = "reason_at"
     }
 
     public init(from decoder: Decoder) throws {
@@ -268,6 +291,60 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
         health = JobHealth(raw: try? c.decode(String.self, forKey: .health))
         let said = (try? c.decode(String.self, forKey: .reason))?.trimmingCharacters(in: .whitespacesAndNewlines)
         reason = said?.isEmpty == false ? said : nil
+        reasonKind = JobReasonKind(raw: try? c.decode(String.self, forKey: .reasonKind))
+        let at = (try? c.decode(String.self, forKey: .reasonAt))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        reasonAt = at?.isEmpty == false ? at : nil
+    }
+}
+
+/// Effective daily caps of one agent on `GET /v1/usage` (`nil` = uncapped).
+/// Missing keys, `null` and an older daemon all read as "no cap": no bar.
+public struct UsageCaps: Equatable, Decodable {
+    public let tokensIn: UInt64?
+    public let tokensOut: UInt64?
+    public let usdCents: UInt64?
+
+    public init(tokensIn: UInt64? = nil, tokensOut: UInt64? = nil, usdCents: UInt64? = nil) {
+        self.tokensIn = tokensIn
+        self.tokensOut = tokensOut
+        self.usdCents = usdCents
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case tokensIn = "tokens_in"
+        case tokensOut = "tokens_out"
+        case usdCents = "usd_cents"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tokensIn = try? c.decode(UInt64.self, forKey: .tokensIn)
+        tokensOut = try? c.decode(UInt64.self, forKey: .tokensOut)
+        usdCents = try? c.decode(UInt64.self, forKey: .usdCents)
+    }
+
+    public var isUnset: Bool { tokensIn == nil && tokensOut == nil && usdCents == nil }
+}
+
+/// One agent row of `GET /v1/usage`.
+public struct UsageAgent: Equatable, Decodable {
+    public let agent: String
+    public let totals: UsageTotals
+    public let caps: UsageCaps?
+
+    public init(agent: String, totals: UsageTotals = UsageTotals(), caps: UsageCaps? = nil) {
+        self.agent = agent
+        self.totals = totals
+        self.caps = caps
+    }
+
+    enum CodingKeys: String, CodingKey { case agent, totals, caps }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agent = (try? c.decode(String.self, forKey: .agent)) ?? ""
+        totals = (try? c.decode(UsageTotals.self, forKey: .totals)) ?? UsageTotals()
+        caps = try? c.decode(UsageCaps.self, forKey: .caps)
     }
 }
 
@@ -275,18 +352,21 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
 public struct UsageDay: Equatable, Decodable {
     public let day: String
     public let total: UsageTotals
+    public let agents: [UsageAgent]
 
-    public init(day: String, total: UsageTotals) {
+    public init(day: String, total: UsageTotals, agents: [UsageAgent] = []) {
         self.day = day
         self.total = total
+        self.agents = agents
     }
 
-    enum CodingKeys: String, CodingKey { case day, total }
+    enum CodingKeys: String, CodingKey { case day, total, agents }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         day = (try? c.decode(String.self, forKey: .day)) ?? ""
         total = (try? c.decode(UsageTotals.self, forKey: .total)) ?? UsageTotals()
+        agents = (try? c.decode([UsageAgent].self, forKey: .agents)) ?? []
     }
 }
 

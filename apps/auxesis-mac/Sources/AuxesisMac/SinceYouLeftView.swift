@@ -189,11 +189,11 @@ struct SinceYouLeftDetailView: View {
     @Environment(\.language) private var language
     let entry: LedgerEntry
     private var detail: SinceYouLeftDetail { SinceYouLeftDetail(entry: entry) }
-    // The ledger has no stable proposal id yet (UI3-6b); a text match would guess, so no link is offered.
+    // The ledger has no stable proposal id yet; a text match would guess, so no link is offered.
     private var matchingApproval: Approval? { nil }
     var body: some View {
         // Scrolls, like the other record details: the wrapped title's height follows the
-        // column's width, and unscrolled it fed the window a layout loop (SINCE-LEFT-CRASH-1).
+        // column's width, and unscrolled it fed the window a layout loop.
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text(LedgerText.what(entry, language: language))

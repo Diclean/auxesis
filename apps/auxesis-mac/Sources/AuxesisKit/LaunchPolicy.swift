@@ -9,7 +9,7 @@
 //
 // The owner's deploy launches the app with `open -g -j`: in the background and
 // hidden, so a deploy never pulls the owner out of what they are doing. That
-// launch must not activate the app either (APP-FOCUS-1). It is told apart by
+// launch must not activate the app either. It is told apart by
 // the launch itself, not by the environment (Finder and `open` pass none):
 // LaunchServices hides the app for `-j` and leaves it inactive for `-g`, and
 // `--background` says it outright.

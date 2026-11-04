@@ -401,7 +401,7 @@ import Foundation
 
     // MARK: - The EventKit-free write plan
 
-    /// CAL-DEFAULT-ID (r1): the writer checks the live event against the
+    /// The writer checks the live event against the
     /// facts the write's approval rested on. A guest added, or a calendar
     /// moved, refuses the write; unchanged, the write goes out.
     func testTheWriterRefusesAWriteWhoseFactsChanged() {
@@ -426,7 +426,7 @@ import Foundation
             .save)
     }
 
-    /// CAL-DEFAULT-ID (r2): a recurring event, or a detached occurrence of
+    /// A recurring event, or a detached occurrence of
     /// one, never takes the approval-free path. EventKit's lookup can return
     /// the first occurrence, not the one the copy saw, so the check and the
     /// save could land on another occurrence.
@@ -444,7 +444,7 @@ import Foundation
             .save)
     }
 
-    /// CAL-DEFAULT-ID (r1): the daemon's expectations reach the writer.
+    /// The daemon's expectations reach the writer.
     func testTheBridgeHandsTheExpectedFactsToTheWriter() async throws {
         let request = BridgeRequest(
             id: "req-1", op: "eventkit.update_event",

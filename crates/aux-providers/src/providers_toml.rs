@@ -670,7 +670,7 @@ pub fn migrate_legacy_config(home: &Path, today: &str) -> Result<MigrationOutcom
     };
     let serialized = toml::to_string_pretty(&file).map_err(|err| invalid(err.to_string()))?;
     let commented = comment_out_legacy_providers(&text, today);
-    // J-02 write gateway: both files are written relative to the verified home
+    // The write gateway: both files are written relative to the verified home
     // directory fd, never through the home path string, under the shared config
     // lock. `providers.toml` goes first: if the config rewrite failed after it,
     // the next start is already migrated (idempotent), so no entry is lost.
@@ -748,7 +748,7 @@ hints = { cheap = "deepseek/deepseek-chat" }
 
     #[test]
     fn a_validation_error_never_quotes_a_secret_id_or_url_value() {
-        // CONFIG-ERR-ECHO-2: a key in the URL stays out of the error.
+        // A key in the URL stays out of the error.
         let ollama = "kind = \"ollama\"\nbase_url";
         for (text, kept) in [
             (
@@ -787,7 +787,7 @@ hints = { cheap = "deepseek/deepseek-chat" }
 
     #[test]
     fn a_percent_encoded_key_never_shows_in_a_provider_url_or_id() {
-        // CONFIG-ERR-ECHO-2 (review): `%73k-…` is the same key as `sk-…`, and
+        // `%73k-…` is the same key as `sk-…`, and
         // so are `%2573k-…` (encoded twice) and `%53K-…` (the same bytes,
         // another case). None of them may reach the error.
         for canary in [
@@ -823,7 +823,7 @@ hints = { cheap = "deepseek/deepseek-chat" }
 
     #[test]
     fn a_key_hidden_however_many_times_it_is_encoded_never_shows() {
-        // CONFIG-ECHO-DECODE-LOOP: `%25252573k-…` is the same key as `sk-…`,
+        // `%25252573k-…` is the same key as `sk-…`,
         // four escape layers deep, and `%252525252573k-…` six layers deep. The
         // decoder peels every layer, so neither reaches the error, in the URL
         // or as the provider id.
@@ -891,7 +891,7 @@ pasted_secret = "sk-nope"
 
     #[test]
     fn a_parse_error_names_the_file_and_line_never_the_text() {
-        // CONFIG-ERR-ECHO-1: a broken line, a pasted key and a bad value.
+        // A broken line, a pasted key and a bad value.
         let base = "[[provider]]\nid = \"deepseek\"\nkind = \"openai\"\n";
         for line in [
             "api_key = \"sk-CANARY-1234567890abcdef\n",

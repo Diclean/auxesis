@@ -286,7 +286,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .merge(super::clients::routes())
         // Private-mode iMessage answers held in memory (PRIV-IMSG).
         .merge(super::private_answers::routes())
-        // Import clients from a contacts file (WO-CRMIO-1).
+        // Import clients from a contacts file.
         .merge(super::contacts::routes())
         .route("/v1/screen", get(screen_not_implemented))
         .route("/v1/audit/{id}", get(audit_not_implemented))
@@ -298,7 +298,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
         ))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         // Outermost: a non-loopback Host or a cross-origin browser request
-        // is refused before auth and before any route (F-17/C P3-2).
+        // is refused before auth and before any route.
         .layer(middleware::from_fn(security::validate_host_origin))
         .with_state(state)
 }
@@ -1961,7 +1961,7 @@ async fn resolve_approval(
             // `append_rule` is a read-modify-write of `config.toml`; it takes
             // the same shared lock so it cannot be lost to a concurrent
             // settings rewrite (P2, #133), and the `<home>/.config.lock` file
-            // lock extends that to writers in other processes (security review P2).
+            // lock extends that to writers in other processes.
             let _guard = config_write
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2012,12 +2012,31 @@ async fn resolve_approval(
         }
     }
 
+    // A grants change is rechecked and written *before* the card resolves, so
+    // a write the chief ceiling refuses is broadcast as denied, never allowed.
+    let (resolution, state_frame, decision, grants_refusal) =
+        if grants_approval && decision == "allow_once" {
+            match apply_grants_proposal(&state.home, &id).await {
+                None => (resolution, state_frame, decision, None),
+                Some((audit_decision, response)) => (
+                    super::approval::Resolution::deny(),
+                    ApprovalStateFrame::Denied {
+                        by: "error".to_string(),
+                    },
+                    audit_decision,
+                    Some(response),
+                ),
+            }
+        } else {
+            (resolution, state_frame, decision, None)
+        };
+
     // Finish on a blocking thread, under the registry lock: the audit row and
     // the `approval.resolved` frame are out *before* the turn wakes, so
     // `resolved` always precedes `tool.end`/`message.done`. `complete_with`
     // returns `Abandoned` when the turn already gave up (the timeout grace
     // expired); then nothing is broadcast and the answer is reported as
-    // expired instead of `allowed` (RV2-01).
+    // expired instead of `allowed`.
     let db_path = state.db_path.clone();
     let events = state.events.clone();
     let id_for_effects = id.clone();
@@ -2046,41 +2065,11 @@ async fn resolve_approval(
 
     match completion {
         Ok(super::approval::Completion::Delivered) => {
-            if grants_approval {
-                match decision {
-                    "allow_once" => {
-                        if let Some(crate::agents::GrantsProposal { agent, grants, .. }) =
-                            crate::agents::take_proposal(&id)
-                        {
-                            let home = state.home.clone();
-                            let write = tokio::task::spawn_blocking(move || {
-                                crate::agents::write_grants(&home, &agent, &grants)
-                            })
-                            .await;
-                            let failed = match write {
-                                Ok(Ok(())) => false,
-                                Ok(Err(err)) => {
-                                    tracing::warn!(error = %err, "applying an approved grants change failed");
-                                    true
-                                }
-                                Err(err) => {
-                                    tracing::warn!(error = %err, "joining the grants writer");
-                                    true
-                                }
-                            };
-                            if failed {
-                                return error::error_response(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "grants_write_failed",
-                                    "the approved grants change could not be saved; nothing was applied",
-                                    None,
-                                );
-                            }
-                        }
-                    }
-                    "deny" => crate::agents::drop_proposal(&id),
-                    _ => {}
-                }
+            if let Some(response) = grants_refusal {
+                return response;
+            }
+            if grants_approval && decision == "deny" {
+                crate::agents::drop_proposal(&id);
             }
             Json(serde_json::json!({ "state": state_frame })).into_response()
         }
@@ -2118,6 +2107,48 @@ async fn resolve_approval(
             )
         }
     }
+}
+
+/// Apply the grants proposal bound to an approval id; the chief ceiling is
+/// rechecked inside the write. `None` when applied, else nothing was applied
+/// and the audit decision plus the HTTP refusal come back.
+async fn apply_grants_proposal(
+    home: &std::path::Path,
+    id: &str,
+) -> Option<(&'static str, Response)> {
+    use crate::agents::RegistryError;
+    let (home, proposal) = (home.to_path_buf(), crate::agents::take_proposal(id));
+    let write = tokio::task::spawn_blocking(move || {
+        let proposal = proposal.ok_or_else(|| RegistryError::Io("the proposal is gone".into()))?;
+        crate::agents::apply_proposal(&home, &proposal)
+    })
+    .await;
+    let (audit, status, code, message) = match write {
+        Ok(Ok(())) => return None,
+        Ok(Err(RegistryError::ExceedsChief)) => (
+            "allow_once_grants_exceed_chief",
+            StatusCode::CONFLICT,
+            "grant_exceeds_chief",
+            "the permissions changed while this approval was pending; nothing was applied",
+        ),
+        Ok(Err(RegistryError::GrantsChanged)) => (
+            "allow_once_grants_changed",
+            StatusCode::CONFLICT,
+            "grants_changed",
+            "the grants changed since this change was proposed; nothing was applied",
+        ),
+        failed => {
+            let error = failed.map(|result| result.err().map(|err| err.to_string()));
+            tracing::warn!(error = ?error.map_err(|err| err.to_string()), "applying an approved grants change failed");
+            (
+                "allow_once_grants_write_failed",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "grants_write_failed",
+                "the approved grants change could not be saved; nothing was applied",
+            )
+        }
+    };
+    Some((audit, error::error_response(status, code, message, None)))
 }
 
 /// Internal channel entry point for Telegram's two-button approval card.
@@ -2212,7 +2243,7 @@ fn invalid_scope(message: &'static str) -> Response {
 }
 
 /// Blocking `approval.answered` audit write. Callers run it on a blocking
-/// thread (`spawn_blocking`), never directly on a tokio worker (RV2-06).
+/// thread (`spawn_blocking`), never directly on a tokio worker.
 ///
 /// `edited_text` is `Some` only for an `edit` decision: the scrubbed draft is
 /// stored with the answer so the journal shows exactly what the owner sent.
@@ -2269,7 +2300,7 @@ fn audit_answered_late_sync(
     }
 }
 
-/// Audit an answer for an approval whose turn was already abandoned (P2-1):
+/// Audit an answer for an approval whose turn was already abandoned:
 /// the answer is rejected with `410`, nothing was written and nothing ran.
 fn audit_answered_abandoned_sync(
     db_path: &std::path::Path,
@@ -2505,13 +2536,13 @@ async fn settings_update(State(state): State<Arc<ApiState>>, body: Bytes) -> Res
     let result = tokio::task::spawn_blocking(move || {
         // The whole read-modify-write runs under the one shared config writer
         // lock, so a concurrent provider append cannot be silently dropped by
-        // this atomic replacement (P2, #133).
+        // this atomic replacement.
         let _guard = config_write
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // The file lock extends that serialization across processes (a CLI or
         // another writer in a different process): the read below must happen
-        // inside it, never on a stale snapshot (security review P2).
+        // inside it, never on a stale snapshot.
         kernel_core::with_config_lock(&home, || {
             crate::api::load_config_verified(&home).map_err(|err| err.to_string())?;
             let handle = kernel_core::SandboxHome::open(&home).map_err(|err| err.to_string())?;

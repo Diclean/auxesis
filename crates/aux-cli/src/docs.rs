@@ -1,4 +1,4 @@
-//! `aux docs`: receipts collected from mail and their client (M5), read from the
+//! `aux docs`: receipts collected from mail and their client, read from the
 //! local `auxd` API; fields only, never a body or a file name.
 
 use std::process::ExitCode;

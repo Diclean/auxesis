@@ -14,7 +14,7 @@ use crate::scheduler::JobRunner;
 const BRIEF_JOB: &str = "morning-brief";
 const BRIEF_PAYLOAD: &str = r#"{"kind":"morning-brief","name":"morning-brief"}"#;
 const MAX_FAILURE_CHARS: usize = 240;
-/// What the phone is told when the brief fails: a fixed phrase (NOTIFY-2).
+/// What the phone is told when the brief fails: a fixed phrase.
 /// The scrubbed reason goes to the run history only.
 const BRIEF_FAILED_TITLE: &str = "Morning brief";
 const BRIEF_FAILED_BODY: &str = "Today's brief could not be made. Open Auxesis for details.";
@@ -170,7 +170,7 @@ impl JobRunner for DispatchJobRunner {
                     MAX_FAILURE_CHARS,
                 );
                 // The phone gets a fixed phrase; the reason stays in the run
-                // history (NOTIFY-2).
+                // history.
                 self.router
                     .alert_batched(&format!("{BRIEF_FAILED_TITLE}\n{BRIEF_FAILED_BODY}"));
                 return Err(reason);
@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_timeline_job_records_a_private_skip() {
-        // B3 round 5: a scheduled crm-timeline run in Private mode makes no
+        // A scheduled crm-timeline run in Private mode makes no
         // network call (the integration test proves the zero dial) and the
         // scheduler records the skip reason in the run row.
         let dir = tempdir().unwrap();

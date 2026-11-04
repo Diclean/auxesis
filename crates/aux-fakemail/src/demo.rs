@@ -245,7 +245,7 @@ fn mail(
     }
 }
 
-/// The receipt's PDF: a real, minimal one-page PDF (DOC-COLLECT-2).
+/// The receipt's PDF: a real, minimal one-page PDF.
 ///
 /// Before, the attachment was a `%PDF-1.4` header followed by plain text: not
 /// a PDF at all, so PDFKit refused it and the document stayed empty ("other,
@@ -273,7 +273,7 @@ const RECEIPT_PDF: &str = concat!(
     "trailer\r\n<< /Size 6 /Root 1 0 R >>\r\nstartxref\r\n558\r\n%%EOF\r\n",
 );
 
-/// An invoice receipt with a small PDF attachment (for the M5 document flow).
+/// An invoice receipt with a small PDF attachment (for the document flow).
 ///
 /// The attachment is a real PDF (see [`RECEIPT_PDF`]): the Mac bridge reads
 /// its text layer, so the receipt carries the invoice number and the amount

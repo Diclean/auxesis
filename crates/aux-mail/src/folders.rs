@@ -1,5 +1,5 @@
 //! Folder discovery: `LIST`, the EN/FR/DE localisation map, and `INBOX.*`
-//! flattening (slice M3).
+//! flattening.
 //!
 //! The map is deliberately small and explicit. It never *opens* a folder; it
 //! only proposes the user-facing role (`inbox`, `sent`, …) for a server name so

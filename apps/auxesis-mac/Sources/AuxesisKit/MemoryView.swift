@@ -1,4 +1,4 @@
-// "What Aux knows" (MEM-UI-1): the memory page's wire shapes and its state.
+// "What Aux knows": the memory page's wire shapes and its state.
 // The daemon owns the store; the app only reads, edits and forgets. The wire
 // is a grouped view, one edit, one delete, two suggestions.
 import Foundation

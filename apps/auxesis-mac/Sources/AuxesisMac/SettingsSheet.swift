@@ -518,6 +518,12 @@ private struct BudgetsTab: View {
         Lede(text: copy(.budgetsLede))
         FormBox {
             FormRow(first: true, title: copy(.spentToday), detail: spent(copy)) { EmptyView() }
+            ForEach(budgetRows) { agent in
+                FormRow(title: TeamMember.displayName(agent.name), detail: budgetDetail(agent, copy)) {
+                    BudgetMeter(used: agent.budgetUsed, hit: agent.budgetHit)
+                }
+                .accessibilityIdentifier("settings-budget-\(agent.name)")
+            }
             FormRow(title: copy(.capsTitle), detail: copy(.capsHint)) { EmptyView() }
         }
         FormBox {
@@ -538,6 +544,22 @@ private struct BudgetsTab: View {
         .onAppear { shell.loadUsage() }
     }
 
+    /// One row per capped agent; `Store.applyUsage` has already set the ratio.
+    private var budgetRows: [Agent] {
+        guard case .loaded(let day) = shell.usage else { return [] }
+        let capped = Set(day.agents.filter { $0.caps?.isUnset == false }.map(\.agent))
+        return shell.store.agents.filter { capped.contains($0.name) }
+    }
+
+    private func budgetDetail(_ agent: Agent, _ copy: Copy) -> String {
+        let percent = copy.f(.budgetUsedPercent, Self.percent(agent.budgetUsed))
+        return agent.budgetHit ? percent + " · " + copy(.budgetCapHit) : percent
+    }
+
+    static func percent(_ ratio: Double) -> Int {
+        min(100, max(0, Int((ratio * 100).rounded())))
+    }
+
     private func spent(_ copy: Copy) -> String {
         switch shell.usage {
         case .loaded(let day):
@@ -554,5 +576,23 @@ private struct BudgetsTab: View {
         formatter.numberStyle = .decimal
         formatter.locale = Locale(identifier: "en_US")
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+}
+
+/// A 64×4 daily-cap bar: ink while there is room, amber only on attention
+/// (the daemon's 80 % line or a reached cap). The row's words carry the meaning.
+private struct BudgetMeter: View {
+    let used: Double
+    let hit: Bool
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        Capsule().fill(palette.line.color)
+            .overlay(alignment: .leading) {
+                Capsule().fill(hit || used >= 0.8 ? palette.amber.color : palette.ink3.color)
+                    .frame(width: 64 * min(1, max(0.03, used)))
+            }
+            .frame(width: 64, height: 4)
+            .accessibilityHidden(true)
     }
 }

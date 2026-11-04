@@ -1,9 +1,9 @@
-//! MAIL-UNKNOWN-CONTACT-1: someone the owner names who is not in Clients may
+//! Someone the owner names who is not in Clients may
 //! still have written to the owner. The address then comes from the `From` of
 //! a received INBOX mail, never from a body, and the card says so. The card is
 //! still asked and the recipient check still runs, for that one address only.
 //!
-//! MAILBOX-LOOKALIKE-HARDEN: that `From` is attacker text: only an address
+//! That `From` is attacker text: only an address
 //! the owner wrote to may be picked. With no readable Sent folder there is no
 //! such evidence, so nothing from the mailbox is picked.
 

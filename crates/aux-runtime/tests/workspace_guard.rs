@@ -1,6 +1,5 @@
-//! Item (C) + K-01 + GLM-P1-2: every workspace **binary target** must call the
-//! one shared sandbox guard, `kernel_core::ensure_sandbox_guard`, before it reads
-//! or creates anything.
+//! Every workspace **binary target** must call the one shared sandbox guard,
+//! `kernel_core::ensure_sandbox_guard`, before it reads or creates anything.
 //!
 //! The target list comes from `cargo metadata` (every package, every `bin`
 //! target, including `src/bin/<name>/main.rs` auto-discovery and `[[bin]]`
@@ -8,9 +7,9 @@
 //! binary fails this test.
 //!
 //! The exemptions are exact `(package, target path)` pairs for **test-only**
-//! JSON-RPC fixtures with no home access: the ACP stdio fake agent (K-01, #28)
-//! and the MCP stdio fake server (#111). Matching is on package + path, so
-//! another package cannot inherit an exception by name.
+//! JSON-RPC fixtures with no home access: the ACP stdio fake agent and the MCP
+//! stdio fake server. Matching is on package + path, so another package cannot
+//! inherit an exception by name.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -124,7 +123,7 @@ fn workspace_relative(source: &Path, root: &Path) -> String {
 
 /// Exact `(package, workspace-relative path)` exemption match: equality, not
 /// a suffix. A second bin named `.../src/bin/acp_fake_agent.rs` under another
-/// directory (or in another package) is NOT exempt (security review round-4 P2).
+/// directory (or in another package) is NOT exempt.
 fn is_exempt_bin(package: &str, workspace_relative_path: &str) -> bool {
     EXEMPT_TEST_ONLY_BINS
         .iter()

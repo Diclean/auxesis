@@ -1,4 +1,4 @@
-//! NOTIFY-TEST: `POST /v1/notify/test` sends one fixed text through the
+//! `POST /v1/notify/test` sends one fixed text through the
 //! brief's notify router, from auxd itself.
 //!
 //! Sandbox only: a temp home and a fake sink. No gateway, no Messages, no

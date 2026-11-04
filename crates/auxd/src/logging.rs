@@ -1,4 +1,4 @@
-//! Size cap for the daemon's log output (F-17, audit C P3-5).
+//! Size cap for the daemon's log output.
 //!
 //! `aux install` points launchd's `StandardOutPath`/`StandardErrorPath` at
 //! `~/.auxesis/logs/auxd.log` and nothing rotates it. A *persistent* failure
@@ -83,10 +83,10 @@ impl<W: Write> Write for CappedWriter<W> {
             // caps.
             return Ok(input_len);
         }
-        // F-03/B2: a log record is still a surface. Error strings logged by
+        // A log record is still a surface. Error strings logged by
         // the daemon can quote store or provider text, so every record runs
         // through the shared pattern redactor as the API previews do.
-        // P3 batch-2: [`kernel_broker::redact_log_line`] adds the identity layer
+        // [`kernel_broker::redact_log_line`] adds the identity layer
         // (WhatsApp JIDs and runs of eight or more digits), because the
         // `whatsapp-rust` stack logs peer numbers at INFO regardless of the
         // filter. Invalid UTF-8 (a formatter mid-codepoint split) passes
@@ -108,7 +108,7 @@ impl<W: Write> Write for CappedWriter<W> {
             );
             let _ = state.inner.flush();
         }
-        // H-01: always report the *input* length. `Write::write` reports how
+        // Always report the *input* length. `Write::write` reports how
         // many bytes of `buf` were consumed, and `tracing`'s fmt layer calls
         // `write_all`: returning the scrubbed length made it re-send
         // `buf[scrubbed_len..]`, which is the raw tail of a record whose
@@ -154,8 +154,8 @@ mod tests {
     #[test]
     fn log_records_are_scrubbed_of_secret_shapes() {
         // A daemon error line can quote store or provider text; the log file
-        // is a surface too (F-03/B2). B3-03: the writer runs the *shared*
-        // entry point, so the normalise layer (invisible/fullwidth folding)
+        // is a surface too. The writer runs the *shared* entry point, so the
+        // normalise layer (invisible/fullwidth folding)
         // applies here exactly as on the API surfaces.
         let mut out = Vec::new();
         let mut writer = CappedWriter::new(&mut out, 4096);
@@ -169,9 +169,8 @@ mod tests {
         assert!(!text.contains("CANARYLOG02"), "{text}");
         assert!(text.contains("<redacted>"), "{text}");
 
-        // The round-3 spellings: the normalise layer is the only thing that
-        // can rescue them, and the log writer must run it like every API
-        // surface (B3-03/B3-04).
+        // More spellings: the normalise layer is the only thing that can
+        // rescue them, and the log writer must run it like every API surface.
         let round_3: &[(&str, &str)] = &[
             ("token\u{200b}=CANARYLOGR301", "CANARYLOGR301"),
             ("api_\u{200b}key=CANARYLOGR302", "CANARYLOGR302"),
@@ -248,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_record_is_consumed_once_even_when_redaction_changes_its_length() {
-        // H-01: returning the *scrubbed* length from `write` made tracing's
+        // Returning the *scrubbed* length from `write` made tracing's
         // `write_all` re-send `raw[scrubbed_len..]` — for a long secret near
         // the end of a record, that tail is the secret itself. Redaction that
         // *grows* the record (a short secret) made the old code report a

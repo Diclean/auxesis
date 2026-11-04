@@ -10,12 +10,12 @@ public struct AppleEventItem: Codable, Equatable {
     public var location: String?
     public var calendarID: String? = nil
     public var allDay: Bool? = nil
-    /// EventKit's event id and guest addresses (CAL-UPDATE-1): the daemon finds
+    /// EventKit's event id and guest addresses: the daemon finds
     /// an event to move by them, and an event whose guests are unknown keeps
     /// its card. An event with no guests sends an empty list, never none.
     public var id: String? = nil
     public var attendees: [String]? = nil
-    /// CAL-DEFAULT-ID (r2): the event is part of a recurring series, or a
+    /// The event is part of a recurring series, or a
     /// detached occurrence of one. Such an event never takes the
     /// approval-free path: EventKit's lookup can return the first occurrence,
     /// not the one the copy saw.
@@ -163,7 +163,7 @@ public enum AppleEventKitAccess: Equatable {
     func events(from start: Date, to end: Date) -> [AppleEventItem] {
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
         return store.events(matching: predicate).map { event in
-            // CAL-DEFAULT-ID (r2): a recurring event, or a detached occurrence
+            // A recurring event, or a detached occurrence
             // of one, never takes the approval-free path.
             let recurring = event.hasRecurrenceRules || event.isDetached
             return AppleEventItem(title: event.title, start: Self.iso(event.startDate),
@@ -337,9 +337,9 @@ final class SandboxRecordingEventWriter: EventWriter {
         expected: BridgeExpectations?
     ) async throws -> BridgeEventResult {
         // The update keeps its event's id and records only what changed, so
-        // the record still holds one event (CAL-UPDATE-1). A sandbox run
+        // the record still holds one event. A sandbox run
         // touches no real calendar, so there is no live event to check the
-        // expectations against (CAL-DEFAULT-ID r1).
+        // expectations against.
         let fields: [String: String?] = ["op": "update", "event_id": eventId, "title": title,
                                           "start": start, "end": end, "calendar": calendar]
         return try record(fields.compactMapValues { $0 })
@@ -495,10 +495,10 @@ actor EventKitBridgeWriter: EventWriter {
               let existingStart = event.startDate, let existingEnd = event.endDate else {
             throw BridgeFailure(code: "not_found", message: "no such event")
         }
-        // CAL-DEFAULT-ID (r1): the copy the approval rested on may be stale. The
+        // The copy the approval rested on may be stale. The
         // live event is checked before anything is touched: a guest added, or a
         // calendar moved, refuses the write and saves nothing. A recurring
-        // event refuses it too (r2): EventKit's lookup can return the first
+        // event refuses it too: EventKit's lookup can return the first
         // occurrence, not the one the copy saw.
         if let expected {
             let facts = BridgeWriteFacts.decide(

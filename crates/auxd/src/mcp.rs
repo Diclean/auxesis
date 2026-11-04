@@ -421,9 +421,10 @@ main = ["X"]
         let home = dir.path();
         kernel_core::ensure_home(home).unwrap();
         let (_program_dir, command) = broken_program();
-        // A confirmation is keyed by the daemon token, so the test must mint
-        // the same binding the confirm endpoint would (now covering the whole
-        // launch spec).
+        // Both records are keyed by the daemon token, so the test must mint
+        // the same bindings the approve endpoint would: the launch
+        // confirmation and the install approval (a confirmation alone is not
+        // an approval since kernel v0.1.2).
         let token = "mcp-unit-token-0123456789";
         std::fs::write(crate::api::token_path(home), token).unwrap();
         let draft = format!(
@@ -434,13 +435,16 @@ main = ["X"]
         let hash = parsed.server[0]
             .confirmation_binding(token.as_bytes())
             .unwrap();
+        let approval = parsed.server[0]
+            .approval_binding(token.as_bytes(), None)
+            .unwrap();
         open_config(home);
         std::fs::write(
             home.join("mcp.toml"),
             format!(
                 "[[server]]\nid = \"broken\"\ntransport = \"stdio\"\ncommand = \"{command}\"\n\
                  enabled = true\nstdio_confirmed = true\nstdio_confirmation = \"{hash}\"\n\
-                 [server.agents]\nmain = [\"X\"]\n"
+                 approval = \"{approval}\"\n[server.agents]\nmain = [\"X\"]\n"
             ),
         )
         .unwrap();

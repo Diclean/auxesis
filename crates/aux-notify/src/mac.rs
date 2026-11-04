@@ -132,7 +132,10 @@ impl Notifier for MacNotifier {
             .map(|code| code.to_string())
             .unwrap_or_else(|| "signal".to_string());
         let raw = String::from_utf8_lossy(&output.stderr);
-        let stderr = kernel_broker::sanitize_external_text(raw.trim(), MAX_STDERR);
+        // Cleaned of invisibles and ANSI and secret-redacted:
+        // the error is logged and can be shown, so no key may ride in it.
+        let stderr =
+            kernel_broker::scrub_external_preview(std::path::Path::new(""), raw.trim(), MAX_STDERR);
         let stderr = if stderr.is_empty() {
             "(no stderr)".to_string()
         } else {
@@ -340,7 +343,7 @@ mod tests {
 
     #[test]
     fn the_script_goes_on_stdin_and_never_on_argv() {
-        // P1 regression (security-review round 4): the one-time code used to be an
+        // The one-time code used to be an
         // argv item of a program resolved through PATH. The only program is
         // the absolute system osascript, argv is exactly `-`, and the
         // title/body (code included) live in the stdin script only.
@@ -440,7 +443,7 @@ mod tests {
 
     #[test]
     fn a_planted_osascript_in_path_is_never_selected() {
-        // P1 regression (security-review round 4): a fake `osascript` placed first
+        // A fake `osascript` placed first
         // in PATH must not be reachable: the spec always names the absolute
         // system binary, and the child environment does not even carry PATH.
         struct PathGuard(Option<std::ffi::OsString>);
@@ -491,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_default_notifier_runs_only_the_system_osascript() {
-        // P1 regression (security-review round 4): no environment variable may
+        // No environment variable may
         // redirect the notifier. The program is fixed at construction and this
         // module never reads the environment; the test seam is chosen only by
         // `system_notifier`.
@@ -527,7 +530,7 @@ mod tests {
 
     #[test]
     fn maps_nonzero_exit_and_sanitizes_stderr() {
-        // Round 3 made the shared sanitiser drop ANSI sequences as units
+        // The shared sanitiser drops ANSI sequences as units
         // (`strip_ansi`): colouring must not survive even as its parameter
         // residue (`[31m`). The old expectation (`[31mpermission
         // denied[0m`) encoded the previous, leakier `sanitize_text`-only
@@ -544,6 +547,23 @@ mod tests {
                     !stderr.contains('\u{1b}') && !stderr.contains("[31m"),
                     "ANSI residue in {stderr:?}"
                 );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_key_in_stderr_is_redacted() {
+        let key = format!(
+            "sk-proj-{}",
+            "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh3iJk6l"
+        ); // gitleaks:allow
+        let stderr = format!("execution error: api_key={key} rejected");
+        let notifier = MacNotifier::with_runner(move |_| Ok(output_with(1, stderr.as_bytes())));
+        match notifier.notify(&Notification::new("t", "b")).unwrap_err() {
+            NotifyError::Osascript { stderr, .. } => {
+                assert!(!stderr.contains("Ab3dEf6h"), "key in {stderr:?}");
+                assert!(stderr.starts_with("execution error"), "{stderr:?}");
             }
             other => panic!("unexpected error: {other:?}"),
         }

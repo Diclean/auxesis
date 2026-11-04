@@ -9,7 +9,7 @@ struct PrivacyRecordListView: View {
     @State private var agent = "All agents"
     @State private var day = ""
 
-    private var receipts: [Receipt] { shell.store.receipts }
+    private var receipts: [Receipt] { shell.store.receiptLog.receipts }
     private var visible: [Receipt] {
         PrivacyRecordListModel.filtered(receipts, agent: agent == "All agents" ? nil : agent,
                                         day: day.isEmpty ? nil : day)
@@ -64,7 +64,7 @@ struct PrivacyRecordListView: View {
         }
         .background(palette.work.color)
         .onAppear { if selection == nil { selection = visible.first?.runId } }
-        .onChange(of: shell.store.receipts) { _, _ in if selection == nil { selection = visible.first?.runId } }
+        .onChange(of: shell.store.receiptLog.receipts) { _, _ in if selection == nil { selection = visible.first?.runId } }
     }
 }
 

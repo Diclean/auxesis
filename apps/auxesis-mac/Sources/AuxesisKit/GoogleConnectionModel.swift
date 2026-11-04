@@ -130,3 +130,75 @@ public final class GoogleConnectionModel: ObservableObject {
         }
     }
 }
+
+/// The sign-in a click on « Connecter Google » started, from this screen only.
+public enum GoogleFlow: Equatable {
+    case idle
+    /// The service started the sign-in; the browser page is open.
+    case waiting
+    /// The sign-in ended without an authorization.
+    case failed
+}
+
+/// What the Réglages row « Google : … » shows (G4).
+///
+/// The mapping is pure so the copy rule (one French phrase per state) is
+/// testable without a window or a service.
+public enum GoogleConnectionState: Equatable {
+    /// The service has not answered yet; the row stays honest and says so.
+    case unknown
+    case disconnected
+    /// The sign-in page is open and the owner has not answered yet.
+    case waitingForConsent
+    case needsUpdate
+    case connected
+    /// The sign-in did not complete.
+    case failed
+
+    /// From the three facts the screen holds: whether the service's status
+    /// answer is known, whether it reports a Google authorization, and whether
+    /// a sign-in started from this screen is still in flight.
+    public static func resolve(
+        known: Bool,
+        connected: Bool,
+        reconnectNeeded: Bool = false,
+        waiting: Bool,
+        failed: Bool
+    ) -> Self {
+        if waiting { return .waitingForConsent }
+        if reconnectNeeded { return .needsUpdate }
+        if connected {
+            return .connected
+        }
+        if failed {
+            return .failed
+        }
+        return known ? .disconnected : .unknown
+    }
+
+    /// The value the row prints after « Google : ».
+    public var valueKey: StringKey {
+        switch self {
+        case .unknown: return .googleUnknownValue
+        case .disconnected: return .googleDisconnectedValue
+        case .waitingForConsent: return .googleWaitingValue
+        case .connected: return .googleConnectedValue
+        case .needsUpdate: return .googleUpdateNeededValue
+        case .failed: return .googleFailedValue
+        }
+    }
+
+    /// The « Connecter Google » button is enabled only when there is something
+    /// to do; pressing it always asks the service, never opens anything here.
+    public var canConnect: Bool {
+        switch self {
+        case .disconnected, .unknown, .failed: return true
+        case .connected, .needsUpdate, .waitingForConsent: return false
+        }
+    }
+
+    /// « Déconnecter » shows while a connection exists (or is being accepted).
+    public var canDisconnect: Bool {
+        self == .connected || self == .needsUpdate || self == .waitingForConsent
+    }
+}

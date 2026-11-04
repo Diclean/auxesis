@@ -68,7 +68,7 @@ struct SidebarView: View {
             // footer a fresh clock, so the numbers are the new day's.
             TimelineView(.periodic(from: Date(), by: 60)) { context in
                 let footer = SidebarText.footer(
-                    read: shell.store.privacyRecordRead, receipts: shell.store.receipts,
+                    read: shell.store.privacyRecordRead, receipts: shell.store.receiptLog.receipts,
                     delegations: shell.delegations, now: context.date, language: language
                 )
                 // Nothing true to say: no band, no rule.
@@ -177,7 +177,7 @@ struct SidebarView: View {
     private func privacyCount(at now: Date) -> PrivacyRecordCount {
         PrivacyRecordCounter.state(
             read: shell.store.privacyRecordRead,
-            receipts: shell.store.receipts,
+            receipts: shell.store.receiptLog.receipts,
             now: now
         )
     }

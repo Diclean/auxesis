@@ -973,7 +973,7 @@ public final class ShellModel: ObservableObject {
         if let provider = client as? ModelSawProviding {
             return provider.modelSaw(agent: agent, messageIds: ids)
         }
-        return ModelSawRecord.from(receipts: store.receipts, agent: agent, at: group.last)
+        return ModelSawRecord.from(receipts: store.receiptLog.receipts, agent: agent, at: group.last)
     }
 
     public func brain(of agent: String) -> String? {

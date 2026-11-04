@@ -540,8 +540,8 @@ private enum ReceiptFixtures {
         let golden = try Fixtures.receipts()
         transport.receiptsResult = .success(golden)
         let store = ReceiptFixtures.startedStore(transport)
-        XCTAssertTrue(waitUntil { store.receipts.count == golden.count })
-        XCTAssertEqual(store.receipts.map(\.runId), golden.map(\.runId))
+        XCTAssertTrue(waitUntil { store.receiptLog.receipts.count == golden.count })
+        XCTAssertEqual(store.receiptLog.receipts.map(\.runId), golden.map(\.runId))
         XCTAssertTrue(transport.receiptsCalls.contains { $0.agent == nil }, "the snapshot reads every agent")
         store.stop()
     }
@@ -549,23 +549,23 @@ private enum ReceiptFixtures {
     func testLiveFrameInsertionOrderingAndDedupe() {
         let transport = FakeTransport()
         let store = ReceiptFixtures.startedStore(transport)
-        XCTAssertTrue(store.receipts.isEmpty)
+        XCTAssertTrue(store.receiptLog.receipts.isEmpty)
 
         transport.emit(.runFinished(Receipt(runId: "run-1", agent: "scout", costCents: 1)))
         transport.emit(.runFinished(Receipt(runId: "run-2", agent: "scout", costCents: 2)))
         transport.emit(.runFinished(Receipt(runId: "run-3", agent: "mail", costCents: 3)))
-        XCTAssertTrue(waitUntil { store.receipts.count == 3 })
-        XCTAssertEqual(store.receipts.map(\.runId), ["run-3", "run-2", "run-1"], "newest first")
+        XCTAssertTrue(waitUntil { store.receiptLog.receipts.count == 3 })
+        XCTAssertEqual(store.receiptLog.receipts.map(\.runId), ["run-3", "run-2", "run-1"], "newest first")
 
         // A replayed frame replaces in place: no duplicate, no reorder.
         transport.emit(.runFinished(Receipt(runId: "run-2", agent: "scout", costCents: 9)))
-        XCTAssertTrue(waitUntil { store.receipts.first { $0.runId == "run-2" }?.costCents == 9 })
+        XCTAssertTrue(waitUntil { store.receiptLog.receipts.first { $0.runId == "run-2" }?.costCents == 9 })
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertEqual(store.receipts.map(\.runId), ["run-3", "run-2", "run-1"])
-        XCTAssertEqual(store.receipts.count, 3)
+        XCTAssertEqual(store.receiptLog.receipts.map(\.runId), ["run-3", "run-2", "run-1"])
+        XCTAssertEqual(store.receiptLog.receipts.count, 3)
 
-        XCTAssertEqual(store.receipts(for: "scout").map(\.runId), ["run-2", "run-1"])
-        XCTAssertEqual(store.receipts(for: "mail").map(\.runId), ["run-3"])
+        XCTAssertEqual(store.receiptLog.receipts(for: "scout").map(\.runId), ["run-2", "run-1"])
+        XCTAssertEqual(store.receiptLog.receipts(for: "mail").map(\.runId), ["run-3"])
         store.stop()
     }
 
@@ -573,12 +573,12 @@ private enum ReceiptFixtures {
         let transport = FakeTransport()
         transport.receiptsResult = .success([])
         let store = ReceiptFixtures.startedStore(transport)
-        XCTAssertTrue(store.receipts.isEmpty)
+        XCTAssertTrue(store.receiptLog.receipts.isEmpty)
 
         let golden = try Fixtures.receipts()
         transport.receiptsResult = .success(golden)
         store.selectAgent("mail")
-        XCTAssertTrue(waitUntil { transport.receiptsCalls.contains { $0.agent == "mail" } && store.receipts.count == golden.count })
+        XCTAssertTrue(waitUntil { transport.receiptsCalls.contains { $0.agent == "mail" } && store.receiptLog.receipts.count == golden.count })
         store.stop()
     }
 }

@@ -241,7 +241,7 @@ import Testing
     /// The whole offline surface — every state, both languages — must be
     /// paste-ready on a DMG install: the only `auxd` it may name is the full
     /// embedded path, and the `aux install` shorthand (dev/Homebrew only) is
-    /// gone. This is the P2-F2 net over *all* states at once, copy block
+    /// gone. This test is the net over *all* states at once, copy block
     /// included.
     func testNoOfflineStateEverShowsABareAuxdOrAuxInstall() {
         let causes: [OfflineCause?] = [
@@ -291,7 +291,7 @@ import Testing
                        "'/Users/me/My Apps/Auxesis.app/bin/auxd'")
     }
 
-    // MARK: F1 — a refused override is surfaced, host only
+    // MARK: A refused override is surfaced, host only
 
     func testRefusedOverrideIsSurfacedWithTheHostAndTheFallbackOnly() {
         let rejection = EndpointOverrideRejection(source: "AUXESIS_API_BASE", host: "evil.work")

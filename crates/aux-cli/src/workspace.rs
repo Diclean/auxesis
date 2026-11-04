@@ -1,22 +1,22 @@
-//! `aux workspace` — owner actions on workspace taint (WS-C).
+//! `aux workspace` — owner actions on workspace taint.
 //!
 //! Dispatching an untrusted-class tool in a workspace marks it
 //! `untrusted-touched`: every conversation that starts there is tainted
 //! until the owner clears the mark. Nothing a tool or the model does clears
 //! it, and there is no time decay.
 //!
-//! Since WS-C fix round 4 the clear is a **two-step owner-presence proof**
+//! The clear is a **two-step owner-presence proof**
 //! (`aux_engine::trust`): `aux workspace trust <path>` creates a pending
 //! request and sends a one-time code through the owner's local notification
 //! channel — never through stdout, stderr, the store, an audit row or the
 //! API. A tool that can run this same CLI (the `shell` tool's whole
 //! capability) never sees the code, and the code is rate-limited, expires
 //! after 120 s, allows 3 attempts and is single-use. The owner token stays
-//! required for the API path, and WS-D's sandbox is the second layer (see
-//! `aux_engine::trust` for the full threat model — in particular that WS-C
-//! alone provides no owner-presence guarantee).
+//! required for the API path, and the sandbox is the second layer (see
+//! `aux_engine::trust` for the full threat model — in particular that the
+//! owner token alone provides no owner-presence guarantee).
 //!
-//! Round 5 moves the code off every command line and out of `PATH`:
+//! The code never appears on a command line or in `PATH`:
 //! re-running `aux workspace trust <path>` prompts for the code on the
 //! terminal without echo, and `aux workspace trust <path> --code -` reads it
 //! from stdin for pipes. `--code <code>` still works but warns: it leaks the
@@ -27,7 +27,7 @@
 //! and audits the request/completion/failure as `workspace.trust_requested`,
 //! `workspace.trusted` and `workspace.trust_failed` — never the code.
 //!
-//! WS-C round 7 refuses the whole action while the loaded `[shell]` config can
+//! The whole action is refused while the loaded `[shell]` config can
 //! run the shell unsandboxed (`sandbox = false` + `allow_unsandboxed = true`,
 //! or an unavailable sandbox with the opt-in): the mark would not constrain a
 //! command-capable model, so the attempt is audited as
@@ -87,7 +87,7 @@ pub fn run(args: WorkspaceArgs) -> ExitCode {
                     ExitCode::SUCCESS
                 }
                 Err(message) => {
-                    // P2-4 (security-review round 4): the transport error may be
+                    // The transport error may be
                     // attacker-influenced, so it gets the same scrub the API
                     // applies — control/invisible characters stripped, home
                     // replaced, key shapes redacted, collapsed to one line,
@@ -203,7 +203,7 @@ fn trust(
 }
 
 /// Refuse the trust action while the loaded `[shell]` config can run the
-/// shell unsandboxed (WS-C round 7).
+/// shell unsandboxed.
 ///
 /// With the escape hatch on, clearing the mark would not constrain the shell,
 /// so the owner action is refused and audited as `workspace.trust_refused`
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_tool_running_this_same_cli_cannot_complete_without_the_notified_code() {
-        // P1 regression (security-review round 3): the shell tool runs ordinary
+        // The shell tool runs ordinary
         // owner commands, so `aux workspace trust` must not clear anything by
         // itself. Without the code from the notification it only creates a
         // pending request; every tool-producible candidate fails and the mark
@@ -531,8 +531,8 @@ mod tests {
         assert!(trust(&s.home, &s.ws, Some(wrong), &fake).is_err());
         let err = trust(&s.home, &s.ws, Some(wrong), &fake).unwrap_err();
         assert!(err.contains("too many wrong codes"), "{err}");
-        // The spent row stays as the cooldown watermark (security-review round 4,
-        // P2-1) instead of being deleted.
+        // The spent row stays as the cooldown watermark instead of being
+        // deleted.
         assert_eq!(
             s.store.trust_request(&s.key).unwrap().unwrap().attempts,
             aux_engine::TRUST_MAX_ATTEMPTS
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn no_code_with_a_pending_request_prompts_and_completes() {
-        // P1 regression (security-review round 4): the no-flag completion path no
+        // The no-flag completion path no
         // longer asks for the code as a command-line argument; it prompts
         // (without echo) and sends no second notification.
         let s = sandbox();
@@ -728,7 +728,7 @@ mod tests {
 
     #[test]
     fn a_hostile_notification_error_becomes_one_capped_safe_line() {
-        // P2-4 regression (security-review round 4): the CLI used to print the
+        // The CLI used to print the
         // transport's stderr verbatim — multi-line, unbounded, with ANSI and
         // bidi characters. The printed line is now the API's scrub.
         let s = sandbox();

@@ -39,7 +39,7 @@ use std::time::Duration;
 /// Default wall-clock limit for a shell command.
 ///
 /// SHELL-JUDGE: 30 s for every call, approved by the owner, by `auto` or by
-/// the judge (was 300 s, H-08). A longer build sets `[shell] timeout_secs`.
+/// the judge. A longer build sets `[shell] timeout_secs`.
 pub const DEFAULT_TIMEOUT: Duration =
     Duration::from_secs(kernel_core::config::DEFAULT_SHELL_TIMEOUT_SECS);
 
@@ -281,7 +281,7 @@ fn push_section(content: &mut String, text: &str) {
 /// Append a *completing* command's stream to `content`: sanitised, capped to
 /// [`STREAM_BUDGET`], keeping its head and its tail (WSD3-P2-03). Each stream
 /// owns half the combined budget, so a chatty stdout can never starve stderr
-/// (WSD3-P3-06); the truncation note sits between the two kept slices.
+/// — the truncation note sits between the two kept slices.
 /// `name` is the bare stream name (`stdout`/`stderr`).
 fn push_capture(content: &mut String, name: &str, capture: &Capture) {
     let mut head = sanitize_text(&String::from_utf8_lossy(&capture.head));
@@ -543,7 +543,7 @@ fn pid_ppid_uid_start(_pid: i32) -> Option<(i32, u32, u64)> {
 /// to the call, even after it reparented to launchd and called `setsid()` —
 /// and unlike the environment, this survives exec of platform binaries.
 ///
-/// Known limit (seal r1, maintainer decision): a process that double-forks, calls
+/// Known limit: a process that double-forks, calls
 /// `setsid()` *and* closes its descriptors (`closerange(3, …)`) drops the
 /// marker and escapes every sweep. macOS has no cgroups to pin it; it stays
 /// inside the Seatbelt sandbox, network off, under its CPU and file limits.
@@ -1036,7 +1036,7 @@ enum Stop {
     MemoryLimit,
 }
 
-/// RAII sweep of a shell command's process tree (P1-2).
+/// RAII sweep of a shell command's process tree.
 ///
 /// The engine may drop the tool future at any moment (turn cancellation): the
 /// future itself would take [`kill_process_tree`]'s timeout path with it.
@@ -1173,7 +1173,7 @@ impl Tool for ShellTool {
             )));
         }
 
-        // Private mode (TOK-3): the command was restored from session tokens
+        // Private mode: the command was restored from session tokens
         // and holds real values, so it runs with the network off whatever
         // `[shell] network` says, and never outside the sandbox that enforces it.
         let private = ctx
@@ -1187,7 +1187,7 @@ impl Tool for ShellTool {
             sandbox_in_force.network = false;
         }
 
-        // A deadline that cannot be computed never spawns (seal r1 P2-3).
+        // A deadline that cannot be computed never spawns.
         let too_long = Duration::from_secs(kernel_core::config::MAX_SHELL_TIMEOUT_SECS);
         if self.timeout > too_long
             || tokio::time::Instant::now()
@@ -1235,7 +1235,7 @@ impl Tool for ShellTool {
         let child_pid = child.id();
         // While the command is in flight this guard owns the child + marker:
         // if the engine drops this future (turn cancellation), `Drop` runs
-        // the same whole-tree sweep as the timeout path (P1-2). A normal exit
+        // the same whole-tree sweep as the timeout path. A normal exit
         // disarms it. Holding the `Child` keeps the root unreaped until the
         // group kill has run.
         let mut reaper = TreeReaper::new(child, marker);
@@ -1286,7 +1286,7 @@ impl Tool for ShellTool {
         let mut is_error = false;
         match stop {
             Stop::Exited(result) => {
-                // Nothing a call started outlives it (seal r1 P2-1): kill
+                // Nothing a call started outlives it: kill
                 // what the exited root left behind, `sleep 60 &` included.
                 let sweep = child_pid.map_or(Sweep::Clean, |root| {
                     sweep_leftovers_with(
@@ -1395,7 +1395,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    /// #75 seal r2 P1: a launchd-started auxd has ppid 1 and holds the marker,
+    /// A launchd-started auxd has ppid 1 and holds the marker,
     /// so a sweep must never name this process (or launchd) as a target.
     #[cfg(unix)]
     #[test]
@@ -1624,7 +1624,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_ctx_token_stops_a_running_command_and_reports_the_cancel() {
-        // P1-2: the turn's cancellation token reaches the tool through
+        // The turn's cancellation token reaches the tool through
         // `ToolCtx`; a running command is stopped and the result says why
         // instead of the future being dropped silently.
         let dir = tempdir().unwrap();
@@ -1710,7 +1710,7 @@ mod tests {
 
     #[tokio::test]
     async fn completed_command_keeps_the_tail_of_stdout() {
-        // WSD3-P2-03: the diagnostic of a *completing* command is at the very
+        // The diagnostic of a *completing* command is at the very
         // end of its output, not only after a timeout (a cargo-build shape).
         let dir = tempdir().unwrap();
         let out = test_tool(DEFAULT_TIMEOUT)
@@ -1736,7 +1736,7 @@ mod tests {
 
     #[tokio::test]
     async fn completed_command_keeps_the_tail_of_stderr() {
-        // WSD3-P2-03 on stderr: a compiler or linter writes the one line that
+        // On stderr, a compiler or linter writes the one line that
         // matters at the end.
         let dir = tempdir().unwrap();
         let out = test_tool(DEFAULT_TIMEOUT)
@@ -1764,7 +1764,7 @@ mod tests {
 
     #[tokio::test]
     async fn stderr_is_never_starved_by_a_chatty_stdout() {
-        // WSD3-P3-06: stderr owns half the budget, so the one line that
+        // Stderr owns half the budget, so the one line that
         // explains `exit 2` survives however verbose stdout was.
         let dir = tempdir().unwrap();
         let out = test_tool(DEFAULT_TIMEOUT)
@@ -1819,7 +1819,7 @@ mod tests {
 
     #[tokio::test]
     async fn commands_are_detached_from_the_terminal() {
-        // Regression for M1-AP NF3-01: a command must not keep a controlling
+        // A command must not keep a controlling
         // terminal, or it could TIOCSTI-inject `y` into approval prompts.
         let dir = tempdir().unwrap();
         let out = test_tool(DEFAULT_TIMEOUT)
@@ -1838,7 +1838,7 @@ mod tests {
     /// SIGKILL the whole group. This is deliberate and also the reason the
     /// daemon's shutdown group sweep cannot see shell-command groups: the
     /// daemon relies on the ppid walk for live trees and on the tool's own
-    /// tree kill on timeout (documented NEW-A3L residual).
+    /// tree kill on timeout.
     #[tokio::test]
     async fn commands_lead_their_own_process_group() {
         // `ps` is setuid and cannot exec inside the Seatbelt sandbox, so the
@@ -2206,7 +2206,7 @@ mod tests {
 
     #[tokio::test]
     async fn stderr_heavy_output_does_not_deadlock() {
-        // Regression for M1-injection-reverify2 NEW2-01: stderr-first output
+        // Stderr-first output
         // must not fill the pipe while we wait on stdout.
         let dir = tempdir().unwrap();
         let tool = test_tool(Duration::from_secs(10));
@@ -2387,7 +2387,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_runs_brew_version_list_and_info() {
-        // H-07 (calibration): `brew` reads its own code and formula metadata
+        // `brew` reads its own code and formula metadata
         // from `Library/Homebrew`; the read-back after the deny is what lets
         // `brew --version`, `brew list` and `brew info` work (the rest of
         // `Library` stays denied). Skips when Homebrew is not installed.
@@ -2404,7 +2404,7 @@ mod tests {
         assert!(!out.is_error, "brew list must work: {}", out.content);
 
         // `brew info` starts Homebrew's own vendored Ruby out of
-        // `Library/Homebrew` (the read+exec read-back, H-07). With the
+        // `Library/Homebrew` (the read+exec read-back). With the
         // network correctly OFF, the JSON API fetch on a cold cache is
         // refused by DNS — that is the sandbox working, not a failure to
         // start Homebrew's own code.
@@ -2486,7 +2486,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_runs_node_and_npm_with_the_minimal_allowlist() {
-        // WSD3-P2-01: Homebrew's node opens
+        // Homebrew's node opens
         // `/opt/homebrew/etc/openssl@3/openssl.cnf` before evaluating any
         // script; the specific read-back after the deny is what lets it start
         // (the broad `etc` tree stays denied).
@@ -2515,7 +2515,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_runs_system_ruby_and_gem() {
-        // WSD3-P2-02: rubygems globs `/Library/Ruby/Gems` at interpreter
+        // Rubygems globs `/Library/Ruby/Gems` at interpreter
         // startup; the read-back restores ruby/gem without touching the
         // protected absolute dirs.
         if !sandbox_path_has("ruby") {
@@ -2607,7 +2607,7 @@ mod tests {
 
         // No repository yet: a `.GIT` made now would be Git's `.git` later.
         // Seatbelt matches paths case-insensitively on APFS, so the one
-        // `.git` deny covers every spelling (TOK-3b).
+        // `.git` deny covers every spelling.
         let bare = tempdir().unwrap();
         let out = run_in_sandbox(
             bare.path(),
@@ -2896,7 +2896,7 @@ mod tests {
 
     #[test]
     fn calibration_shell_default_timeout_is_pinned_and_still_enforced() {
-        // SHELL-JUDGE: the default wall-clock limit is 30 s (H-08 had 300 s).
+        // The default wall-clock limit is 30 s.
         // The limit still binds:
         // the tool's timeout is what it says it is, the CPU grace scales with
         // it, and an explicit shorter timeout still aborts a long command.
@@ -3061,7 +3061,7 @@ mod tests {
     async fn background_children_holding_output_do_not_fake_a_timeout() {
         // The command finishes at once; the backgrounded `sleep` holds stdout
         // open. The call returns the real output fast, not a timeout, and
-        // (seal r1) the `sleep` does not outlive the call.
+        // The `sleep` does not outlive the call.
         let dir = tempdir().unwrap();
         let tool = ShellTool::with_timeout(Duration::from_secs(5));
 
@@ -3165,7 +3165,7 @@ mod tests {
 
     #[tokio::test]
     async fn commands_run_with_the_fixed_sandbox_path() {
-        // WSD2-P2-08: the owner's PATH (username + private toolchain dirs)
+        // The owner's PATH (username + private toolchain dirs)
         // must never cross into the command.
         let dir = tempdir().unwrap();
         let out = test_tool(DEFAULT_TIMEOUT)
@@ -3196,7 +3196,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_denies_process_table_and_sysctl_internals() {
-        // WSD2-P1-01: lsof, ps-equivalents, launchctl listings and sysctl -a
+        // lsof, ps-equivalents, launchctl listings and sysctl -a
         // must not be able to enumerate the user's processes/files/kernel.
         let dir = tempdir().unwrap();
         let out = run_in_sandbox(
@@ -3237,7 +3237,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_denies_real_package_state_dirs() {
-        // WSD2-P1-02: the owner's source checkout, service logs and package
+        // The owner's source checkout, service logs and package
         // configs under /opt/homebrew must not be readable (names/sizes only;
         // contents are never printed).
         let dir = tempdir().unwrap();
@@ -3362,7 +3362,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_timeout_kills_a_double_forked_setsid_orphan() {
-        // WSD2-P2-03: double fork + setsid leaves both the ppid tree and the
+        // Double fork + setsid leaves both the ppid tree and the
         // command's session/group. The per-call marker descriptor must reap
         // it on timeout.
         let dir = tempdir().unwrap();
@@ -3413,7 +3413,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn dropping_the_run_future_kills_a_double_forked_setsid_orphan() {
-        // P1-2 regression: cancelling a turn drops the tool future before its
+        // Cancelling a turn drops the tool future before its
         // own timeout can run; the RAII reaper guard must run the same
         // whole-tree sweep from `Drop` so the orphan does not survive.
         let dir = tempdir().unwrap();
@@ -3474,7 +3474,7 @@ mod tests {
     #[ignore = "SANDBOX-BOMB-ESCAPE: on macOS a double-forked child that leaves the \
                 process group can outlive the kill; flaky in CI until the sweep is redesigned"]
     async fn sandbox_kills_a_double_forked_process_bomb() {
-        // WSD2-P2-03, bomb variant: orphans that reparented to launchd and
+        // Bomb variant: orphans that reparented to launchd and
         // left the session must still be counted by the watchdog.
         let dir = tempdir().unwrap();
         std::fs::write(
@@ -3539,7 +3539,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn sandbox_timeout_returns_the_tail_of_the_output() {
-        // WSD2-P2-07: the diagnostic lines of a hung command are at the end.
+        // The diagnostic lines of a hung command are at the end.
         let dir = tempdir().unwrap();
         let tool = ShellTool::with_timeout(Duration::from_secs(2));
         let out = tool

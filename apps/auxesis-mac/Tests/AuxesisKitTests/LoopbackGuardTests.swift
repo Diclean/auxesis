@@ -1,4 +1,4 @@
-// F1: the bearer token must never be sent off-box.
+// The bearer token must never be sent off-box.
 //
 // Two layers, both tested here:
 //   * the resolver refuses every non-loopback/malformed override and falls back

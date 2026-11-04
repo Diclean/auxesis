@@ -1,4 +1,4 @@
-//! BRIEF-SINCE-CLOCK acceptance: the morning brief's mail window follows the
+//! The morning brief's mail window follows the
 //! brief's own local day, not the system clock in UTC.
 //!
 //! The brief runs at 2026-10-15 21:30 at -04:00, which is already 2026-10-16

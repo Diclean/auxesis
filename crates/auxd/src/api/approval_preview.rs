@@ -160,7 +160,7 @@ pub fn build_checked(
 /// A skill run's edit must keep the run's calls, each with its tool: the
 /// executor runs the card's tools with the edited `real` arguments and refuses
 /// any other edit, so it is refused here too, with the reason, and the ask
-/// stays pending (SEND-REAL-ARGS-1).
+/// stays pending.
 pub fn build_edit_checked(
     tool: &str,
     original: &Value,
@@ -191,7 +191,7 @@ pub fn build_edit_checked(
         // The card the owner approves shows what the run sends: a call that
         // carries a field its tool never sends is refused here, with the
         // reason, and the ask stays pending. The card builder refuses it too;
-        // this check is the edit route's own (SEND-REAL-ARGS-1).
+        // this check is the edit route's own.
         for call in &calls {
             check_ignored_fields(call.tool, call.real)?;
         }
@@ -210,7 +210,7 @@ fn skill_card(
 ) -> Result<CardPreview, String> {
     let calls = run_calls(arguments)?;
     // Every call of the run must be showable: a call that carries a field its
-    // tool never sends is refused, never shown (SEND-REAL-ARGS-1).
+    // tool never sends is refused, never shown.
     for call in &calls {
         check_ignored_fields(call.tool, call.real)?;
     }

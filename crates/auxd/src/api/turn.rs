@@ -139,7 +139,7 @@ pub struct TurnRecord {
     pub thread: Session,
     /// Messages persisted by this turn (user, assistant, tool results), in
     /// insertion order — exactly the rows this turn wrote, never a concurrent
-    /// turn's (BAPIV2-04).
+    /// turn's.
     pub messages: Vec<Message>,
     /// Provider completions used by this turn (`>= 1`).
     pub rounds: usize,
@@ -344,7 +344,7 @@ pub struct EngineTurnRunner {
     session_locks: Mutex<HashMap<(i64, usize), Lane>>,
     /// One mutex per agent: the "get-or-create the current session" step and
     /// the first turn run under it, so concurrent first sends cannot fork the
-    /// agent's thread (BAPIV2-03).
+    /// agent's thread.
     agent_locks: Mutex<HashMap<(String, usize), Lane>>,
     /// The session each first send resolved, for the card check below.
     agent_sessions: Mutex<HashMap<String, i64>>,
@@ -515,7 +515,7 @@ impl EngineTurnRunner {
         self
     }
 
-    /// Hand the delegated task's token pairs to the turn (TOK-DELEGATE).
+    /// Hand the delegated task's token pairs to the turn.
     pub fn with_inherited_tokens(mut self, handoff: aux_engine::handoff::Handoff) -> Self {
         self.inherited = handoff;
         self
@@ -635,7 +635,7 @@ impl EngineTurnRunner {
         self
     }
 
-    /// Mount the agent's mounted extension tools on every turn (WO-13b).
+    /// Mount the agent's mounted extension tools on every turn.
     pub fn with_extensions_handle(mut self, extensions: crate::extensions::ExtSlot) -> Self {
         self.extensions = Some(extensions);
         self
@@ -1001,7 +1001,7 @@ impl EngineTurnRunner {
             workspace,
             sandbox_home: None,
             // An ACP brain is read-only: the agent may not run a terminal or
-            // write a file, whatever the skill declares (security-review round 3, P1).
+            // write a file, whatever the skill declares.
             read_only: true,
         };
         let mut host = aux_acp::StoreTurnHost::new(
@@ -2258,7 +2258,7 @@ impl EngineTurnRunner {
 
             // Exactly the rows this turn persisted — the system prompt is not
             // reported by the sink and never enters the response, and a
-            // concurrent turn's rows can never be picked up (BAPIV2-04).
+            // concurrent turn's rows can never be picked up.
             // A private turn's rows are stored as the provider saw them (G1,
             // PRIVATE-TRANSCRIPT); memory rows remain only for a session whose
             // history the store does not keep.
@@ -3808,7 +3808,7 @@ mod tests {
         );
         for request in provider.requests() {
             let body = serde_json::to_string(&request.messages).unwrap();
-            // A name is no hidden value (NAMES-OFF, owner 2026-10-19).
+            // A name is no hidden value.
             for raw in [
                 "camille@exemple.fr",
                 "+33 6 12 34 56 78",

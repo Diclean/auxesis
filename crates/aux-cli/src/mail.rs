@@ -387,7 +387,7 @@ fn resolve_account<'a>(
 }
 
 /// The configured mail service, or `None` when this home has no mailbox:
-/// `aux skill run` reads mail through it for `docs.ingest` (M5-3).
+/// `aux skill run` reads mail through it for `docs.ingest`.
 pub(crate) fn configured_service(home: &Path) -> Option<MailService> {
     let config = load_config(home).ok()?;
     (!config.accounts.is_empty()).then(|| service(home, &config))

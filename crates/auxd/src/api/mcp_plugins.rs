@@ -180,7 +180,7 @@ pub(super) async fn packs() -> Response {
         return internal("catalog_invalid");
     };
     Json(serde_json::json!({"packs": packs.pack.into_iter().map(|p| {
-        // Item 13: a pack never lists a catalog entry whose endpoint is
+        // A pack never lists a catalog entry whose endpoint is
         // `unverified`; the count and the key hint follow the visible set.
         let visible: Vec<&CatalogEntry> = p.servers.iter().filter_map(|id| {
             catalog.server.iter().find(|e| &e.id == id && catalog_endpoint_usable(e))
@@ -193,7 +193,7 @@ pub(super) async fn packs() -> Response {
 /// Whether a catalog entry's endpoint is verified enough to appear in a pack.
 ///
 /// `endpoint = "unverified"` is the explicit unknown; such an entry is never
-/// offered by a pack (item 13).
+/// offered by a pack.
 fn catalog_endpoint_usable(entry: &CatalogEntry) -> bool {
     entry.endpoint.as_deref() != Some("unverified")
 }
@@ -275,7 +275,7 @@ pub(super) async fn enable_pack(
     // A pack enable is itself the owner's approval for the curated read-only
     // entries it names; the binding is still keyed by the daemon token.
     let approval_secret = state.token.confirmation_key().to_vec();
-    // Review P2: an existing server is only approved when every tool it would
+    // An existing server is only approved when every tool it would
     // mount is one the pack curates as read-only. Discovery before this call
     // is the only trusted source for that set: an unstarted or failed server
     // has none, so a non-empty allowlist can never be proven in-pack and stays
@@ -501,7 +501,7 @@ pub(super) async fn test_server(
     }
 }
 
-/// Build the pinned, SSRF-checked transport `test_server` uses (item 11).
+/// Build the pinned, SSRF-checked transport `test_server` uses.
 ///
 /// Kept in one place so a test can prove the checked constructor is the one
 /// wired in: `HttpTransport::new` would accept a private host, `new_checked`
@@ -618,7 +618,7 @@ pub(super) async fn import_servers(
         if has_secret(command) || args.iter().any(|a| has_secret(a)) {
             return secret_config_error();
         }
-        // Item 2: a wrapper or shell `argv[0]` is refused outright, before the
+        // A wrapper or shell `argv[0]` is refused outright, before the
         // command is ever resolved or stored. No warning-only path.
         if kernel_mcp::wrapper_launcher_label(command).is_some() {
             return fail(StatusCode::BAD_REQUEST, "wrapper_launcher");
@@ -804,7 +804,7 @@ pub(super) async fn servers(State(state): State<std::sync::Arc<ApiState>>) -> Re
             }
         })
         .collect();
-    // Item 6: entries that failed to deserialize are listed as quarantined so
+    // Entries that failed to deserialize are listed as quarantined so
     // the GET returns 200 with a reason instead of dropping every server.
     for quarantined in &config.quarantined {
         views.push(ServerView {
@@ -915,7 +915,7 @@ pub(crate) fn catalog_match(server: &kernel_mcp::McpServerConfig) -> CatalogMatc
                 _ => CatalogMatch::Mismatch,
             }
         }
-        // Item 7: a `stdio` server that claims a catalog id must match the
+        // A `stdio` server that claims a catalog id must match the
         // entry's command and args, and the entry must carry a full pin. The
         // kernel's confirmation binding, minted at install, locks the rest of
         // the launch (env names, network, data class, binary SHA-256) and is
@@ -935,13 +935,13 @@ pub(crate) fn catalog_match(server: &kernel_mcp::McpServerConfig) -> CatalogMatc
 
 /// The daemon's per-server policy: quarantine or allow, before any transport.
 ///
-/// Order matters: a hard refusal (item 2) or a catalog mismatch (item 7) wins;
-/// then an uncurated `stdio` server needs the owner's confirmation (item 1) and
-/// is reported `needs_confirmation`; finally the M6-2 install approval gates
-/// every enabled server. `secret` is the daemon's API token: a confirmation or
-/// approval is only honoured when it was minted with that token, so a
-/// hand-edited config file cannot forge one. When the token cannot be read
-/// (`None`) nothing is confirmed (item 5, fail closed).
+/// Order matters: a hard refusal or a catalog mismatch wins; then an
+/// uncurated `stdio` server needs the owner's confirmation and is reported
+/// `needs_confirmation`; finally the install approval gates every enabled
+/// server. `secret` is the daemon's API token: a confirmation or approval is
+/// only honoured when it was minted with that token, so a hand-edited config
+/// file cannot forge one. When the token cannot be read (`None`) nothing is
+/// confirmed (fail closed).
 pub(crate) fn server_policy_refusal(
     server: &kernel_mcp::McpServerConfig,
     secret: Option<&[u8]>,
@@ -972,9 +972,9 @@ pub(crate) fn server_policy_refusal(
         && !secret.is_some_and(|secret| server.stdio_is_confirmed_with(secret))
     {
         // The old stdio gate stays first: an unconfirmed server reports
-        // `needs_confirmation`, as it did before M6-2. A stored confirmation
+        // `needs_confirmation`, as before. A stored confirmation
         // that no longer matches (the digest hardening invalidated every
-        // pre-r1 record) is reported as `needs_approval`: the one-approval path
+        // older record) is reported as `needs_approval`: the one-approval path
         // re-mints both records. Both states refuse to spawn (fail closed).
         if server.stdio_confirmation.is_some() {
             return Some(kernel_mcp::McpServerRefusal::needs_approval(
@@ -1007,7 +1007,7 @@ struct ConfirmationPreview {
     data_class: String,
     binary_hash: String,
     high_risk: Option<&'static str>,
-    /// Item 2 (downgraded P3): always set for a **non-catalog** stdio server,
+    /// Always set for a **non-catalog** stdio server,
     /// whatever `high_risk` says, so a missing heuristic warning is never
     /// reassuring. Stable code the Mac app translates.
     unverified_program: Option<&'static str>,
@@ -1018,9 +1018,9 @@ struct ConfirmationPreview {
 /// A stable warning **code**, not a sentence: the Mac app translates it into
 /// the system language (EN/FR). The daemon never ships English copy.
 const CONFIRMATION_WARNING_CODE: &str = "mcp_stdio_confirmation";
-/// The generic warning every non-catalog stdio server carries (item 2).
+/// The generic warning every non-catalog stdio server carries.
 const UNVERIFIED_PROGRAM_WARNING_CODE: &str = "stdio_unverified_program";
-/// M6-2: the install preview is an approval, not a connection test.
+/// The install preview is an approval, not a connection test.
 const APPROVAL_WARNING_CODE: &str = "mcp_install_approval";
 
 /// One tool in the install preview. `risk`/`access` are derived from the
@@ -1117,7 +1117,7 @@ fn non_catalog_binary_sha(server: &kernel_mcp::McpServerConfig) -> Option<String
 
 /// The curated catalog pin for a server's claimed entry, if it has one: one
 /// digest over the `catalog_version` and the entry hash (which covers its
-/// published SHA-256). M6-3: a new catalog release or a changed entry is a
+/// published SHA-256). A new catalog release or a changed entry is a
 /// changed pin, so the approval no longer matches until the owner re-approves.
 pub(crate) fn catalog_pin(server: &kernel_mcp::McpServerConfig) -> Option<String> {
     let entry = catalog_entry(server.catalog_id.as_deref())?;
@@ -1131,7 +1131,7 @@ pub(crate) fn catalog_pin(server: &kernel_mcp::McpServerConfig) -> Option<String
 }
 
 /// The launch confirmation for a `stdio` server. A catalog server binds the
-/// PUBLISHED SHA-256 (never a re-read of the file, #524 P3), so the kernel's
+/// PUBLISHED SHA-256 (never a re-read of the file), so the kernel's
 /// spawn-time re-hash only passes for exactly the curated binary.
 fn stdio_launch_binding(
     server: &kernel_mcp::McpServerConfig,
@@ -1259,7 +1259,7 @@ pub(super) async fn approve_server(
     let ledger_agent = req.agent.clone();
     let ledger_hash = req.hash.clone();
     let secret = state.token.confirmation_key().to_vec();
-    // Review P3: the audit row is written inside the same commit path, before
+    // The audit row is written inside the same commit path, before
     // `mcp.toml` is rewritten and before `mutate` starts the runtime. A store
     // that cannot record the approval fails the call (500 `ledger_failed`) and
     // leaves the server disabled.
@@ -1297,7 +1297,7 @@ pub(super) async fn approve_server(
             if !server.agents.contains_key(&req.agent) {
                 return Err("agent_not_in_preview");
             }
-            // M6-2: a catalog stdio binary can be swapped between the preview and
+            // A catalog stdio binary can be swapped between the preview and
             // this call. Re-run the catalog checks and bind the PUBLISHED sha —
             // never a fresh read — so the kernel's spawn-time re-hash only passes
             // for exactly the curated file.
@@ -1377,7 +1377,7 @@ pub(super) async fn confirmation_preview(
     if server.transport != kernel_mcp::McpTransport::Stdio {
         return fail(StatusCode::BAD_REQUEST, "not_stdio");
     }
-    // Review P2: a catalog stdio entry has exactly one install path,
+    // A catalog stdio entry has exactly one install path,
     // `POST .../approve`, which re-runs the published-SHA checks and binds the
     // verified checksum. The legacy route must not preview a re-read file.
     if server.catalog_id.is_some() {
@@ -1447,7 +1447,7 @@ pub(super) async fn confirm_server(
         if server.transport != kernel_mcp::McpTransport::Stdio {
             return Err("not_stdio");
         }
-        // Review P2: never confirm a catalog stdio entry from whatever bytes
+        // Never confirm a catalog stdio entry from whatever bytes
         // currently sit at `command`. `/approve` re-checks `binary_path_mutable`
         // and the published SHA, and binds that SHA; re-reading the file here
         // would let a swapped catalog binary be confirmed as if curated.
@@ -1698,7 +1698,7 @@ pub(super) async fn add_server(
         if config.server.iter().any(|s| s.id == server.id) {
             return fail(StatusCode::CONFLICT, "server_exists");
         }
-        // Item 1 (keep): a quarantined entry already owns this id. Refuse
+        // A quarantined entry already owns this id. Refuse
         // rather than creating a twin the owner could never promote or delete
         // unambiguously. The owner deletes or fixes the quarantined entry first.
         if config.quarantined.iter().any(|entry| entry.id == server.id) {
@@ -1785,7 +1785,7 @@ pub(super) async fn add_server(
         if config.server.iter().any(|s| s.id == server.id) {
             return Err("server_exists");
         }
-        // Item 1 (keep): the same check again, now under the write lock, so a
+        // The same check again, now under the write lock, so a
         // quarantined entry written between the pre-check and here still wins.
         if config.quarantined.iter().any(|entry| entry.id == server.id) {
             return Err("id_taken_by_quarantined_entry");
@@ -1822,7 +1822,7 @@ fn mcp_test_digest(url: &str, tools: &[String]) -> String {
 fn has_secret(value: &str) -> bool {
     kernel_mcp::looks_like_secret(value)
 }
-/// Stable warning code for an import that dropped HTTP headers (item 6).
+/// Stable warning code for an import that dropped HTTP headers.
 ///
 /// A code, never a sentence: the Mac app owns the EN/FR copy, exactly as with
 /// [`CONFIRMATION_WARNING_CODE`].
@@ -1897,7 +1897,7 @@ pub(super) async fn set_agent_tools(
         let Some(s) = c.server.iter_mut().find(|s| s.id == id) else {
             return Err("server_not_found");
         };
-        // M6-3: the approval digest covers every agent's allowlist. Read what
+        // The approval digest covers every agent's allowlist. Read what
         // was valid before the edit, so a shrink can keep it and a growth
         // cannot.
         let approved = s.is_install_approved(Some(secret.as_slice()), catalog_pin(s).as_deref());
@@ -1964,13 +1964,11 @@ async fn mutate(
 /// One MCP mutation, with an optional audit row written **before** the config
 /// write and therefore before any child starts.
 ///
-/// Review P3: the `mcp.approve` row used to be written after the enable and a
-/// failure was only warned about, so a crash (or a store that could not open)
-/// left an enabled, spawned server with no ledger row. Now the row is part of
-/// the commit path: if the store cannot open or log, nothing is written,
-/// nothing is enabled or started, and the caller gets 500 `ledger_failed`. The
-/// reverse window (row written, file write then fails) over-records an approval
-/// that did not take effect, which is the fail-closed direction.
+/// The `mcp.approve` row is written as part of the commit path: if the store
+/// cannot open or log, nothing is written, nothing is enabled or started, and
+/// the caller gets 500 `ledger_failed`. The reverse window (row written, file
+/// write then fails) over-records an approval that did not take effect, which
+/// is the fail-closed direction.
 async fn mutate_audited(
     state: &std::sync::Arc<ApiState>,
     audit: Option<(&'static str, serde_json::Value)>,
@@ -1997,7 +1995,7 @@ async fn mutate_audited(
             // Structural only: a single invalid or unconfirmed server is
             // quarantined by the runtime, never a whole-file write failure.
             config.validate_structural().map_err(|_| "invalid_server")?;
-            // Item 7: a re-parse of the retained source that fails is refused
+            // A re-parse of the retained source that fails is refused
             // rather than silently replacing the owner's file from scratch.
             let text = config.to_toml_string().map_err(|_| "mcp_config_invalid")?;
             let gateway = kernel_core::SandboxHome::open(&home).map_err(|_| "write_failed")?;
@@ -2059,9 +2057,9 @@ async fn mutate_audited(
 fn fail(status: StatusCode, code: &'static str) -> Response {
     let message = match code {
         "pack_server_mismatch" => "An existing server with this ID does not match the selected catalog transport or endpoint. Restore the catalog settings or remove that server first.",
-        // Item 1 (keep): never silently create a twin of an unusable entry.
+        // Never silently create a twin of an unusable entry.
         "id_taken_by_quarantined_entry" => "An entry with this ID is already in mcp.toml but could not be loaded, so it is quarantined. Delete that entry or fix it first, then add this server.",
-        // Review P2: catalog servers and non-catalog stdio installs have one
+        // Catalog servers and non-catalog stdio installs have one
         // install path: the approval, whose preview covers tools and agents.
         "use_approve" => "This install must be approved from its preview: GET /v1/mcp/servers/{id}/approval, then POST /v1/mcp/servers/{id}/approve.",
         "ledger_failed" => "The approval could not be recorded in the audit log, so nothing was enabled. Check the store and retry.",
@@ -2325,7 +2323,7 @@ mod tests {
         assert!(!pack_server_matches(&server, &entry));
         server.command = None;
         assert!(pack_server_matches(&server, &entry));
-        // Review P2: no install-relevant override may ride along with a pack.
+        // No install-relevant override may ride along with a pack.
         server.args = vec!["--write".into()];
         assert!(!pack_server_matches(&server, &entry));
         server.args.clear();
@@ -2372,7 +2370,7 @@ mod tests {
     fn import_warns_when_headers_were_dropped() {
         let warnings = import_warnings(true);
         assert_eq!(warnings, vec![IMPORT_HEADERS_WARNING_CODE]);
-        // Item 6: a stable code, never a sentence the daemon would have to
+        // A stable code, never a sentence the daemon would have to
         // translate or that could leak a value.
         assert!(!warnings[0].contains(' '), "the warning must be a code");
         assert!(!warnings[0].contains("${"));
@@ -2398,7 +2396,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_uses_the_pinned_checked_transport() {
-        // Item 11: `test_server` must use `new_checked`, which refuses a
+        // `test_server` must use `new_checked`, which refuses a
         // private host. `HttpTransport::new` alone would accept it.
         assert!(
             pinned_test_transport("http://127.0.0.1:9/mcp")
@@ -2410,7 +2408,7 @@ mod tests {
 
     #[test]
     fn packs_exclude_catalog_entries_with_an_unverified_endpoint() {
-        // Item 13: the stdio INSEE entry has endpoint = "unverified".
+        // The stdio INSEE entry has endpoint = "unverified".
         let unverified = catalog_entry(Some("mcp-insee-entreprises")).unwrap();
         assert_eq!(unverified.endpoint.as_deref(), Some("unverified"));
         assert!(!catalog_endpoint_usable(&unverified));
@@ -2420,14 +2418,14 @@ mod tests {
 
     #[test]
     fn confirmation_preview_sends_a_warning_code_and_the_high_risk_key() {
-        // Item 6 (GLM): the daemon ships a code, never an English sentence, and
+        // The daemon ships a code, never an English sentence, and
         // the JSON key Swift maps is `high_risk`.
         assert_eq!(CONFIRMATION_WARNING_CODE, "mcp_stdio_confirmation");
         assert!(
             !CONFIRMATION_WARNING_CODE.contains(' '),
             "the warning must be a stable code, not copy"
         );
-        // Item 2: the generic non-catalog warning is its own stable code, and
+        // The generic non-catalog warning is its own stable code, and
         // it is set whatever the heuristic `high_risk` says.
         assert_eq!(UNVERIFIED_PROGRAM_WARNING_CODE, "stdio_unverified_program");
         assert!(!UNVERIFIED_PROGRAM_WARNING_CODE.contains(' '));
@@ -2454,7 +2452,7 @@ mod tests {
 
     #[test]
     fn a_quarantined_entry_survives_the_api_rewrite_verbatim() {
-        // Item 1: the rewrite path the confirm/revoke endpoints use must keep
+        // The rewrite path the confirm/revoke endpoints use must keep
         // an unusable entry byte-for-byte, never drop it.
         let bad = "[[server]]\nid = \"bad\"\ntransport = \"carrier-pigeon\"\n";
         let text = format!(

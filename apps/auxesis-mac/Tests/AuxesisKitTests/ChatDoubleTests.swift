@@ -1,4 +1,4 @@
-// CHAT-DOUBLE-1: one turn shows one agent bubble. The frames below are the
+// One turn shows one agent bubble. The frames below are the
 // daemon's real shapes (crates/auxd/src/api/wire.rs, turn_events.rs): a
 // streamed round carries a `draft-<thread>-<run>-<round>` id, the stored reply
 // that ends it names that draft in `draft_id`, and every row names its run.
@@ -191,8 +191,8 @@ import Testing
         store.stop()
     }
 
-    /// Item 2: a failed stream's partial draft goes, and the next turn's
-    /// round 1 never appends into it.
+    /// A failed stream's partial draft goes, and the next turn's first
+    /// round never appends into it.
     func testAFailedStreamLeavesNoDraftForTheNextTurn() {
         let transport = FakeTransport()
         transport.eventScripts = [.hold([])]

@@ -343,8 +343,8 @@ impl Rehydrator {
         scanned
     }
 
-    /// One pass. A value holding a reference (a span took a kept token with it,
-    /// TOK-CONSISTENT-1) is read once more, `nested`; deeper is the marker.
+    /// One pass. A value holding a reference (a span took a kept token with it)
+    /// is read once more, `nested`; deeper is the marker.
     fn scan_at(&self, buf: &str, last: bool, nested: bool, links: &mut LinkGuard) -> Scanned {
         let mut text = String::with_capacity(buf.len());
         let mut unavailable = false;
@@ -1053,7 +1053,7 @@ mod tests {
         assert_eq!(shown.text, format!("⟦{PERSON}⟧"));
     }
 
-    /// TOK-CONSISTENT-1 F5: one level deep, then the marker.
+    /// One level deep, then the marker.
     #[test]
     fn a_value_holding_a_reference_never_shows_it_raw() {
         let tokens = table();

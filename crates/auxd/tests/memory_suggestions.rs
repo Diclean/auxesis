@@ -1,4 +1,4 @@
-//! Acceptance tests: the model proposes local memory and the
+//! The model proposes local memory and the
 //! owner decides what to keep. Every test uses a temp home and fake provider.
 
 mod common;

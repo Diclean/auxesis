@@ -2096,7 +2096,7 @@ mod tests {
 
     /// The demonstrated NEW-1 scenario: a workspace file the model can read is
     /// owner private data, so the fetch that follows must ask even under an
-    /// `allow` rule. The read itself stays card-free (PR #63).
+    /// `allow` rule. The read itself stays card-free.
     #[tokio::test]
     async fn a_workspace_file_read_marks_the_conversation_private_so_the_fetch_asks() {
         let harness = Harness::new();

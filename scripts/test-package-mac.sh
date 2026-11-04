@@ -64,7 +64,7 @@ echo "== 1b. the build number"
 # commit; any integer of 1 or more is accepted, and 0, a negative, a dotted
 # version or an empty value is refused. 1 is the floor: the app reads a
 # missing or unreadable CFBundleVersion as 1 too, and the updater only needs
-# a manifest build that is greater (BUILD-NUMBER-P3).
+# a manifest build that is greater.
 COMMIT_COUNT="$(git -C "$REPO_ROOT" rev-list --count HEAD)"
 DRY_BUILD="$(printf '%s\n' "$DRY_OUT" | awk '$1 == "build" { print $2; exit }')"
 [ "$DRY_BUILD" = "$COMMIT_COUNT" ] && ok "the default build number is the commit count ($COMMIT_COUNT)" \

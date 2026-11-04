@@ -1,4 +1,4 @@
-//! WO-ROUTINES-1 acceptance: the owner creates, pauses and deletes recurring
+//! The owner creates, pauses and deletes recurring
 //! tasks ("routines") through the local API.
 //!
 //! A real server on an ephemeral loopback port, a temp home, no network, no

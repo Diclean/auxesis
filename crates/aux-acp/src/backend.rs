@@ -6,8 +6,8 @@
 //! the engine: everything it returns is marked tainted, and the wall-clock
 //! and output caps are enforced here.
 //!
-//! `TODO(streaming-1)`: once the streaming `message.delta` path (PR #22) is on
-//! main, the [`TurnObserver::message_chunk`] callback becomes a live delta
+//! TODO: once the streaming `message.delta` path lands, the
+//! [`TurnObserver::message_chunk`] callback becomes a live delta
 //! emitter; today the backend accumulates and emits the final message only.
 
 use std::path::PathBuf;

@@ -1,4 +1,4 @@
-//! One current-thread runtime per worker thread, reused across turns (E-11).
+//! One current-thread runtime per worker thread, reused across turns.
 //!
 //! The engine's futures are `!Send`-friendly by design (the broker is
 //! authenticated through a store handle, and one turn stays one task), so

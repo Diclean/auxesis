@@ -1,4 +1,4 @@
-// The E2 team shell: copy, icons, the sidebar rows, the thread timeline, the
+// The team shell: copy, icons, the sidebar rows, the thread timeline, the
 // mail draft, and the decoders for the NEW routes (delegations, coverage,
 // skill hash in the Ledger). No network: everything is built in memory.
 import Foundation
@@ -47,7 +47,7 @@ import Testing
         }
     }
 
-    /// ACT-FREE-GRANTS-1: Settings says why an ACP brain's reads open a card,
+    /// Settings says why an ACP brain's reads open a card,
     /// in both languages, with no privacy overclaim.
     func testSettingsExplainsWhyAnACPBrainAsksBeforeAReadInBothLanguages() {
         XCTAssertEqual(
@@ -154,7 +154,7 @@ import Testing
         XCTAssertEqual(status(.done, took: 48_000, stopped: true), "Done · 48 s", "finished work stays finished")
     }
 
-    /// VAGUE-ASK-1: a task that attempted nothing is stopped, not a failure:
+    /// A task that attempted nothing is stopped, not a failure:
     /// the chip never says "couldn't finish" on a task that never ran.
     func testATaskThatAttemptedNothingIsNotAFailure() {
         let ran = Delegation(

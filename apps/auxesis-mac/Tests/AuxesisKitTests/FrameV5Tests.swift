@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AuxesisKit
 
-/// UI-V5-FINISH-1: the v5 frame. The sidebar holds only the team; every page
+/// The v5 frame. The sidebar holds only the team; every page
 /// that used to sit under "More" stays one click away in the Records menu and
 /// one Go-menu item away (no shortcut); the four agents keep ⌘1–⌘5; a
 /// conversation fills the main area alone.

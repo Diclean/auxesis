@@ -153,7 +153,7 @@ private enum ReceiptFixtures {
         XCTAssertEqual(unknownEn, "a tool « totally_new_tool_9000 »")
     }
 
-    /// Regression (PR #104, security review FAIL P2 a/d): an id made only of invisible
+    /// An id made only of invisible
     /// characters must not disappear behind the generic phrase, and the id must
     /// sit inside the card's quote. Two invisible-only ids stay distinct because
     /// the characters are escaped, never dropped.
@@ -171,7 +171,7 @@ private enum ReceiptFixtures {
         XCTAssertNotEqual(labelA, labelB, "two invisible-only ids must not share one label")
     }
 
-    /// Regression (PR #104, security review R4 P2 B): a combining mark (category Mn) carries
+    /// A combining mark (category Mn) carries
     /// no width of its own, so `mystery` and `mystery\u{034F}` used to render
     /// identically while "Allow once" stayed available. For an unknown id every
     /// scalar outside printable ASCII is now escaped, so the pair is visibly

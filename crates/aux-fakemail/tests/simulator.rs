@@ -1,4 +1,4 @@
-//! M2 simulator acceptance: a real aux-mail client over the local fake.
+//! Simulator acceptance: a real aux-mail client over the local fake.
 //!
 //! Everything here is loopback and fictional. The client pins the simulator's
 //! self-signed `cert.pem` through the new `ca_file` setting; no webpki root is

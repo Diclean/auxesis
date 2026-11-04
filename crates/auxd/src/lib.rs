@@ -22,7 +22,7 @@ pub mod crm;
 pub mod delegation;
 /// The deterministic `collect-receipts` runner (row C1).
 pub mod docs;
-/// Extensions at daemon startup (WO-13b).
+/// Extensions at daemon startup.
 pub mod extensions;
 pub mod gateway;
 #[cfg(feature = "google")]

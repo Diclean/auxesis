@@ -1,4 +1,4 @@
-// WO UI-V5-RICH-1: agent replies as blocks, tables and chips. Pure text in,
+// Agent replies as blocks, tables and chips. Pure text in,
 // values out. Nothing here fetches, opens or evaluates anything: a link is
 // only text with a host, an image is only text, HTML stays literal.
 import Foundation
@@ -225,7 +225,7 @@ public enum TokenChip {
     }
 }
 
-/// LANG-LEAKS-1: the kernel's removal marker (`removal_text` in
+/// The kernel's removal marker (`removal_text` in
 /// the kernel's `crates/kernel-privacy/src/safetext.rs`) is one stable English text: the
 /// model sees it and the daemon stores it. Only the chip shown to the owner
 /// follows the reply's language; the stored and copied text never changes.
@@ -400,7 +400,7 @@ public enum InlineParser {
     }
 
     /// The runs of one line of a reply written in `replyLanguage`: a removal
-    /// marker chip reads in that language (display only, LANG-LEAKS-1).
+    /// marker chip reads in that language (display only).
     public static func parse(_ line: String, replyLanguage: Language) -> [InlineRun] {
         parse(line).map { run in
             guard run.chip else { return run }

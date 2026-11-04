@@ -9,8 +9,7 @@
 //!
 //! `async_imap` logs the encoded `LOGIN` command — the password included — at
 //! `TRACE`. This crate cannot silence another crate's target, so the daemon's
-//! tracing filter forces `async_imap=off` (see the `P2-3` note in
-//! `crates/auxd/src/main.rs`). Never add a subscriber here that lets
+//! tracing filter forces `async_imap=off`. Never add a subscriber here that lets
 //! `async_imap` reach `trace` while a login is in flight.
 
 use std::time::Duration;

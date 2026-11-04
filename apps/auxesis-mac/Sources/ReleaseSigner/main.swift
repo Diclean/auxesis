@@ -1,4 +1,4 @@
-// ReleaseSigner — the offline release-manifest signer (H4).
+// ReleaseSigner — the offline release-manifest signer.
 //
 // It is a SwiftPM executable target, not part of Auxesis.app: the app only
 // ever holds the public key. CryptoKit's Ed25519 is the whole dependency set.
@@ -136,7 +136,7 @@ func main() throws -> Int32 {
         throw SignerError.usage(
             "usage: ReleaseSigner generate|sign|verify … (see scripts/sign-release.sh, docs/releasing.md)")
     }
-    // Accept both `generate` and `--generate` (the work order names the flag).
+    // Accept both `generate` and `--generate`.
     let command = rawCommand.hasPrefix("--") ? String(rawCommand.dropFirst(2)) : rawCommand
     switch command {
     case "generate":

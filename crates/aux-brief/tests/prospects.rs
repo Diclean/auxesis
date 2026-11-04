@@ -1,4 +1,4 @@
-//! LEAD-1 acceptance: possible new clients are spotted locally, only suggested
+//! Possible new clients are spotted locally, only suggested
 //! (never created), and the notification carries a count and no name.
 
 use aux_brief::{

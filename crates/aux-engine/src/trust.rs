@@ -1,16 +1,15 @@
-//! Owner-presence proof for clearing a workspace's taint mark (WS-C fix
-//! rounds 4–5).
+//! Owner-presence proof for clearing a workspace's taint mark.
 //!
-//! # WS-C alone provides no owner-presence guarantee
+//! # The mark alone provides no owner-presence guarantee
 //!
 //! What follows is a speed bump on the delivery channel, not a security
 //! boundary. The code is displayed on the owner's screen; any same-user
 //! process that can read that screen's inputs (the macOS notification
-//! database, a keylogger, the process table before round 5's stdin fix) or
-//! write the store file can defeat or bypass the proof entirely. WS-D's
-//! sandbox (token unreadable, network off, notification store and process
-//! info out of reach) is the layer that turns this into a guarantee; WS-C is
-//! designed to be correct only together with it.
+//! database, a keylogger, the process table) or write the store file can
+//! defeat or bypass the proof entirely. The sandbox (token unreadable,
+//! network off, notification store and process info out of reach) is the
+//! layer that turns this into a guarantee; the proof is correct only
+//! together with it.
 //!
 //! The one promise this module keeps on its own: no tool or model can make
 //! the code reach a program of *its* choosing. The notifier executes a
@@ -22,7 +21,7 @@
 //! claim was broken because `aux workspace trust <path>` was an ordinary
 //! owner CLI: the `shell` tool runs owner commands, so one approved command
 //! (or none, under `allow shell`) could disarm the whole mechanism, and its
-//! audit row was byte-identical to a hand-run clear (security-review round 3, P1).
+//! audit row was byte-identical to a hand-run clear.
 //!
 //! The fix splits the clear into two steps.
 //!
@@ -53,7 +52,7 @@
 //! never the code — the store methods take no code parameter at all, which
 //! makes the leak structurally impossible.
 //!
-//! # Threat model / WS-D
+//! # Threat model
 //!
 //! The code travels through a channel the model cannot read (a macOS
 //! notification; the app's Inbox has no trust surface in this tree). A tool
@@ -62,7 +61,7 @@
 //! capped at 3 attempts inside a 120 s window (and the cooldown that bounds
 //! request/guess cycles survives an exhausted request). The KDF is a speed
 //! bump, not the boundary: a stolen store copy is a ~60-core-day job, and
-//! WS-D's sandbox is the layer that keeps the store (and the notification
+//! The sandbox is the layer that keeps the store (and the notification
 //! database) out of a tool's reach.
 
 use std::io::Read as _;
@@ -88,7 +87,7 @@ pub const TRUST_REQUEST_COOLDOWN_SECS: i64 = 30;
 /// store hash is ≈ 5.4e6 CPU-seconds ≈ **62 core-days** (single core; a
 /// 10-core host brings it to about a week). The per-request random salt
 /// keeps rainbow tables reusable across requests at zero. This is a speed
-/// bump, not the boundary — WS-D's sandbox is the boundary.
+/// bump, not the boundary — the sandbox is the boundary.
 const KDF_ITERATIONS: u32 = 500_000;
 
 /// Notification title; the body is built by [`notification_body`].
@@ -166,7 +165,7 @@ pub enum TrustError {
 }
 
 /// Refuse a trust action while the loaded `[shell]` config can run the shell
-/// unsandboxed (WS-C round 7).
+/// unsandboxed.
 ///
 /// The owner-presence proof exists to clear the workspace taint mark. While
 /// the shell can run unsandboxed, that mark is not the boundary — the shell
@@ -261,7 +260,7 @@ pub fn complete_trust(
     if pending.attempts >= TRUST_MAX_ATTEMPTS {
         // The attempt cap already spent this request. The row stays until
         // the cooldown/TTL so the request rate limit cannot be reset by
-        // burning the cap (security-review round 4, P2-1); no code can revive it.
+        // burning the cap; no code can revive it.
         store.log_trust_no_request(workspace, by)?;
         return Err(TrustError::NoRequest);
     }
@@ -548,7 +547,7 @@ mod tests {
             complete_trust(&store, "/ws/main", wrong, "owner-cli").unwrap_err(),
             TrustError::AttemptsExhausted
         ));
-        // The spent row stays as the cooldown watermark (P2-1)…
+        // The spent row stays as the cooldown watermark…
         assert_eq!(
             store.trust_request("/ws/main").unwrap().unwrap().attempts,
             TRUST_MAX_ATTEMPTS
@@ -571,11 +570,10 @@ mod tests {
 
     #[test]
     fn exhausting_the_cap_does_not_reset_the_request_cooldown() {
-        // P2 regression (security-review round 4, P2-1): three wrong codes used to
-        // delete the only cooldown record, so the next request was accepted
-        // immediately and every cycle delivered another owner notification.
-        // With the spent row kept in place, the request step stays limited
-        // for the remainder of the 30 s window.
+        // Three wrong codes must not delete the only cooldown record: otherwise
+        // the next request is accepted immediately and every cycle delivers
+        // another owner notification. With the spent row kept in place, the
+        // request step stays limited for the remainder of the 30 s window.
         let (_dir, path, store) = store_with_tainted();
         let notifier = FakeNotifier::new();
         request_trust(&store, "/ws/main", "owner-cli", &notifier).unwrap();
@@ -732,9 +730,8 @@ mod tests {
 
     #[test]
     fn trust_is_refused_while_the_shell_can_run_unsandboxed() {
-        // WS-C round 7: with the escape hatch on, clearing the mark would not
-        // constrain the shell, so the trust action is refused and audited —
-        // and the refusal path never reaches the code generation.
+        // With the escape hatch on, clearing the mark would not constrain the shell, so the trust
+        // action is refused and audited; the refusal path never reaches the code generation.
         let (_dir, path, store) = store_with_tainted();
         let notifier = FakeNotifier::new();
         let unsandboxed = kernel_core::ShellConfig {

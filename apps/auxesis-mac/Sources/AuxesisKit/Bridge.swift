@@ -120,14 +120,14 @@ public struct BridgeFailure: Error, Equatable {
         code: "invalid_args",
         message: "the arguments are not valid for this op")
     /// The live event no longer matches the facts the write rested on: a guest
-    /// was added, or the event moved to another calendar (CAL-DEFAULT-ID r1).
+    /// was added, or the event moved to another calendar.
     /// Nothing was written: the owner decides.
     public static let factsChanged = BridgeFailure(
         code: "facts_changed",
         message: "the event's calendar or its guests changed")
 }
 
-/// The facts a write's approval rested on (CAL-DEFAULT-ID r1).
+/// The facts a write's approval rested on.
 ///
 /// The daemon's copy of the calendar said the event sits on a calendar and
 /// has no guest. The copy may be stale, so the app checks the live event
@@ -144,7 +144,7 @@ public struct BridgeExpectations: Equatable {
     }
 }
 
-/// What the writer does with the live event's facts (CAL-DEFAULT-ID r1).
+/// What the writer does with the live event's facts.
 public enum BridgeWriteFacts: Equatable {
     /// The live event still matches what the copy said: the write goes out.
     case save
@@ -154,13 +154,13 @@ public enum BridgeWriteFacts: Equatable {
     /// The writer's one decision on the approval-free path: the live event
     /// must still sit on the same calendar with the same guest count. A guest
     /// added, or a calendar moved, refuses the write. A recurring event
-    /// refuses it too (CAL-DEFAULT-ID r2): EventKit's lookup can return the
+    /// refuses it too: EventKit's lookup can return the
     /// first occurrence, not the one the copy saw, so the check and the save
     /// could land on another one.
     ///
     /// No expectations, no check: a write that already had the owner's card
     /// is not checked twice, and a recurring update stays behind that card
-    /// (the security review's "keep recurring updates approval-gated").
+    /// so recurring updates stay approval-gated.
     public static func decide(
         liveCalendarID: String, liveAttendees: Int, recurring: Bool,
         expected: BridgeExpectations?
@@ -433,7 +433,7 @@ enum BridgeWritePlanner {
     /// nil is the default for create and "unchanged" for update; a named
     /// calendar must exist. On a create, an empty or whitespace-only name is
     /// the same as no name: the store's default. On an update, a blank name
-    /// still names a calendar and fails closed (#397).
+    /// still names a calendar and fails closed.
     private static func calendar(
         _ name: String?, calendarNames: [String], forUpdate: Bool
     ) -> Result<BridgeCalendarChoice, BridgeFailure> {
@@ -522,7 +522,7 @@ public actor BridgeHandler {
                 return (.failure(.invalidArgs), BridgeFailure.invalidArgs.code)
             }
             // The expected facts travel as a pair: half of them proves nothing,
-            // and a write is never checked halfway (CAL-DEFAULT-ID r1).
+            // and a write is never checked halfway.
             if (args.expectedCalendarID == nil) != (args.expectedAttendees == nil) {
                 return (.failure(.invalidArgs), BridgeFailure.invalidArgs.code)
             }
@@ -679,7 +679,7 @@ struct UpdateEventArgs: Decodable, Equatable {
     let location: String?
     let notes: String?
     let url: String?
-    /// The facts the write's approval rested on (CAL-DEFAULT-ID r1).
+    /// The facts the write's approval rested on.
     let expectedCalendarID: String?
     let expectedAttendees: Int?
 

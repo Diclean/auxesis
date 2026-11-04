@@ -376,8 +376,7 @@ async fn canary_survives_the_streaming_fallback() {
 
 #[tokio::test]
 async fn a_known_contact_name_reaches_the_provider_wire_as_written() {
-    // The name canary is in the owner's contacts; private mode hides no name
-    // (NAMES-OFF, owner 2026-10-19).
+    // The name canary is in the owner's contacts; private mode hides no name.
     let name = canary("canary-06");
     let server = MockServer::start().await;
     mount_reply(&server).await;
@@ -511,9 +510,9 @@ async fn a_private_turn_keeps_its_text_only_in_the_chat_history_and_the_next_tur
     second.send("Et demain ?").await.unwrap();
     drop(second);
 
-    // PRIVATE-TRANSCRIPT: the rows hold tokens; a value sits only in the
-    // session's token table, never in messages, audit, events or usage.
-    // Names are not hidden (NAMES-OFF), so only the e-mail is a hidden value.
+    // The rows hold tokens; a value sits only in the session's token table,
+    // never in messages, audit, events or usage. Names are not hidden, so only
+    // the e-mail is a hidden value.
     let hits = stored_text_containing(&db, &["camille@exemple.fr"]);
     assert!(
         !hits.is_empty(),

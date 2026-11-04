@@ -1,9 +1,7 @@
-//! Regression tests for the B-API v2 fix round (BAPIV2-01/02/03, P2-04/05/07,
-//! P3 error hygiene).
+//! Regression tests for the v2 API.
 //!
-//! This file deliberately uses only APIs that existed before the fix, so the
-//! exact same file can be compiled into a `git archive` of the pre-fix commit
-//! and its failures recorded there (see the fix report for the numbers).
+//! The file uses only stable public APIs, so it also compiles against an
+//! archive of the previous commit.
 //!
 //! Everything runs in-process on ephemeral loopback ports with temp homes and
 //! the fake provider: no network, no Keychain, no real `~/.auxesis`.
@@ -225,7 +223,7 @@ fn user_contents(response: &HttpResponse) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// BAPIV2-01: the scope of an allow-always answer is pinned to the pending ask
+// The scope of an allow-always answer is pinned to the pending ask
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -335,7 +333,7 @@ async fn allow_always_scope_is_pinned_to_the_pending_ask() {
 }
 
 // ---------------------------------------------------------------------------
-// BAPIV2-02: concurrent answers — one winner, truthful effects, parseable file
+// Concurrent answers — one winner, truthful effects, parseable file
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -406,7 +404,7 @@ async fn concurrent_allow_always_answers_are_serialized_and_truthful() {
 }
 
 // ---------------------------------------------------------------------------
-// BAPIV2-03: concurrent first sends share one session
+// Concurrent first sends share one session
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -469,7 +467,7 @@ async fn concurrent_first_sends_create_exactly_one_session() {
 }
 
 // ---------------------------------------------------------------------------
-// P2-04: concurrent turns on one session serialize and keep their own rows
+// Concurrent turns on one session serialize and keep their own rows
 // ---------------------------------------------------------------------------
 
 /// Provider that records overlap and answers with a marker derived from the
@@ -606,7 +604,7 @@ async fn concurrent_turns_on_one_session_do_not_merge_responses() {
 }
 
 // ---------------------------------------------------------------------------
-// BAPIV2-08: a job transcript never becomes the agent's chat thread
+// A job transcript never becomes the agent's chat thread
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -633,7 +631,7 @@ async fn a_job_transcript_never_becomes_the_agent_thread() {
         .unwrap();
     // The row predates the v8 watermark, so the title heuristic still
     // protects it. (A session created today has an explicit kind and is only
-    // distinguished by the watermark; see the RV2-05 regressions.)
+    // distinguished by the watermark.)
     let job_session_id = {
         let conn = aux_store::open_keyed(&store_path(&home)).unwrap();
         conn.execute(
@@ -708,7 +706,7 @@ async fn a_job_transcript_never_becomes_the_agent_thread() {
 }
 
 // ---------------------------------------------------------------------------
-// BAPIV2-02 recovery: a broken config is a clear error, never a crash
+// Recovery: a broken config is a clear error, never a crash
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -763,7 +761,7 @@ async fn an_allow_always_answer_to_a_broken_config_fails_closed() {
 }
 
 // ---------------------------------------------------------------------------
-// P2-05 + P2-07: event order and tool-content scrubbing
+// Event order and tool-content scrubbing
 // ---------------------------------------------------------------------------
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -887,7 +885,7 @@ async fn tool_role_message_new_is_scrubbed_like_tool_end() {
     let tool_text = frames
         .iter()
         .filter(|value| value["type"] == "message.new")
-        // UMF-05: tool-role messages carry their own author kind.
+        // Tool-role messages carry their own author kind.
         .find(|value| value["message"]["author"]["kind"] == "tool")
         .and_then(|value| value["message"]["blocks"][0]["text"].as_str())
         .expect("tool-role message.new")
@@ -909,7 +907,7 @@ async fn tool_role_message_new_is_scrubbed_like_tool_end() {
 }
 
 // ---------------------------------------------------------------------------
-// P3: error envelopes never echo key-shaped caller input
+// Error envelopes never echo key-shaped caller input
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

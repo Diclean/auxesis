@@ -1,4 +1,4 @@
-// MASCOT-P3: the brand guard the SVG badges had (BRAND-1), restored for the
+// The brand guard the SVG badges had, restored for the
 // agents the owner reads. The names of the old brand sheet are that brand's,
 // and another company's product is another company's: no built-in agent,
 // mascot or tint carries one. The check is a word check, and it is never

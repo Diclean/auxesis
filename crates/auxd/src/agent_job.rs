@@ -17,8 +17,8 @@
 //!   notification.
 //! - **Private mode runs it as a private chat turn.** The same session gate
 //!   tokenises every outbound text and tool argument and rehydrates locally;
-//!   the same tools are mounted; no session title is stored (G1); the
-//!   notification is held (C10).
+//!   the same tools are mounted; no session title is stored; the
+//!   notification is held.
 //! - **Notifying.** A notification can leave the Mac (iMessage) and the
 //!   gateway sends one text to every channel, so it is generic: the agent,
 //!   the job id and a fixed phrase ([`JobOutcome`]). Never the job name,
@@ -62,7 +62,7 @@ pub const MAX_SUMMARY_CHARS: usize = 2_000;
 /// Longest failure reason kept for a run (characters).
 pub const MAX_REASON_CHARS: usize = 500;
 
-/// What a job notification may say (NOTIFY-1). Fixed phrases only: a job's
+/// What a job notification may say. Fixed phrases only: a job's
 /// name, its output and a failure reason can carry client data or mail
 /// content, and the text may leave the Mac.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,8 +165,7 @@ pub struct AgentJobRunner {
     provider: Option<Box<dyn ChatProvider>>,
     /// Live config file. `[shell]` (and the whole config) is re-read for
     /// every run, so tightening the sandbox takes effect on the next job
-    /// without a daemon restart — the same per-turn reload API turns do
-    /// (security-review round 5, P2-1).
+    /// without a daemon restart, exactly as API turns do.
     config_file: PathBuf,
     rules: Vec<Rule>,
     budgets: Budgets,
@@ -174,7 +173,7 @@ pub struct AgentJobRunner {
     context: ContextConfig,
     home: PathBuf,
     notifier: Arc<dyn Notifier>,
-    /// Discovered MCP servers (P2/P4); each job mounts only the job agent's
+    /// Discovered MCP servers; each job mounts only the job agent's
     /// explicitly listed tools. `None` means no MCP tool.
     mcp: Option<McpSlot>,
     /// Contacts injected by a test. `None` reads the owner's store at each run,
@@ -295,7 +294,7 @@ impl AgentJobRunner {
         self
     }
 
-    /// Mount the discovered MCP runtime on every job turn (P2/P4).
+    /// Mount the discovered MCP runtime on every job turn.
     pub fn with_mcp(mut self, mcp: McpSlot) -> Self {
         self.mcp = Some(mcp);
         self
@@ -323,7 +322,7 @@ impl AgentJobRunner {
     /// logged, never turned into run failures. Returns whether the
     /// notification was handed to the notifier.
     fn notify(&self, job: &Job, outcome: JobOutcome) -> bool {
-        // C10: a notification leaves the app through the OS. Private mode sends
+        // A notification leaves the app through the OS. Private mode sends
         // none, and the held text is not logged. The agent's own default
         // tightens the global mode, as it does for the run itself.
         if self.notification_held(job) {
@@ -348,14 +347,14 @@ impl AgentJobRunner {
         false
     }
 
-    /// C10: private mode holds every job notification. The agent's own default
+    /// Private mode holds every job notification. The agent's own default
     /// tightens the global mode, as it does for the run itself.
     fn notification_held(&self, job: &Job) -> bool {
         let mode = agent_mode_fn(&self.home, &job.agent)();
         admit_call(PathId::C10, mode, Destination::LocalDisplay).is_err()
     }
 
-    /// A watcher's fetch (WATCH-1), through the gated `http_fetch` in
+    /// A watcher's fetch, through the gated `http_fetch` in
     /// `registry`. A failure is a silent failed run, never a notification.
     fn fetch_page(&self, job: &Job, url: &str, registry: &ToolRegistry) -> Result<String, String> {
         let fetch = registry
@@ -456,15 +455,15 @@ impl AgentJobRunner {
         let active_skills = aux_engine::load_active_skills(&self.home, &agent_config.skills)
             .map_err(std::io::Error::other)?;
         // A job transcript is its own session, durably marked `job`: it can
-        // never become the agent's chat thread (BAPIV2-08). Like a private
-        // chat, a private run stores no title (G1).
+        // never become the agent's chat thread. Like a private chat, a private
+        // run stores no title.
         let title = (mode != PrivacyMode::Private).then(|| format!("job {}", job.name));
         let session = kernel_core::sync::lock_recover(store).create_session_of_kind(
             &job.agent,
             title.as_deref(),
             "job",
         )?;
-        // The per-agent tools ceiling (B-API v3): listed tools keep their
+        // The per-agent tools ceiling: listed tools keep their
         // global rules, every other registered tool is denied for this agent.
         let mut rules = self.rules.clone();
         if let Some(tools) = &agent_config.tools {
@@ -498,10 +497,10 @@ impl AgentJobRunner {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             &mut rules,
         );
-        // WO-09: load the agent's skills at agent start, writing any
+        // Load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
         crate::agent_skills::load_agent_skills(&self.home, &job.agent, store);
-        // E-11: the current-thread runtime is cached per blocking worker
+        // The current-thread runtime is cached per blocking worker
         // thread, not rebuilt per run.
         let outcome = crate::turn_runtime::block_on(async {
             let mut session = ChatSession::start(ChatSetup {
@@ -559,7 +558,7 @@ impl JobRunner for AgentJobRunner {
         if self.is_stopped() {
             return Err("stopped by kill switch".to_string());
         }
-        // Per-agent markers (B-API v3): the scheduler skips paused agents
+        // Per-agent markers: the scheduler skips paused agents
         // before claiming; this covers a pause engaged between claim and
         // run. No notification — the owner asked for the pause.
         match agent::state(&self.home, &job.agent) {
@@ -576,10 +575,8 @@ impl JobRunner for AgentJobRunner {
             }
         };
 
-        // P2-1 regression (security-review round 5): the registry used to be frozen
-        // at daemon boot, so turning the sandbox back on never reached
-        // scheduled jobs until a restart. Re-read the config (and build the
-        // `[shell]` profile) per run, exactly like an API turn; a config that
+        // The config is re-read per run, exactly like an API turn, so turning
+        // the sandbox back on takes effect without a restart. A config that
         // cannot be loaded fails the run instead of reusing a stale, possibly
         // permissive profile.
         let verified = match kernel_core::verified_home_or_verify(&self.home) {
@@ -593,7 +590,7 @@ impl JobRunner for AgentJobRunner {
         // The run's mode is the chat turn's: the global mode, tightened by the
         // agent's own default.
         let mode = agent_mode_fn(&self.home, &job.agent)();
-        // F1: an agent run is a chat turn with tools. In private mode it goes
+        // An agent run is a chat turn with tools. In private mode it goes
         // through the same session gate as a chat turn (ChatSession tokenises
         // every outbound text and tool argument, and rehydrates locally).
         if let Err(refused) = admit_call(PathId::F1, mode, Destination::Vendor("job".to_string())) {
@@ -794,7 +791,7 @@ impl JobRunner for AgentJobRunner {
                 ),
             ),
             // The mode changed mid-run: the run stops here, and the failure says
-            // why. No notification is sent in private mode (C10).
+            // why. No notification is sent in private mode.
             Err(ChatError::Stopped) if agent_mode_fn(&self.home, &job.agent)() != mode => {
                 if mode == PrivacyMode::Private {
                     self.fail(job, "stopped: private mode is off")
@@ -813,9 +810,9 @@ impl JobRunner for AgentJobRunner {
 /// Summary for a successful run: the assistant text (scrubbed, capped) plus
 /// the count of denied approvals when there were any.
 ///
-/// F-03/P3-9: this string lands in `runs.summary`, `/v1/jobs` and
-/// `/v1/activity`, so it runs through the same shared scrub as the API
-/// previews. It is never put in a notification (NOTIFY-1).
+/// This string lands in `runs.summary`, `/v1/jobs` and `/v1/activity`, so it
+/// runs through the same shared scrub as the API previews. It is never put in
+/// a notification.
 fn success_summary(home: &Path, text: &str, denied: usize) -> String {
     let scrubbed = kernel_broker::scrub_external_preview(home, text, MAX_SUMMARY_CHARS * 4);
     let mut summary = cap_chars(&scrubbed, MAX_SUMMARY_CHARS);
@@ -1189,8 +1186,8 @@ mod tests {
         ));
         let mut budgets = Budgets::default();
         // The day is already at its cap: the first check denies before any
-        // provider call. (`0` no longer means "deny everything" — P1-1 treats
-        // it as "use the conservative default".)
+        // provider call. (`0` means "use the conservative default", not
+        // "deny everything".)
         let day = harness.store().local_day().unwrap();
         harness
             .store()
@@ -1238,10 +1235,9 @@ mod tests {
 
     #[test]
     fn a_job_in_a_touched_workspace_starts_tainted_and_asks() {
-        // WS-C redesign: the workspace mark is read when the job's session
-        // starts, so a scheduled run cannot act on a workspace an untrusted
-        // call touched without an approval the non-interactive approver will
-        // deny. Round 1 reset every job to clean.
+        // The workspace mark is read when the job's session starts, so a
+        // scheduled run cannot act on a workspace an untrusted call touched
+        // without an approval the non-interactive approver will deny.
         let mut harness = Harness::new();
         let workspace = harness.home.join("agents/main/workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -1311,12 +1307,11 @@ mod tests {
 
     #[test]
     fn tightening_shell_config_applies_to_the_next_job_run_without_restart() {
-        // P2-1 regression (security-review round 5): the job registry used to be
-        // built once at daemon boot. With `sandbox = false` +
-        // `allow_unsandboxed = true`, an `allow shell` rule must be raised to
-        // an ask (denied by the non-interactive approver); after the owner
+        // The job registry is rebuilt per run. With `sandbox = false` +
+        // `allow_unsandboxed = true`, an `allow shell` rule is raised to an
+        // ask (denied by the non-interactive approver); after the owner
         // tightens `[shell]` back, the very next run — same runner, no
-        // restart — must honour the allow rule again.
+        // restart — honours the allow rule again.
         let mut harness = Harness::new();
         write_shell_config(&harness.home, false, true);
 
@@ -1481,7 +1476,7 @@ mod tests {
 
     #[test]
     fn a_jobs_tools_ceiling_denies_write_file_even_when_globally_allowed() {
-        // B3-04 / mutation M15: the scheduled-job path builds its own rules
+        // The scheduled-job path builds its own rules
         // from `agent.toml`, and an empty allowlist must deny every registered
         // tool even when a global rule allows it — the path that runs
         // unattended every night.
@@ -1541,7 +1536,7 @@ mod tests {
         );
     }
 
-    /// MAIL-NO-SHELL, seal r1: under a global `allow shell`, a scheduled
+    /// Under a global `allow shell`, a scheduled
     /// domain-agent job is not offered the shell and a forced call is denied;
     /// an agent.toml opt-in and the chief keep it.
     #[test]
@@ -1741,7 +1736,7 @@ mod tests {
     #[test]
     fn every_canary_family_is_scrubbed_in_run_summaries() {
         // `runs.summary` / notifications are a display surface; the same
-        // shared scrubber covers every round-2 family here.
+        // shared scrubber covers every canary family here.
         let home = Path::new("/Users/secret/.auxesis");
         let cases: Vec<(String, String)> = vec![
             (
@@ -1786,7 +1781,7 @@ mod tests {
                 "summary leaked {secret:?}: {summary:?}"
             );
         }
-        // The round-3 shapes as they reach `runs.summary` / notifications
+        // More canary shapes as they reach `runs.summary` / notifications
         // (this module is compiled into the bin, so the lib's test-only
         // corpus is not reachable here).
         let round_3: Vec<(String, String)> = vec![
@@ -1845,7 +1840,7 @@ mod tests {
 
     #[test]
     fn secrets_in_output_are_scrubbed_in_summary_and_notification() {
-        // F-03/P3-9: `runs.summary` and the notification must carry the same
+        // `runs.summary` and the notification must carry the same
         // scrub as the API previews.
         let mut harness = Harness::new();
         let leaked = "wrote ghp_0123456789abcdefghijklmnop and password=hunter2swordfish";
@@ -1876,7 +1871,7 @@ mod tests {
         );
     }
 
-    /// NOTIFY-1: the text can reach iMessage, so it carries neither the
+    /// The text can reach iMessage, so it carries neither the
     /// routine's name nor the model output nor a failure reason.
     #[test]
     fn a_notification_never_carries_the_routine_name_or_its_output() {
@@ -2436,7 +2431,7 @@ mod tests {
         assert_eq!(fetched.unwrap().len(), 1, "the page was fetched");
         let wire = serde_json::to_string(&provider.requests()).unwrap();
         assert!(wire.contains("place") && !wire.contains(email), "{wire}");
-        // C10: private mode sends no notification, so the watcher stays armed.
+        // Private mode sends no notification, so the watcher stays armed.
         assert_eq!(harness.notifier.count(), 0);
         assert!(harness.store().job_by_id(id).unwrap().unwrap().enabled);
         // The held hit stored the hash: the same page asks the model nothing.

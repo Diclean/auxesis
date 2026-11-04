@@ -1,11 +1,11 @@
-//! C1 review: `collect-receipts` runs through the daemon's skill dispatch.
+//! `collect-receipts` runs through the daemon's skill dispatch.
 //!
 //! The fake provider forces the skill once; the daemon's own
 //! [`attach_skill_runtime`] hands the executor the `docs.ingest` connector, and
 //! the deterministic collector writes the evidence registry. No model is asked
 //! to read a document, and the fake mail API is the only mailbox.
 //!
-//! DOC-COLLECT-1 adds the end-to-end acceptance: the fictional demo mailbox
+//! The end-to-end acceptance: the fictional demo mailbox
 //! (the receipt for VF-2210 with its PDF) → the collect → the Documents list.
 
 mod common;
@@ -110,7 +110,7 @@ impl MailApi for CollectMail {
         _: u32,
     ) -> Result<FetchedAttachments, MailError> {
         // One receipt per mailbox, so a collect that names no account files
-        // both of them (DOC-COLLECT-1).
+        // both of them.
         let (bytes, sha256) = if account == "work" {
             (WORK_PDF_BYTES, WORK_PDF_SHA256)
         } else {
@@ -177,7 +177,7 @@ impl ChatProvider for DocsProvider {
         );
         if self.offered.lock().unwrap().len() == 1 {
             // The fill names no account: the model is never told the slug, and
-            // the collector reads the only configured mailbox (DOC-COLLECT-1).
+            // the collector reads the only configured mailbox.
             let arguments = json!({
                 "slots": {},
                 "calls": [{
@@ -298,7 +298,7 @@ async fn collect_receipts_dispatches_docs_ingest_and_writes_the_registry() {
     assert_eq!(offered[0], vec!["skill__collect-receipts".to_string()]);
 
     // The connector ran the real registry write, over both mailboxes: a
-    // collect that names no account reads every configured one (DOC-COLLECT-1).
+    // collect that names no account reads every configured one.
     assert_eq!(count(&home, "documents"), 2, "one document per mailbox");
     assert_eq!(count(&home, "evidence_source"), 2, "one source per mailbox");
     assert_eq!(open_blob(&home, PDF_SHA256), PDF_BYTES);
@@ -346,7 +346,7 @@ fn open_blob(home: &std::path::Path, sha256: &str) -> Vec<u8> {
     aux_store::open_evidence(&key, sha256, &raw).expect("the blob opens")
 }
 
-/// M5-5: a fresh home, as the daemon starts it: the shipped files are in, the
+/// A fresh home, as the daemon starts it: the shipped files are in, the
 /// only configured model is unreachable (`providers.toml` when `providers`).
 fn owner_home(mode: &str, providers: bool) -> (tempfile::TempDir, PathBuf) {
     let dir = tempdir().unwrap();
@@ -456,7 +456,7 @@ fn with_no_mailbox_and_no_model_the_collect_says_so_and_chat_still_needs_one() {
     );
 }
 
-/// DOC-COLLECT-1: a receipt with a PDF attachment reaches the Documents list.
+/// A receipt with a PDF attachment reaches the Documents list.
 ///
 /// The fictional demo mailbox holds the receipt for invoice VF-2210 with its
 /// PDF attachment. The collect runs through the daemon's own `docs.ingest`

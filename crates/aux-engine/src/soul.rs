@@ -182,9 +182,8 @@ pub fn load_or_create(home: &Path, agent: &str) -> Soul {
     }
 }
 
-/// Write the default soul through the verified sandbox home handle (J-02
-/// write gateway), never following a symlink and never clobbering an existing
-/// file.
+/// Write the default soul through the verified sandbox home handle, never
+/// following a symlink and never clobbering an existing file.
 fn write_default(home: &Path, agent: &str, content: &str) -> std::io::Result<()> {
     let handle = kernel_core::SandboxHome::open(home)?;
     let rel = Path::new("agents").join(agent).join("soul.md");

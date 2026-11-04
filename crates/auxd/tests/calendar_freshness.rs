@@ -1,4 +1,4 @@
-//! CAL-SNAPSHOT-STALE: the calendar copy says how old it is.
+//! The calendar copy says how old it is.
 //!
 //! Only the app reads EventKit; it publishes a snapshot every 30 minutes and
 //! keeps the old copy when it cannot. The snapshot carries its own capture
@@ -145,7 +145,7 @@ fn the_status_route_says_how_fresh_the_calendar_copy_is() {
     assert_eq!(stale["fresh"], false, "a four-day-old copy is not fresh");
     assert_eq!(at(&stale["updated_at"]).timestamp(), old.timestamp());
 
-    // A build before CAL-PAGE-1 publishes no capture facts: still accepted,
+    // A snapshot with no capture facts: still accepted,
     // never fresh, its age unknown.
     publish(&EventKitSnapshot {
         captured_at: None,
@@ -236,7 +236,7 @@ fn coverage_fails_closed_on_every_unknown() {
     ));
 }
 
-/// M4-3b r5: the free-times read asks for its search window, whole local
+/// The free-times read asks for its search window, whole local
 /// days as UTC bounds (`free_times::search_span`, pinned for Budapest in its
 /// own tests), and only the copy's capture facts decide whether it is held.
 #[test]

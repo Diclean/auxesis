@@ -191,7 +191,7 @@ impl BridgeInner {
     }
 
     /// Retire one id when its deadline fired. The decision is a pure function
-    /// of whether the entry is still pending (P2-1): if it is, the timeout
+    /// of whether the entry is still pending: if it is, the timeout
     /// wins; if not, the answer route won the race under this lock.
     fn retire_on_timeout(&mut self, id: &str) -> TimeoutOutcome {
         match self.pending.remove(id) {
@@ -210,7 +210,7 @@ impl BridgeInner {
 /// open. A call publishes its request frame on the shared events broadcast, so
 /// the frame reaches **every** authenticated events socket; every app socket
 /// is in the same loopback + local-token trust domain. Routing a request to
-/// one specific app is A2b-app work, not this one (P3-3/P3-4).
+/// one specific app is separate work, not this one.
 pub struct Bridge {
     home: PathBuf,
     events: broadcast::Sender<String>,
@@ -247,7 +247,7 @@ impl Bridge {
         let started = Instant::now();
         let id = mint_id();
         // The request row lands first on every path, so request and result
-        // rows always pair (P3-5a).
+        // rows always pair.
         self.journal_request(op, &id).await;
 
         if self.events.receiver_count() == 0 {
@@ -263,7 +263,7 @@ impl Bridge {
             inner.pending.insert(id.clone(), Pending { answer: sender });
         }
         // Retires the id on every exit path below, including a caller whose
-        // future is dropped mid-wait (P2-2).
+        // future is dropped mid-wait.
         let _pending = PendingGuard {
             bridge: self,
             id: id.clone(),
@@ -286,7 +286,7 @@ impl Bridge {
 
         let deadline = self.deadline(op);
         // `&mut receiver`: the deadline must not drop the channel, so a late
-        // answer that raced the timer can still be read (P2-1).
+        // answer that raced the timer can still be read.
         let waited = match timeout(deadline, &mut receiver).await {
             Ok(Ok(answer)) => Some(answer),
             // The deadline fired, or the waiter's sender was dropped without
@@ -318,7 +318,7 @@ impl Bridge {
         }
     }
 
-    /// Resolve a fired deadline against the pending table (P2-1).
+    /// Resolve a fired deadline against the pending table.
     ///
     /// If the entry is still pending the timeout wins and `None` is returned.
     /// If it is gone, the answer route removed it while holding the same lock
@@ -391,7 +391,7 @@ impl Bridge {
 
     /// Append one audit row with the verified-home writer the other auxd
     /// modules use. The store open is blocking, so it runs on the blocking
-    /// pool (P3-5b). A failed write is a warning: the call's outcome does not
+    /// pool. A failed write is a warning: the call's outcome does not
     /// depend on the audit.
     async fn journal(&self, kind: &str, payload: Value) {
         let (home, kind, text) = (self.home.clone(), kind.to_string(), payload.to_string());
@@ -427,7 +427,7 @@ fn result_payload(op: BridgeOp, id: &str, outcome: &str, elapsed: Duration) -> V
 }
 
 /// Test-only: the thread that last ran [`write_journal`], so a unit test can
-/// prove the blocking store open is not run on the async worker (P3-5b).
+/// prove the blocking store open is not run on the async worker.
 #[cfg(test)]
 static JOURNAL_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
 
@@ -447,8 +447,8 @@ fn write_journal(home: &std::path::Path, kind: &str, text: &str) {
     }
 }
 
-/// Retires one request id on every exit path, including a dropped caller
-/// (P2-2). The guard is armed while the id is pending; a normal exit retires
+/// Retires one request id on every exit path, including a dropped caller.
+/// The guard is armed while the id is pending; a normal exit retires
 /// the id first, so the drop finds nothing left to do.
 struct PendingGuard<'a> {
     bridge: &'a Bridge,
@@ -470,7 +470,7 @@ impl Drop for PendingGuard<'_> {
             }
         };
         if retired {
-            // The caller's future was dropped without a result (P2-2).
+            // The caller's future was dropped without a result.
             self.bridge.journal_detached(
                 "bridge.result",
                 result_payload(self.op, &self.id, "cancelled", self.started.elapsed()),
@@ -574,11 +574,11 @@ struct UpdateEventArgs {
     notes: Option<String>,
     #[serde(default)]
     url: Option<String>,
-    /// The calendar the event must still sit on (CAL-DEFAULT-ID r1). The app
+    /// The calendar the event must still sit on. The app
     /// refuses the write when the live event is on another calendar.
     #[serde(default)]
     expected_calendar_id: Option<String>,
-    /// The guest count the event must still have (CAL-DEFAULT-ID r1).
+    /// The guest count the event must still have.
     #[serde(default)]
     expected_attendees: Option<usize>,
 }
@@ -623,7 +623,7 @@ fn validate_update_event(args: &Value) -> Result<(), String> {
             return Err("event end must be after its start".to_string());
         }
     }
-    // The expected facts are names and a count: both bounded (CAL-DEFAULT-ID r1).
+    // The expected facts are names and a count: both bounded.
     if parsed.expected_calendar_id.is_some() != parsed.expected_attendees.is_some() {
         return Err("the expected facts must travel as a pair".to_string());
     }

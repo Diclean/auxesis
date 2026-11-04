@@ -1,4 +1,4 @@
-//! DOC-COLLECT-1: the receipts collector's mail path.
+//! The receipts collector's mail path.
 //!
 //! Four shapes are pinned here, with fictional data only: a call that names a
 //! mailbox account this Mac does not have — the model is never told the slug,

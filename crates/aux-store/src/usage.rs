@@ -571,7 +571,7 @@ impl Store {
         }
         if actual.usd_cents > 0 {
             // Money actually spent: the provider-reported cost or the
-            // per-model price table (P2-3). Without this row the daily
+            // per-model price table. Without this row the daily
             // `usd_cents` cap could never bind nor warn.
             tx.execute(
                 "INSERT INTO usage(agent, at, kind, amount, unit, run_id)

@@ -1,4 +1,4 @@
-//! M0 acceptance tests: config round-trip, strict leaf structs, defaults and
+//! Acceptance tests: config round-trip, strict leaf structs, defaults and
 //! limit clamping. Offline only — no socket is opened anywhere in this file.
 
 use std::time::Duration;

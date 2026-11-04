@@ -1,4 +1,4 @@
-// WO UI-V5-RICH-1: an agent reply as blocks (v5 contract). Display only: a
+// An agent reply as blocks (v5 contract). Display only: a
 // link is underlined text with its host on hover, never opened from here; no
 // image or HTML is ever loaded. Colours are Palette tokens by name.
 import AppKit

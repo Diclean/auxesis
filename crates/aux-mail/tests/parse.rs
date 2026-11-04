@@ -1,4 +1,4 @@
-//! M4: parse, decode, sanitise and the untrusted banner. Offline only.
+//! Parse, decode, sanitise and the untrusted banner. Offline only.
 
 use aux_mail::error::MailError;
 use aux_mail::limits::Limits;

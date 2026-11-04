@@ -26,7 +26,7 @@ import Testing
         XCTAssertFalse(LaunchPolicy.shouldActivate(env: ["AUXESIS_MAC_BACKGROUND": "1"]))
     }
 
-    // APP-FOCUS-1: `open -g -j` launches the app hidden and inactive; no activation then.
+    // `open -g -j` launches the app hidden and inactive; no activation then.
     func testHiddenAndBackgroundLaunchesAreTold() {
         XCTAssertTrue(LaunchPolicy.launchedInBackground(isHidden: true, isActive: false, inBundle: true), "open -g -j")
         XCTAssertTrue(LaunchPolicy.launchedInBackground(isHidden: false, isActive: false, inBundle: true), "open -g")

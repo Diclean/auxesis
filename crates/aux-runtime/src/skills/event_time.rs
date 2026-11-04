@@ -1,4 +1,4 @@
-//! The time of a calendar event, resolved before its card (M4-2).
+//! The time of a calendar event, resolved before its card.
 //!
 //! The model writes the owner's wall time and maybe an IANA zone, never an
 //! offset (it is told only today's). The card shows the zone, real offsets,

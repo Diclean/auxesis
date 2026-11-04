@@ -1,4 +1,4 @@
-//! Acceptance: Aux answers "how many requests left the Mac
+//! Aux answers "how many requests left the Mac
 //! today?" from the record the sidebar footer counts. A private turn calls
 //! `privacy_record_summary` with no card; the brain receives the tool's
 //! answer byte for byte, its count matches `GET /v1/receipts`, and it holds

@@ -24,10 +24,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 
 /// The owner-account tools whose private-mode arguments are restored to real
-/// values (D24, TOK-3, TOK-DELEGATE): each acts on the Mac or on the owner's own
-/// account server (the IMAP server already holds that mail), never on a third
-/// party. An explicit allowlist by name and path: any other tool, a new one, or
-/// a known name on another path keeps the tokens (MCP B13/B14, web B6).
+/// values: each acts on the Mac or on the owner's own account server (the IMAP
+/// server already holds that mail), never on a third party. An explicit
+/// allowlist by name and path: any other tool, a new one, or a known name on
+/// another path keeps the tokens.
 #[rustfmt::skip]
 const OWNER_ACCOUNT_TOOLS: &[(PathId, &[&str])] = &[
     (PathId::B2, &["remember", "forget", "suggest_memory"]), (PathId::B3, &["read_file"]),
@@ -133,7 +133,7 @@ fn argument_ask_detail(
     }
     // The session's own tokens hold no value, but the screen's joined
     // letters-and-digits view could read a random token body as an IBAN and
-    // refuse the call by chance (TOK-7, ~1 call in 5). Only minted tokens are
+    // refuse the call by chance (~1 call in 5). Only minted tokens are
     // blanked; any other token-shaped text is screened as it is.
     let screened = without_minted_tokens(arguments, minted);
     kernel_broker::argument_screen::identifier_in_arguments(&screened)
@@ -212,8 +212,8 @@ impl<'a> ChatSession<'a> {
     #[allow(clippy::await_holding_lock)]
     /// A copy of the session's tokens. The lock is taken and released here, so
     /// no guard is held across the executor's awaits.
-    /// It holds this turn's handed pairs too (TOK-DELEGATE); a private row
-    /// stores the pairs its own tokens need (PRIVATE-TRANSCRIPT), nothing else.
+    /// It holds this turn's handed pairs too; a private row stores the pairs
+    /// its own tokens need, nothing else.
     pub(super) fn token_snapshot(&self) -> SessionTokenStore {
         let mut tokens = kernel_core::sync::lock_recover(&self.skill_tokens).clone();
         tokens.record(&self.handoff.resolvable());
@@ -463,14 +463,14 @@ impl<'a> ChatSession<'a> {
 
     /// Authorize and run one tool call, returning the tool-result text.
     ///
-    /// Runs with the conversation's current taint state (WS-C), so the broker
+    /// Runs with the conversation's current taint state, so the broker
     /// raises an `allow` rule to `ask` for consequential calls while tainted
     /// (only tools in the registry's explicit read-only class are exempt),
-    /// and with the tool's execution mode (WS-C round 7), so a call that will
+    /// and with the tool's execution mode, so a call that will
     /// run unsandboxed is raised to `ask` on the first call — no taint mark
     /// required, and no `allow` rule can auto-run it.
     ///
-    /// Untrusted-class tools are **write-ahead tainted** (WS-C redesign): the
+    /// Untrusted-class tools are **write-ahead tainted**: the
     /// conversation and the workspace are marked and persisted *before* the
     /// call runs, so a cancelled, killed, timed-out or crashed call still
     /// leaves both tainted. If the mark cannot be persisted, the call is
@@ -518,11 +518,11 @@ impl<'a> ChatSession<'a> {
         // A web call can leak its arguments even if a tool was mistakenly
         // registered as read-only. It must never bypass a forced egress ask.
         let read_only = self.registry().is_read_only(&name) && !performs_egress && !leaves_machine;
-        // WS-C round 7: the shell profile is an input to the authorization
+        // The shell profile is an input to the authorization
         // decision. A tool that will run unsandboxed can never be auto-run by
         // an allow rule — on the *first* call, before any taint mark exists.
         // Unknown tools fail closed (the registry answers Unsandboxed).
-        // SHELL-NETWORK-ASK: a sandboxed shell with `[shell] network = true`
+        // A sandboxed shell with `[shell] network = true`
         // reports Networked and gets the same bar. Private mode forces the
         // shell's network off at the tool boundary (`shell.rs`), so there it is
         // an ordinary sandboxed call and keeps its pre-existing allow-rule
@@ -542,12 +542,12 @@ impl<'a> ChatSession<'a> {
         // itself happens in the authorized branch below, persisted there —
         // a read the broker refuses must not mark private data.
 
-        // P2 regression (security-review round 3): the workspace mark was read once
-        // at session start, so a conversation that started clean kept running
-        // clean even after another conversation touched the workspace. Re-read
-        // it before every authorization (one indexed SELECT; skipped once the
-        // in-memory taint already forces an ask). A read failure fails closed
-        // as unknown — every consequential call then asks.
+        // The workspace mark is read before every authorization, not once at
+        // session start: a conversation that started clean must not keep
+        // running clean after another conversation touched the workspace. One
+        // indexed SELECT; skipped once the in-memory taint already forces an
+        // ask. A read failure fails closed as unknown — every consequential
+        // call then asks.
         if !self.taint.forces_ask() {
             match self
                 .store
@@ -620,7 +620,7 @@ impl<'a> ChatSession<'a> {
         // arguments and masks every other token-shaped string.
         call_ctx.session_tokens = Some(Arc::new(self.token_snapshot().tokens()));
 
-        // The approval wait is cancellable too (P2-1): a client disconnect
+        // The approval wait is cancellable too: a client disconnect
         // or the turn timeout must not leave the turn (and the per-session
         // lock) waiting on an answer up to the approval timeout. On cancel
         // the future is dropped; `EngineTurnRunner` then retires the turn's
@@ -674,7 +674,7 @@ impl<'a> ChatSession<'a> {
                 // the hardline deny floor an edit can never widen; its
                 // `web.fetch` refusal row is already written.
                 let edited_arguments = auth.arguments_were_edited();
-                // D24, TOK-3 and TOK-DELEGATE: the owner-account tools (on the
+                // The owner-account tools (on the
                 // Mac or the owner's own account server, `OWNER_ACCOUNT_TOOLS`)
                 // act for the owner. In private
                 // mode their arguments carry this session's tokens; restore the
@@ -798,7 +798,7 @@ impl<'a> ChatSession<'a> {
                         error_kind: None,
                     });
                 };
-                // TOK-DELEGATE: only `delegate` reads the calling session, to
+                // Only `delegate` reads the calling session, to
                 // hand the task's token pairs over and take the answer's back.
                 let caller = crate::handoff::Caller {
                     session_id: self.session.id,
@@ -1143,7 +1143,7 @@ mod tests {
         }
     }
 
-    /// Harness routing contract for `http_fetch` (WS-A): a model tool call
+    /// Harness routing contract for `http_fetch`: a model tool call
     /// reaches a tool named `http_fetch` and the tool message the model
     /// receives carries the untrusted provenance tag plus the page text.
     #[tokio::test]
@@ -1329,10 +1329,10 @@ mod tests {
 
     #[tokio::test]
     async fn shell_config_disable_alone_still_refuses() {
-        // WSD-P2-07 regression: `sandbox = false` without
-        // `allow_unsandboxed = true` must refuse before anything runs. With
-        // the config unwired (the registry hardcodes the default profile),
-        // the command would run sandboxed and create `ran.txt`.
+        // `sandbox = false` without `allow_unsandboxed = true` must refuse
+        // before anything runs. With the config unwired (the registry hardcodes
+        // the default profile), the command would run sandboxed and create
+        // `ran.txt`.
         let config = shell_config(false, false, false);
         let harness = Harness::with_registry(crate::registry_from_config(&config));
         let provider = FakeProvider::scripted(
@@ -1438,8 +1438,8 @@ mod tests {
         // is the only way to run unsandboxed: the command must reach outside
         // the workspace, and the untrusted shell class must still write-ahead
         // taint the session and the workspace. With the config unwired, the
-        // default sandboxed profile denies the outside write. WS-C round 7:
-        // the first call is an ask — the approver is consulted exactly once.
+        // default sandboxed profile denies the outside write. The first call
+        // is an ask: the approver is consulted exactly once.
         let config = shell_config(false, false, true);
         let harness = Harness::with_registry(crate::registry_from_config(&config));
         let outside = harness.home.parent().unwrap().join("escaped.txt");
@@ -1509,10 +1509,9 @@ mod tests {
 
     #[tokio::test]
     async fn shell_config_unsandboxed_first_call_is_forced_to_ask() {
-        // P1 regression (security-review round 5): with the escape hatch on, an
-        // `allow shell` rule must NOT auto-run the first call in a clean
-        // workspace. A denying approver must be consulted exactly once, and
-        // the command must not run.
+        // With the escape hatch on, an `allow shell` rule must NOT auto-run the
+        // first call in a clean workspace. A denying approver must be consulted
+        // exactly once, and the command must not run.
         let config = shell_config(false, false, true);
         let harness = Harness::with_registry(crate::registry_from_config(&config));
         let outside = harness.home.parent().unwrap().join("escaped.txt");
@@ -1599,7 +1598,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_config_sandboxed_allow_rule_still_does_not_ask() {
-        // No over-asking (WS-C round 7): the safe default profile keeps its
+        // No over-asking: the safe default profile keeps its
         // pre-existing behaviour — a clean workspace with an `allow shell`
         // rule runs without consulting the approver at all.
         let harness = Harness::new();
@@ -1856,7 +1855,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_reaches_the_tool_token_and_lets_it_clean_up() {
-        // P1-2, platform-independent half: the token reaches `ToolCtx` and a
+        // The token reaches `ToolCtx` and a
         // cooperative tool observes it and runs cleanup before the turn ends.
         let harness = Harness::new();
         let started = Arc::new(AtomicBool::new(false));
@@ -2061,9 +2060,9 @@ fn previous_owner_row(
         .iter()
         .find(|row| row.id == current_id && row.role == "user")
         .and_then(|row| stored_at_seconds(&row.created_at))?;
-    // Review round #509 P3: a wall-clock rollback can stamp an older row after the
-    // active one. One impossible ordering means time cannot be trusted for
-    // this window, so fail closed instead of letting an old row look recent.
+    // A wall-clock rollback can stamp an older row after the active one. One
+    // impossible ordering means time cannot be trusted for this window, so
+    // fail closed instead of letting an old row look recent.
     for row in rows.iter().filter(|row| row.id < current_id) {
         if stored_at_seconds(&row.created_at)? > current_at {
             return None;
@@ -2083,10 +2082,9 @@ fn previous_owner_row(
             .and_then(|value| value.as_object().map(|obj| !obj.contains_key("source")))
             .unwrap_or(false),
     };
-    // Review round #509 P2: a delegated row stored before the source
-    // label existed (#415) has no meta and reads as the
-    // owner's. Only a row from the last day counts, which
-    // also keeps an old thread's names out of a new "send it".
+    // A delegated row stored before the source label existed has no meta and
+    // reads as the owner's. Only a row from the last day counts, which also
+    // keeps an old thread's names out of a new "send it".
     let recent = stored_at_seconds(&row.created_at)
         .is_some_and(|at| at <= current_at && current_at - at <= FOLLOW_UP_WINDOW_SECS);
     if !owner_row || !recent {
@@ -2159,8 +2157,8 @@ mod follow_up_stamp_tests {
         }
     }
 
-    /// Review round #509 P2: a delegated row stored before the source label (#415)
-    /// has no meta; an old one never binds a "send it".
+    /// A delegated row stored before the source label has no meta; an old one
+    /// never binds a "send it".
     #[test]
     fn only_a_recent_unlabelled_row_right_before_counts() {
         let now = "2026-11-02 12:00:00";
@@ -2214,8 +2212,8 @@ mod follow_up_stamp_tests {
         assert_eq!(stored_at_seconds(""), None);
     }
 
-    /// Review round #509 P3: a day past the month's end used to normalise into
-    /// another day, so an impossible stamp read as a real, recent one.
+    /// A day past the month's end must not normalise into another day, so an
+    /// impossible stamp never reads as a real, recent one.
     #[test]
     fn impossible_dates_and_seconds_fail_closed() {
         assert_eq!(stored_at_seconds("2026-10-32 00:00:00"), None);
@@ -2238,9 +2236,9 @@ mod follow_up_stamp_tests {
         assert_eq!(stored_at_seconds("1900-02-29 00:00:00"), None);
     }
 
-    /// Review round #509 P3: when the wall clock rolled back, an older row is
-    /// stamped after the active one, so its age cannot be trusted. The
-    /// whole window fails closed; an intact window still binds the row.
+    /// When the wall clock rolled back, an older row is stamped after the
+    /// active one, so its age cannot be trusted. The whole window fails closed;
+    /// an intact window still binds the row.
     #[test]
     fn a_clock_rollback_refuses_the_previous_owner() {
         let rolled_back = vec![

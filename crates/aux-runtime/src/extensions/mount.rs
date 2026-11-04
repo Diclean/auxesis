@@ -401,8 +401,8 @@ pub fn accept(home: &Path, name: &str) -> Result<(), MountError> {
 ///
 /// A `public` extension mounts in either mode. A `sensitive` one follows its
 /// privacy path: every stdio extension runs on `B14`, which the registry marks
-/// Covered since TOK-7 (arguments keep session tokens, replies pass the session
-/// gate), so it mounts in Private mode too.
+/// Covered (arguments keep session tokens, replies pass the session gate), so it
+/// mounts in Private mode too.
 pub fn may_mount_in_mode(
     entry: &super::catalog::Entry,
     mode: kernel_core::privacy::PrivacyMode,

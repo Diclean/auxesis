@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AuxesisKit
 
-/// UI-V5-FINISH-2: the v5 Steps card and the handoff line.
+/// The v5 Steps card and the handoff line.
 @objcMembers @MainActor final class StepsCardV5Tests: XCTestCase {
     private func step(_ text: String, _ place: StepPlace?) -> DelegationStep {
         DelegationStep(text: text, state: .done, place: place)

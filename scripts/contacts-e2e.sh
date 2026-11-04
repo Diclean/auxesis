@@ -16,7 +16,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The shared sandbox guard (J-02): inert here, but it refuses a sandbox run
+# The shared sandbox guard: inert here, but it refuses a sandbox run
 # whose HOME resolves to the real home.
 # shellcheck source=lib/guard.sh
 . "$ROOT/scripts/lib/guard.sh"

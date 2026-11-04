@@ -3,7 +3,7 @@
 //! The loader writes every `skill.load_error` row through the store's
 //! `AuditSink`, deduplicated per `(agent, file hash)` so a broken skill is
 //! logged once, not on every turn. The parsed skills are not yet wired into
-//! the turn: the executor lands in WO-11.
+//! the turn.
 
 use std::collections::HashSet;
 use std::path::Path;

@@ -214,7 +214,7 @@ fn read_only_home(dir: &Path, scenario: &str, marker: &Path) -> PathBuf {
     home
 }
 
-/// Security-review round 3, P1: an empty-tools skill on an ACP brain cannot drive the
+/// An empty-tools skill on an ACP brain cannot drive the
 /// agent's own terminal.
 #[test]
 fn an_acp_read_only_brain_refuses_the_agents_terminal() {
@@ -231,7 +231,7 @@ fn an_acp_read_only_brain_refuses_the_agents_terminal() {
     assert!(!marker.exists(), "the read-only brain ran a terminal");
 }
 
-/// Security-review round 3, P1: the same brain cannot write a file either.
+/// The same brain cannot write a file either.
 #[test]
 fn an_acp_read_only_brain_refuses_the_agents_fs_write() {
     let dir = tempfile::tempdir().unwrap();

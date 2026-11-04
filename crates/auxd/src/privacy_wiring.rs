@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn private_mode_keeps_voice_unmounted_and_mounts_mcp() {
-        // Voice (C3) is not mounted. TOK-7: both MCP transports are, since the
+        // Voice (C3) is not mounted. Both MCP transports are, since the
         // arguments keep session tokens and the reply passes the session gate.
         assert!(!kernel_core::privacy::may_mount(
             PathId::C3,
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn the_memory_rows_mount_in_private_because_they_are_covered() {
-        // K16b (D24): memory is storage. B1, B2 and G3 are Covered and Allow
+        // Memory is storage. B1, B2 and G3 are Covered and Allow
         // in Private, so `retain_mountable` keeps the memory tools mounted;
         // the engine's session gate still tokenises every result.
         for id in [PathId::B1, PathId::B2, PathId::G3] {
@@ -737,7 +737,7 @@ mod tests {
 
     #[test]
     fn the_mail_and_calendar_reads_mount_in_private_because_they_are_covered() {
-        // K16c (with MA3): B11, B19 and B22 become Covered and Allow in
+        // B11, B19 and B22 become Covered and Allow in
         // Private, so `retain_mountable` keeps the EventKit and mail tools
         // mounted; the session gate tokenises every result before the provider.
         for id in [PathId::B11, PathId::B19, PathId::B22] {
@@ -757,8 +757,8 @@ mod tests {
         }
     }
 
-    /// MA4 round 3: B20 is no longer an ungated `Absent` row. It is held by a
-    /// Gate, and in Private it is an `AskEachTime` the connector satisfies with
+    /// B20 is not an ungated `Absent` row. It is held by a Gate, and in Private
+    /// it is an `AskEachTime` the connector satisfies with
     /// the run card plus the executor's recipient filter.
     #[test]
     fn the_mail_send_row_is_gated() {

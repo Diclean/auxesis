@@ -32,7 +32,7 @@ impl GoogleBriefSource {
     }
 
     fn google(&self) -> Result<GoogleTools, BriefSourceError> {
-        // F2/B8/B10: every brief read asks the live mode, so a switch to private
+        // Every brief read asks the live mode, so a switch to private
         // ends the run's remaining reads.
         if crate::privacy_wiring::private_now(&self.home) {
             return Err(BriefSourceError::Unavailable);

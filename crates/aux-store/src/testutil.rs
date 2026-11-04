@@ -88,7 +88,7 @@ pub(crate) fn table_columns(store: &Store, table: &str) -> Vec<String> {
         .unwrap()
 }
 
-/// Create a store file in the exact v1 shape (M0 code, before v2).
+/// Create a store file in the exact v1 shape.
 pub(crate) fn write_v1_database(path: &Path) {
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(

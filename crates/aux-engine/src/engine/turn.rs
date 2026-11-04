@@ -125,8 +125,7 @@ fn is_document_tool(name: &str) -> bool {
 /// Tools that return the owner's own raw text (a file, a memory note), which
 /// may start with the document marker by chance. Only these are exempt from
 /// the marker rule: every other tool whose result carries the marker is still
-/// treated as a document on erase, so erase coverage never narrows (Fable F1;
-/// lead review of #518).
+/// treated as a document on erase, so erase coverage never narrows.
 fn is_raw_text_tool(name: &str) -> bool {
     matches!(name, "read_file" | "recall")
 }
@@ -136,7 +135,7 @@ fn is_raw_text_tool(name: &str) -> bool {
 /// result is never a document, even when its text opens with the marker. A
 /// result whose call the window no longer holds cannot be attributed (an old
 /// row), so the marker is the only evidence and it still counts, failing
-/// closed in the store's scrubber (#489/#504/#513).
+/// closed in the store's scrubber.
 fn is_document_result(
     message: &SafeMessage,
     calls: &std::collections::HashMap<&str, bool>,
@@ -443,7 +442,7 @@ impl<'a> ChatSession<'a> {
         // The first step boundary, before anything is stored. The mode is read
         // when the turn starts and the tools are built after that, so a switch
         // during setup is seen only here: no raw row may be written under a mode
-        // that has already changed (P3-1).
+        // that has already changed.
         self.enforce_stop()?;
         // A turn may run its skill once (F2): the flag belongs to this turn.
         self.skill_ran_this_turn.store(false, Ordering::Relaxed);
@@ -615,9 +614,9 @@ impl<'a> ChatSession<'a> {
                     _ = cancel.cancelled() => {
                         // A cancelled provider call never completed: settle
                         // the estimate of what already streamed, so the spend
-                        // the provider may bill is not recorded as zero
-                        // (I-01). The WS-C taint marks already written for
-                        // earlier untrusted dispatches are untouched.
+                        // the provider may bill is not recorded as zero. The
+                        // taint marks already written for earlier untrusted
+                        // dispatches are untouched.
                         if let Some(reservation) = &reservation {
                             settle_streamed(
                                 &self.store,
@@ -796,9 +795,9 @@ impl<'a> ChatSession<'a> {
                 // STOP and cancellation abort between two tool calls as well:
                 // an engaged switch must never let the rest of the batch run.
                 // Either way the batch is closed with synthetic results so
-                // the persisted assistant `tool_calls` row never dangles
-                // (P2-2: a dangling row makes the whole thread a permanent
-                // provider 400).
+                // the persisted assistant `tool_calls` row never dangles:
+                // a dangling row makes the whole thread a permanent provider
+                // 400.
                 if let Err(err) = self.enforce_stop() {
                     self.fail_batch(
                         &calls,
@@ -855,7 +854,7 @@ impl<'a> ChatSession<'a> {
                     };
                     match call_outcome {
                         Ok(outcome) => {
-                            // Seal #91 r2: a skill's connector replies are
+                            // A skill's connector replies are
                             // untrusted, so the turn is tainted before the
                             // model sees them (`run_call` marks its own); a
                             // mark that cannot be persisted forces the card.
@@ -892,7 +891,7 @@ impl<'a> ChatSession<'a> {
                 // A switch to private, or a STOP, that landed during the call
                 // ends the batch here. The output is dropped: it is neither
                 // stored nor shown, since it was produced under the old mode.
-                // The batch is still closed, so the thread stays valid (P2-2).
+                // The batch is still closed, so the thread stays valid.
                 if let Err(err) = self.enforce_stop() {
                     self.fail_batch(
                         &calls,
@@ -960,7 +959,7 @@ impl<'a> ChatSession<'a> {
         content: &str,
         meta: &str,
     ) -> Result<(String, SafeMessage, Message), ChatError> {
-        // TOK-DELEGATE: a handed value stays whole after the gate reads it.
+        // A handed value stays whole after the gate reads it.
         let content = kernel_broker::sanitize_external_text(content, 128 * 1024);
         let message = ChatMessage::tool_result(call.id.clone(), content);
         let outbound = if call.name == "delegate" {
@@ -1141,7 +1140,7 @@ impl<'a> ChatSession<'a> {
     /// Close a tool batch the turn will never answer (cancel or STOP between
     /// two calls): persist one synthetic `cancelled` tool result per
     /// unanswered call **in one transaction**, so the stored assistant
-    /// `tool_calls` row never dangles without matching results (P2-2). A
+    /// `tool_calls` row never dangles without matching results. A
     /// dangling row is rejected by every provider, and because the same
     /// prefix is re-sent on every resume the thread would 400 forever.
     ///
@@ -2287,7 +2286,7 @@ mod tests {
 
         assert!(matches!(err, ChatError::Stopped), "got {err:?}");
         assert_eq!(provider.request_count(), 0, "no provider call may happen");
-        // P3-1: the stop is read before the user row is stored, so a stopped
+        // The stop is read before the user row is stored, so a stopped
         // turn leaves no raw row behind.
         assert_eq!(harness.roles(session_id), vec!["system"]);
     }
@@ -2317,7 +2316,7 @@ mod tests {
             !harness.workspace().join("note.txt").exists(),
             "the tool call after the engaged stop must not run"
         );
-        // P2-2: the batch is closed with a synthetic result instead of a
+        // The batch is closed with a synthetic result instead of a
         // dangling assistant `tool_calls` row.
         assert_eq!(
             harness.roles(session_id),

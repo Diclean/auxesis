@@ -1441,10 +1441,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_carried_secret_on_a_seen_host_asks_in_a_private_data_turn() {
-        // P3-1 (re-rated P2): host history alone used to pass any query-free
-        // URL, so a secret in the path left silently. On a sensitive turn only
-        // the bare root of a seen origin is silent; any path or query asks,
-        // and so does a re-fetch of a URL that already ran.
+        // Host history alone must not pass a query-free URL: on a sensitive
+        // turn only the bare root of a seen origin is silent; any path or query
+        // asks, and so does a re-fetch of a URL that already ran.
         let harness = Harness::new();
         harness
             .registry

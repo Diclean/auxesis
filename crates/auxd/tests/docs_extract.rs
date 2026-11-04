@@ -253,7 +253,7 @@ fn seed(store: &Store, home: &Path, tag: u8, bytes: &[u8], name: &str, mime: &st
 fn seed_hash(store: &Store, home: &Path, hash: &str, bytes: &[u8], name: &str, mime: &str) {
     let storage_path = format!("evidence/{hash}");
     std::fs::create_dir_all(home.join("evidence")).unwrap();
-    // DOC-SAFE-1: blobs are sealed at rest; the blob route opens them.
+    // Blobs are sealed at rest; the blob route opens them.
     let key = aux_store::evidence_key(home).unwrap();
     let sealed = aux_store::seal_evidence(&key, hash, bytes).unwrap();
     std::fs::write(home.join(&storage_path), sealed).unwrap();

@@ -1,4 +1,4 @@
-// H4 — updater tests. Every one runs against a URLProtocol stub: no packets,
+// Updater tests. Every one runs against a URLProtocol stub: no packets,
 // no real feed, no real dmg.
 import CryptoKit
 import Foundation

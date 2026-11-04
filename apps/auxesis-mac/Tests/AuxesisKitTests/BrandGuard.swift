@@ -1,4 +1,4 @@
-// The brand guard AGENT-MARKS-1 brought, shared by the mascot tests: the
+// The brand guard shared by the mascot tests: the
 // names of the old brand sheet are the brand's, not the app's. No source
 // file, no agent, mascot, tint or copy string says one.
 import Foundation

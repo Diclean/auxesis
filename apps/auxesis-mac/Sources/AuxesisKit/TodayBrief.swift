@@ -1,4 +1,4 @@
-// Today (M2): the morning brief auxd writes, read-only. `GET /v1/brief/today`
+// Today: the morning brief auxd writes, read-only. `GET /v1/brief/today`
 // answers it; a 404 (no route yet, or no brief) reads as the empty state.
 // `notes` are the brief's own degradation lines ("Calendar: not available."),
 // already in the owner's language.

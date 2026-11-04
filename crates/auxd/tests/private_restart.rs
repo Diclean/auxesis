@@ -1,4 +1,4 @@
-//! PRIVATE-TRANSCRIPT across a real process restart: the real `auxd` binary is
+//! A private transcript across a real process restart: the real `auxd` binary is
 //! spawned on a throwaway home, stopped, and spawned again on the same home.
 //! A private thread is stored as the provider saw it, so the turn after the
 //! restart re-sends the tokens, never a value the gate could no longer classify
@@ -202,7 +202,7 @@ fn a_private_thread_resumed_by_a_new_process_resends_tokens_never_values() {
         "the passport was not tokenised: {}",
         bodies[1]
     );
-    // R1, R2: no value reaches the provider, before or after the restart.
+    // No value reaches the provider, before or after the restart.
     for body in &bodies {
         assert!(
             !body.contains(PASSWORD),
@@ -220,7 +220,7 @@ fn a_private_thread_resumed_by_a_new_process_resends_tokens_never_values() {
         resumed.contains(&format!("Noted: {}", secret[0])),
         "{resumed}"
     );
-    // R3: the tool call's arguments keep the passport's token.
+    // The tool call's arguments keep the passport's token.
     let arguments = format!("{}.txt", id.join(""));
     let encoded = serde_json::to_string(&arguments).unwrap();
     let encoded = encoded.trim_matches('"');
@@ -229,7 +229,7 @@ fn a_private_thread_resumed_by_a_new_process_resends_tokens_never_values() {
         "tool arguments changed: {resumed}"
     );
 
-    // R4: the owner's page shows the values, never a token.
+    // The owner's page shows the values, never a token.
     let page = get(addr, "/v1/threads/main/messages", Some(&token));
     assert_eq!(page.status, 200, "{}", page.body);
     let rows: Value = page.json();

@@ -401,7 +401,7 @@ final class DelayRecorder {
         store.stop()
     }
 
-    // MARK: Survivor kills (breaker round 1)
+    // MARK: Survivor kills
 
     func testMessageDoneEndsTheStreamingState() {
         let transport = FakeTransport()
@@ -467,7 +467,7 @@ final class DelayRecorder {
         store.stop()
     }
 
-    // MARK: - R2: a 401 on an app↔daemon route is the app's own local access
+    // MARK: - A 401 on an app↔daemon route is the app's own local access
 
     /// A refused bearer token (rotated/stale `api.token` after a reinstall or a
     /// daemon restart) must go offline with the local-service copy — never the

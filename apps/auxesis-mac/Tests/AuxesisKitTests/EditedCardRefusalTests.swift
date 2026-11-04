@@ -1,4 +1,4 @@
-// A refused edited card shows why, not a generic error (SEND-REAL-ARGS-P3).
+// A refused edited card shows why, not a generic error.
 //
 // The daemon refuses an edited card with `409` and the code
 // `edited_card_unshowable`, and a reason a person can act on ("bcc is not

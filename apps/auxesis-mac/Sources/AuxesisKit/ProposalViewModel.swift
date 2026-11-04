@@ -130,7 +130,7 @@ public enum PlainLabel {
     }
 
     /// A skill id in the owner's words: "collect-receipts" → "Collect receipts";
-    /// an id with no words here reads "Skill: <id>" (LANG-LEAKS-1).
+    /// an id with no words here reads "Skill: <id>".
     public static func skill(_ id: String, language: Language = .en) -> String {
         if let known = skills[id] { return language == .fr ? known.fr : known.en }
         return language == .fr ? "Compétence : \(id)" : "Skill: \(id)"
@@ -138,9 +138,9 @@ public enum PlainLabel {
 
     /// A skill id in the owner's words, for a step row: a known skill gets its
     /// name, an unknown one still reads as words ("Collect anything"), never as
-    /// a raw id (STEP-LABELS-1). The id is trimmed first: a skill whose name
+    /// a raw id. The id is trimmed first: a skill whose name
     /// starts with a dash ("skill__-foo") reads as its words, with one space
-    /// between them, never a blank row (APP-P3-SWEEP-2).
+    /// between them, never a blank row.
     public static func skillWords(_ id: String, language: Language = .en) -> String {
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         if let known = skills[trimmed] { return language == .fr ? known.fr : known.en }

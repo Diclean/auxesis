@@ -1,4 +1,4 @@
-// MEM-UI-1: the memory page's wire shapes and its three actions. No network:
+// The memory page's wire shapes and its three actions. No network:
 // the daemon is the fixture, and the one real client is driven through the
 // recording URL protocol.
 import Foundation

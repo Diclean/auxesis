@@ -773,7 +773,7 @@ async fn fs_read_control_heavy_reply_still_reaches_the_agent() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // serializes the global known-secret registry
 async fn split_secret_never_reaches_the_answer_or_the_observers() {
-    // security review round-2 P2: the canary is split across consecutive frames of every
+    // The canary is split across consecutive frames of every
     // agent-originated stream.
     let _guard = secret_test_lock();
     kernel_broker::scrub::clear_known_secrets();

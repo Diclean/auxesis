@@ -29,10 +29,15 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
         case memoryEmpty
         /// The team, with a Calendar answer that carries its calendar card.
         case calendarCard
+        /// TODAY-SHAPE-1, no card waiting: a failing job; an event in 40 min; mail only; calm.
+        case todayJob, todayEvent, todayMail, todayCalm
     }
+
+    private var todayFocus: Bool { [.todayJob, .todayEvent, .todayMail, .todayCalm].contains(scenario) }
 
     public let scenario: Scenario
     private let base: Date
+    private let now: Date
     private var threads: [String: [MessageJson]] = [:]
     private var approvalList: [Approval] = []
     private var delegationList: [Delegation] = []
@@ -70,11 +75,13 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         self.base = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: now) ?? now
+        self.now = now
         self.stoppedNow = scenario == .stopped
         if scenario != .empty {
             seed()
             seedClients()
         }
+        if todayFocus { approvalList = [] }
     }
 
     // MARK: Time helpers
@@ -394,7 +401,7 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
 
     public func plannedJobs() async throws -> [PlannedJob] {
         guard scenario != .empty else { return [] }
-        return [
+        let jobs = [
             PlannedJob(id: 1, agent: "aux", name: "Morning brief", schedule: "weekdays 08:00", nextRunAt: stamp(24 * 60), health: .ok),
             PlannedJob(id: 2, agent: "mail", name: "Check Exemple SARL's payment", schedule: "after Camille's reply", nextRunAt: nil),
             // One late and one failing job, so the health marks show in previews.
@@ -403,6 +410,7 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
             PlannedJob(id: 4, agent: "mail", name: "Inbox sweep", schedule: "daily 07:30", nextRunAt: stamp(24 * 60 - 30),
                        health: .failing, reason: "Inbox sweep failed at 07:32"),
         ]
+        return todayFocus && scenario != .todayJob ? jobs.filter { $0.health == .ok || $0.health == .unknown } : jobs
     }
 
     public func usageToday() async throws -> UsageDay {
@@ -630,6 +638,16 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
             return DailyBrief(day: day, writtenAt: "08:00", events: nil, mail: Self.briefMail,
                               notes: ["Calendar: not available.", "Weather: no city set yet."])
         }
+        if todayFocus {
+            // Real-clock times, so "within 2 h" holds (past 22:00 it wraps: no event soon).
+            let clock = { (minutes: Double) in TimeText.clock(self.now.addingTimeInterval(minutes * 60)) }
+            let soon = scenario == .todayEvent ? 40.0 : 180
+            return DailyBrief(day: day, writtenAt: "08:00", events: [
+                BriefEvent(title: "Invoice NW-2026-031 due", allDay: true),
+                BriefEvent(title: "Call with Jonas Weber", start: clock(soon), end: clock(soon + 30)),
+            ], mail: scenario == .todayCalm ? [] : Self.briefMail,
+               prospects: scenario == .todayCalm ? [] : Self.prospects.filter { !prospectsHandled.contains($0.id) })
+        }
         return DailyBrief(day: day, writtenAt: "08:00", events: [
             BriefEvent(title: "Call with Jonas Weber", start: "15:00", end: "15:30"),
             BriefEvent(title: "Exemple SARL: invoice review", start: "10:30", end: "11:00"),
@@ -664,6 +682,10 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
     private static let briefMail = [
         BriefMail(sender: "Camille Exemple", subject: "Re: Invoice NW-2026-031"),
         BriefMail(sender: "Jonas Weber", subject: "A slot this week?"),
+        BriefMail(sender: "Northfield Studio", subject: "Availability next month"),
+        BriefMail(sender: "Lena Okafor", subject: "Quote request: brand refresh"),
+        BriefMail(sender: "Sample Bank", subject: "Your October statement"),
+        BriefMail(sender: "Atelier Brume", subject: "Photos from the workshop"),
         BriefMail(sender: "Hosting Test", subject: "Your October receipt"),
     ]
 

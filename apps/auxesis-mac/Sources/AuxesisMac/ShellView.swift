@@ -103,7 +103,7 @@ struct ShellView: View {
                     .frame(maxWidth: detail ? 380 : .infinity)
                 if detail {
                     Rectangle().fill(palette.line.color).frame(width: 1)
-                    DetailColumn(selectedAgent: selectedAgent, todaySelection: todaySelection,
+                    DetailColumn(selectedAgent: selectedAgent, todaySelection: $todaySelection,
                                  selectedLedgerEntryID: selectedLedgerEntryID, privacySelection: selectedPrivacyRecord)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .disabled(shell.stopped)
@@ -117,7 +117,7 @@ struct ShellView: View {
 struct DetailColumn: View {
     @EnvironmentObject private var shell: ShellModel
     let selectedAgent: String
-    let todaySelection: TodaySelection
+    @Binding var todaySelection: TodaySelection
     let selectedLedgerEntryID: String?
     let privacySelection: String?
 
@@ -129,7 +129,7 @@ struct DetailColumn: View {
                let approval = shell.waitingApprovals.first(where: { $0.id == id }) {
                 ApprovalProposalView(approval: approval)
             } else {
-                TodayView(selection: todaySelection)
+                TodayView(selection: $todaySelection)
             }
         } else if shell.route == .clients {
             if shell.selectedClient != nil { ClientCardView() }

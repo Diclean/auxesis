@@ -275,6 +275,9 @@ public final class ShellModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var subscriptions: Set<AnyCancellable> = []
     private let clock: () -> Date
+    public var now: Date { clock() }
+    /// Set before `go(.ledger)`: the Ledger opens on its Planned tab once.
+    public var ledgerOpensPlanned = false
 
     public init(store: Store, client: TeamClient?, defaults: UserDefaults? = nil, clock: @escaping () -> Date = Date.init) {
         self.store = store

@@ -196,7 +196,7 @@ struct LedgerView: View {
             case .planned: plannedList(copy)
             }
         }
-        .onAppear { shell.loadLedger() }
+        .onAppear { if shell.ledgerOpensPlanned { tab = .planned; shell.ledgerOpensPlanned = false }; shell.loadLedger() }
     }
 
     @ViewBuilder private func done(_ copy: Copy) -> some View {

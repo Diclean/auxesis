@@ -207,6 +207,11 @@ enum SnapshotRunner {
         Shot(name: "m2-04-today-degraded", prototype: nil, scenario: .briefDegraded) { $0.go(.today) },
         Shot(name: "m2-05-today-empty", prototype: nil, scenario: .empty) { $0.go(.today) },
         Shot(name: "m2-06-today-empty-dark-fr", prototype: nil, scenario: .empty, dark: true, french: true) { $0.go(.today) },
+        // TODAY-SHAPE-1: one shot per focus state (the team one is m2-01).
+        Shot(name: "m2-07-today-job", prototype: nil, scenario: .todayJob) { $0.go(.today) },
+        Shot(name: "m2-08-today-event-dark", prototype: nil, scenario: .todayEvent, dark: true) { $0.go(.today) },
+        Shot(name: "m2-09-today-mail-fr", prototype: nil, scenario: .todayMail, french: true) { $0.go(.today) },
+        Shot(name: "m2-10-today-calm", prototype: nil, scenario: .todayCalm) { $0.go(.today) },
         // The Calendar page. Invented events only (FixtureEventKit).
         Shot(name: "cal-01-fresh", prototype: nil) { $0.go(.calendar) },
         Shot(name: "cal-02-stale", prototype: nil, scenario: .calendarStale) { $0.go(.calendar) },

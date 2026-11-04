@@ -4426,13 +4426,45 @@
       "en" : "1 event",
       "fr" : "1 événement"
     },
+    "todayFocusCalm" : {
+      "en" : "Nothing needs you right now.",
+      "fr" : "Rien ne vous attend pour l’instant."
+    },
+    "todayFocusEventSoon" : {
+      "en" : "%@ starts at %@.",
+      "fr" : "%@ commence à %@."
+    },
+    "todayFocusJobFailed" : {
+      "en" : "A job failed: %@.",
+      "fr" : "Une tâche a échoué : %@."
+    },
+    "todayFocusJobLate" : {
+      "en" : "A job is late: %@.",
+      "fr" : "Une tâche est en retard : %@."
+    },
+    "todayFocusUnreadAtLeast" : {
+      "en" : "At least %d unread emails. Nothing else needs you.",
+      "fr" : "Au moins %d mails non lus. Rien d’autre ne vous attend."
+    },
+    "todayFocusUnreadMany" : {
+      "en" : "%d unread emails. Nothing else needs you.",
+      "fr" : "%d mails non lus. Rien d’autre ne vous attend."
+    },
+    "todayFocusUnreadOne" : {
+      "en" : "1 unread email. Nothing else needs you.",
+      "fr" : "1 mail non lu. Rien d’autre ne vous attend."
+    },
+    "todayFocusWaitingMany" : {
+      "en" : "%d things wait for you.",
+      "fr" : "%d choses vous attendent."
+    },
+    "todayFocusWaitingOne" : {
+      "en" : "1 thing waits for you.",
+      "fr" : "1 chose vous attend."
+    },
     "todayFreshnessUnreported" : {
       "en" : "Freshness not reported",
       "fr" : "Fraîcheur non indiquée"
-    },
-    "todayLead" : {
-      "en" : "Waiting for you: %@",
-      "fr" : "Vous attend : %@"
     },
     "todayMail" : {
       "en" : "Mail",
@@ -4469,6 +4501,22 @@
     "todaySubtitle" : {
       "en" : "The brief of the day",
       "fr" : "Le brief du jour"
+    },
+    "todayTopAsked" : {
+      "en" : "%@ · since %@",
+      "fr" : "%@ · depuis %@"
+    },
+    "todayTopEventAt" : {
+      "en" : "Today · %@",
+      "fr" : "Aujourd’hui · %@"
+    },
+    "todayTopOldestUnread" : {
+      "en" : "Oldest unread · from %@",
+      "fr" : "Plus ancien non lu · de %@"
+    },
+    "todayTopTitle" : {
+      "en" : "What matters first",
+      "fr" : "À traiter d’abord"
     },
     "todayUnavailable" : {
       "en" : "Unavailable",

@@ -61,7 +61,7 @@ import Testing
         // The summary counts the same `local` steps, so it claims no more than
         // the step labels do. The Team map reuses this very string.
         XCTAssertEqual(StepsCardModel(steps: sixSteps).summary(.en), "6 checks · 5 handled by a local brain")
-        XCTAssertEqual(StepsCardModel(steps: sixSteps).summary(.fr), "6 checks · 5 traitées par un modèle sur ce Mac")
+        XCTAssertEqual(StepsCardModel(steps: sixSteps).summary(.fr), "6 vérifications · 5 traitées par un modèle sur ce Mac")
         for language in Language.allCases {
             let summary = StepsCardModel(steps: sixSteps).summary(language).lowercased()
             XCTAssertFalse(summary.contains("stayed"), "\(language.rawValue) summary says it stayed: \(summary)")

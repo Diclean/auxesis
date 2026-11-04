@@ -3048,27 +3048,27 @@
     },
     "ledgerSkillAsked" : {
       "en" : "%@ asked for your yes",
-      "fr" : "%@ asked for your yes"
+      "fr" : "%@ a demandé votre oui"
     },
     "ledgerSkillRan" : {
       "en" : "Ran %@",
-      "fr" : "Ran %@"
+      "fr" : "A exécuté %@"
     },
     "ledgerStarted" : {
       "en" : "Auxesis started · %@",
-      "fr" : "Auxesis started · %@"
+      "fr" : "Auxesis a démarré · %@"
     },
     "ledgerSubtitle" : {
       "en" : "Everything done, and what is planned",
-      "fr" : "Everything done, and what is planned"
+      "fr" : "Tout ce qui est fait, et ce qui est prévu"
     },
     "leftMac" : {
       "en" : "Left this Mac",
-      "fr" : "Left this Mac"
+      "fr" : "Sorti de ce Mac"
     },
     "loadFailed" : {
       "en" : "Couldn't load this.",
-      "fr" : "Couldn't load this."
+      "fr" : "Impossible de charger."
     },
     "loading" : {
       "en" : "Loading",
@@ -3076,23 +3076,23 @@
     },
     "lvAsk" : {
       "en" : "Ask first",
-      "fr" : "Ask first"
+      "fr" : "Demander d’abord"
     },
     "lvAsksEveryTime" : {
       "en" : "Asks every time",
-      "fr" : "Asks every time"
+      "fr" : "Demande à chaque fois"
     },
     "lvAuto" : {
       "en" : "On its own",
-      "fr" : "On its own"
+      "fr" : "De lui-même"
     },
     "lvOff" : {
       "en" : "Off",
-      "fr" : "Off"
+      "fr" : "Désactivé"
     },
     "lvRead" : {
       "en" : "Read",
-      "fr" : "Read"
+      "fr" : "Lecture"
     },
     "mascotCancel" : {
       "en" : "Cancel",
@@ -3136,7 +3136,7 @@
     },
     "memory" : {
       "en" : "Memory",
-      "fr" : "Memory"
+      "fr" : "Mémoire"
     },
     "memoryAboutYou" : {
       "en" : "About you",
@@ -3152,7 +3152,7 @@
     },
     "memoryEmpty" : {
       "en" : "Nothing remembered yet. %@ saves rules you give it, with the date.",
-      "fr" : "Nothing remembered yet. %@ saves rules you give it, with the date."
+      "fr" : "Rien n’est encore mémorisé. %@ enregistre les règles que vous lui donnez, avec la date."
     },
     "memoryErrFailed" : {
       "en" : "Couldn't save. Nothing was changed. Try again.",
@@ -3248,23 +3248,23 @@
     },
     "menuIdle" : {
       "en" : "Running · nothing in progress",
-      "fr" : "Running · nothing in progress"
+      "fr" : "Lancé · rien en cours"
     },
     "menuOffline" : {
       "en" : "Auxesis isn't running · Start",
-      "fr" : "Auxesis isn't running · Start"
+      "fr" : "Auxesis n’est pas lancé · Démarrer"
     },
     "menuOpen" : {
       "en" : "Open Auxesis",
-      "fr" : "Open Auxesis"
+      "fr" : "Ouvrir Auxesis"
     },
     "menuQuit" : {
       "en" : "Quit Auxesis",
-      "fr" : "Quit Auxesis"
+      "fr" : "Quitter Auxesis"
     },
     "menuWaiting" : {
       "en" : "Waiting for you (%d)",
-      "fr" : "Waiting for you (%d)"
+      "fr" : "Vous attend (%d)"
     },
     "menuWorkingMany" : {
       "en" : "%d agents working",
@@ -3292,23 +3292,23 @@
     },
     "modelSawAux" : {
       "en" : "Aux never received your emails or files, only the short results the team sent back.",
-      "fr" : "Aux never received your emails or files, only the short results the team sent back."
+      "fr" : "Aux n’a jamais reçu vos e-mails ni vos fichiers, seulement les courts résultats que l’équipe a renvoyés."
     },
     "modelSawGone" : {
       "en" : "This record is gone from the Ledger.",
-      "fr" : "This record is gone from the Ledger."
+      "fr" : "Cette entrée a disparu du Registre."
     },
     "modelSawHide" : {
       "en" : "Back to names",
-      "fr" : "Back to names"
+      "fr" : "Revenir aux noms"
     },
     "modelSawLink" : {
       "en" : "What %@ sent to its brain",
-      "fr" : "What %@ sent to its brain"
+      "fr" : "Ce que %@ a envoyé à son modèle"
     },
     "modelSawNoTokens" : {
       "en" : "This Auxesis does not keep the exact text it sent yet. The Ledger lists the request.",
-      "fr" : "This Auxesis does not keep the exact text it sent yet. The Ledger lists the request."
+      "fr" : "Cette version d’Auxesis ne conserve pas encore le texte exact envoyé. Le Registre liste la requête."
     },
     "money" : {
       "en" : "Money",
@@ -3316,27 +3316,27 @@
     },
     "moneyEmpty" : {
       "en" : "Payment records are unavailable.",
-      "fr" : "Payment records are unavailable."
+      "fr" : "L’historique des paiements est indisponible."
     },
     "needsYouMany" : {
       "en" : "%d need you",
-      "fr" : "%d need you"
+      "fr" : "%d à traiter"
     },
     "needsYouOne" : {
       "en" : "Needs you",
-      "fr" : "Needs you"
+      "fr" : "À traiter"
     },
     "never" : {
       "en" : "Never",
-      "fr" : "Never"
+      "fr" : "Jamais"
     },
     "newChat" : {
       "en" : "New chat",
-      "fr" : "New chat"
+      "fr" : "Nouvelle conversation"
     },
     "newChatDivider" : {
       "en" : "New chat. The conversation above stays on this Mac.",
-      "fr" : "New chat. The conversation above stays on this Mac."
+      "fr" : "Nouvelle conversation. La conversation ci-dessus reste sur ce Mac."
     },
     "newConversation" : {
       "en" : "New conversation",
@@ -3344,23 +3344,23 @@
     },
     "newLine" : {
       "en" : "New",
-      "fr" : "New"
+      "fr" : "Nouveau"
     },
     "nextOpenDraft" : {
       "en" : "Open draft",
-      "fr" : "Open draft"
+      "fr" : "Ouvrir le brouillon"
     },
     "nextSeeSteps" : {
       "en" : "See steps",
-      "fr" : "See steps"
+      "fr" : "Voir les étapes"
     },
     "noBrainBody" : {
       "en" : "No brain yet. Add a provider to start.",
-      "fr" : "No brain yet. Add a provider to start."
+      "fr" : "Aucun modèle pour l’instant. Ajoutez un fournisseur pour commencer."
     },
     "noBrainTitle" : {
       "en" : "No brain yet",
-      "fr" : "No brain yet"
+      "fr" : "Aucun modèle pour l’instant"
     },
     "notAvailableYet" : {
       "en" : "Not available yet",
@@ -3368,15 +3368,15 @@
     },
     "notSentRetry" : {
       "en" : "Not sent · Retry",
-      "fr" : "Not sent · Retry"
+      "fr" : "Non envoyé · Réessayer"
     },
     "notifications" : {
       "en" : "When an agent needs your yes",
-      "fr" : "When an agent needs your yes"
+      "fr" : "Quand un agent attend votre oui"
     },
     "notificationsHint" : {
       "en" : "One banner per request, with Send and Open. None while stopped.",
-      "fr" : "One banner per request, with Send and Open. None while stopped."
+      "fr" : "Une bannière par demande, avec Envoyer et Ouvrir. Aucune quand tout est arrêté."
     },
     "notificationsQuietHours" : {
       "en" : "Notifications and quiet hours",
@@ -3388,19 +3388,19 @@
     },
     "now" : {
       "en" : "now",
-      "fr" : "now"
+      "fr" : "maintenant"
     },
     "offlineRetry" : {
       "en" : "Retry",
-      "fr" : "Retry"
+      "fr" : "Réessayer"
     },
     "offlineStart" : {
       "en" : "Start it",
-      "fr" : "Start it"
+      "fr" : "Le lancer"
     },
     "offlineTitle" : {
       "en" : "Auxesis isn't running on this Mac.",
-      "fr" : "Auxesis isn't running on this Mac."
+      "fr" : "Auxesis n’est pas lancé sur ce Mac."
     },
     "open" : {
       "en" : "Open",
@@ -3408,11 +3408,11 @@
     },
     "openLedger" : {
       "en" : "Open in the Ledger",
-      "fr" : "Open in the Ledger"
+      "fr" : "Ouvrir dans le Registre"
     },
     "openSettings" : {
       "en" : "Open Settings",
-      "fr" : "Open Settings"
+      "fr" : "Ouvrir les Réglages"
     },
     "panelToggle" : {
       "en" : "Show or hide the side panel",
@@ -3420,7 +3420,7 @@
     },
     "pauseAgent" : {
       "en" : "Pause %@",
-      "fr" : "Pause %@"
+      "fr" : "Mettre %@ en pause"
     },
     "pauseChangeFailed" : {
       "en" : "Couldn't update %@'s pause state. Its state was restored. Try again.",
@@ -3432,11 +3432,11 @@
     },
     "pinnedMany" : {
       "en" : "%d actions wait for your yes",
-      "fr" : "%d actions wait for your yes"
+      "fr" : "%d actions attendent votre oui"
     },
     "pinnedOne" : {
       "en" : "1 action waits for your yes",
-      "fr" : "1 action waits for your yes"
+      "fr" : "1 action attend votre oui"
     },
     "pluginAccess" : {
       "en" : "Access",
@@ -3600,7 +3600,7 @@
     },
     "privacyLede" : {
       "en" : "In Private mode, what you see as a name the model sees as a token such as [PERSON_1]. Here is every path data can take, and how it is held.",
-      "fr" : "In Private mode, what you see as a name the model sees as a token such as [PERSON_1]. Here is every path data can take, and how it is held."
+      "fr" : "En mode Privé, ce que vous voyez comme un nom, le modèle le voit comme un jeton tel que [PERSON_1]. Voici tous les chemins que les données peuvent prendre, et comment elles sont gardées."
     },
     "privacyRecord" : {
       "en" : "Privacy record",
@@ -3608,15 +3608,15 @@
     },
     "privacyRecordEmpty" : {
       "en" : "Request history is unavailable.",
-      "fr" : "Request history is unavailable."
+      "fr" : "L’historique des requêtes est indisponible."
     },
     "privacyRecordLede" : {
       "en" : "Run receipts list hosts; individual provider requests are unavailable.",
-      "fr" : "Run receipts list hosts; individual provider requests are unavailable."
+      "fr" : "Les reçus d’exécution indiquent les hôtes ; les requêtes individuelles au fournisseur sont indisponibles."
     },
     "privacyTab" : {
       "en" : "Privacy",
-      "fr" : "Privacy"
+      "fr" : "Confidentialité"
     },
     "privacyTabEmpty" : {
       "en" : "No run recorded today for this conversation.",
@@ -3688,135 +3688,135 @@
     },
     "privateMode" : {
       "en" : "Private mode",
-      "fr" : "Private mode"
+      "fr" : "Mode Privé"
     },
     "privateModeHint" : {
       "en" : "On for every agent and every provider",
-      "fr" : "On for every agent and every provider"
+      "fr" : "Activé pour chaque agent et chaque fournisseur"
     },
     "privateModeOn" : {
       "en" : "On",
-      "fr" : "On"
+      "fr" : "Activé"
     },
     "profile" : {
       "en" : "Agent profile",
-      "fr" : "Agent profile"
+      "fr" : "Profil de l’agent"
     },
     "prospectAdd" : {
       "en" : "Add as prospect",
-      "fr" : "Add as prospect"
+      "fr" : "Ajouter comme prospect"
     },
     "prospectAddLabel" : {
       "en" : "Add %@ as a prospect",
-      "fr" : "Add %@ as a prospect"
+      "fr" : "Ajouter %@ comme prospect"
     },
     "prospectAvailability" : {
       "en" : "Asked about availability",
-      "fr" : "Asked about availability"
+      "fr" : "A demandé les disponibilités"
     },
     "prospectFailed" : {
       "en" : "Could not save that. Check that Aux is running, then try again.",
-      "fr" : "Could not save that. Check that Aux is running, then try again."
+      "fr" : "Impossible d’enregistrer. Vérifiez qu’Aux est lancé, puis réessayez."
     },
     "prospectIgnore" : {
       "en" : "Ignore",
-      "fr" : "Ignore"
+      "fr" : "Ignorer"
     },
     "prospectIgnoreLabel" : {
       "en" : "Ignore %@",
-      "fr" : "Ignore %@"
+      "fr" : "Ignorer %@"
     },
     "prospectQuote" : {
       "en" : "Asked for a quote",
-      "fr" : "Asked for a quote"
+      "fr" : "A demandé un devis"
     },
     "prospectReferral" : {
       "en" : "Was referred to you",
-      "fr" : "Was referred to you"
+      "fr" : "Vous a été recommandé"
     },
     "prospectsMany" : {
       "en" : "%d senders",
-      "fr" : "%d senders"
+      "fr" : "%d expéditeurs"
     },
     "prospectsOne" : {
       "en" : "1 sender",
-      "fr" : "1 sender"
+      "fr" : "1 expéditeur"
     },
     "prospectsTitle" : {
       "en" : "Possible new clients",
-      "fr" : "Possible new clients"
+      "fr" : "Nouveaux clients potentiels"
     },
     "providerAdd" : {
       "en" : "Add a provider",
-      "fr" : "Add a provider"
+      "fr" : "Ajouter un fournisseur"
     },
     "providerAddress" : {
       "en" : "Address",
-      "fr" : "Address"
+      "fr" : "Adresse"
     },
     "providerConnected" : {
       "en" : "Connected",
-      "fr" : "Connected"
+      "fr" : "Connecté"
     },
     "providerKey" : {
       "en" : "Key",
-      "fr" : "Key"
+      "fr" : "Clé"
     },
     "providerKeyHint" : {
       "en" : "Keys are never shown after you save them.",
-      "fr" : "Keys are never shown after you save them."
+      "fr" : "Les clés ne sont jamais affichées après l’enregistrement."
     },
     "providerKeyRefused" : {
       "en" : "The key was refused by %@. Check it and try again.",
-      "fr" : "The key was refused by %@. Check it and try again."
+      "fr" : "La clé a été refusée par %@. Vérifiez-la et réessayez."
     },
     "providerKind" : {
       "en" : "Kind",
-      "fr" : "Kind"
+      "fr" : "Type"
     },
     "providerKindFake" : {
       "en" : "Test provider (sandbox only)",
-      "fr" : "Test provider (sandbox only)"
+      "fr" : "Fournisseur de test (bac à sable uniquement)"
     },
     "providerKindOpenAI" : {
       "en" : "OpenAI-compatible",
-      "fr" : "OpenAI-compatible"
+      "fr" : "Compatible OpenAI"
     },
     "providerModel" : {
       "en" : "Model",
-      "fr" : "Model"
+      "fr" : "Modèle"
     },
     "providerName" : {
       "en" : "Name",
-      "fr" : "Name"
+      "fr" : "Nom"
     },
     "providerNotResponding" : {
       "en" : "Not responding",
-      "fr" : "Not responding"
+      "fr" : "Ne répond pas"
     },
     "providerNotTested" : {
       "en" : "Not tested",
-      "fr" : "Not tested"
+      "fr" : "Non testé"
     },
     "providerSave" : {
       "en" : "Add",
-      "fr" : "Add"
+      "fr" : "Ajouter"
     },
     "providerSaveFailed" : {
       "en" : "Couldn't add the provider. Nothing was saved.",
-      "fr" : "Couldn't add the provider. Nothing was saved."
+      "fr" : "Impossible d’ajouter le fournisseur. Rien n’a été enregistré."
     },
     "providerTest" : {
       "en" : "Test",
-      "fr" : "Test"
+      "fr" : "Tester"
     },
     "providersEmpty" : {
       "en" : "No brain yet. Add a provider to start.",
-      "fr" : "No brain yet. Add a provider to start."
+      "fr" : "Aucun modèle pour l’instant. Ajoutez un fournisseur pour commencer."
     },
     "providersLede" : {
       "en" : "The services that can think for Auxesis. Keys stay on this Mac. In Private mode every provider gets tokens instead of names.",
-      "fr" : "The services that can think for Auxesis. Keys stay on this Mac. In Private mode every provider gets tokens instead of names."
+      "fr" : "Les services qui peuvent réfléchir pour Auxesis. Les clés restent sur ce Mac. En mode Privé, chaque fournisseur reçoit des jetons à la place des noms."
     },
     "quietHours" : {
       "en" : "Quiet hours",
@@ -3844,7 +3844,7 @@
     },
     "resume" : {
       "en" : "Resume",
-      "fr" : "Resume"
+      "fr" : "Reprendre"
     },
     "retry" : {
       "en" : "Retry",
@@ -3856,35 +3856,35 @@
     },
     "roleAux" : {
       "en" : "Hands work to the team",
-      "fr" : "Hands work to the team"
+      "fr" : "Confie le travail à l’équipe"
     },
     "roleCalendar" : {
       "en" : "Your days and free times",
-      "fr" : "Your days and free times"
+      "fr" : "Vos journées et vos créneaux libres"
     },
     "roleClients" : {
       "en" : "The people you work with",
-      "fr" : "The people you work with"
+      "fr" : "Les personnes avec qui vous travaillez"
     },
     "roleCustom" : {
       "en" : "An agent you added",
-      "fr" : "An agent you added"
+      "fr" : "Un agent que vous avez ajouté"
     },
     "roleDocuments" : {
       "en" : "Receipts and invoices",
-      "fr" : "Receipts and invoices"
+      "fr" : "Reçus et factures"
     },
     "roleMail" : {
       "en" : "Inbox and replies",
-      "fr" : "Inbox and replies"
+      "fr" : "Boîte de réception et réponses"
     },
     "running" : {
       "en" : "Running",
-      "fr" : "Running"
+      "fr" : "En cours"
     },
     "runningEmpty" : {
       "en" : "Nothing is running.",
-      "fr" : "Nothing is running."
+      "fr" : "Rien ne tourne."
     },
     "runningNow" : {
       "en" : "Running now",
@@ -3892,11 +3892,11 @@
     },
     "saveFailed" : {
       "en" : "Couldn't save. Your change was not applied.",
-      "fr" : "Couldn't save. Your change was not applied."
+      "fr" : "Impossible d’enregistrer. Votre modification n’a pas été appliquée."
     },
     "saving" : {
       "en" : "Saving",
-      "fr" : "Saving"
+      "fr" : "Enregistrement"
     },
     "schedule" : {
       "en" : "Schedule",
@@ -3904,15 +3904,15 @@
     },
     "searchPlaceholder" : {
       "en" : "Search or jump to…",
-      "fr" : "Search or jump to…"
+      "fr" : "Rechercher ou accéder à…"
     },
     "selectItemDetail" : {
       "en" : "Select an item to see its details.",
-      "fr" : "Select an item to see its details."
+      "fr" : "Sélectionnez un élément pour voir ses détails."
     },
     "send" : {
       "en" : "Send",
-      "fr" : "Send"
+      "fr" : "Envoyer"
     },
     "sendNotSent" : {
       "en" : "Not sent",
@@ -3924,19 +3924,19 @@
     },
     "sentBy" : {
       "en" : "Sent by",
-      "fr" : "Sent by"
+      "fr" : "Envoyé par"
     },
     "sentTo" : {
       "en" : "Sent to",
-      "fr" : "Sent to"
+      "fr" : "Envoyé à"
     },
     "sentWhen" : {
       "en" : "When",
-      "fr" : "When"
+      "fr" : "Quand"
     },
     "settings" : {
       "en" : "Settings",
-      "fr" : "Settings"
+      "fr" : "Réglages"
     },
     "setupAllow" : {
       "en" : "Allow access",
@@ -4028,7 +4028,7 @@
     },
     "showAll" : {
       "en" : "Show all",
-      "fr" : "Show all"
+      "fr" : "Tout afficher"
     },
     "showSidebar" : {
       "en" : "Show sidebar",
@@ -4100,55 +4100,55 @@
     },
     "skillIgnored" : {
       "en" : "Not loaded: %@",
-      "fr" : "Not loaded: %@"
+      "fr" : "Non chargée : %@"
     },
     "skillReady" : {
       "en" : "Ready",
-      "fr" : "Ready"
+      "fr" : "Prête"
     },
     "skills" : {
       "en" : "Skills",
-      "fr" : "Skills"
+      "fr" : "Compétences"
     },
     "skillsEmpty" : {
       "en" : "No skills on this Mac yet.",
-      "fr" : "No skills on this Mac yet."
+      "fr" : "Aucune compétence sur ce Mac pour l’instant."
     },
     "skillsLede" : {
       "en" : "Every skill asks before it acts. Anything that sends or writes outside this Mac waits 10 seconds so you can Undo.",
-      "fr" : "Every skill asks before it acts. Anything that sends or writes outside this Mac waits 10 seconds so you can Undo."
+      "fr" : "Chaque compétence demande avant d’agir. Tout ce qui envoie ou écrit hors de ce Mac attend 10 secondes, pour que vous puissiez annuler."
     },
     "spentToday" : {
       "en" : "Spent today",
-      "fr" : "Spent today"
+      "fr" : "Dépensé aujourd’hui"
     },
     "spentTodayValue" : {
       "en" : "%@ · %@ tokens in, %@ out",
-      "fr" : "%@ · %@ tokens in, %@ out"
+      "fr" : "%@ · %@ jetons en entrée, %@ en sortie"
     },
     "stateConnecting" : {
       "en" : "Connecting…",
-      "fr" : "Connecting…"
+      "fr" : "Connexion…"
     },
     "stateOffline" : {
       "en" : "Not running on this Mac",
-      "fr" : "Not running on this Mac"
+      "fr" : "Pas lancé sur ce Mac"
     },
     "statePrivate" : {
       "en" : "Private mode",
-      "fr" : "Private mode"
+      "fr" : "Mode Privé"
     },
     "stateRunning" : {
       "en" : "Running",
-      "fr" : "Running"
+      "fr" : "En cours"
     },
     "stateStopped" : {
       "en" : "Stopped · all agents paused",
-      "fr" : "Stopped · all agents paused"
+      "fr" : "Arrêté · tous les agents en pause"
     },
     "stateWorking" : {
       "en" : "%d working",
-      "fr" : "%d working"
+      "fr" : "%d en activité"
     },
     "stayedOnMac" : {
       "en" : "Handled by a brain on this Mac",
@@ -4172,11 +4172,11 @@
     },
     "stepsChecksMany" : {
       "en" : "%d checks",
-      "fr" : "%d checks"
+      "fr" : "%d vérifications"
     },
     "stepsChecksOne" : {
       "en" : "1 check",
-      "fr" : "1 check"
+      "fr" : "1 vérification"
     },
     "stepsDoneV5" : {
       "en" : "Steps · %d done",
@@ -4192,7 +4192,7 @@
     },
     "stepsHide" : {
       "en" : "Hide the steps",
-      "fr" : "Hide the steps"
+      "fr" : "Masquer les étapes"
     },
     "stepsLeftV5" : {
       "en" : "%d left",
@@ -4204,7 +4204,7 @@
     },
     "stepsShow" : {
       "en" : "Show the steps",
-      "fr" : "Show the steps"
+      "fr" : "Afficher les étapes"
     },
     "stepsStayed" : {
       "en" : "%d handled by a local brain",
@@ -4220,43 +4220,43 @@
     },
     "stopAll" : {
       "en" : "Stop all",
-      "fr" : "Stop all"
+      "fr" : "Tout arrêter"
     },
     "stopNow" : {
       "en" : "Stop now",
-      "fr" : "Stop now"
+      "fr" : "Arrêter maintenant"
     },
     "stopRowHint" : {
       "en" : "Halts every agent and cancels sends that are waiting. Also in the menu bar.",
-      "fr" : "Halts every agent and cancels sends that are waiting. Also in the menu bar."
+      "fr" : "Arrête tous les agents et annule les envois en attente. Aussi dans la barre des menus."
     },
     "stopRowTitle" : {
       "en" : "Stop",
-      "fr" : "Stop"
+      "fr" : "Arrêter"
     },
     "stoppedBody" : {
       "en" : "All five agents are paused. Nothing runs or sends until you press Resume.",
-      "fr" : "All five agents are paused. Nothing runs or sends until you press Resume."
+      "fr" : "Les cinq agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre."
     },
     "stoppedCancelledMany" : {
       "en" : "%d pending sends were cancelled.",
-      "fr" : "%d pending sends were cancelled."
+      "fr" : "%d envois en attente ont été annulés."
     },
     "stoppedCancelledOne" : {
       "en" : "1 pending send was cancelled.",
-      "fr" : "1 pending send was cancelled."
+      "fr" : "1 envoi en attente a été annulé."
     },
     "stoppedTitle" : {
       "en" : "Stopped.",
-      "fr" : "Stopped."
+      "fr" : "Arrêté."
     },
     "tabBudgets" : {
       "en" : "Budgets & Stop",
-      "fr" : "Budgets & Stop"
+      "fr" : "Budgets et arrêt"
     },
     "tabGeneral" : {
       "en" : "General",
-      "fr" : "General"
+      "fr" : "Général"
     },
     "tabPlugins" : {
       "en" : "Plugins",
@@ -4264,63 +4264,63 @@
     },
     "tabPrivacy" : {
       "en" : "Privacy & Coverage",
-      "fr" : "Privacy & Coverage"
+      "fr" : "Confidentialité et couverture"
     },
     "tabProviders" : {
       "en" : "Providers",
-      "fr" : "Providers"
+      "fr" : "Fournisseurs"
     },
     "tabSkills" : {
       "en" : "Skills",
-      "fr" : "Skills"
+      "fr" : "Compétences"
     },
     "team" : {
       "en" : "Team",
-      "fr" : "Team"
+      "fr" : "Équipe"
     },
     "teamAsked" : {
       "en" : "Aux asked: %@",
-      "fr" : "Aux asked: %@"
+      "fr" : "Aux a demandé : %@"
     },
     "teamLeft" : {
       "en" : "%d left",
-      "fr" : "%d left"
+      "fr" : "%d sorties du Mac"
     },
     "teamNeedsYou" : {
       "en" : "Needs you: %d",
-      "fr" : "Needs you: %d"
+      "fr" : "À traiter : %d"
     },
     "teamNoSteps" : {
       "en" : "No steps yet today",
-      "fr" : "No steps yet today"
+      "fr" : "Aucune étape aujourd’hui"
     },
     "teamOffline" : {
       "en" : "Offline",
-      "fr" : "Offline"
+      "fr" : "Hors ligne"
     },
     "teamStepsMany" : {
       "en" : "%d steps",
-      "fr" : "%d steps"
+      "fr" : "%d étapes"
     },
     "teamStepsOne" : {
       "en" : "1 step",
-      "fr" : "1 step"
+      "fr" : "1 étape"
     },
     "teamTab" : {
       "en" : "Team",
-      "fr" : "Team"
+      "fr" : "Équipe"
     },
     "teamToday" : {
       "en" : "Today",
-      "fr" : "Today"
+      "fr" : "Aujourd’hui"
     },
     "teamUnknown" : {
       "en" : "%d unknown",
-      "fr" : "%d unknown"
+      "fr" : "%d au lieu inconnu"
     },
     "teamWorking" : {
       "en" : "Working: %@",
-      "fr" : "Working: %@"
+      "fr" : "En cours : %@"
     },
     "today" : {
       "en" : "Today",
@@ -4436,15 +4436,15 @@
     },
     "typing" : {
       "en" : "%@ is writing",
-      "fr" : "%@ is writing"
+      "fr" : "%@ écrit"
     },
     "unavailable" : {
       "en" : "Not available from this Auxesis yet.",
-      "fr" : "Not available from this Auxesis yet."
+      "fr" : "Pas encore disponible dans cette version d’Auxesis."
     },
     "waitingEmpty" : {
       "en" : "Nothing waits for you. Agents ask here and in their own threads.",
-      "fr" : "Nothing waits for you. Agents ask here and in their own threads."
+      "fr" : "Rien ne vous attend. Les agents demandent ici et dans leur propre fil."
     },
     "waitingForYou" : {
       "en" : "Waiting for you",
@@ -4452,27 +4452,27 @@
     },
     "waitingLede" : {
       "en" : "%d actions from %d agents. Saying yes here is the same as saying yes in the thread.",
-      "fr" : "%d actions from %d agents. Saying yes here is the same as saying yes in the thread."
+      "fr" : "%d actions de %d agents. Dire oui ici revient à dire oui dans le fil."
     },
     "waitingLedeOne" : {
       "en" : "1 action from 1 agent. Saying yes here is the same as saying yes in the thread.",
-      "fr" : "1 action from 1 agent. Saying yes here is the same as saying yes in the thread."
+      "fr" : "1 action de 1 agent. Dire oui ici revient à dire oui dans le fil."
     },
     "waitingLedeOneAgent" : {
       "en" : "%d actions from 1 agent. Saying yes here is the same as saying yes in the thread.",
-      "fr" : "%d actions from 1 agent. Saying yes here is the same as saying yes in the thread."
+      "fr" : "%d actions de 1 agent. Dire oui ici revient à dire oui dans le fil."
     },
     "waitingSubtitle" : {
       "en" : "Every agent's questions in one list",
-      "fr" : "Every agent's questions in one list"
+      "fr" : "Les questions de tous les agents en une liste"
     },
     "waitsForYesMany" : {
       "en" : "%d wait for your yes",
-      "fr" : "%d wait for your yes"
+      "fr" : "%d en attente de votre oui"
     },
     "waitsForYesOne" : {
       "en" : "1 waits for your yes",
-      "fr" : "1 waits for your yes"
+      "fr" : "1 en attente de votre oui"
     },
     "whatAuxKnows" : {
       "en" : "What Aux knows",
@@ -4496,7 +4496,7 @@
     },
     "workForAux" : {
       "en" : "Work for Aux",
-      "fr" : "Work for Aux"
+      "fr" : "Travailler pour Aux"
     },
     "workMore" : {
       "en" : "%d more",
@@ -4524,7 +4524,7 @@
     },
     "workTab" : {
       "en" : "Work",
-      "fr" : "Work"
+      "fr" : "Travail"
     },
     "workToday" : {
       "en" : "today %@",
@@ -4540,196 +4540,34 @@
     },
     "worksWith" : {
       "en" : "Works with",
-      "fr" : "Works with"
+      "fr" : "Travaille avec"
     },
     "worksWithAux" : {
       "en" : "Aux hands it work and gets back only the result.",
-      "fr" : "Aux hands it work and gets back only the result."
+      "fr" : "Aux lui confie du travail et ne reçoit que le résultat."
     },
     "worksWithTeam" : {
       "en" : "Mail, Calendar, Clients and Documents.",
-      "fr" : "Mail, Calendar, Clients and Documents."
+      "fr" : "Mail, Calendrier, Clients et Documents."
     },
     "workshop" : {
       "en" : "Workshop",
-      "fr" : "Workshop"
+      "fr" : "Atelier"
     },
     "workshopEmpty" : {
       "en" : "No tools built yet. A tool is built only after you approve its source.",
-      "fr" : "No tools built yet. A tool is built only after you approve its source."
+      "fr" : "Aucun outil créé pour l’instant. Un outil n’est créé qu’après votre approbation de son code source."
     },
     "yesterday" : {
       "en" : "Yesterday",
-      "fr" : "Yesterday"
+      "fr" : "Hier"
     },
     "youPrefix" : {
       "en" : "You: ",
-      "fr" : "You: "
+      "fr" : "Vous : "
     }
   },
   "uiMissingFrench" : [
-    "ledgerSkillAsked",
-    "ledgerSkillRan",
-    "ledgerStarted",
-    "ledgerSubtitle",
-    "leftMac",
-    "loadFailed",
-    "lvAsk",
-    "lvAsksEveryTime",
-    "lvAuto",
-    "lvOff",
-    "lvRead",
-    "memory",
-    "memoryEmpty",
-    "menuIdle",
-    "menuOffline",
-    "menuOpen",
-    "menuQuit",
-    "menuWaiting",
-    "modelSawAux",
-    "modelSawGone",
-    "modelSawHide",
-    "modelSawLink",
-    "modelSawNoTokens",
-    "moneyEmpty",
-    "needsYouMany",
-    "needsYouOne",
-    "never",
-    "newChat",
-    "newChatDivider",
-    "newLine",
-    "nextOpenDraft",
-    "nextSeeSteps",
-    "noBrainBody",
-    "noBrainTitle",
-    "notSentRetry",
-    "notifications",
-    "notificationsHint",
-    "now",
-    "offlineRetry",
-    "offlineStart",
-    "offlineTitle",
-    "openLedger",
-    "openSettings",
-    "pauseAgent",
-    "pinnedMany",
-    "pinnedOne",
-    "privacyLede",
-    "privacyRecordEmpty",
-    "privacyRecordLede",
-    "privacyTab",
-    "privateMode",
-    "privateModeHint",
-    "privateModeOn",
-    "profile",
-    "prospectAdd",
-    "prospectAddLabel",
-    "prospectAvailability",
-    "prospectFailed",
-    "prospectIgnore",
-    "prospectIgnoreLabel",
-    "prospectQuote",
-    "prospectReferral",
-    "prospectsMany",
-    "prospectsOne",
-    "prospectsTitle",
-    "providerAdd",
-    "providerAddress",
-    "providerConnected",
-    "providerKey",
-    "providerKeyHint",
-    "providerKeyRefused",
-    "providerKind",
-    "providerKindFake",
-    "providerKindOpenAI",
-    "providerModel",
-    "providerName",
-    "providerNotResponding",
-    "providerNotTested",
-    "providerSave",
-    "providerSaveFailed",
-    "providerTest",
-    "providersEmpty",
-    "providersLede",
-    "resume",
-    "roleAux",
-    "roleCalendar",
-    "roleClients",
-    "roleCustom",
-    "roleDocuments",
-    "roleMail",
-    "running",
-    "runningEmpty",
-    "saveFailed",
-    "saving",
-    "searchPlaceholder",
-    "selectItemDetail",
-    "send",
-    "sentBy",
-    "sentTo",
-    "sentWhen",
-    "settings",
-    "setupMessages",
-    "showAll",
-    "skillIgnored",
-    "skillReady",
-    "skills",
-    "skillsEmpty",
-    "skillsLede",
-    "spentToday",
-    "spentTodayValue",
-    "stateConnecting",
-    "stateOffline",
-    "statePrivate",
-    "stateRunning",
-    "stateStopped",
-    "stateWorking",
-    "stepsChecksMany",
-    "stepsChecksOne",
-    "stepsHide",
-    "stepsShow",
-    "stopAll",
-    "stopNow",
-    "stopRowHint",
-    "stopRowTitle",
-    "stoppedBody",
-    "stoppedCancelledMany",
-    "stoppedCancelledOne",
-    "stoppedTitle",
-    "tabBudgets",
-    "tabGeneral",
-    "tabPrivacy",
-    "tabProviders",
-    "tabSkills",
-    "team",
-    "teamAsked",
-    "teamLeft",
-    "teamNeedsYou",
-    "teamNoSteps",
-    "teamOffline",
-    "teamStepsMany",
-    "teamStepsOne",
-    "teamTab",
-    "teamToday",
-    "teamUnknown",
-    "teamWorking",
-    "typing",
-    "unavailable",
-    "waitingEmpty",
-    "waitingLede",
-    "waitingLedeOne",
-    "waitingLedeOneAgent",
-    "waitingSubtitle",
-    "waitsForYesMany",
-    "waitsForYesOne",
-    "workForAux",
-    "workTab",
-    "worksWith",
-    "worksWithAux",
-    "worksWithTeam",
-    "workshop",
-    "workshopEmpty",
-    "yesterday",
-    "youPrefix"
+
   ]
 }

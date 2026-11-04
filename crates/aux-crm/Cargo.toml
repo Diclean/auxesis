@@ -23,7 +23,7 @@ kernel-privacy.workspace = true
 kernel-broker.workspace = true
 # Exact `YYYY-MM-DD` / RFC 3339 validation for a follow-up due date.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-# WO CLIENT-TZ-FIELD: a client's zone is an IANA name, validated before it is
+# A client's zone is an IANA name, validated before it is
 # stored. Already in the lock (`aux-runtime` reads event zones with it).
 chrono-tz = "0.10"
 serde_json = "1"

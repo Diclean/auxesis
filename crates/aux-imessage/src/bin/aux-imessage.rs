@@ -39,7 +39,7 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    // J-02: the one shared sandbox guard, before anything is read or created.
+    // The one shared sandbox guard, before anything is read or created.
     // It refuses the real `~/.auxesis` while the sandbox is active and returns
     // the verified home every path below is built from.
     let home_path = match kernel_core::ensure_sandbox_guard(None) {

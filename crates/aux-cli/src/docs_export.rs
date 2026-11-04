@@ -1,4 +1,4 @@
-//! `aux docs export` (M5-2): ask the daemon to write the receipts of a period
+//! `aux docs export`: ask the daemon to write the receipts of a period
 //! to `<out>/auxesis-receipts-<from>-<to>/` (`receipts.csv` + `originals/`). An
 //! empty period prints one line and exits 0 without writing anything; an
 //! existing empty export folder is reused, a non-empty one is refused.

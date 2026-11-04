@@ -130,7 +130,7 @@ async fn oversized_registry_masks_the_whole_message() {
     kernel_broker::scrub::clear_known_secrets();
 }
 
-/// R8 (3), the security review's repro: with every value pinned the registry grows to its
+/// The security review's repro: with every value pinned the registry grows to its
 /// hard ceiling and then refuses new values; the pinned target is never
 /// evicted, and a live stream fails closed with a visible placeholder
 /// instead of publishing the target verbatim.

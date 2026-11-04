@@ -12,7 +12,7 @@ kernel-core.workspace = true
 kernel-broker.workspace = true
 blake3 = "1"
 getrandom = "0.3"
-# WO-06c: one master.key, HKDF-SHA256-derived store and vault keys. `hkdf` is
+# One master.key, HKDF-SHA256-derived store and vault keys. `hkdf` is
 # the RustCrypto construction already in the lock file (0.12.4); `sha2` is its
 # hash (0.10.9, already used elsewhere in the workspace).
 hkdf = "0.12"
@@ -20,7 +20,7 @@ sha2 = "0.10"
 libc = "0.2"
 rusqlite.workspace = true
 zeroize = "1"
-# B4-01/H-11/SB6-06: `arbitrary_precision` (every number keeps its exact
+# `arbitrary_precision` (every number keeps its exact
 # source lexeme) and `preserve_order` (keys keep input order) are load-bearing
 # for the byte-faithful scrub layer. They are declared here as well as in
 # `kernel-broker` and `aux-runtime` so this crate cannot silently lose them if that edge ever drops

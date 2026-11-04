@@ -489,7 +489,7 @@ async fn connection_refused_is_mapped_to_request_error() {
 }
 
 // ---------------------------------------------------------------------------
-// streaming (WS-F1)
+// streaming
 // ---------------------------------------------------------------------------
 
 /// Collects the sink's deltas in order.

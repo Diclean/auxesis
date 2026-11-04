@@ -100,7 +100,7 @@ impl Store {
     ///
     /// The counter is one `meta` row, bumped in one statement, so it survives a
     /// restart and two processes cannot read the same value. Readable ids that
-    /// must never collide across runs are built from it (CRM-NOTE-P3).
+    /// must never collide across runs are built from it.
     pub fn next_counter(&self, name: &str) -> Result<u64, StoreError> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -119,7 +119,7 @@ impl Store {
 
     /// The store's own UTC clock, as a strict RFC 3339 timestamp
     /// (`YYYY-MM-DDTHH:MM:SSZ`). A CRM write that cannot trust a
-    /// model-supplied time stamps the row from here (CRM-TAINT-AT).
+    /// model-supplied time stamps the row from here.
     pub fn now_rfc3339(&self) -> Result<String, StoreError> {
         Ok(self
             .conn
@@ -335,7 +335,7 @@ impl Store {
     }
 
     /// [`Store::insert_interaction`] with the row's taint flag. A tainted row's
-    /// summary is not returned to the model (CRM-NOTE-P3).
+    /// summary is not returned to the model.
     #[allow(clippy::too_many_arguments)]
     pub fn insert_interaction_marked(
         &self,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ACP-A0 manual smoke: ONE real turn against the owner's OpenCode login.
+# Manual smoke: ONE real turn against the owner's OpenCode login.
 #
 # NOT run in CI. NOT run by automation. Makes exactly one attempt — if it
 # fails, capture the output and stop (do not retry).
@@ -8,7 +8,7 @@
 # that its data directory exists, then lets the sandboxed child use its own
 # login through a read-only vendor data dir.
 set -euo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 prompt="${1:-say ok}"
 

@@ -265,7 +265,7 @@ async fn a_public_send_reaches_the_pinned_target_only() {
     );
 }
 
-/// Item 1: an immediate reply waits out the pacing delay and is delivered,
+/// An immediate reply waits out the pacing delay and is delivered,
 /// instead of being refused and silently dropped.
 #[tokio::test(start_paused = true)]
 async fn an_immediate_reply_waits_for_the_pacing_delay_and_is_delivered() {
@@ -293,7 +293,7 @@ async fn an_immediate_reply_waits_for_the_pacing_delay_and_is_delivered() {
     assert_eq!(sender.sent(), vec![(OWNER.to_string(), "yes".to_string())]);
 }
 
-/// Item 1: a wait that cannot open within the bound fails and sends nothing.
+/// A wait that cannot open within the bound fails and sends nothing.
 #[tokio::test(start_paused = true)]
 async fn a_pacing_wait_beyond_the_bound_is_refused() {
     let source = Arc::new(FakeSource {
@@ -407,7 +407,7 @@ async fn a_fake_chat_db_flows_through_the_locked_query() {
     assert!(sender.sent().is_empty(), "polling never sends");
 }
 
-/// Item 2: a full queue stops the cursor at the last delivered rowid, so the
+/// A full queue stops the cursor at the last delivered rowid, so the
 /// rows that did not fit are read again after a drain and delivered exactly
 /// once.
 #[tokio::test]
@@ -466,7 +466,7 @@ async fn a_full_queue_delivers_every_row_exactly_once() {
     assert_eq!(bodies, expected, "every row delivered exactly once");
 }
 
-/// Item 6: the poller's SQLite read runs on a blocking thread, so it must be
+/// The poller's SQLite read runs on a blocking thread, so it must be
 /// callable through `spawn_blocking` and still return the report.
 #[tokio::test]
 async fn poll_and_receipts_run_off_the_async_thread() {
@@ -715,7 +715,7 @@ async fn ws_frames(ws: &mut Ws) -> String {
 
 const SECRETS: [&str; 4] = ["Camille", "Durand", "camille@example.test", "\u{27e6}"];
 
-/// PRIV-IMSG: in Private mode an owner text is still answered. The provider
+/// In Private mode an owner text is still answered. The provider
 /// sees a token for the address, nothing reaches `/v1/events`, the turn leaves no row in
 /// the store, the answer waits in memory for the app, and Messages carries the
 /// fixed phrase and nothing else.
@@ -734,7 +734,7 @@ async fn private_mode_answers_in_the_app_and_texts_only_the_fixed_phrase() {
         .map(|request| serde_json::to_string(&request.messages).unwrap())
         .collect::<String>();
     assert!(!requests.is_empty());
-    // The address is masked; the name passes as written (NAMES-OFF, 2026-10-19).
+    // The address is masked; the name passes as written.
     assert!(
         !requests.contains(SECRETS[2]),
         "the address reached the provider"
@@ -869,7 +869,7 @@ impl ChatProvider for MidTurnReader {
     }
 }
 
-/// PRIV-EVENTS-RACE: a snapshot taken in the middle of a Private turn shows
+/// A snapshot taken in the middle of a Private turn shows
 /// nothing of it. The private session's rows exist while the turn runs; the
 /// agent list (what `agent.state` carries), the activity feed, a thread read
 /// by id and a fresh `/v1/events` socket must not show them. A private turn
@@ -915,7 +915,7 @@ async fn a_snapshot_taken_mid_private_turn_shows_nothing_of_it() {
     );
 }
 
-/// PRIV-EVENTS-RACE: the private session is no thread of the app. A post to
+/// The private session is no thread of the app. A post to
 /// its id is a 404: no message is stored and no provider is called.
 #[tokio::test]
 async fn a_post_to_a_private_session_id_is_not_found() {
@@ -942,7 +942,7 @@ async fn a_post_to_a_private_session_id_is_not_found() {
     assert_eq!(rig.table_counts(), before);
 }
 
-/// PRIV-IMSG: a Private turn that gives no answer still tells the owner, with a
+/// A Private turn that gives no answer still tells the owner, with a
 /// constant that carries no error detail.
 #[tokio::test]
 async fn a_failed_private_turn_sends_only_the_constant_failure_notice() {
@@ -968,7 +968,7 @@ async fn a_failed_private_turn_sends_only_the_constant_failure_notice() {
     assert_eq!(counts(&rig), before);
 }
 
-/// PRIV-IMSG: a stranger in the pinned chat is still ignored in Private mode.
+/// A stranger in the pinned chat is still ignored in Private mode.
 #[tokio::test]
 async fn private_mode_still_ignores_a_stranger() {
     let dir = tempfile::tempdir().unwrap();
@@ -1013,7 +1013,7 @@ impl Sender for FailingSender {
     }
 }
 
-/// BRIEF-NOTICE: one manual brief in `mode` through the real router, worker
+/// One manual brief in `mode` through the real router, worker
 /// and `sender` over Messages (the local display only when `None`). Returns
 /// the recorded delivery and whether the full brief is stored for the app.
 async fn run_brief(mode: &str, sender: Option<Arc<dyn Sender>>) -> (serde_json::Value, bool) {
@@ -1144,7 +1144,7 @@ fn osascript_sender(dir: &Path, name: &str, body: &str) -> Arc<dyn Sender> {
     Arc::new(sender.unwrap())
 }
 
-/// IMSG-SEND-CAUSE: a failed brief send records and logs why, and never the
+/// A failed brief send records and logs why, and never the
 /// text, the handle or osascript's own output (which echoes both here).
 #[tokio::test]
 async fn a_failed_brief_send_names_its_cause_never_the_text_or_handle() {
@@ -1193,7 +1193,7 @@ exit 1"#;
 }
 
 /// Switch the rig's home to Open mode: the turn then runs as a plain chat and
-/// its answer is the reply text (IMSG-SCRUB-1).
+/// its answer is the reply text.
 fn open_mode(rig: &Rig) {
     std::fs::write(
         kernel_core::config_path(&rig.home),
@@ -1202,7 +1202,7 @@ fn open_mode(rig: &Rig) {
     .unwrap();
 }
 
-/// IMSG-SCRUB-1: an Open-mode reply is the assistant text, which can hold real
+/// An Open-mode reply is the assistant text, which can hold real
 /// values (rehydrated tokens, or what an injected mail made the model echo).
 /// None of a key, an IBAN, a card, a national ID or a health term reaches
 /// the text Messages is handed.
@@ -1253,7 +1253,7 @@ async fn gateway_open_mode_reply_never_carries_a_key_an_iban_a_card_an_id_or_hea
     );
 }
 
-/// IMSG-SCRUB-1: a plain Open-mode answer goes out as written.
+/// A plain Open-mode answer goes out as written.
 #[tokio::test]
 async fn gateway_open_mode_plain_reply_goes_out_unchanged() {
     let answer = "Done. Your meeting with Camille is moved to Thursday at 10:00.";

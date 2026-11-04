@@ -132,7 +132,7 @@ impl Notifier for MacNotifier {
             .map(|code| code.to_string())
             .unwrap_or_else(|| "signal".to_string());
         let raw = String::from_utf8_lossy(&output.stderr);
-        // Cleaned of invisibles and ANSI and secret-redacted (IMSG-SCRUB-1):
+        // Cleaned of invisibles and ANSI and secret-redacted:
         // the error is logged and can be shown, so no key may ride in it.
         let stderr =
             kernel_broker::scrub_external_preview(std::path::Path::new(""), raw.trim(), MAX_STDERR);

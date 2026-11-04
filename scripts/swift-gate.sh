@@ -16,7 +16,7 @@
 # gitignored `.build` dir, so nothing lands in the owner's ~/Library.
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 repo_root="$(git rev-parse --show-toplevel)"
 

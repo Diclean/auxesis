@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 # disk-guard.sh — keeps the Mac's data volume healthy while agent fleets build.
 # Run by a user LaunchAgent every 20 min (scripts/install-disk-guard.sh), or by hand.
 #   WARN (default 75 %): clean stale temp workspaces (AGE 60), drop cargo incremental dirs,

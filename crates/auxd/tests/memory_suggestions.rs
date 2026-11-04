@@ -332,7 +332,7 @@ async fn a_mail_read_taints_the_suggestion_with_its_run_identity() {
     assert_eq!(source_ref, turn["run_id"].as_str().unwrap());
 }
 
-/// SUGGESTION-ACCEPT-TRUST: the owner's yes is what makes a suggestion a
+/// The owner's yes is what makes a suggestion a
 /// memory. An accepted tainted suggestion becomes an active owner memory the
 /// model recalls, and the item still says it came from outside content, with
 /// the run that proposed it.
@@ -674,7 +674,7 @@ async fn switching_suggestions_off_mid_turn_hides_the_tool_and_refuses_a_pending
     );
 }
 
-/// TAINTED-REMEMBER: an instruction read from a mail never becomes a lasting
+/// An instruction read from a mail never becomes a lasting
 /// memory on its own. `remember` after an untrusted `mail_read` writes no
 /// memory row; the text waits in the owner's review queue and the model is
 /// told so.

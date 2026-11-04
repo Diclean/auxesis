@@ -45,7 +45,7 @@ const DISPLAY_HIDDEN: &str = "[content hidden]";
 
 /// Mask every secret and every prohibited value (e-mail, phone, IBAN, card,
 /// national ID, health and the rest of the Private-mode detector) in free
-/// text before a remote gateway carries it to the owner (IMSG-SCRUB-1).
+/// text before a remote gateway carries it to the owner.
 /// Names stay readable (owner rule). The kernel's secret scrub runs first, then
 /// its full display detector, the same pair the app's message previews use.
 ///

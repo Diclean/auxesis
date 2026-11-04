@@ -1,4 +1,4 @@
-//! End-to-end tests of the `aux install` sandbox refusal (J-02 round 3).
+//! End-to-end tests of the `aux install` sandbox refusal.
 //!
 //! macOS-only: launchd and `~/Library/LaunchAgents` do not exist on Linux, so
 //! this whole integration file is compiled away on other platforms (CI runs

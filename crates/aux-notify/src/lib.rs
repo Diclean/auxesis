@@ -1,4 +1,4 @@
-//! macOS notifications for Auxesis — Slice N of M2.
+//! macOS notifications for Auxesis.
 //!
 //! [`Notifier`] is the contract the engine and scheduler program against.
 //! [`MacNotifier`] delivers through `osascript display notification` (no

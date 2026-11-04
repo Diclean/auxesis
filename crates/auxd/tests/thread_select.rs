@@ -127,7 +127,7 @@ async fn select_restores_an_older_session_and_survives_a_restart() {
     restarted.shutdown();
 }
 
-/// CONV-SIDEBAR-1: Aux's chats only, newest first, capped, titles only.
+/// Aux's chats only, newest first, capped, titles only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversations_are_aux_chats_newest_first_and_titles_only() {
     let dir = TempDir::new().unwrap();

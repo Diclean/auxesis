@@ -1,5 +1,5 @@
 # Pinned toolchain — the exact stable version this project currently builds
-# with (REPO-HYGIENE-1). CI installs this via rustup, so the pin is the single
+# with. CI installs this via rustup, so the pin is the single
 # source of truth; bump it deliberately (and re-run the gates), never silently.
 #
 # The two components are required by the CI `Format` and `Clippy` steps and by

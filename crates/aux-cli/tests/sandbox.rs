@@ -1,4 +1,4 @@
-//! H-03/J-02 guard, end to end against the real `aux` binary.
+//! The sandbox guard, end to end against the real `aux` binary.
 //!
 //! With `AUXESIS_SANDBOX=1` — or with `$HOME` unset, empty, relative, or
 //! overridden away from the OS user database home — `aux` refuses a home
@@ -127,7 +127,7 @@ fn home_override_alone_refuses_the_real_home() {
     assert_refused(&output);
 }
 
-/// Item 2: unset, empty and relative `$HOME` are violations too.
+/// Unset, empty and relative `$HOME` are violations too.
 #[test]
 fn invalid_home_refuses_the_real_home() {
     let Some(real_home) = os_home() else { return };
@@ -145,7 +145,7 @@ fn invalid_home_refuses_the_real_home() {
     ));
 }
 
-/// Item 2: with neither `AUXESIS_HOME` nor a usable `$HOME`, refuse — never
+/// With neither `AUXESIS_HOME` nor a usable `$HOME`, refuse — never
 /// fall back to the CWD.
 #[test]
 fn no_home_at_all_refuses_instead_of_a_cwd_fallback() {
@@ -158,7 +158,7 @@ fn no_home_at_all_refuses_instead_of_a_cwd_fallback() {
     );
 }
 
-/// Item 3: the case-insensitive spelling of the real `.auxesis` is refused.
+/// The case-insensitive spelling of the real `.auxesis` is refused.
 #[test]
 fn sandbox_refuses_a_case_variant_of_the_real_home() {
     let Some(real_home) = os_home() else { return };
@@ -195,7 +195,7 @@ fn a_literal_sandbox_home_is_allowed() {
     assert!(output.status.success(), "{}", text(&output));
 }
 
-/// Item 5: `AUXESIS_API_PORT=0` means "no endpoint" for a client — doctor
+/// `AUXESIS_API_PORT=0` means "no endpoint" for a client — doctor
 /// reports that instead of probing the real daemon on 2893.
 #[test]
 fn doctor_honours_port_zero_as_no_endpoint() {

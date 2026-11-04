@@ -4,7 +4,7 @@
 #   scripts/install-disk-guard.sh --uninstall
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 LABEL=com.auxesis.disk-guard
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"

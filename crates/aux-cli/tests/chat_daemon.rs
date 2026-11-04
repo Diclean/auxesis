@@ -1,4 +1,4 @@
-//! CLI-DELEGATE: `aux chat` goes through `auxd` when it answers (a real API on a
+//! `aux chat` goes through `auxd` when it answers (a real API on a
 //! loopback port, scripted fake brain, sandboxed `aux`), else says so and runs alone.
 
 use std::io::{BufRead, BufReader};

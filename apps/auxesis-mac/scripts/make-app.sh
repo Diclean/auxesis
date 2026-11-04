@@ -16,7 +16,7 @@
 # prints the Gatekeeper "Open Anyway" step. No other signing is attempted.
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${AUXESIS_MAC_BUILD_DIR:-$APP_DIR/build}"

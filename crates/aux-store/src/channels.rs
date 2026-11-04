@@ -7,7 +7,7 @@
 use super::*;
 
 impl Store {
-    // ---- channel bindings and message ledger (v11, WA-MSG-0) ----
+    // ---- channel bindings and message ledger (v11) ----
     //
     // Everything here is keyed by a salted hash (`chat_key`, `message_key`):
     // the store never sees a phone number or message content.
@@ -307,7 +307,7 @@ mod tests {
         );
     }
 
-    /// WA-MSG-0 P2 fix: a failed turn releases its slot and admits exactly
+    /// A failed turn releases its slot and admits exactly
     /// one retry on redelivery.
     #[test]
     fn channel_failed_turn_is_retried_once() {
@@ -324,7 +324,7 @@ mod tests {
         assert!(!store.channel_message_seen("c", "m").unwrap());
     }
 
-    /// WA-MSG-0 P2 fix: the cap is checked and the slot written in one
+    /// The cap is checked and the slot written in one
     /// `BEGIN IMMEDIATE` transaction, so two connections racing for the last
     /// slot admit exactly one.
     #[test]
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(store.channel_count_accepted_since("c", 0).unwrap(), 1);
     }
 
-    /// WA-MSG-0 P2 fix: retention keeps at most `max_messages` newest rows
+    /// Retention keeps at most `max_messages` newest rows
     /// per bound thread and drops anything older than the age cap.
     #[test]
     fn channel_retention_prunes_count_and_age() {

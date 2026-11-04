@@ -13,7 +13,7 @@
 #
 # AUXESIS_ALLOW_KEYCHAIN is never set here: the real Keychain stays off.
 set -euo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 <command> [args...]" >&2

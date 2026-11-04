@@ -1,4 +1,4 @@
-// First-launch setup screen (SETUP-SCREEN): a fake permission provider only.
+// First-launch setup screen: a fake permission provider only.
 // No test raises a macOS prompt, reads a calendar or touches a real permission.
 import XCTest
 @testable import AuxesisKit

@@ -1,4 +1,4 @@
-// Private answers (PRIV-ANSWERS-UI): the answers to the owner's iMessage texts
+// Private answers: the answers to the owner's iMessage texts
 // that the daemon holds in memory in Private mode (`GET /v1/private/answers`,
 // newest first). The app keeps them in this model only: never on disk, never in
 // UserDefaults, never in the Store or its cache, never in a log. A restart, or

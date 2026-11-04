@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for .gitleaks.toml (SHD-3, round 1).
+# Self-test for .gitleaks.toml.
 #
 # gitleaks applies allowlist paths with MatchString. Every entry must therefore
 # be a full repo-relative path anchored with ^...$ and have every dot escaped,

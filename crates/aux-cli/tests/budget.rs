@@ -187,7 +187,7 @@ fn chat_usage_is_recorded_and_over_budget_calls_are_denied() {
     let dir = tempdir().unwrap();
     let home = dir.path().join("home");
     // A cap the first call comfortably fits under: admission now includes the
-    // caller's own reserve (B-01R), so a tiny cap no longer admits the call
+    // caller's own reserve, so a tiny cap no longer admits the call
     // and then overshoots. The cap is pinned to the recorded usage *after*
     // the first call, which is what must block the next one.
     write_config(

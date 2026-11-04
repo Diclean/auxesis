@@ -82,7 +82,7 @@ public final class Store: ObservableObject {
     @Published public private(set) var mcpTestResult: McpConnectionTest?
     @Published public private(set) var mcpTestedURL: String?
     @Published public var mcpCustomDataClass = "sensitive"
-    /// M6-4: the install preview waiting for the owner's one yes.
+    /// The install preview waiting for the owner's one yes.
     @Published public private(set) var pluginPreview: McpApprovalPreview?
     /// The agent picked in the preview sheet (a team id; Aux by default).
     @Published public private(set) var pluginAgent = TeamMember.aux.id
@@ -849,7 +849,7 @@ public final class Store: ObservableObject {
         do { async let catalog = client.mcpCatalog(); async let servers = client.mcpServers(); async let packs = client.mcpPacks(); let (c, s, p) = try await (catalog, servers, packs); mcpCatalog = c; mcpServers = s; mcpPacks = p; mcpFailed = false } catch { mcpFailed = true }
     }
     public func enablePluginPack(_ pack: McpPack, agent: String) { guard let client = features.plugins else { return }; Task { do { try await client.enableMcpPack(id: pack.id, agent: agent); self.refreshPlugins() } catch { self.mcpFailed = true } } }
-    /// M6-4: Install stages the entry off for Aux and opens its preview; nothing runs before `approvePluginPreview`.
+    /// Install stages the entry off for Aux and opens its preview; nothing runs before `approvePluginPreview`.
     public func installPlugin(_ entry: McpCatalogEntry) async {
         pluginAgent = TeamMember.aux.id
         await stagePlugin(id: String(entry.id.prefix(32)), catalogID: entry.id, agent: pluginAgent, replace: false)
@@ -863,7 +863,7 @@ public final class Store: ObservableObject {
         pluginPreviewCatalogID = mcpCatalog.first { $0.id == server.id }?.id
         await showPluginPreview(agent: staged.count > 1 ? nil : pluginAgent) { try await $0.mcpApproval(id: server.id) }
     }
-    /// r1 (#532 P2): the hash binds the agent's allowlist, so another agent means a new staging
+    /// The hash binds the agent's allowlist, so another agent means a new staging
     /// and a new preview. Until it arrives, Approve does nothing: the old hash never goes out.
     public func choosePluginAgent(_ agent: String) async {
         guard agent != pluginAgent, pluginPreviewAgent != nil, let preview = pluginPreview, let catalogID = pluginPreviewCatalogID else { return }
@@ -919,7 +919,7 @@ public final class Store: ObservableObject {
     }
     public func testPluginURL(_ url: String) { guard let client = features.plugins else { mcpFailed = true; return }; clearPluginTest(); Task { do { self.mcpTestResult = try await client.testMcpServer(url: url); self.mcpTestedURL = url; self.mcpFailed = false; self.mcpFailureCode = nil } catch { self.mcpTestResult = nil; self.mcpTestedURL = nil; self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
     public func addPluginURL(_ url: String, id: String) { guard let client = features.plugins, let test = mcpTestResult, Self.pluginAddReady(url: url, id: id, testedURL: mcpTestedURL) else { return }; Task { do { try await client.addMcpUrlServer(id: id, url: url, dataClass: mcpCustomDataClass, testDigest: test.digest); clearPluginTest(); self.refreshPlugins(); self.mcpFailureCode = nil } catch { self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
-    /// M6-APP-APPROVE-ONLY: turning a server on is never a bare PUT; it goes through the
+    /// Turning a server on is never a bare PUT; it goes through the
     /// preview and the one approve (`reviewPlugin`). Only "off" is a direct call.
     public func setPlugin(_ server: McpServerView, enabled: Bool) async {
         guard enabled else { await mcpCall(server) { try await $0.setMcpServer(id: server.id, enabled: false) }; return }
@@ -975,7 +975,7 @@ public final class Store: ObservableObject {
         loadThread(agent: name, session: nil)
     }
 
-    /// CONV-SIDEBAR-1: open a listed conversation as the agent's current one.
+    /// Open a listed conversation as the agent's current one.
     public func selectConversation(_ id: Int64) {
         guard !isSendingMessage else { return }
         loadThread(agent: TeamMember.aux.id, session: id)
@@ -1021,7 +1021,7 @@ public final class Store: ObservableObject {
         }
     }
 
-    /// CONV-SIDEBAR-1: refresh at the start and when Aux's turn ends.
+    /// Refresh at the start and when Aux's turn ends.
     public func loadConversations() {
         Task { [weak self] in
             guard let self else { return }
@@ -1132,7 +1132,7 @@ public final class Store: ObservableObject {
             streaming: false,
             pending: true
         )
-        // CANCEL-AT-CARD, CARD-NEVER-BLOCKS: a card may hold the turn in
+        // A card may hold the turn in
         // flight. Send at once: a refusal withdraws it, anything else runs
         // beside it; the queue would hold the words for the card's timeout.
         if hasPendingApproval {
@@ -1155,7 +1155,7 @@ public final class Store: ObservableObject {
     /// True when any card waits: the turn in flight may be parked on it,
     /// even one an agent Aux delegated to raised in its own thread. The
     /// daemon runs the words beside the card, or queues them behind a turn
-    /// that still works (CARD-NEVER-BLOCKS).
+    /// that still works.
     private var hasPendingApproval: Bool {
         approvals.contains { $0.state.isPending }
     }
@@ -1184,7 +1184,7 @@ public final class Store: ObservableObject {
     /// held by that agent's `thread_busy` may try again.
     private func turnEnded(_ agent: String) {
         turnEnds[agent, default: 0] += 1
-        // CONV-SIDEBAR-1: a finished Aux turn may add a conversation or move
+        // A finished Aux turn may add a conversation or move
         // its last activity; the list refreshes now, not on the next launch.
         if agent == TeamMember.aux.id { loadConversations() }
         guard sendQueueHeldBy == agent else { return }

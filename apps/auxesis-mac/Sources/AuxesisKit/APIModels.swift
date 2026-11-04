@@ -9,7 +9,7 @@
 //     the small functions at the bottom.
 //
 // Unknown JSON fields are ignored; unknown `kind`s/`type`s become `.other`
-// so a newer daemon never breaks decoding (WF-1's `message.delta` included).
+// so a newer daemon never breaks decoding (the `message.delta` frame included).
 import Foundation
 
 // MARK: - Health / agents (GET /v1/health, GET /v1/agents)
@@ -116,7 +116,7 @@ public struct McpServerView: Decodable, Equatable, Identifiable {
     public let reason: String?; public let highRisk: String?
     enum CodingKeys: String, CodingKey { case id, enabled, state, transport, auth, tools, agents, dots, reason; case dataClass = "data_class"; case highRisk = "high_risk" }
 
-    /// `agents` is the current key; the pre-WO-07 `dots` spelling is still read
+    /// `agents` is the current key; the older `dots` spelling is still read
     /// for one release, so an older daemon keeps decoding.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,7 +153,7 @@ public struct McpTestBody: Encodable { let url: String }
 public struct McpAddBody: Encodable { let id: String; let catalogID: String; let agent: String; enum CodingKeys: String, CodingKey { case id, agent; case catalogID = "catalog_id" } }
 public struct McpEnabledBody: Encodable { let enabled: Bool }
 public struct McpToolsBody: Encodable { let tools: [String] }
-// M6-2 (#527): the install preview from `POST /servers` (flat, beside `ok`) or `GET /servers/{id}/approval`.
+// The install preview from `POST /servers` (flat, beside `ok`) or `GET /servers/{id}/approval`.
 public struct McpApprovalPreview: Decodable, Equatable, Identifiable {
     public struct Tool: Decodable, Equatable, Identifiable { public let name: String; public let risk: String; public let access: String; public var id: String { name } }
     public let id: String; public let transport: String; public let enabled: Bool; public let network: Bool
@@ -278,7 +278,7 @@ public struct AgentSummary: Decodable, Equatable, Identifiable {
     /// The agent's current session id as a string, or nil when it has no
     /// session yet (auxd resolves the agent name to this session).
     public let threadId: String?
-    /// D33 (NEW, E0): the brain this agent runs with, as `model` (or the
+    /// The brain this agent runs with, as `model` (or the
     /// provider id when no model is named). Absent before the agents runtime.
     public let brain: String?
     /// MODE-CHIP-TRUTH: the mode the daemon last reported for this agent.
@@ -1868,7 +1868,7 @@ public struct FirstRunComplete: Decodable, Equatable {
     }
 }
 
-// MARK: - Contacts import (POST /v1/contacts/import, WO-CRMIO-2)
+// MARK: - Contacts import (POST /v1/contacts/import)
 
 /// The party kind every row of an import becomes. `none` sends no tag.
 public enum ContactsImportTag: String, CaseIterable, Equatable {

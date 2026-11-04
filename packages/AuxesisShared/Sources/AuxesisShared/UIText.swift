@@ -1,5 +1,5 @@
 // Copy for the E2 shell, through the same `L10n` mechanism as the rest of the
-// app. Owner rule (2026-10-11): content is English only for now. Each key
+// app. Content is English only for now. Each key
 // carries its EN source; FR is a peer slot that is empty today and falls back
 // to EN, so French can be added key by key without touching a view.
 // `UITextTests` checks every key has EN copy and none of the banned words.
@@ -63,7 +63,7 @@ public enum UIKey: String, CaseIterable {
     // Waiting for you
     case waitingSubtitle, waitingLede, waitingLedeOneAgent, waitingLedeOne, waitingEmpty
 
-    // Today (M2)
+    // Today
     case todaySubtitle, todayWrittenAt, todayCalendar, todayMail, todayWeather, todayAvailable, todayUnavailable
     case todayNotChecked, todayFreshnessUnreported, todayCheckSources, todayAllDay, todayNoEvents, todayNoMail
     case todayDueEmpty, todayNoProspects, todayWhatRan, whatBriefChecked, todayLead, todayYourDay, runningNow
@@ -121,13 +121,13 @@ public enum UIKey: String, CaseIterable {
     // Shared states
     case loading, loadFailed, unavailable, saving, saveFailed
 
-    // Calendar page (CAL-PAGE-1)
+    // Calendar page
     case calPage, calSubtitle, calLede, calUpdatedNow, calUpdatedMinutes, calUpdatedHours, calNotUpdatedSince
     case calUpdateUnknown, calNotShared, calStaleHint, calRefresh, calRefreshing, calNoEvents
     case calOpenSettings, calErrNoAccess, calErrOffline, calErrFailed
     case calLoginTitle, calLoginHint, calLoginOn, calLoginApproval, calLoginOff, calLoginUnavailable, calLoginFailed
 
-    // Documents page (M5-4)
+    // Documents page
     case docsLede, docsShow, docsShowAll, docsShowUnlinked, docsEmptyUnlinked, docsEmptyClient
     case docsColDate, docsColDocument, docsColAmount, docsColClient, docsKindInvoice, docsKindReceipt, docsKindOther
     case docsWaiting, docsNoDetails, docsUnreadable, docsNoClient, docsArchived, docsUnlink, docsLinkAfterRead
@@ -135,7 +135,7 @@ public enum UIKey: String, CaseIterable {
     case docsExportedOne, docsExportedMany, docsExportMissing, docsExportEmpty, docsReveal
     case docsErrOffline, docsErrNotRead, docsErrGone, docsErrExists, docsErrRefused, docsErrFailed
 
-    // Memory page (MEM-UI-1)
+    // Memory page
     case whatAuxKnows, memoryLede, memoryAboutYou, memoryRules, memoryPeople, memoryOther
     case memoryRuleAlways, memoryRuleFixed, memorySuggestions, memorySuggestionsLede
     case memorySectionEmpty
@@ -148,21 +148,21 @@ public enum UIKey: String, CaseIterable {
     case stepsChecksOne, stepsChecksMany, stepsStayed, stepsUnrecorded, stepsShow, stepsHide
     case whereLeft, whereUnavailable, needsYouOne, needsYouMany
     case youPrefix, newChatDivider, recordsMenu, panelToggle
-    // Sidebar v5 (UI-V5-3) and past conversations (CONV-SIDEBAR-1)
+    // Sidebar and past conversations
     case sidebarSearch, sidebarSearchClear, sidebarNoMatch, sidebarTeam
     case sidebarConversations, newConversation, conversationUntitled
     case sidebarWaitingOn, sidebarIdle, sidebarIdleLast, sidebarStayedOne, sidebarStayedMany
     case sidebarRoleAux, sidebarRoleMail, sidebarRoleCalendar, sidebarRoleClients, sidebarRoleDocuments
-    // Right panel and team map (UI-V4-3)
+    // Right panel and team map
     case workTab, teamTab, privacyTab, comingNext
     case teamWorking, teamNeedsYou, teamStepsOne, teamStepsMany, teamLeft, teamUnknown, teamNoSteps
     case teamToday, teamAsked, teamOffline
     case calCardTitle, calCardFreeTitle, calCardFreeRow, calCardAllDay, calCardNotChecked, calCardIncomplete, calCardAsOf
-    // Mascot sheet (MASCOT-2)
+    // Mascot sheet
     case mascotMenu, mascotTitle, mascotLede, mascotHeading, mascotTint, mascotDefault, mascotSame, mascotReset, mascotCancel, mascotDone
 
 
-    // Plugins (M6-4)
+    // Plugins
     case tabPlugins, pluginsLede, pluginsInstalled, pluginsAvailable, pluginsEmpty, pluginOn, pluginOff, pluginNeedsYou, pluginError, pluginRead, pluginReadWrite, pluginNotChecked
     case pluginOnThisMac, pluginAccess, pluginConnects, pluginAuth, pluginNone, pluginAuthKey, pluginData, pluginDataPublic, pluginDataPrivate, pluginTools, pluginToolsLater, pluginNetwork
     case pluginNetworkAny, pluginNoNetwork, pluginEnv, pluginInstall, pluginReview, pluginTurnOff, pluginRemove, pluginPreviewTitle, pluginPreviewLede, pluginChangedReview, pluginApprove, pluginGivesTo
@@ -844,7 +844,7 @@ public extension L10n {
         .docsErrRefused: "Auxesis can't export there. Pick a folder outside the Auxesis folder.",
         .docsErrFailed: "Something went wrong. Nothing was changed. Try again.",
 
-        // Memory page (MEM-UI-1)
+        // Memory page
         .whatAuxKnows: "What Aux knows",
         .memoryLede: "Stored on this Mac only. Change or delete anything; Aux uses it from the next message.",
         .memoryAboutYou: "About you",
@@ -891,7 +891,7 @@ public extension L10n {
         .mascotDone: "Done",
     ]
 
-    /// FR peers, key by key (Today, M2). Missing keys fall back to EN.
+    /// FR peers, key by key (Today). Missing keys fall back to EN.
     static let uiFrench: [UIKey: String] = [
         .tabPlugins: "Plugins",
         .pluginsLede: "Les plugins donnent de nouveaux outils à vos agents. Parcourir cette liste ne connecte rien : un plugin ne tourne qu'après votre accord.",
@@ -1211,7 +1211,7 @@ public extension L10n {
         .docsErrRefused: "Auxesis ne peut pas exporter ici. Choisissez un dossier hors du dossier Auxesis.",
         .docsErrFailed: "Un problème est survenu. Rien n’a été modifié. Réessayez.",
 
-        // Memory page (MEM-UI-1)
+        // Memory page
         .whatAuxKnows: "Ce qu’Aux sait",
         .memoryLede: "Gardé sur ce Mac seulement. Modifiez ou supprimez ce que vous voulez ; Aux s’en sert dès le prochain message.",
         .memoryAboutYou: "À propos de vous",

@@ -71,6 +71,11 @@ impl ChatProvider for Brain {
         Some(self.host.to_string())
     }
 
+    /// A priced model: the money cap refuses an unpriced cloud brain.
+    fn model(&self) -> Option<&str> {
+        Some("deepseek-flash")
+    }
+
     fn on_this_mac(&self) -> bool {
         self.local
     }

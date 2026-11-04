@@ -136,8 +136,8 @@ fn notice_unpriced_model(model: Option<&str>) {
     tracing::warn!(
         model,
         "no price for this model in [prices] or the bundled catalog: the daily usd_cents \
-         cap cannot be checked; the token caps are the effective ones, and an agent \
-         capped by money alone is refused (add [prices.models.<model>] to config.toml)"
+         cap cannot be checked, so calls to it are refused while a money cap applies \
+         (add [prices.models.<model>] to config.toml)"
     );
 }
 
@@ -197,26 +197,31 @@ fn provider_cost_cents(usage: Option<aux_providers::Usage>) -> Option<u64> {
     Some((cost * 100.0).ceil().min(u64::MAX as f64) as u64)
 }
 
-/// A call whose model has no price cannot be checked against the money cap.
-/// That is acceptable while a token cap still binds, but an agent capped by
-/// money alone (no token cap configured) would run uncapped, so it is refused.
-fn unpriced_money_only_cap(
+/// A call whose model has no price cannot be checked against the money cap:
+/// it would reserve 0 cents, so concurrent calls could all pass the cap. While
+/// a money cap applies (every capped agent has one), such a call is refused.
+///
+/// Only a provider that cannot spend money is let through unpriced: a brain
+/// positively known to run on this Mac, or an in-process adapter that names
+/// neither a model nor an endpoint host (every cloud adapter names both).
+fn unpriced_under_money_cap(
     caps: &kernel_core::budget::BudgetCaps,
     prices: &PriceTable,
+    provider: &dyn ChatProvider,
     model: Option<&str>,
 ) -> Option<String> {
-    let set = |cap: Option<u64>| cap.is_some_and(|value| value > 0);
-    if !set(caps.usd_cents) || set(caps.tokens_in) || set(caps.tokens_out) {
+    if caps.limit(UsageKind::UsdCents).is_none() || price_source(prices, model).is_some() {
         return None;
     }
-    if price_source(prices, model).is_some() {
+    let in_process = model.is_none() && provider.endpoint_hosts().is_empty();
+    if provider.on_this_mac() || in_process {
         return None;
     }
     notice_unpriced_model(model);
+    let model = model.unwrap_or("<unreported>");
     Some(format!(
-        "model {} has no price, so the daily usd_cents cap cannot be checked and no \
-         token cap is set; add [prices.models.<model>] or a token cap to config.toml",
-        model.unwrap_or("<unreported>")
+        "model {model} has no price; add [prices.models.\"{model}\"] with \
+         input_cents_per_million and output_cents_per_million to config.toml"
     ))
 }
 
@@ -367,11 +372,11 @@ impl<'a> ChatSession<'a> {
             return Ok(None);
         }
         let model = request_model(self.provider, request);
-        if let Some(message) = unpriced_money_only_cap(&caps, self.prices, model) {
+        if let Some(message) = unpriced_under_money_cap(&caps, self.prices, self.provider, model) {
             let denial = Denial {
                 agent: self.agent.clone(),
                 day: self.current_day()?,
-                reason: DenialReason::FailClosed { message },
+                reason: DenialReason::LedgerUnavailable { message },
                 audit_error: None,
             };
             let denial = self.store.with(|store| audit_denial(store, denial));
@@ -1606,18 +1611,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unpriced_model_still_runs_when_a_token_cap_binds() {
+    async fn an_unpriced_model_is_refused_even_when_token_caps_also_bind() {
         let harness = Harness::new();
-        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("ok"))
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"))
             .with_model("unpriced-model");
         let budgets = wide_token_caps(100);
         let mut session =
             harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
 
-        session.send("hello").await.unwrap();
+        let err = session.send("hello").await.unwrap_err();
 
-        assert_eq!(provider.request_count(), 1);
-        assert_eq!(usd_spent(&harness), 0, "unpriced: no money recorded");
+        assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("[prices.models.\"unpriced-model\"]"),
+            "{err}"
+        );
+        assert_eq!(provider.request_count(), 0, "no provider call may happen");
+        assert_eq!(
+            harness.store().reservation_count().unwrap(),
+            0,
+            "nothing reserved"
+        );
+        assert_eq!(usd_spent(&harness), 0);
     }
 
     #[tokio::test]

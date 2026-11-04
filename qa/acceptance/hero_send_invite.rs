@@ -848,7 +848,15 @@ async fn drive(
     register_eventkit_tools(Arc::clone(&rig.bridge.bridge), &mut registry);
     let registry = Arc::new(RwLock::new(registry));
     let budgets = Budgets::default();
-    let prices = PriceTable::default();
+    // The money cap refuses an unpriced model, so the test brain has a price.
+    let mut prices = PriceTable::default();
+    prices.models.insert(
+        "hero-fake".to_string(),
+        kernel_core::budget::ModelPrice {
+            input_cents_per_million: 1,
+            output_cents_per_million: 1,
+        },
+    );
     let mode_fn: kernel_core::privacy::ModeFn = Arc::new(move || mode);
     let contacts = contacts();
     let session = ChatSession::start(ChatSetup {

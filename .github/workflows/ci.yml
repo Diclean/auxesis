@@ -116,6 +116,12 @@ jobs:
         # the fast local check). Runs before the switch to Command Line Tools.
         working-directory: packages/AuxesisShared
         run: xcodebuild -scheme AuxesisShared -destination 'generic/platform=iOS Simulator' build -quiet
+      - name: Mac app release build (full Xcode, as the owner deploy)
+        # Release with the full Xcode is what the owner's deploy builds
+        # (apps/auxesis-mac/scripts/make-app.sh); a Command Line Tools debug
+        # build alone missed a type-check failure in Views.swift. Runs before
+        # the switch to Command Line Tools below.
+        run: scripts/ci-sandbox-env.sh swift build -c release --package-path apps/auxesis-mac
       - name: Command Line Tools toolchain
         # The package carries its own small XCTest/Testing runner for the
         # Command Line Tools; a full Xcode toolchain would shadow it (see

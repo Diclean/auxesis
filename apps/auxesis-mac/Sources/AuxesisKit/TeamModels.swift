@@ -271,22 +271,76 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
     }
 }
 
+/// Effective daily caps of one agent on `GET /v1/usage` (`nil` = uncapped).
+/// Missing keys, `null` and an older daemon all read as "no cap": no bar.
+public struct UsageCaps: Equatable, Decodable {
+    public let tokensIn: UInt64?
+    public let tokensOut: UInt64?
+    public let usdCents: UInt64?
+
+    public init(tokensIn: UInt64? = nil, tokensOut: UInt64? = nil, usdCents: UInt64? = nil) {
+        self.tokensIn = tokensIn
+        self.tokensOut = tokensOut
+        self.usdCents = usdCents
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case tokensIn = "tokens_in"
+        case tokensOut = "tokens_out"
+        case usdCents = "usd_cents"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tokensIn = try? c.decode(UInt64.self, forKey: .tokensIn)
+        tokensOut = try? c.decode(UInt64.self, forKey: .tokensOut)
+        usdCents = try? c.decode(UInt64.self, forKey: .usdCents)
+    }
+
+    public var isUnset: Bool { tokensIn == nil && tokensOut == nil && usdCents == nil }
+}
+
+/// One agent row of `GET /v1/usage`.
+public struct UsageAgent: Equatable, Decodable {
+    public let agent: String
+    public let totals: UsageTotals
+    public let caps: UsageCaps?
+
+    public init(agent: String, totals: UsageTotals = UsageTotals(), caps: UsageCaps? = nil) {
+        self.agent = agent
+        self.totals = totals
+        self.caps = caps
+    }
+
+    enum CodingKeys: String, CodingKey { case agent, totals, caps }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agent = (try? c.decode(String.self, forKey: .agent)) ?? ""
+        totals = (try? c.decode(UsageTotals.self, forKey: .totals)) ?? UsageTotals()
+        caps = try? c.decode(UsageCaps.self, forKey: .caps)
+    }
+}
+
 /// `GET /v1/usage`: today's spend for Budgets & Stop.
 public struct UsageDay: Equatable, Decodable {
     public let day: String
     public let total: UsageTotals
+    public let agents: [UsageAgent]
 
-    public init(day: String, total: UsageTotals) {
+    public init(day: String, total: UsageTotals, agents: [UsageAgent] = []) {
         self.day = day
         self.total = total
+        self.agents = agents
     }
 
-    enum CodingKeys: String, CodingKey { case day, total }
+    enum CodingKeys: String, CodingKey { case day, total, agents }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         day = (try? c.decode(String.self, forKey: .day)) ?? ""
         total = (try? c.decode(UsageTotals.self, forKey: .total)) ?? UsageTotals()
+        agents = (try? c.decode([UsageAgent].self, forKey: .agents)) ?? []
     }
 }
 

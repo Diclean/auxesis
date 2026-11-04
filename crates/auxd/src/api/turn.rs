@@ -1611,7 +1611,7 @@ impl EngineTurnRunner {
         // D33: only the chief can hand work out. The tool returns the domain
         // agent's short result; the chief never sees its raw data.
         let before = tool_ids(&registry);
-        if agent == aux_runtime::grants::CHIEF_AGENT {
+        if agent == crate::agents::chief_id(&self.home) {
             // WATCH-1: the chief also sets up "tell me when" watchers.
             registry.register(Box::new(crate::watch::WatchTool::new(
                 self.home.clone(),

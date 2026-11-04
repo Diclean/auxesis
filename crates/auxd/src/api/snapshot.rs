@@ -3010,7 +3010,6 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "aux",
                 "axis",
                 "calendar",
                 "clients",
@@ -3054,7 +3053,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(config_path(&home), "default_agent = \"main\"\n").unwrap();
         let agents = agents_snapshot(&home).unwrap();
-        assert_eq!(agents.len(), 6, "the seeded five plus main");
+        assert_eq!(agents.len(), 5, "the chief main plus the four domains");
         let main = agents.iter().find(|agent| agent.name == "main").unwrap();
         assert_eq!(main.usage_today.tokens_in, 0);
         assert_eq!(main.thread_id, None, "lazily created on first use");

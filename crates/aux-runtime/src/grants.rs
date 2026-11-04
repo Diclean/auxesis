@@ -19,9 +19,12 @@
 
 use thiserror::Error;
 
-/// The chief: the owner's only contact, which delegates and never reads raw
-/// domain data.
-pub const CHIEF_AGENT: &str = "aux";
+/// The preset chief: every access, shown as "Aux". An agent the owner adds
+/// can only get a subset of it.
+pub const CHIEF_AGENT: &str = "main";
+
+/// The chief of older installs (`default_agent = "aux"`): delegates only.
+pub const LEGACY_CHIEF: &str = "aux";
 
 /// The four domain agents, in the sidebar's order.
 pub const DOMAIN_AGENTS: [&str; 4] = ["mail", "calendar", "clients", "documents"];
@@ -457,6 +460,20 @@ pub fn default_grants(agent: &str) -> Option<AgentGrants> {
     let note = |text: &str| text.to_string();
     let grants = match agent {
         CHIEF_AGENT => AgentGrants {
+            see: "mail calendar contacts clients documents mcp connector"
+                .split_whitespace()
+                .map(|scope| see(scope, "local", AccessLevel::Read))
+                .collect(),
+            can_do: "delegate read_file mail.read mail.draft mail.send calendar.read \
+                calendar.write clients.read clients.note documents.read documents.file \
+                mcp.access connector.access"
+                .split_whitespace()
+                .map(|skill| do_grant(skill, ActionLevel::Auto))
+                .collect(),
+            never: Vec::new(),
+            egress_note: note("Aux can work with your connected services; privacy and approval rules still apply."),
+        },
+        LEGACY_CHIEF => AgentGrants {
             see: DOMAIN_AGENTS
                 .iter()
                 .map(|scope| see(scope, "short results only", AccessLevel::Read))
@@ -580,8 +597,12 @@ mod tests {
         assert!(grants.check_tool("documents", "documents.file").is_ok());
         let chief = default_grants(CHIEF_AGENT).unwrap();
         assert!(chief.check_tool(CHIEF_AGENT, "delegate").is_ok());
-        // The chief can hand work out but must not read raw domain data.
-        assert!(chief.check_tool(CHIEF_AGENT, "mail.raw").is_err());
+        assert!(chief.check_tool(CHIEF_AGENT, "mail.raw").is_ok());
+        // The legacy chief still hands work out and never reads raw data.
+        let legacy = default_grants(LEGACY_CHIEF).unwrap();
+        assert!(legacy.check_tool(LEGACY_CHIEF, "delegate").is_ok());
+        assert!(legacy.check_tool(LEGACY_CHIEF, "mail.raw").is_err());
+        assert!(legacy.check_tool(LEGACY_CHIEF, "mail_read").is_err());
     }
 
     #[test]
@@ -618,28 +639,28 @@ mod tests {
     }
 
     #[test]
-    fn the_chief_cannot_call_a_domain_tool_directly() {
+    fn the_chief_can_call_domain_tools_directly() {
         let chief = default_grants(CHIEF_AGENT).unwrap();
-        assert!(chief.check_tool(CHIEF_AGENT, "mail_read").is_err());
+        assert!(chief.check_tool(CHIEF_AGENT, "mail_read").is_ok());
         assert!(chief
             .check_tool(CHIEF_AGENT, "google_calendar_create_event")
-            .is_err());
+            .is_ok());
         assert!(chief
             .check_tool(CHIEF_AGENT, "apple_calendar_list_events")
-            .is_err());
+            .is_ok());
     }
 
     #[test]
-    fn an_unknown_connector_or_mcp_tool_is_scoped_and_refused_by_default() {
+    fn an_unknown_connector_or_mcp_tool_is_scoped_for_the_chief() {
         assert_eq!(tool_scope("google_mystery_thing"), Some("connector"));
         assert_eq!(tool_scope("mcp__server__weird_tool"), Some("mcp"));
         let chief = default_grants(CHIEF_AGENT).unwrap();
         assert!(chief
             .check_tool(CHIEF_AGENT, "google_mystery_thing")
-            .is_err());
+            .is_ok());
         assert!(chief
             .check_tool(CHIEF_AGENT, "mcp__server__weird_tool")
-            .is_err());
+            .is_ok());
     }
 
     #[test]

@@ -74,15 +74,20 @@ struct TestApi {
     _dir: tempfile::TempDir,
     addr: SocketAddr,
     token: String,
+    home: std::path::PathBuf,
     handle: Option<ApiHandle>,
 }
 
 impl TestApi {
     async fn start(options: ApiOptions) -> Self {
+        Self::start_with(options, CONFIG).await
+    }
+
+    async fn start_with(options: ApiOptions, config: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(config_path(&home), CONFIG).unwrap();
+        std::fs::write(config_path(&home), config).unwrap();
         std::fs::write(api::token_path(&home), format!("{TOKEN}\n")).unwrap();
         let _ = Store::open(&store_path(&home)).unwrap();
         let handle = api::spawn(&home, options).unwrap();
@@ -91,6 +96,7 @@ impl TestApi {
             _dir: dir,
             addr,
             token: TOKEN.to_string(),
+            home,
             handle: Some(handle),
         }
     }
@@ -895,6 +901,48 @@ async fn an_ask_grant_requires_an_approval_despite_a_global_allow() {
     assert_eq!(denied.status, 200, "body: {}", denied.body);
     let _ = tokio::time::timeout(Duration::from_secs(10), send).await;
     assert!(!ran.load(Ordering::SeqCst));
+    t.stop();
+}
+
+/// A grants approval that went stale (the chief lost the access while the
+/// card waited) is refused, and the stream never shows it allowed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_grants_approval_is_refused_and_never_streams_allowed() {
+    let provider = Arc::new(FakeProvider::scripted("fakey", vec![]));
+    let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"");
+    let mut t = TestApi::start_with(options(provider), &config).await;
+    let mut ws = ws_connect(t.addr, &t.token).await;
+    let before = t.get("/v1/agents/mail/grants").json();
+    let mut wider = before.clone();
+    let more = json!({"skill": "mcp.access", "level": "auto"});
+    wider["do"].as_array_mut().unwrap().push(more);
+    let put = t.put("/v1/agents/mail/grants", &wider.to_string());
+    assert_eq!(put.status, 200, "body: {}", put.body);
+    let id = put.json()["approval_id"].as_str().unwrap().to_string();
+    let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
+    chief.can_do.retain(|grant| grant.skill != "mcp.access");
+    auxd::agents::write_grants(&t.home, "main", &chief).unwrap();
+
+    let answer = t.post(
+        &format!("/v1/approvals/{id}"),
+        r#"{"decision":"allow_once"}"#,
+    );
+    assert_eq!(answer.status, 409, "body: {}", answer.body);
+    assert!(
+        answer.body.contains("grant_exceeds_chief"),
+        "{}",
+        answer.body
+    );
+    assert_eq!(t.get("/v1/agents/mail/grants").json(), before);
+    // The answer streams `resolved` then `updated`; both must say denied.
+    for kind in ["approval.resolved", "approval.updated"] {
+        let frame = wait_ws(&mut ws, Duration::from_secs(5), |value| {
+            value["type"] == kind && value["id"] == id.as_str()
+        })
+        .await
+        .unwrap_or_else(|| panic!("{kind} must stream"));
+        assert_eq!(frame["state"]["state"], "denied", "{frame}");
+    }
     t.stop();
 }
 

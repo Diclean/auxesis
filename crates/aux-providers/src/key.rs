@@ -389,7 +389,7 @@ pub fn set_named_in_env_file(
     // (the daemon's API, the CLI `aux secret set`) with the shared
     // `<home>/.config.lock` file lock: without it a writer that read the file
     // before another saved a key would rewrite the stale text and erase that
-    // key (security review P2).
+    // key.
     kernel_core::with_config_lock(home, || {
         let mut lines: Vec<String> = read_env_text(home)?
             .map(|text| text.lines().map(str::to_string).collect())

@@ -1,4 +1,4 @@
-//! Workspace-level taint (WS-C redesign round 2).
+//! Workspace-level taint.
 //!
 //! Dispatching an untrusted-class tool in a workspace marks the whole
 //! workspace `untrusted-touched` *before* the call runs, so no write can land

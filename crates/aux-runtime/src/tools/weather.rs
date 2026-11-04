@@ -365,7 +365,7 @@ fn resolve_target(
 /// most [`MAX_PLACE_BYTES`] bytes. Digits and everything else are refused, so
 /// the outbound text cannot carry numbers or markup. A private session token
 /// (`⟦PERSON_1A2B⟧`) is the one exception: it is the masked form of a personal
-/// value and goes out as the token, never as the value (TOK-3).
+/// value and goes out as the token, never as the value.
 fn validate_place(raw: &str) -> Result<String, String> {
     let place = raw.trim();
     if place.is_empty() {

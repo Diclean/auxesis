@@ -470,7 +470,7 @@ impl<'a> ChatSession<'a> {
         Arc::as_ptr(&self.messages) as usize
     }
 
-    /// Current conversation taint state (WS-C).
+    /// Current conversation taint state.
     ///
     /// The model can never change this; only running an untrusted-output
     /// tool (or resuming a session that already did, or starting in a

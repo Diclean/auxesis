@@ -151,7 +151,7 @@ pub struct ApiState {
     /// Pending approvals + their waiters (in-memory).
     pub(crate) approvals: Arc<ApprovalRegistry>,
     /// Cancellation tokens of in-flight turns, keyed by agent: pause/kill and
-    /// stop-all fire them so the turn aborts now (B-API v3 × E-18).
+    /// stop-all fire them so the turn aborts now.
     pub(crate) turn_cancels: Arc<TurnCancels>,
     /// Owner notification channel for trust requests: the one-time code is
     /// delivered here and nowhere else (osascript in production, a fake in

@@ -638,7 +638,7 @@ fn kind_is_local(kind: ProviderKind) -> bool {
 /// still parse and the provider section must satisfy the loader. The whole
 /// read-modify-write runs under the shared `<home>/.config.lock` file lock so
 /// a CLI or settings writer in another process cannot be lost to a stale
-/// read (security review P2).
+/// read.
 fn append_provider_config(home: &Path, provider: &ProviderConfig) -> Result<(), String> {
     kernel_core::with_config_lock(home, || {
         // Create the default config first so a fresh home has a valid file.

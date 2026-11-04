@@ -1,4 +1,4 @@
-//! Coalesced, secret-scrubbed `message.delta` frames (WS-F1).
+//! Coalesced, secret-scrubbed `message.delta` frames.
 //!
 //! The engine reports transient assistant text token by token while the
 //! provider streams. Forwarding every fragment as its own WebSocket frame

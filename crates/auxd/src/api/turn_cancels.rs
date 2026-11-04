@@ -1,4 +1,4 @@
-//! In-flight turn cancellation tokens, keyed by agent (B-API v3 × E-18).
+//! In-flight turn cancellation tokens, keyed by agent.
 //!
 //! EH-1 made one turn cancellable through a per-turn [`TurnCancel`] token
 //! (client disconnect, request timeout). B-API v3 made per-agent pause/kill

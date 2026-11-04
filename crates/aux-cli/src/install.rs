@@ -205,7 +205,7 @@ fn escaped_path(path: &Path, what: &str) -> Result<String, String> {
 /// Render the launchd plist. Deterministic: same inputs, same bytes (the
 /// snapshot test pins this). The environment always carries the resolved
 /// `AUXESIS_API_PORT`, so a launchd-started `auxd` never silently falls back
-/// to 2893 (J-02 round 3, item d).
+/// to 2893.
 fn render_plist(auxd: &Path, home: &Path, log: &Path, api_port: u16) -> Result<String, String> {
     let auxd = escaped_path(auxd, "auxd")?;
     let home = escaped_path(home, "home")?;

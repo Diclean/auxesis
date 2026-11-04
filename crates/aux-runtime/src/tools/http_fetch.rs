@@ -8,7 +8,7 @@
 //! tool does not model CSS visibility: text hidden with `display:none`,
 //! `visibility:hidden`, `font-size:0`, clipping or off-screen positioning can
 //! still be returned. Consumers for which visibility is a security property
-//! must use the browser path (WS-B, `kernel_net::RenderMode::Browser`).
+//! must use the browser path (`kernel_net::RenderMode::Browser`).
 //! Leftover hidden-content findings are KNOWN-ACCEPTED: this simple path
 //! does not model CSS visibility, so a page can hide text from a reader
 //! and still show it here.

@@ -1,4 +1,4 @@
-//! TOK-DELEGATE: the token pairs a delegation carries between two sessions.
+//! The token pairs a delegation carries between two sessions.
 //!
 //! In private mode a token resolves only in the session that minted it. One
 //! [`Handoff`] per delegation run, in memory: the agent gets the caller's pairs
@@ -33,10 +33,10 @@ pub struct Handoff {
     pub(crate) kept: BTreeSet<String>,
     /// Tokens the agent's gate issued this run; `None` for an open caller.
     issued: Option<Arc<Mutex<BTreeSet<String>>>>,
-    /// TOK-CONSISTENT-1: every pair the caller knows, so a value the agent
+    /// Every pair the caller knows, so a value the agent
     /// reads keeps the caller's token; it resolves only once read this run.
     pub(crate) known: Vec<(String, String)>,
-    /// Seal r2 P2b: the tokens of the agent's input this run (task, owner
+    /// The tokens of the agent's input this run (task, owner
     /// text, tool results); what its model wrote never counts.
     read: Arc<Mutex<BTreeSet<String>>>,
 }
@@ -142,12 +142,12 @@ fn pairs_in(store: &SessionTokenStore, text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// TOK-CONSISTENT-1 seal r2 P1: `issued`, what the gate made of the text as
-/// written, with each name or address it `minted` that a carried token stands
-/// for put back as that token (`own` keeps the choice for the next turns), then
-/// each carried value it left in clear: the text to issue again and the tokens
-/// to keep whole, or `None` when nothing changes. A value the detectors claimed
-/// stays one masked unit; only its pseudonym changes.
+/// `issued` is what the gate made of the text as written. Each name or address
+/// it `minted` that a carried token stands for is put back as that token
+/// (`own` keeps the choice for the next turns), then each carried value it left
+/// in clear: the text to issue again and the tokens to keep whole, or `None`
+/// when nothing changes. A value the detectors claimed stays one masked unit;
+/// only its pseudonym changes.
 pub(crate) fn carry(
     issued: &str,
     minted: &[(String, String)],
@@ -155,7 +155,7 @@ pub(crate) fn carry(
     handed: &[(String, String)],
     known: &[(String, String)],
 ) -> Option<(String, BTreeSet<String>)> {
-    // Seal r3: each carried value is folded once (a lookup per token, never a
+    // Each carried value is folded once (a lookup per token, never a
     // scan of every value), and an address keeps its accents: `info@côte.test`
     // is another mailbox than `info@cote.test`.
     let mut by_value: HashMap<String, &String> = HashMap::new();
@@ -199,10 +199,10 @@ pub(crate) fn carry(
 /// Replace each carried value in `text` with `⟦token⟧`. The match is
 /// deterministic and needs no name model: case and accents are folded on both
 /// sides, between word boundaries, never inside a token; the longest value wins
-/// an overlap. A `handed` value (TOK-DELEGATE) matches with spaces folded off
+/// an overlap. A `handed` value matches with spaces folded off
 /// too (`MARA QUELL`, `Mara  Quell`, `MaraQuell`, `Mara Quéll`: the mail
 /// sanitizer may have joined two words); a `known` one keeps one space per run
-/// (`Anna Bell` is not `Ann Abell`, seal r2 P2a). Linear in the text per value.
+/// (`Anna Bell` is not `Ann Abell`). Linear in the text per value.
 pub(crate) fn retokenize(
     text: &str,
     handed: &[(String, String)],
@@ -241,7 +241,7 @@ pub(crate) fn retokenize(
         let (folded, origin) = &views[usize::from(*spaced)];
         for (at, _) in folded.match_indices(value.as_str()) {
             let (start, end) = (origin[at].0, origin[at + value.len() - 1].1);
-            // Seal r3: an address matches its own accents only (case-blind).
+            // An address matches its own accents only (case-blind).
             if token.starts_with("EMAIL_") && text[start..end].to_lowercase() != *raw {
                 continue;
             }
@@ -318,7 +318,7 @@ fn fold(text: &str, spaced: bool) -> (String, Vec<(usize, usize)>) {
     (folded, origin)
 }
 
-/// TOK-CONSISTENT-1: each well-formed `⟦KIND_<hex>⟧` of `text` not in `keep`
+/// Each well-formed `⟦KIND_<hex>⟧` of `text` not in `keep`
 /// (forged, or another conversation's) becomes `marker`, never a raw marker.
 pub(crate) fn hide_unknown(text: &str, keep: &BTreeSet<String>, marker: &str) -> String {
     replace_refs(text, |token| {
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn an_address_with_other_accents_is_another_mailbox() {
-        // Seal r3 P2: `info@côte.test` never takes `info@cote.test`'s token.
+        // `info@côte.test` never takes `info@cote.test`'s token.
         let known = [(
             "EMAIL_AAAAAAAAAAAA".to_string(),
             "info@cote.test".to_string(),
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn carrying_many_addresses_stays_linear() {
-        // Seal r3 P2: 512 carried and 512 new addresses (14 s before, debug).
+        // 512 carried and 512 new addresses (14 s before, debug).
         let hex = |i: usize| format!("{i:012X}");
         let known: Vec<(String, String)> = (0..512)
             .map(|i| (format!("EMAIL_{}", hex(i)), format!("old{i}@fiction.test")))
@@ -477,7 +477,7 @@ mod tests {
         assert!(!open.is_private() && open.pairs.is_empty() && open.kept.is_empty());
     }
 
-    /// Seal r2 P2b: a caller's token the agent's model only wrote (never read)
+    /// A caller's token the agent's model only wrote (never read)
     /// fills no send: the snapshot a send fill and its card read refuses it.
     #[test]
     fn a_token_the_model_only_echoes_never_fills_a_send() {

@@ -809,7 +809,7 @@ fn status_error(
         code => ProviderError::Client {
             provider,
             status: code,
-            // The upstream body may echo the key (P2 security-review round 1).
+            // The upstream body may echo the key.
             message: error_message(&redact_upstream(body, key)),
         },
     }

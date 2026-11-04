@@ -30,6 +30,46 @@ public struct UpNextItem: Equatable, Identifiable {
     public let title: String
     /// "Aux · tomorrow 08:00", or the job's own schedule words.
     public let line: String
+    /// Nil when the job is fine or its health is unknown: nothing extra drawn.
+    public let health: JobHealthMark?
+
+    public init(id: Int, title: String, line: String, health: JobHealthMark? = nil) {
+        self.id = id
+        self.title = title
+        self.line = line
+        self.health = health
+    }
+}
+
+/// A late or failing job's small mark: a dot, one word, the daemon's reason.
+/// `ok` and `unknown` draw nothing (quiet).
+public struct JobHealthMark: Equatable {
+    public enum Tone: Equatable {
+        /// Amber: the owner should look.
+        case wait
+        /// The error hue: the last run failed.
+        case bad
+    }
+
+    public let tone: Tone
+    /// "Late" / "En retard", "Failed" / "A échoué".
+    public let label: String
+    /// "Late · Morning brief did not run at 07:00", or the label alone.
+    public let text: String
+    /// Spoken label; always carries the reason when there is one.
+    public let accessibilityLabel: String
+
+    public static func make(_ health: JobHealth, reason: String?, language: Language) -> JobHealthMark? {
+        let tone: Tone
+        let label: String
+        switch health {
+        case .ok, .unknown: return nil
+        case .late: (tone, label) = (.wait, L10n.ui(.jobHealthLate, language))
+        case .failing: (tone, label) = (.bad, L10n.ui(.jobHealthFailing, language))
+        }
+        let text = reason.map { label + " · " + $0 } ?? label
+        return JobHealthMark(tone: tone, label: label, text: text, accessibilityLabel: reason.map { label + ". " + $0 } ?? label)
+    }
 }
 
 public enum WorkTab {
@@ -80,7 +120,8 @@ public enum WorkTab {
                 } else {
                     when = job.schedule
                 }
-                return UpNextItem(id: job.id, title: job.name, line: TeamMember.displayName(job.agent) + " · " + when)
+                return UpNextItem(id: job.id, title: job.name, line: TeamMember.displayName(job.agent) + " · " + when,
+                                  health: JobHealthMark.make(job.health, reason: job.reason, language: language))
             }
     }
 }

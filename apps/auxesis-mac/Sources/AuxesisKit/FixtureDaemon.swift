@@ -395,8 +395,13 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
     public func plannedJobs() async throws -> [PlannedJob] {
         guard scenario != .empty else { return [] }
         return [
-            PlannedJob(id: 1, agent: "aux", name: "Morning brief", schedule: "weekdays 08:00", nextRunAt: stamp(24 * 60)),
+            PlannedJob(id: 1, agent: "aux", name: "Morning brief", schedule: "weekdays 08:00", nextRunAt: stamp(24 * 60), health: .ok),
             PlannedJob(id: 2, agent: "mail", name: "Check Exemple SARL's payment", schedule: "after Camille's reply", nextRunAt: nil),
+            // One late and one failing job, so the health marks show in previews.
+            PlannedJob(id: 3, agent: "documents", name: "File receipts", schedule: "daily 07:00", nextRunAt: stamp(-60),
+                       health: .late, reason: "File receipts did not run at 07:00"),
+            PlannedJob(id: 4, agent: "mail", name: "Inbox sweep", schedule: "daily 07:30", nextRunAt: stamp(24 * 60 - 30),
+                       health: .failing, reason: "Inbox sweep failed at 07:32"),
         ]
     }
 

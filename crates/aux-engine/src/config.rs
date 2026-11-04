@@ -585,6 +585,20 @@ fn replace_file_atomically(
     previous: Option<&str>,
     mode: u32,
 ) -> Result<(), RulesError> {
+    let rename = |temp: &Path, path: &Path| std::fs::rename(temp, path);
+    replace_with(path, bytes, previous, mode, &rename)
+        .map_err(|(err, removed)| RulesError::Io(with_leftover(err, removed)))
+}
+
+/// [`replace_file_atomically`] with its rename step given, so a test can make
+/// it fail. An error comes with the result of removing the temp file.
+fn replace_with(
+    path: &Path,
+    bytes: &[u8],
+    previous: Option<&str>,
+    mode: u32,
+    rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
+) -> Result<(), (io::Error, io::Result<()>)> {
     let parent: PathBuf = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
@@ -595,17 +609,21 @@ fn replace_file_atomically(
         .unwrap_or_else(|| "config.toml".to_string());
     let backup = parent.join(format!("{file_name}.bak"));
     // SANDBOX-GATEWAY-EXEMPT: legacy agent-config writer, path-based by design; tracked for the gateway follow-up.
-    let (mut file, mut temp) = create_temp(path, "tmp")?;
+    let (mut file, mut temp) = create_temp(path, "tmp").map_err(|err| (err, Ok(())))?;
 
     let result = (|| -> std::io::Result<()> {
         #[cfg(unix)]
         file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        if let Some(previous) = previous {
-            let _ = replace_file_atomically(&backup, previous.as_bytes(), None, mode);
+        // The backup is best effort: a failed one is logged. A temp name it
+        // left behind is an error, raised before `path` is replaced.
+        match previous.map(|text| replace_with(&backup, text.as_bytes(), None, mode, rename)) {
+            Some(Err((err, Err(left)))) => return Err(with_leftover(err, Err(left))),
+            Some(Err((err, Ok(())))) => tracing::warn!(error = %err, "config.toml.bak not updated"),
+            _ => {}
         }
-        std::fs::rename(&temp.path, path)?;
+        rename(&temp.path, path)?;
         temp.armed = false;
         // Make the rename durable: without this a crash can lose the new file
         // while the temp names are already gone.
@@ -614,7 +632,7 @@ fn replace_file_atomically(
         }
         Ok(())
     })();
-    result.map_err(|err| RulesError::Io(with_leftover(err, temp.remove())))
+    result.map_err(|err| (err, temp.remove()))
 }
 
 #[cfg(test)]
@@ -1099,6 +1117,42 @@ mod tests {
             |temp: &Path, path: &Path| std::fs::hard_link(temp, path).and_then(|()| stuck(temp));
         publish_new_with(&path, b"version = 1\n", linked).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "version = 1\n");
+    }
+
+    /// The `.bak` write is best effort: a failed one is only logged and the
+    /// config is still replaced. One whose temp name stays is an error, raised
+    /// before `config.toml` is touched, and the config's own temp still goes.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_backup_is_logged_and_its_stuck_temp_stops_the_replace() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let state = || {
+            let names = std::fs::read_dir(dir.path()).unwrap().count();
+            (std::fs::read_to_string(&path).unwrap(), names)
+        };
+        std::fs::write(&path, "old\n").unwrap();
+        let on_backup = |stuck: bool| {
+            move |temp: &Path, to: &Path| {
+                if !to.ends_with("config.toml.bak") {
+                    return std::fs::rename(temp, to);
+                }
+                if stuck {
+                    std::fs::remove_file(temp)?;
+                    std::fs::create_dir(temp)?;
+                }
+                Err(io::Error::other("backup failed"))
+            }
+        };
+        replace_with(&path, b"new\n", Some("old\n"), 0o600, &on_backup(false)).unwrap();
+        assert_eq!(state(), ("new\n".into(), 1), "no .bak and no temp name");
+        let stuck = replace_with(&path, b"newer\n", Some("new\n"), 0o600, &on_backup(true));
+        let (err, removed) = stuck.unwrap_err();
+        removed.unwrap();
+        let err = err.to_string();
+        assert!(err.starts_with("backup failed; "), "{err}");
+        assert!(err.contains(".config.toml.bak.tmp.") && err.contains("left behind"));
+        assert_eq!(state(), ("new\n".into(), 2), "only the stuck backup name");
     }
 
     /// The kernel has no public parse-from-text entry, so the load from the

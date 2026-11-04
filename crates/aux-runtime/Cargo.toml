@@ -19,7 +19,7 @@ aux-store = { path = "../aux-store" }
 base64 = "0.23"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 flate2 = "1"
-html5ever = "0.39"
+html5ever = "0.40"
 kernel-broker.workspace = true
 kernel-core.workspace = true
 kernel-mcp.workspace = true

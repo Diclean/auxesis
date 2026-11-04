@@ -1187,7 +1187,7 @@ mod tests {
         assert_eq!(cards.people[1].display_name.as_deref(), Some("Solo Person"));
     }
 
-    // CSV-CARD-2: a CSV row fills the whole client card. Fictional data only.
+    // A CSV row fills the whole client card. Fictional data only.
     const CARD_CSV: &str = "Company,Name,Email,Street,Postcode,City,Country,VAT,Tags,Notes,Sector\n\
         Atelier Fictif,,contact@atelier-fictif.test,1 rue Imaginaire,75000,Paris,France,FR00999999999,client; design,Pays à 30 jours,Graphisme\n\
         Studio Exemple,Camille Exemple,camille@studio-exemple.test,,,,,,,,\n";

@@ -26,46 +26,46 @@ enum SnapshotRunner {
     enum Kind { case shell, settings, menu, pluginPreview }
 
     static let shots: [Shot] = [
-        // SOBER-1 + AGENT-MARKS-1: neutral where-labels and footer, the new agent marks.
+        // Neutral where-labels and footer, the new agent marks.
         Shot(name: "sober-1-steps-open-light", prototype: nil, top: true) { $0.expanded.formUnion(["dl-1", "dl-3", "dl-5"]) },
         Shot(name: "sober-1-steps-open-fr-dark", prototype: nil, dark: true, top: true, french: true) { $0.expanded.formUnion(["dl-1", "dl-3", "dl-5"]) },
         Shot(name: "sober-1-team-light", prototype: nil, top: true) { $0.rightPanelTab = .team; $0.setRightPanel(true) },
         Shot(name: "sober-1-mail-dark", prototype: nil, dark: true, top: true) { $0.go(.agent(TeamMember.mail.id)) },
         Shot(name: "sober-1-privacy-light", prototype: nil, top: true) { $0.rightPanelTab = .privacy; $0.setRightPanel(true) },
-        // BRAND-1: the Open Alpha marks in the sidebar and in the team map.
+        // The Open Alpha marks in the sidebar and in the team map.
         Shot(name: "brand-1-sidebar-light", prototype: nil, top: true) { _ in },
         Shot(name: "brand-1-sidebar-dark", prototype: nil, dark: true, top: true) { _ in },
         Shot(name: "brand-1-team-light", prototype: nil, top: true) { $0.rightPanelTab = .team; $0.setRightPanel(true) },
         Shot(name: "brand-1-team-dark", prototype: nil, dark: true, top: true) { $0.rightPanelTab = .team; $0.setRightPanel(true) },
-        // UI-V5-FINISH-1: the v5 frame — sidebar, one 640-pt column, the right panel.
+        // The v5 frame — sidebar, one 640-pt column, the right panel.
         Shot(name: "ui-v5-finish-1-panel-dark", prototype: nil, dark: true, top: true) { $0.rightPanelTab = .team; $0.setRightPanel(true) },
         Shot(name: "ui-v5-finish-1-agents-light", prototype: nil) { $0.go(.agentsAndRules) },
         Shot(name: "ui-v5-finish-1-fr-dark", prototype: nil, dark: true, top: true, french: true) { $0.go(.agent(TeamMember.mail.id)) },
-        // UI-V5-FINISH-4: the Privacy tab (today's record) and the v5 composer hint.
+        // The Privacy tab (today's record) and the v5 composer hint.
         Shot(name: "ui-v5-finish-4-privacy-dark", prototype: nil, dark: true, top: true) { $0.rightPanelTab = .privacy; $0.setRightPanel(true) },
         Shot(name: "ui-v5-finish-4-privacy-mail-light", prototype: nil, top: true) { $0.go(.agent(TeamMember.mail.id)); $0.rightPanelTab = .privacy; $0.setRightPanel(true) },
-        // UI-V5-3: sidebar v5 rows, search and privacy footer, next to the v5 prototype.
+        // Sidebar v5 rows, search and privacy footer, next to the v5 prototype.
         Shot(name: "ui-v5-3-light", prototype: nil, top: true) { _ in },
         Shot(name: "ui-v5-3-dark", prototype: "v5-prototype-dark.png", dark: true, top: true) { _ in },
-        // v5 step 5: the draft card with its amber badge, and the next-step
+        // The draft card with its amber badge, and the next-step
         // links under an answer (the mirror in Aux's thread, the open draft in
         // the agent's thread).
         Shot(name: "ui-v5-5-draft-light", prototype: nil, top: true) { $0.go(.agent(TeamMember.mail.id)) },
         Shot(name: "ui-v5-5-draft-dark", prototype: nil, dark: true, top: true) { $0.go(.agent(TeamMember.mail.id)) },
         Shot(name: "ui-v5-5-links-light", prototype: nil, top: true) { _ in },
         Shot(name: "ui-v5-5-links-dark", prototype: nil, dark: true, top: true) { _ in },
-        // v5 rich reply: a table, a list, code and hidden values in Aux's thread.
+        // A rich reply: a table, a list, code and hidden values in Aux's thread.
         Shot(name: "ui-v5-rich-1-light", prototype: nil, scenario: .rich, top: true) { _ in },
         Shot(name: "ui-v5-rich-1-dark", prototype: nil, scenario: .rich, dark: true, top: true) { _ in },
-        // UI-V5-RICH-2a: a Calendar answer with its calendar card.
+        // A Calendar answer with its calendar card.
         Shot(name: "ui-v5-rich-2a-light", prototype: nil, scenario: .calendarCard, top: true) { $0.go(.agent(TeamMember.calendar.id)) },
         Shot(name: "ui-v5-rich-2a-dark", prototype: nil, scenario: .calendarCard, dark: true, top: true) { $0.go(.agent(TeamMember.calendar.id)) },
         Shot(name: "ui-v5-rich-2a-fr-light", prototype: nil, scenario: .calendarCard, top: true, french: true) { $0.go(.agent(TeamMember.calendar.id)) },
-        // UI-V5-FINISH-2: the v5 Steps card (collapsed, then open) and the handoff line.
+        // The v5 Steps card (collapsed, then open) and the handoff line.
         Shot(name: "ui-v5-finish-2-steps-light", prototype: nil, top: true) { _ in },
         Shot(name: "ui-v5-finish-2-steps-open-dark", prototype: nil, dark: true, top: true) { $0.expanded.formUnion(["dl-1", "dl-3", "dl-5"]) },
         Shot(name: "ui-v5-finish-2-handoff-dark", prototype: nil, dark: true, top: true) { $0.go(.agent(TeamMember.mail.id)) },
-        // UI-V5-FINISH-3: the Work tab (Active, Up next), Aux's mirror with its text and Send.
+        // The Work tab (Active, Up next), Aux's mirror with its text and Send.
         Shot(name: "ui-v5-finish-3-work-dark", prototype: nil, dark: true, top: true) { $0.rightPanelTab = .work; $0.setRightPanel(true) },
         Shot(name: "ui-v5-finish-3-work-light", prototype: nil, top: true) { $0.rightPanelTab = .work; $0.setRightPanel(true) },
         Shot(name: "ui-v5-finish-3-mirror-light", prototype: nil) { _ in },
@@ -74,10 +74,10 @@ enum SnapshotRunner {
         Shot(name: "v4-home-dark", prototype: "v4-home-dark-en.png", dark: true, top: true) { _ in },
         Shot(name: "v4-mail-light", prototype: "v4-mail-light-en.png", top: true) { $0.go(.agent(TeamMember.mail.id)) },
         Shot(name: "v4-mail-dark", prototype: "v4-mail-dark-en.png", dark: true, top: true) { $0.go(.agent(TeamMember.mail.id)) },
-        // UI-V4-3: the right panel's Team tab, next to the v5 mock.
+        // The right panel's Team tab, next to the v5 mock.
         Shot(name: "ui-v4-3-team-light", prototype: nil, top: true) { $0.rightPanelTab = .team; $0.setRightPanel(true) },
         Shot(name: "ui-v4-3-team-dark", prototype: nil, dark: true, top: true) { $0.rightPanelTab = .team; $0.setRightPanel(true) },
-        // UI-V4-3: neutral ink accent (selected row, send button, links).
+        // Neutral ink accent (selected row, send button, links).
         Shot(name: "ui-v4-3-mail-light", prototype: nil, top: true) { $0.go(.agent(TeamMember.mail.id)) },
         Shot(name: "ui-v4-3-mail-dark", prototype: nil, dark: true, top: true) { $0.go(.agent(TeamMember.mail.id)) },
         Shot(name: "ui3-8-agents-light", prototype: nil) { shell in
@@ -158,7 +158,7 @@ enum SnapshotRunner {
             shell.settingsTab = .budgets
         },
         Shot(name: "m6-4-plugins-light", prototype: nil, size: CGSize(width: 760, height: 640), view: .settings) { $0.settingsTab = .plugins },
-        // M6-4 r1: the install preview names the agent that gets the tools.
+        // The install preview names the agent that gets the tools.
         Shot(name: "m6-4-plugins-preview-light", prototype: nil, size: CGSize(width: 560, height: 360), view: .pluginPreview) { shell in
             Task { await shell.store.loadPlugins(); if let entry = shell.store.mcpCatalog.first { await shell.store.installPlugin(entry) } }
         },
@@ -172,7 +172,7 @@ enum SnapshotRunner {
         Shot(name: "18-dark-approval", prototype: "29-dark-approval.png", dark: true) { shell in
             shell.go(.agent(TeamMember.mail.id))
         },
-        // E3: Clients. Fixture people only (Camille Exemple, Jonas Weber).
+        // Clients. Fixture people only (Camille Exemple, Jonas Weber).
         Shot(name: "e3-01-clients-card", prototype: "22-client-inspector.png") { shell in
             openClient(shell)
         },
@@ -200,22 +200,22 @@ enum SnapshotRunner {
         Shot(name: "e3-09-clients-error-dark", prototype: nil, scenario: .clientsDown, dark: true) { shell in
             shell.go(.clients)
         },
-        // M2: Today, the brief of the day. Fixture events and mail only.
+        // Today, the brief of the day. Fixture events and mail only.
         Shot(name: "m2-01-today", prototype: nil) { $0.go(.today) },
         Shot(name: "m2-02-today-dark", prototype: nil, dark: true) { $0.go(.today) },
         Shot(name: "m2-03-today-fr", prototype: nil, french: true) { $0.go(.today) },
         Shot(name: "m2-04-today-degraded", prototype: nil, scenario: .briefDegraded) { $0.go(.today) },
         Shot(name: "m2-05-today-empty", prototype: nil, scenario: .empty) { $0.go(.today) },
         Shot(name: "m2-06-today-empty-dark-fr", prototype: nil, scenario: .empty, dark: true, french: true) { $0.go(.today) },
-        // CAL-PAGE-1: the Calendar page. Invented events only (FixtureEventKit).
+        // The Calendar page. Invented events only (FixtureEventKit).
         Shot(name: "cal-01-fresh", prototype: nil) { $0.go(.calendar) },
         Shot(name: "cal-02-stale", prototype: nil, scenario: .calendarStale) { $0.go(.calendar) },
         Shot(name: "cal-03-stale-dark-fr", prototype: nil, scenario: .calendarStale, dark: true, french: true) { $0.go(.calendar) },
         Shot(name: "cal-04-not-shared", prototype: nil, scenario: .empty) { $0.go(.calendar) },
-        // MEM-UI-1: "What Aux knows", light, English and French.
+        // "What Aux knows", light, English and French.
         Shot(name: "mem-01-what-aux-knows", prototype: nil) { $0.go(.memory) },
         Shot(name: "mem-02-what-aux-knows-fr", prototype: nil, french: true) { $0.go(.memory) },
-        // MEM-EMPTY-STATE: the same page with nothing saved: one empty line
+        // The same page with nothing saved: one empty line
         // per section, light and dark, English and French.
         Shot(name: "mem-03-what-aux-knows-empty-light", prototype: nil, scenario: .memoryEmpty) { $0.go(.memory) },
         Shot(name: "mem-04-what-aux-knows-empty-dark", prototype: nil, scenario: .memoryEmpty, dark: true) { $0.go(.memory) },
@@ -249,7 +249,7 @@ enum SnapshotRunner {
         }
     }
 
-    /// MASCOT-1 (`AUXESIS_MAC_MASCOTS=1`): the ten mascots at 64/28/20/16 pt
+    /// With `AUXESIS_MAC_MASCOTS=1`: the ten mascots at 64/28/20/16 pt
     /// and the five tints, light and dark, rendered offscreen with
     /// ImageRenderer into <dir>/mascots-{light,dark}.png at 2×.
     static func runMascots(into directory: URL) {
@@ -268,7 +268,7 @@ enum SnapshotRunner {
                 print("AUXESIS_MAC_SNAPSHOT \(url.lastPathComponent)")
             }
         }
-        // MASCOT-2: the mascot sheet, as in the design board — light: Mail with
+        // The mascot sheet, as in the design board — light: Mail with
         // its tint changed; dark: an agent the owner made, looking like Documents.
         let travel = TeamMember.custom("Travel")
         for dark in [false, true] {
@@ -342,7 +342,7 @@ enum SnapshotRunner {
         }
     }
 
-    /// E3 proof against a real sandboxed auxd (`AUXESIS_MAC_LIVE=clients`,
+    /// A proof against a real sandboxed auxd (`AUXESIS_MAC_LIVE=clients`,
     /// run through `scripts/run-auxesis-mac.sh`): the empty Clients view, then,
     /// once the parties seeded from outside appear, the first card and its
     /// editor, light and dark, then the editor locked by a held save.
@@ -396,7 +396,7 @@ enum SnapshotRunner {
         }
     }
 
-    /// M5-4 proof against a real sandboxed auxd (`AUXESIS_MAC_LIVE=docs`) whose
+    /// A proof against a real sandboxed auxd (`AUXESIS_MAC_LIVE=docs`) whose
     /// home was seeded with fictional receipts: the Documents page light, dark
     /// and French, then the No client filter. Prints `LIVE <step> ok|fail`.
     static func runDocsLive(into directory: URL) {
@@ -572,7 +572,7 @@ enum SnapshotRunner {
     }
 }
 
-/// The board of MASCOT-1: one column per mascot (64, 28, 20, 16 pt, then its
+/// The mascot board: one column per mascot (64, 28, 20, 16 pt, then its
 /// name and the agent it is the default for), then each tint at 28/20/16.
 private struct MascotSheet: View {
     @Environment(\.palette) private var palette

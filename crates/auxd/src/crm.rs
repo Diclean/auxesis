@@ -1,4 +1,4 @@
-//! B3 daemon wiring: the CRM timeline builders and the follow-up tool.
+//! Daemon wiring for the CRM: the timeline builders and the follow-up tool.
 //!
 //! Three pieces live here:
 //!
@@ -100,7 +100,7 @@ impl NativeTool for CrmFollowupTool {
 #[async_trait]
 impl Tool for CrmFollowupTool {
     fn path_id(&self) -> PathId {
-        // G3 is the CRM/memory storage row (`docs/phase1.md` §2, D24).
+        // The CRM/memory storage row of the privacy matrix (`docs/phase1.md` §2).
         PathId::G3
     }
 
@@ -261,7 +261,7 @@ fn choices(matches: &[PartyMatch]) -> String {
 }
 
 /// Resolve a party reference to exactly one live party, for a write. A name is
-/// its whole name or whole address, never a substring (CRM-NOTE-P3).
+/// its whole name or whole address, never a substring.
 fn resolve_one_party(
     store: &Store,
     party_id: Option<i64>,
@@ -299,7 +299,7 @@ fn match_json(party: &PartyMatch) -> Value {
         "kind": party.kind.as_str(),
         "display_name": party.display_name,
         "emails": party.emails,
-        // More addresses than shown: the agent says "+N more" (CRM-SEARCH-P3).
+        // More addresses than shown: the agent says "+N more".
         "email_count": party.email_count,
     })
 }
@@ -329,7 +329,7 @@ fn brief_json(store: &Store, brief: &PartyBrief) -> Value {
             .iter()
             .map(|row| {
                 // `at` predates validation on old rows: a non-time becomes the
-                // store's clock, never model text (CRM-TAINT-AT).
+                // store's clock, never model text.
                 let at = aux_crm::safe_interaction_at(store, &row.at);
                 if row.tainted {
                     // A tainted row's id, source reference, provenance, direction
@@ -379,7 +379,7 @@ fn brief_json(store: &Store, brief: &PartyBrief) -> Value {
 }
 
 /// The brief's CRM section as JSON.
-/// CAL-SNAPSHOT-STALE: a day read from a stale calendar copy says so.
+/// A day read from a stale calendar copy says so.
 fn with_calendar_note(mut today: Value, home: &Path, snapshot: Option<&EventKitSnapshot>) -> Value {
     let note = snapshot.and_then(|snapshot| apple_eventkit::stale_note(home, snapshot));
     if let (Some(note), Some(map)) = (note, today.as_object_mut()) {
@@ -903,7 +903,7 @@ fn add_note(
     }
     let body = kernel_broker::sanitize_external_text(note, MAX_NOTE_CHARS * 4);
     // The counter lives in the store, so two notes in the same second across
-    // a restart are still two rows (CRM-NOTE-P3).
+    // a restart are still two rows.
     let seq = store
         .next_counter(NOTE_COUNTER)
         .map_err(|err| err.to_string())?;
@@ -1023,7 +1023,7 @@ pub fn register_tools(home: &Path, store: Arc<Mutex<Store>>, registry: &mut Tool
     }
 }
 
-/// The executor's connector for the B4 CRM reads and the `log-interaction`
+/// The executor's connector for the CRM reads and the `log-interaction`
 /// write. Unlike the network connectors it is always mountable: every call is
 /// local, and the broker's skill floor still refuses a skill-only write from a
 /// plain conversation.
@@ -1297,7 +1297,7 @@ pub async fn collect_threads(
     // Follow In-Reply-To through the listed headers; past the oldest listed
     // one, its parent's id is the root, so a window that drops a thread's first
     // mail keeps its key. Bounded, so an In-Reply-To loop cannot hang it.
-    // TODO(TIMELINE-REFERENCES): a window that drops two ancestors makes a new key.
+    // TODO: a window that drops two ancestors makes a new key.
     let mut threads: BTreeMap<String, Vec<&(String, EnvelopeItem)>> = BTreeMap::new();
     for pair in by_id.values() {
         let (mut item, mut root) = (&pair.1, None);
@@ -1494,7 +1494,7 @@ pub fn run_job_with_mode(
     store: &Arc<Mutex<Store>>,
     mode: &ModeFn,
 ) -> Result<String, String> {
-    // F2, same rule as the brief: Private runs the refresh only when every
+    // Same rule as the brief: Private runs the refresh only when every
     // IMAP host is loopback (the owner's mailbox on this Mac). A remote host,
     // or a config that does not parse, skips the whole refresh here, before
     // the kill switch and before any socket or DNS lookup for any account.

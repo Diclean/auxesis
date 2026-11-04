@@ -1,4 +1,4 @@
-// Typed result cards (UI-V5-RICH-2a): a calendar answer also shows its events and free time,
+// Typed result cards: a calendar answer also shows its events and free time,
 // built in the app from the `apple_calendar_list_events` row and the owner's question. Display
 // only: never stored, sent to a model or part of egress. Rule: never say Free unless it knows.
 import Foundation
@@ -59,7 +59,8 @@ public enum CalendarCard {
 
     static let (minFree, maxDays): (TimeInterval, Int) = (30 * 60, 5)  // shorter gaps get no row
     /// The tool keeps at most 100 events (`MAX_ITEMS`, apple_eventkit.rs; the app's `prefix(100)`) and the
-    /// count is after de-duplication, so 50+ counts as maybe capped (lead). Backlog CAL-TRUNC-FLAG-1: a real flag.
+    /// count is after de-duplication, so 50+ counts as maybe capped (lead); only a flag from the tool
+    /// could say it exactly.
     static let capped = 50
     /// The seven weekdays, English and French, from Sunday.
     static let weekdayNames: [[String]] = [["sunday", "dimanche"], ["monday", "lundi"], ["tuesday", "mardi"],
@@ -83,7 +84,7 @@ public enum CalendarCard {
         "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
     /// Date words that are never a name: a capitalised "Next" or "March" is not a person, and neither is a
     /// capitalised function word ("Except", "But"). They also stay unplaceable, so "Next Monday" and the
-    /// "March meeting" never give a card (CAL-PARSE-ALLOWLIST-1).
+    /// "March meeting" never give a card.
     static let neverNames: Set<String> = monthNames.union(weekdayNames.flatMap { $0 }).union(dayAbbreviations).union([
         "next", "last", "this", "these", "that", "those", "following", "previous", "week", "weeks", "weekend", "weekends",
         "prochain", "prochaine", "prochains", "prochaines", "dernier", "derniere", "derniers", "dernieres",
@@ -93,7 +94,7 @@ public enum CalendarCard {
         "tenth", "eleventh", "twelfth", "thirteenth", "twentieth", "thirtieth", "premier", "premiere",
         "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
         "huit", "quinze", "deux", "trois", "quatre", "cinq", "sept", "neuf", "dix", "onze", "douze",
-        // Function words: a capitalised one is not a name (CAL-PARSE-ALLOWLIST-1).
+        // Function words: a capitalised one is not a name.
         "except", "but", "not", "no", "without", "instead", "only", "other", "besides", "apart",
         "sans", "sauf", "pas", "ni", "hors", "excepte", "every", "each", "any", "all", "tous", "toutes",
         "chaque", "either", "neither", "or", "and", "ou", "et", "between", "entre", "from", "des",
@@ -104,8 +105,7 @@ public enum CalendarCard {
     /// "Monday – Friday", "Monday — Friday", "Monday ~ Friday" and every other dash Unicode
     /// writes — "Monday‐Friday" (U+2010), "Monday‑Friday" (U+2011), "Monday‒Friday" (U+2012),
     /// "Monday―Friday" (U+2015), "Monday－Friday" (U+FF0D) or "lundi〜vendredi" (U+301C). A range is
-    /// not a day and we do not expand it, so a range of days means no card (CAL-PARSE-RANGE-2,
-    /// CAL-PARSE-RANGE-3).
+    /// not a day and we do not expand it, so a range of days means no card.
     static func isRangeMark(_ character: Character) -> Bool {
         if character == "/" || character == "~" || character == "\u{223C}" { return true }
         // Dash punctuation (Pd): the hyphen and every typographic dash. The wave dash (U+301C) and
@@ -114,14 +114,14 @@ public enum CalendarCard {
     }
     /// The French elisions written with a hyphen, folded: "qu'est-ce", "est-ce", "est-il", "a-t-il",
     /// "ai-je", "suis-je", "dois-je", "puis-je". The words around the hyphen are one phrase, so the
-    /// hyphen is not a range mark (CAL-PARSE-RANGE-3).
+    /// hyphen is not a range mark.
     static let elisionPhrases: [String] = [
         "qu'est-ce", "est-ce", "est-il", "a-t-il", "ai-je", "suis-je", "dois-je", "puis-je"]
     /// The words that join the two ends of a range of days, folded ("à" is "a"): "lundi à vendredi",
-    /// "de lundi à vendredi", "Monday to Friday" (CAL-PARSE-RANGE-2).
+    /// "de lundi à vendredi", "Monday to Friday".
     static let rangeWords: Set<String> = ["a", "to", "au", "through", "thru", "till", "until", "jusqu"]
     /// The words a calendar question may use around the day (EN + FR): a closed, small list. A word that is
-    /// not here, and is not a name, means the card does not show (CAL-PARSE-ALLOWLIST-1). A range word
+    /// not here, and is not a name, means the card does not show. A range word
     /// ("Monday to Friday", "du lundi au vendredi") is not here: a range is not a day.
     static let questionWords: Set<String> = [
         // EN
@@ -143,7 +143,7 @@ public enum CalendarCard {
     /// English question that says "Mon" must not be read as French. Neither is a word that is also a
     /// common English word or a name ("ai", "la", "de", "le", "du", "des", "a", "est", "ma", "me",
     /// "on", "ou", "plus", "sans", "pas"): they would call an English question French, and a mixed
-    /// question must never read "mon" as "my" (CAL-PARSE-RANGE-2).
+    /// question must never read "mon" as "my".
     static let frenchMarkers: Set<String> = [
         "demain", "aujourd", "hier", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
         "matin", "matinee", "soir", "soiree", "aprem", "apres", "avant", "calendrier", "creneau", "dejeuner",
@@ -152,8 +152,7 @@ public enum CalendarCard {
         "moi", "avec", "pour", "rien", "vous", "mes", "une"]
     /// The question words that are an English day abbreviation at the same time: "mon" is "my" in French
     /// and "Mon" is Monday in English. A French question that writes the word in lower case may use it;
-    /// any other use is a day the card cannot place, so the card does not show (CAL-PARSE-ALLOWLIST-1,
-    /// CAL-PARSE-RANGE-2).
+    /// any other use is a day the card cannot place, so the card does not show.
     static let frenchDayWords: Set<String> = ["mon"]
 
     /// The words that are names: capitalised in the original question, not the first word of it and not a
@@ -171,7 +170,7 @@ public enum CalendarCard {
     /// Is the word at this index written in lower case in the question as it was written? The first
     /// word of a question is capitalised because the sentence starts there ("Mon agenda"), but a
     /// capitalised word is not a lower case word: "Mon" may be "my" only when it is written in lower
-    /// case, and a shouted word ("MON") is not one either (CAL-PARSE-RANGE-2).
+    /// case, and a shouted word ("MON") is not one either.
     static func isLowerCase(_ original: [String], _ index: Int) -> Bool {
         guard index < original.count else { return false }
         return original[index] == original[index].lowercased()
@@ -190,14 +189,14 @@ public enum CalendarCard {
     }
 
     /// Days and hours asked (EN, FR): only today, tomorrow, the day after, a bare weekday; else nil, never a wrong day.
-    /// CAL-PARSE-ALLOWLIST-1: every word of the question must be one the card understands — a word that
+    /// Every word of the question must be one the card understands — a word that
     /// places a day (today, tomorrow, the day after, a weekday), a part of a day, a question word, or a
     /// name. A word we do not know means no card: a wrong day is worse than no card, and no card still
     /// shows the chat answer as text.
-    /// CAL-PARSE-RANGE-2: a range of days ("Monday-Friday", "lundi à vendredi") is not a day and we do
+    /// A range of days ("Monday-Friday", "lundi à vendredi") is not a day and we do
     /// not expand it: no card. And "mon" is the French "my" only when it is written in lower case in a
     /// question that holds a lower case French word: a mixed question gives no card either.
-    /// CAL-PARSE-RANGE-3: every dash Unicode writes joins two days ("Monday‐Friday", U+2010), and the
+    /// Every dash Unicode writes joins two days ("Monday‐Friday", U+2010), and the
     /// hyphen of a French elision ("est-ce", "y a-t-il") is not a range: the words around it are one
     /// phrase.
     static func window(_ question: String, now: Date, calendar: Calendar) -> (days: [Date], from: Int, to: Int)? {
@@ -209,17 +208,15 @@ public enum CalendarCard {
         let named = names(original: original, folded: words)
         let aligned = original.count == words.count  // the written words and the folded ones line up
         // The question is written in French when it holds a French-only word written in lower case:
-        // "AI", "La", "De", "Le" and "Du" are English too, and a shouted word is not a marker
-        // (CAL-PARSE-RANGE-2).
+        // "AI", "La", "De", "Le" and "Du" are English too, and a shouted word is not a marker.
         let french = aligned && words.indices.contains { index in
             frenchMarkers.contains(words[index]) && isLowerCase(original, index)
         }
         // A mark or a word that joins two days may hide the days between them ("Monday-Friday" hides
-        // Tuesday, Wednesday and Thursday). We do not expand a range: a range of days means no card
-        // (CAL-PARSE-RANGE-2).
+        // Tuesday, Wednesday and Thursday). We do not expand a range: a range of days means no card.
         // The hyphens of "après-demain" and "après-midi" are one day, not a range, and neither is the
         // hyphen of a French elision ("est-ce", "y a-t-il", "ai-je"): the words around it are one
-        // phrase (CAL-PARSE-RANGE-3).
+        // phrase.
         let markless = elisionPhrases.reduce(q) { text, phrase in
             text.replacingOccurrences(of: phrase, with: phrase.replacingOccurrences(of: "-", with: " "))
         }
@@ -237,8 +234,7 @@ public enum CalendarCard {
             if word == "day", next == "after", index + 2 < words.count, words[index + 2] == "tomorrow" {
                 offsets.insert(2); index += 3; continue
             }
-            // "y a-t-il" and "a-t-il": one elided phrase, and its hyphen is not a range
-            // (CAL-PARSE-RANGE-3).
+            // "y a-t-il" and "a-t-il": one elided phrase, and its hyphen is not a range.
             if word == "a", next == "t", index + 2 < words.count, words[index + 2] == "il" { index += 3; continue }
             if word == "apres", next == "demain" { offsets.insert(2); index += 2; continue }
             if word == "apres", next == "midi" { afternoon = true; index += 2; continue }
@@ -262,8 +258,7 @@ public enum CalendarCard {
                 if let weekday = weekdayIndex[word] { weekdays.append(weekday) }
                 else if dayAbbreviations.contains(word) {
                     // "Mon" is Monday in English and "my" in French, and "Sat" is a day the card cannot
-                    // place. Only a French question that writes the word in lower case may use one
-                    // (CAL-PARSE-ALLOWLIST-1, CAL-PARSE-RANGE-2).
+                    // place. Only a French question that writes the word in lower case may use one.
                     guard frenchDayWords.contains(word), french, aligned, isLowerCase(original, index) else { return nil }
                 }
                 else if !questionWords.contains(word) && !named.contains(index) { return nil }

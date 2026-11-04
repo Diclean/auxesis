@@ -1,0 +1,52 @@
+name: AuxesisPhone
+options:
+  deploymentTarget:
+    iOS: '17.0'
+  createIntermediateGroups: true
+packages:
+  AuxesisShared:
+    path: ../../packages/AuxesisShared
+settings:
+  base:
+    SWIFT_VERSION: '5.9'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    TARGETED_DEVICE_FAMILY: '1'
+targets:
+  AuxesisPhone:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Info.plist
+      properties:
+        CFBundleLocalizations: [en, fr]
+        CFBundleDisplayName: Auxesis
+        NSFaceIDUsageDescription: Confirm sending this draft.
+        UILaunchScreen: {}
+    dependencies:
+      - package: AuxesisShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auxesis.phone
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+  AuxesisPhoneTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: AuxesisPhone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.auxesis.phone.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  AuxesisPhone:
+    build:
+      targets:
+        AuxesisPhone: all
+        AuxesisPhoneTests: [test]
+    test:
+      targets: [AuxesisPhoneTests]
+      gatherCoverageData: false

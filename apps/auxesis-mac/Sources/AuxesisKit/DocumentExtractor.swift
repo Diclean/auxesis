@@ -39,6 +39,45 @@ public struct ExtractionOutput: Equatable, Sendable {
     public static let none = ExtractionOutput(extractor: .none, text: "", pages: 0)
 }
 
+/// The seam between the extractor and Vision: one call is one fresh accurate
+/// request, with no retry and no change of level. Tests inject a scripted one.
+protocol OCRRecognizer {
+    func text(in image: CGImage) -> String?
+    func text(in data: Data) -> String?
+    /// The pause between the accurate pass and its single retry.
+    func pauseBeforeRetry()
+}
+
+/// The real on-device recogniser: one ACCURATE request per call, same
+/// languages, options and revision every time. Never `.fast`.
+struct VisionOCRRecognizer: OCRRecognizer {
+    func text(in image: CGImage) -> String? {
+        let request = DocumentExtractor.textRequest()
+        do {
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        } catch {
+            return nil
+        }
+        return DocumentExtractor.recognizedText(request)
+    }
+
+    func text(in data: Data) -> String? {
+        let request = DocumentExtractor.textRequest()
+        do {
+            try VNImageRequestHandler(data: data, options: [:]).perform([request])
+        } catch {
+            return nil
+        }
+        return DocumentExtractor.recognizedText(request)
+    }
+
+    func pauseBeforeRetry() {
+        // The worker extracts off the main actor; never stall a UI caller.
+        guard !Thread.isMainThread else { return }
+        Thread.sleep(forTimeInterval: DocumentExtractor.ocrRetryPause)
+    }
+}
+
 /// Pure, testable extraction. No stored state, no I/O.
 public struct DocumentExtractor {
     /// One evidence item is at most 25 MiB. Enforced before
@@ -61,8 +100,21 @@ public struct DocumentExtractor {
     public static let maxRenderDimension = 20_000
     /// French first, then English: the owner's documents.
     public static let ocrLanguages = ["fr-FR", "en-US"]
+    /// One retry after an empty accurate pass, off the main thread. Vision's
+    /// ACCURATE pass sometimes finds nothing on an image it reads a moment
+    /// later; a fresh identical request is what fixes it.
+    static let ocrRetryPause: TimeInterval = 0.3
 
-    public init() {}
+    private let recognizer: any OCRRecognizer
+
+    public init() {
+        self.recognizer = VisionOCRRecognizer()
+    }
+
+    /// The test seam: no Vision call and no real pause.
+    init(recognizer: any OCRRecognizer) {
+        self.recognizer = recognizer
+    }
 
     /// Extract one document. `nil`/unknown MIME is sniffed from the bytes.
     public func extract(data: Data, mime: String?) -> ExtractionOutput {
@@ -111,10 +163,10 @@ public struct DocumentExtractor {
                 guard let page = document.page(at: index), let image = Self.render(page) else {
                     return
                 }
-                Self.appendCapped(Self.recognize(cgImage: image) ?? "", to: &text)
+                Self.appendCapped(self.recognize(cgImage: image) ?? "", to: &text)
             }
         }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .none }
+        guard Self.hasText(text) else { return .none }
         return ExtractionOutput(
             extractor: .ocr, text: text, pages: pageCount)
     }
@@ -169,8 +221,8 @@ public struct DocumentExtractor {
 
     private func extractImage(_ data: Data) -> ExtractionOutput {
         guard Self.imageWithinPixelCap(data) else { return .none }
-        guard let text = Self.recognize(data: data) else { return .none }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .none }
+        guard let text = self.recognize(data: data) else { return .none }
+        guard Self.hasText(text) else { return .none }
         return ExtractionOutput(extractor: .ocr, text: Self.truncated(text), pages: 1)
     }
 
@@ -201,27 +253,30 @@ public struct DocumentExtractor {
         return request
     }
 
-    static func recognize(cgImage: CGImage) -> String? {
-        let request = textRequest()
-        do {
-            try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
-        } catch {
-            return nil
-        }
-        return recognizedText(request)
+    /// One accurate pass, then one fresh identical pass when the first found
+    /// nothing. The retry keeps the level, languages and options unchanged.
+    private func recognized(_ attempt: () -> String?) -> String? {
+        let first = attempt()
+        guard !Self.hasText(first) else { return first }
+        recognizer.pauseBeforeRetry()
+        return attempt()
     }
 
-    static func recognize(data: Data) -> String? {
-        let request = textRequest()
-        do {
-            try VNImageRequestHandler(data: data, options: [:]).perform([request])
-        } catch {
-            return nil
-        }
-        return recognizedText(request)
+    func recognize(cgImage: CGImage) -> String? {
+        recognized { self.recognizer.text(in: cgImage) }
     }
 
-    private static func recognizedText(_ request: VNRecognizeTextRequest) -> String {
+    func recognize(data: Data) -> String? {
+        recognized { self.recognizer.text(in: data) }
+    }
+
+    /// Whether a pass produced at least one non-blank observation.
+    static func hasText(_ text: String?) -> Bool {
+        guard let text else { return false }
+        return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    static func recognizedText(_ request: VNRecognizeTextRequest) -> String {
         (request.results ?? [])
             .compactMap { $0.topCandidates(1).first?.string }
             .joined(separator: "\n")

@@ -2674,7 +2674,7 @@ fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &st
     });
 }
 
-/// CHIEF-BASE-1: an agent other than the chief can do nothing the chief
+/// An agent other than the chief can do nothing the chief
 /// could not. A tool the chief is refused (its grants, its tools lists, its
 /// own config deny) is denied for the agent; one the chief must ask about
 /// asks, unless the agent is already denied it. Only ever narrows. Returns

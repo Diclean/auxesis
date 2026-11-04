@@ -1226,7 +1226,7 @@ async fn private_api_turn_masks_each_value_before_the_fake_provider() {
     private_egress_e2e(false, "notes").await;
 }
 
-/// CHIEF-BASE-1: the chief has every access, and its text is still
+/// The chief has every access, and its text is still
 /// tokenised before the provider and rehydrated for the owner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn private_chief_turn_masks_each_value_before_the_fake_provider() {

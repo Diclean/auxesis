@@ -753,7 +753,7 @@ fn validate_selection(
     Ok(config)
 }
 
-/// CHIEF-BASE-1: a tools list names only tools the chief may use (its
+/// A tools list names only tools the chief may use (its
 /// grants, its own tools list, its config deny rules). The run-time ceiling
 /// enforces the same every turn; this refuses early with a clear error. The
 /// chief is the one this home runs: on an older install an added agent stays

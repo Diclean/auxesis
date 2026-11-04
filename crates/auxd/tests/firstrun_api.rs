@@ -110,7 +110,7 @@ async fn put_auth(t: &TestApi, path: &str, body: &str) -> HttpResponse {
     call_auth(t, "PUT", path, Some(body)).await
 }
 
-/// CHIEF-BASE-1: a fresh home gets one agent, the `main` chief shown as
+/// A fresh home gets one agent, the `main` chief shown as
 /// "Aux"; a config naming `aux` is left as it is.
 #[test]
 fn a_fresh_home_starts_with_the_main_chief_and_aux_configs_stay() {

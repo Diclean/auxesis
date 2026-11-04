@@ -1183,7 +1183,7 @@ async fn a_builtin_tool_still_runs() {
     t.stop();
 }
 
-/// CHIEF-BASE-1: what the chief is denied, an agent is denied too, at run
+/// What the chief is denied, an agent is denied too, at run
 /// time and when the agent is created, whatever the agent's own rules say.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {

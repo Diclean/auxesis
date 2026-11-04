@@ -318,7 +318,7 @@ api() {
     | curl "${args[@]}" "http://127.0.0.1:$PORT$path")" || HTTP_CODE="000"
 }
 
-# CHIEF-BASE-1: a fresh install has the chief alone; the owner creates a
+# A fresh install has the chief alone; the owner creates a
 # domain agent from its template (POST /v1/agents {template}), as the app does.
 from_template() {
   [ -d "$WORK/home/.auxesis/agents/$1" ] && return 0
@@ -464,7 +464,7 @@ step_m2_brief() {
 
 # The agent the CLI runs skills as: `main`, open mode (the brief step already
 # switched the mode), the CRM tools, and the shipped log-interaction skill.
-# `main` is the chief: its tool list caps every agent (CHIEF-BASE-1), so it
+# `main` is the chief: its tool list caps every agent, so it
 # also lists what the Calendar and Mail agents run in M4.
 step_m3_skill_setup() {
   STEP="m3-skill-setup"
@@ -887,7 +887,7 @@ step_m6_setup() {
   # rule is exact (MCP tools never ride a wildcard).
   mkdir -p "$agent_dir"
   printf '[[do]]\nskill = "mcp"\nlevel = "auto"\n' >"$agent_dir/grants.toml"
-  # The chief caps every agent (CHIEF-BASE-1): it must cover the MCP bucket
+  # The chief caps every agent: it must cover the MCP bucket
   # and list both fixture tools too. M6 is the last step, so the chief's
   # overlay here changes no earlier one.
   local chief_dir="$WORK/home/.auxesis/agents/main"

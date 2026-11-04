@@ -545,7 +545,7 @@ fn doctor_survives_closed_stdout() {
     );
 }
 
-/// CHIEF-BASE-1: a doctor run on a fresh home makes the same config as the
+/// A doctor run on a fresh home makes the same config as the
 /// daemon would: the `main` chief, never the legacy `aux`.
 #[test]
 fn doctor_on_a_fresh_home_starts_with_the_main_chief() {

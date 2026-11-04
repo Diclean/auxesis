@@ -36,6 +36,17 @@ pub struct ModelRow {
     /// Output price in USD per million tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_usd_mtok: Option<f64>,
+    /// How the provider bills this model, when it is not per token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billing: Option<Billing>,
+}
+
+/// A billing mode other than a per-token price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Billing {
+    /// A flat subscription: the cost of one call is known to be 0 cents.
+    Subscription,
 }
 
 /// The parsed `catalog/models.toml`.

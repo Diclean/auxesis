@@ -142,8 +142,9 @@ fn notice_unpriced_model(model: Option<&str>) {
 }
 
 /// The bundled catalog's list prices, in whole cents per million tokens
-/// rounded up, for every model id that carries both prices. When two
-/// providers list the same id, the higher price wins.
+/// rounded up, for every model id that carries both prices; a row marked as
+/// billed by subscription costs 0 cents per call. A row with neither stays
+/// unpriced. When two providers list the same id, the higher price wins.
 fn catalog_prices() -> &'static PriceTable {
     static PRICES: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
     PRICES.get_or_init(|| {
@@ -152,12 +153,14 @@ fn catalog_prices() -> &'static PriceTable {
         };
         let cents = |usd: f64| (usd * 100.0 - 1e-6).ceil().max(0.0) as u64;
         for row in aux_providers::Catalog::bundled().rows() {
-            let (Some(input), Some(output)) = (row.input_usd_mtok, row.output_usd_mtok) else {
-                continue;
+            let (input, output) = match (row.input_usd_mtok, row.output_usd_mtok, row.billing) {
+                (Some(input), Some(output), _) => (cents(input), cents(output)),
+                (_, _, Some(aux_providers::Billing::Subscription)) => (0, 0),
+                _ => continue,
             };
             let entry = table.models.entry(row.id.clone()).or_default();
-            entry.input_cents_per_million = entry.input_cents_per_million.max(cents(input));
-            entry.output_cents_per_million = entry.output_cents_per_million.max(cents(output));
+            entry.input_cents_per_million = entry.input_cents_per_million.max(input);
+            entry.output_cents_per_million = entry.output_cents_per_million.max(output);
         }
         table
     })
@@ -1634,6 +1637,63 @@ mod tests {
             "nothing reserved"
         );
         assert_eq!(usd_spent(&harness), 0);
+    }
+
+    #[test]
+    fn every_bundled_catalog_model_is_priced_or_billed_by_subscription() {
+        // A new catalog row without either would be refused under the money cap.
+        let no_config = PriceTable {
+            models: Default::default(),
+        };
+        for row in aux_providers::Catalog::bundled().rows() {
+            assert!(
+                price_source(&no_config, Some(&row.id)).is_some(),
+                "{}/{} has no price and no billing = \"subscription\"",
+                row.provider,
+                row.id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_flash_runs_under_the_default_money_cap() {
+        // The owner's brain, with the default caps; also with a config whose
+        // own [prices] table replaced the built-in prices (catalog price).
+        for (prices, cents) in [
+            (PriceTable::default(), 22 + 66),
+            (
+                PriceTable {
+                    models: Default::default(),
+                },
+                30 + 120,
+            ),
+        ] {
+            let mut harness = Harness::new();
+            harness.prices = prices;
+            let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+                .with_model("deepseek-flash");
+            let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+
+            session.send("hello").await.unwrap();
+
+            assert_eq!(provider.request_count(), 1);
+            assert_eq!(usd_spent(&harness), cents);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subscription_model_passes_the_money_cap_at_zero_cents() {
+        let harness = Harness::new();
+        let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+        let provider = FakeProvider::repeating("fake", reported(1_000, 10, None))
+            .with_model("gpt-oss:120b-cloud");
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(provider.request_count(), 1);
+        assert_eq!(usd_spent(&harness), 0, "a subscription call costs 0 cents");
     }
 
     #[tokio::test]

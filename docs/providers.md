@@ -78,6 +78,11 @@ Phase 1 seeds at least: `anthropic/claude-opus-5-5`, `anthropic/claude-sonnet-5-
 `anthropic/claude-haiku-5-5`, `deepseek/deepseek-chat`, and the Ollama Cloud models the owner uses.
 A model missing from the catalog is `tools = false` until the owner adds it.
 
+**Prices.** When `[prices]` in `config.toml` has no entry for a model, the daily money cap uses the
+catalog's `input_usd_mtok` / `output_usd_mtok`. Rows of subscription providers (Ollama Cloud,
+OpenCode Go) carry `billing = "subscription"`: one call costs 0 cents. A cloud model with neither is
+refused while a money cap applies; a test keeps every catalog row priced or flagged.
+
 **Gating.** A skill with any tool needs `tools = true`. Otherwise the skill refuses to start with the
 label `chat only` and the reason ("<model> cannot use tools; pick another brain for this skill"), and
 the brain picker shows `chat only` next to the model. `structured_output` is informational in Phase 1.

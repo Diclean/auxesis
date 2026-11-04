@@ -546,7 +546,7 @@ public enum StringKey: String, CaseIterable {
     case packToolUnknown
     case packNoChange
 
-    // Clients: import a contacts file (WO-CRMIO-2)
+    // Clients: import a contacts file
     case importOpen, importTitle, importLede, importStaysHere, importReading, importRunning
     case importFound, importFoundDetail, importParties, importColumnsRead, importColumnRow, importColumnsIgnored
     case importSkippedTitle, importSkippedNoContact, importSkippedRepeated, importSkippedNeedsCountry

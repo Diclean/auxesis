@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Hero path, sandbox only. M1: one private chat turn through a real auxd with the
-# fake provider. M2: `aux brief now` builds a brief from a fictional calendar
-# snapshot and a loopback aux-fakemail mailbox, in the same run. M3: `aux crm
+# Hero path, sandbox only. One private chat turn through a real auxd with the
+# fake provider. `aux brief now` builds a brief from a fictional calendar
+# snapshot and a loopback aux-fakemail mailbox, in the same run. `aux crm
 # timeline refresh` puts one fixture mail and one fixture meeting on the client
 # card (GET /v1/clients/{id}), then `aux skill run log-interaction` logs one
-# interaction that shows on the card. M4: `/invite` raises one approval card in
+# interaction that shows on the card. `/invite` raises one approval card in
 # the app (a fake /v1/events client) and nothing reaches the fake SMTP; a no sends
 # nothing; a yes sends exactly one mail with a text/calendar METHOD:REQUEST part to
 # the client, whose card shows the client's own start and whose .ics carries that
-# converted hour; a repeat yes sends nothing more. M5: `aux skill run collect-receipts`
+# converted hour; a repeat yes sends nothing more. `aux skill run collect-receipts`
 # collects a mailed PDF receipt, a fake bridge reads it, `aux docs list` shows it
-# linked to its client, `aux docs export` writes the CSV and the original. M6: a
+# linked to its client, `aux docs export` writes the CSV and the original. A
 # fixture stdio MCP server installs disabled, one approval starts it, a chat call
 # sends an IBAN token and never the raw value, and a widened tool list waits for
 # a second yes. Prints one GREEN or RED line; exit 0 only when GREEN.
@@ -24,7 +24,7 @@
 # AUXESIS_API_PORT=0). The one CLI call that reaches auxd uses the loopback port
 # auxd announced; the sandbox guard needs a real port for a client. A trap stops
 # auxd, aux-fakemail, the provider recorder, the fake app, any open turn and the
-# M6 stdio child, and deletes the temp dir. The real home and the real daemon
+# stdio child, and deletes the temp dir. The real home and the real daemon
 # port are never used.
 set -Eeuo pipefail
 
@@ -38,16 +38,16 @@ FIXTURES="$REPO_ROOT/scripts/fixtures/hero-m2"
 source "$REPO_ROOT/scripts/lib/guard.sh"
 
 # Invented data only. The contact is fictional; its e-mail address must not reach the
-# provider raw. Its name does: private mode hides no name (owner, 2026-10-19).
+# provider raw. Its name does: private mode hides no name.
 NAME="Camille Exemple"
 EMAIL="camille@exemple.fr"
 MESSAGE="Dis bonjour à $NAME, $EMAIL."
 
-# M2 expectations, matching scripts/fixtures/hero-m2: one meeting today (the one
+# Brief expectations, matching scripts/fixtures/hero-m2: one meeting today (the one
 # tomorrow must not show) and three unread mails (the read one must not count).
 EXPECT_MEETINGS=2
 EXPECT_UNREAD=3
-# M3 expectations: the fictional client, matched by exact address to the fixture mail
+# CRM expectations: the fictional client, matched by exact address to the fixture mail
 # (uid 1) and the fixture meeting; the owner's note is what the skill logs.
 CLIENT_EMAIL="camille@exemple.test"
 CLIENT_PHONE="+33612345678"
@@ -56,10 +56,10 @@ MEETING_TITLE="Call with"
 LOG_NOTE="Appel de suivi fictif"
 # What `aux brief now` prints when today's brief already exists (CLI text).
 ALREADY_TODAY="Today's brief already exists."
-# M4: a demo-world client (aux-fakemail world.json, Blueharbor) the owner invites.
+# A demo-world client (aux-fakemail world.json, Blueharbor) the owner invites.
 INVITEE="Lea Blueharbor"
 INVITEE_EMAIL="lea@blueharbor.example"
-# M6: a fictional IBAN, the MCP server's id, and its two tools. The fake provider
+# A fictional IBAN, the MCP server's id, and its two tools. The fake provider
 # only ever sees the kernel's token for the IBAN; the fixture logs what it gets.
 M6_IBAN="FR76 3000 6000 0112 3456 7890 189"
 M6_IBAN_DIGITS="FR7630006000011234567890189"
@@ -109,7 +109,7 @@ red() {
 on_error() {
   red "unexpected failure (exit $1)"
 }
-# The M6 stdio child is auxd's, but the trap stops it explicitly too: its pid is
+# The stdio child is auxd's, but the trap stops it explicitly too: its pid is
 # in the private temp dir the sandbox gave it, before "$WORK" is deleted.
 cleanup_m6_child() {
   local file pid
@@ -218,11 +218,11 @@ class H(http.server.BaseHTTPRequestHandler):
             if any(m["role"] == "tool" for m in msgs[last + 1:]):
                 msg["content"] = "Invitation sent."
             else:
-                # M4: the send-invite fill, tomorrow 10:00 local. The recipient is
+                # The send-invite fill, tomorrow 10:00 local. The recipient is
                 # invented: the runtime puts in the contact's own address.
                 person = user.split("/invite", 1)[1].split(" tomorrow")[0].strip()
                 start = (datetime.datetime.now().astimezone() + datetime.timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-                # M4-2 / CLIENT-TZ-FIELD: the wall time, as the owner says it;
+                # The wall time, as the owner says it;
                 # auxd resolves the zone. The invite is written in Paris time
                 # and the model guesses a zone; the fixture client's card says
                 # New York, so that stored zone must win and her own start show.
@@ -235,11 +235,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 call = {"id": "call-1", "type": "function", "function": {"name": "skill__send-invite", "arguments": json.dumps(fill)}}
                 msg, finish = {"role": "assistant", "content": "", "tool_calls": [call]}, "tool_calls"
         if "skill__follow-up" in offered and "/followup" in user:
-            # FOLLOWUP-READ-FIRST: the pre-read's results come before the fill.
+            # The pre-read's results come before the fill.
             if any(m["role"] == "tool" and not m.get("tool_call_id", "").startswith("pre_read_") for m in msgs[last + 1:]):
                 msg["content"] = "Follow-up sent."
             else:
-                # M4-3a: the follow-up fill. The recipient is invented: the
+                # The follow-up fill. The recipient is invented: the
                 # runtime puts in the contact's own address.
                 person = user.split("/followup", 1)[1].strip()
                 fill = {"slots": {"person": person, "topic": "the quote"}, "calls": [
@@ -281,7 +281,7 @@ PY
   printf 'version = 1\ndefault_agent = "main"\n\n[privacy]\nmode = "private"\n\n[[providers]]\nid = "fakey"\nbase_url = "http://127.0.0.1:%s/v1"\nmodel = "fake-model"\nkind = "openai-compat"\n' \
     "$(cat "$WORK/recorder.port")" >"$WORK/home/.auxesis/config.toml"
   (umask 077; printf 'AUX_KEY_FAKEY=fictional-key\n' >"$WORK/home/.auxesis/.env")
-  # The M3 client card matches the fixture mail and meeting by this second address
+  # The client card matches the fixture mail and meeting by this second address
 # (scripts/fixtures/hero-m2), and holds one E.164 phone.
   printf 'BEGIN:VCARD\nVERSION:3.0\nFN:%s\nEMAIL:%s\nEMAIL:%s\nTEL:%s\nEND:VCARD\n' "$NAME" "$EMAIL" "$CLIENT_EMAIL" "$CLIENT_PHONE" >"$WORK/contact.vcf"
   sbx "$AUX" contacts import "$WORK/contact.vcf" >"$WORK/import.log" 2>&1 || red "aux contacts import failed: $(cat "$WORK/import.log")"
@@ -289,7 +289,7 @@ PY
 
 step_start() {
   STEP="start"
-  # TMPDIR under the run: the M6 stdio child's mandatory sandbox gives it a
+  # TMPDIR under the run: the stdio child's mandatory sandbox gives it a
   # private aux-mcp-* temp dir below this, where the fixture writes its log.
   env -i HOME="$WORK/home" AUXESIS_HOME="$WORK/home/.auxesis" \
     AUXESIS_SANDBOX=1 AUXESIS_API_PORT=0 TMPDIR="$WORK/m6/tmp" \
@@ -396,7 +396,7 @@ step_m2_config() {
   STEP="m2-config"
   local config="$WORK/home/.auxesis/config.toml"
   # The brief reads calendar and mail, which private mode refuses (privacy registry
-  # row F2). Switch the mode only now, after the M1 privacy checks. The daemon reads
+  # row). Switch the mode only now, after the first privacy checks. The daemon reads
   # its config again on every call, so no restart is needed.
   sed 's/^mode = "private"$/mode = "open"/' "$config" >"$config.tmp" && mv "$config.tmp" "$config"
   grep -q '^mode = "open"$' "$config" || red "could not switch privacy to open for the brief"
@@ -447,7 +447,7 @@ step_m2_brief() {
   [[ "$brief" == *"Call with Camille Exemple"* ]] || red "brief misses today's meeting with Camille Exemple"
   [[ "$brief" != *"Fictional retro tomorrow"* ]] || red "brief lists tomorrow's meeting"
   # Whole-line match: "13 unread" must not satisfy an expected 3. The wording is
-  # BriefUnreadMany ("{0} unread"), changed by #245 from "{0} new message(s).".
+  # BriefUnreadMany ("{0} unread"), not "{0} new message(s)".
   grep -qxF "$EXPECT_UNREAD unread" <<<"$brief" || red "brief does not count $EXPECT_UNREAD unread mail(s)"
   # Daily idempotency: a second run today answers already_today, not a second brief.
   again="$(sbx_cli brief now 2>"$WORK/brief2.err")" || red "second aux brief now failed: $(head -c 300 "$WORK/brief2.err")"
@@ -495,7 +495,7 @@ step_m3_card() {
     red "the timeline has no meeting \"$MEETING_TITLE…\": $(jq -c '[.timeline[] | {kind, summary}]' "$WORK/resp.json" | head -c 300)"
 }
 
-# Log one interaction through the B4 skill (each_run approval: the owner's `y` on
+# Log one interaction through the skill (each_run approval: the owner's `y` on
 # stdin), then see it on the card with the skill's provenance.
 step_m3_log() {
   STEP="m3-log"
@@ -531,7 +531,7 @@ step_m4_setup() {
   printf 'BEGIN:VCARD\nVERSION:3.0\nFN:%s\nORG:Blueharbor\nEMAIL:%s\nTZ:America/New_York\nEND:VCARD\n' "$INVITEE" "$INVITEE_EMAIL" >"$WORK/invitee.vcf"
   sbx "$AUX" contacts import "$WORK/invitee.vcf" >"$WORK/import2.log" 2>&1 || red "aux contacts import failed: $(cat "$WORK/import2.log")"
   # The seeded Calendar agent owns send-invite: its shipped grants, and the
-  # agent.md + skill the daemon installed at start (CAL-AGENT-INSTALL).
+  # agent.md + skill the daemon installed at start.
   local agent_dir="$WORK/home/.auxesis/agents/calendar"
   [ -f "$agent_dir/agent.md" ] || red "auxd did not install the Calendar agent.md"
   cmp -s "$agent_dir/skills/send-invite.md" "$REPO_ROOT/crates/aux-runtime/src/skills/fixtures/skills/send-invite.md" \
@@ -637,7 +637,7 @@ step_m4_invite() {
   m4_turn m4-allow
   m4_wait_card m4-allow
   [ "$(outbox_count)" = 0 ] || red "a mail was sent before the yes"
-  # M4-2: "slots proposed in the client's time zone" (PLAN.md). The invite is
+  # "Slots proposed in the client's time zone" (PLAN.md). The invite is
   # written in Paris time and the fixture client is in New York: the card the
   # owner approves must show 10:00 Paris and her own start, a converted hour.
   jq -c '.[0]' "$WORK/resp.json" >"$WORK/invite-card.json"
@@ -734,7 +734,7 @@ step_m4_followup() {
   check="$(python3 -I - "$(find "$WORK/sim/outbox" -name '*.eml' -newer "$WORK/fu-card.json")" "$WORK/fu-card.json" <<'PY'
 import email, email.policy, email.utils, json, sys
 mail = email.message_from_binary_file(open(sys.argv[1], "rb"), policy=email.policy.default)
-# Since #272 the card is the text the owner reads (preview) plus the exact
+# The card is the text the owner reads (preview) plus the exact
 # arguments (edit_preview); the mail must be both.
 card = json.load(open(sys.argv[2]))
 real = json.loads(card["edit_preview"])["calls"][0]["real"]
@@ -748,7 +748,7 @@ PY
   [ "$check" = "rcpt=$INVITEE_EMAIL card_to=$INVITEE_EMAIL same_subject=True same_body=True shown=True" ] || red "the follow-up mail is not the card: $check"
 }
 
-# M4-3b: /availability. No sends nothing; yes sends the card's mail, whose
+# /availability. No sends nothing; yes sends the card's mail, whose
 # times are the runtime's (one line per window, in the owner's zone).
 step_m4_availability() {
   STEP="m4-availability"
@@ -784,7 +784,7 @@ PY
   [ "$check" = "same_body=True shown=True marker=False windows=yes" ] || red "the free-times mail is not the card: $check"
 }
 
-# M5: the receipt mail (fixture uid 5: a PDF from the demo-world client Lea
+# The receipt mail (fixture uid 5: a PDF from the demo-world client Lea
 # Blueharbor) is collected by the shipped collect-receipts skill, read by a fake
 # bridge (the Mac app's PDFKit post), listed linked to that client, and
 # exported. The four text-only mails are no documents; a second collect adds no row.
@@ -850,7 +850,7 @@ step_m5_export() {
   [ ! -e "$WORK/export/auxesis-receipts-2001-01-01-2001-01-31" ] || red "an empty period wrote a folder"
 }
 
-# M6 starts from the open mode M2 set. Private mode is what tokenises MCP
+# The MCP stage starts from the open mode the brief stage set. Private mode is what tokenises MCP
 # arguments (B14), so switch back and wait for the one watch rebuild before the
 # server is approved. The added (disabled) server keeps the runtime non-empty,
 # so the rebuild logs "MCP runtime started"; an empty runtime logs nothing.

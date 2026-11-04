@@ -720,7 +720,6 @@ fn mail_exec_agent() -> LoadedAgent {
         name: "assistant".to_string(),
         brain: Brain::Cloud,
         default_mode: AgentMode::Private,
-        budget: None,
         channels: Vec::new(),
         tools: vec!["mail.send".to_string()],
         recipients_policy: RecipientPolicy::KnownContacts,

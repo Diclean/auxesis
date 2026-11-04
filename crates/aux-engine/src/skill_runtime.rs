@@ -232,7 +232,6 @@ mod tests {
             name: "assistant".to_string(),
             brain: aux_runtime::skills::agent::Brain::Cloud,
             default_mode: aux_runtime::skills::agent::AgentMode::Private,
-            budget: None,
             channels: vec!["mac".to_string()],
             tools: vec!["calendar.create_event".to_string(), "mail.send".to_string()],
             recipients_policy: aux_runtime::skills::RecipientPolicy::KnownContacts,

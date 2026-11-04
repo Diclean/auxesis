@@ -1119,7 +1119,6 @@ mod tests {
             name: "assistant".to_string(),
             brain: super::super::agent::Brain::Cloud,
             default_mode: super::super::agent::AgentMode::Private,
-            budget: None,
             channels: Vec::new(),
             tools: tools.iter().map(|tool| tool.to_string()).collect(),
             recipients_policy: RecipientPolicy::KnownContacts,

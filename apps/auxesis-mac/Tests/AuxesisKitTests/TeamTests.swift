@@ -72,7 +72,7 @@ import Testing
 
     func testE1EmptyStatesAreVerbatim() {
         XCTAssertEqual(L10n.ui(.waitingEmpty, .en), "Nothing waits for you. Agents ask here and in their own threads.")
-        XCTAssertEqual(L10n.ui(.ledgerEmpty, .en), "Nothing has happened yet. Every action and every send will be listed here.")
+        XCTAssertEqual(L10n.ui(.ledgerEmpty, .en), "No actions or sends since you left.")
         XCTAssertEqual(L10n.ui(.clientsEmpty, .en), "No clients yet. Import contacts, or tell Clients about someone.")
         XCTAssertEqual(L10n.ui(.providersEmpty, .en), "No brain yet. Add a provider to start.")
         XCTAssertEqual(L10n.uf(.memoryEmpty, .en, "Mail"), "Nothing remembered yet. Mail saves rules you give it, with the date.")

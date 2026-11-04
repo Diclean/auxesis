@@ -501,7 +501,7 @@ public extension L10n {
 
         .ledgerSubtitle: "Everything done, and what is planned",
         .ledgerLede: "Every action and every request that left this Mac, in order. Nobody can edit it, you included, so it can be trusted.",
-        .ledgerEmpty: "Nothing has happened yet. Every action and every send will be listed here.",
+        .ledgerEmpty: "No actions or sends since you left.",
         .ledgerPlannedEmpty: "Nothing is planned.",
         .ledgerDone: "Done",
         .ledgerPlanned: "Planned",
@@ -1384,7 +1384,7 @@ public extension L10n {
         .ledger: "Registre",
         .ledgerAnswered: "%@ a répondu · %@ jetons en entrée, %@ en sortie",
         .ledgerDone: "Terminé",
-        .ledgerEmpty: "Rien ne s’est encore passé. Chaque action et chaque envoi seront listés ici.",
+        .ledgerEmpty: "Aucune action ni aucun envoi depuis votre départ.",
         .ledgerHashHelp: "L’empreinte épinglée de la compétence. Une compétence modifiée reçoit une nouvelle empreinte et redemande votre accord.",
         .ledgerLede: "Chaque action et chaque requête sortie de ce Mac, dans l’ordre. Personne ne peut le modifier, vous compris : on peut donc s’y fier.",
         .ledgerPlanned: "Prévu",

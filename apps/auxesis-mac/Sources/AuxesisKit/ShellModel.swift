@@ -297,6 +297,22 @@ public final class ShellModel: ObservableObject {
         store.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &subscriptions)
+        // The ledger is a read, not the socket: loaded once on appear it went
+        // stale while the day's runs streamed in as receipts. Refresh it when
+        // the daemon (re)connects and whenever a run finishes, so "Since you
+        // left" shows the work that happened while the page stayed open.
+        store.$connection
+            .removeDuplicates()
+            .sink { [weak self] connection in
+                guard case .online = connection else { return }
+                self?.loadLedger()
+            }
+            .store(in: &subscriptions)
+        store.receiptLog.$receipts
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.loadLedger() }
+            .store(in: &subscriptions)
     }
 
     public var language: Language { store.language }

@@ -48,11 +48,11 @@ import XCTest
 
     func testVisibleEntriesAreNewestFirstAndOmitEmptySummaries() {
         let rows = [
-            LedgerEntry(at: "2026-10-25 03:15:00", kind: "message.user", agent: "aux", summary: "old"),
-            LedgerEntry(at: "2026-10-25 06:22:00", kind: "message.user", agent: "aux", summary: "new"),
-            LedgerEntry(at: "2026-10-25 06:23:00", kind: "message.user", agent: "aux", summary: " (empty) "),
-            LedgerEntry(at: "2026-10-25 06:24:00", kind: "message.user", agent: "aux", summary: "  "),
-            LedgerEntry(at: "2026-10-25 06:25:00", kind: "message.user", agent: "aux", summary: "** **")
+            LedgerEntry(at: "2026-10-25 03:15:00", kind: "skill.run", agent: "aux", summary: "old"),
+            LedgerEntry(at: "2026-10-25 06:22:00", kind: "skill.run", agent: "aux", summary: "new"),
+            LedgerEntry(at: "2026-10-25 06:23:00", kind: "skill.run", agent: "aux", summary: " (empty) "),
+            LedgerEntry(at: "2026-10-25 06:24:00", kind: "skill.run", agent: "aux", summary: "  "),
+            LedgerEntry(at: "2026-10-25 06:25:00", kind: "skill.run", agent: "aux", summary: "** **")
         ]
         let visible = SinceYouLeftPresentation.visibleEntries(rows)
         XCTAssertEqual(visible.map(\.summary), ["new", "old"])
@@ -130,9 +130,9 @@ import XCTest
 
     func testTodayPreviewAndUnfilteredListShareVisibleOrderingAndNewestEntry() {
         let entries = [
-            LedgerEntry(at: "2026-10-25 07:00:00", kind: "message.user", agent: "aux", summary: "older"),
-            LedgerEntry(at: "2026-10-25 08:00:00", kind: "message.user", agent: "aux", summary: "newest"),
-            LedgerEntry(at: "2026-10-25 09:00:00", kind: "message.user", agent: "aux", summary: " (empty) ")
+            LedgerEntry(at: "2026-10-25 07:00:00", kind: "skill.run", agent: "aux", summary: "older"),
+            LedgerEntry(at: "2026-10-25 08:00:00", kind: "skill.run", agent: "aux", summary: "newest"),
+            LedgerEntry(at: "2026-10-25 09:00:00", kind: "skill.run", agent: "aux", summary: " (empty) ")
         ]
         let list = SinceYouLeftPresentation.entries(entries, filter: .all)
         let preview = SinceYouLeftPresentation.previewEntries(entries)
@@ -157,5 +157,59 @@ import XCTest
         XCTAssertEqual(LedgerText.what(message, language: .en), "Joe denied — call me")
         let decision = LedgerEntry(at: "", kind: "tool.decision", agent: "clients", summary: "recall allowed — no matching rule (default ask): ask, approved")
         XCTAssertNotEqual(LedgerText.what(decision, language: .en), decision.summary)
+    }
+
+    /// "Since you left" is the work that ran while the
+    /// owner was away — actions and sends. The owner's own chat turn, and the
+    /// agent's prose answer to it, are the conversation, not work the app did.
+    func testOwnerChatTurnsAndAgentProseAreNotSinceYouLeftItems() {
+        let rows = [
+            LedgerEntry(at: "2026-11-04 13:40:00", kind: "message.user", agent: "aux",
+                        summary: "Send Camille the invoice before noon"),
+            LedgerEntry(at: "2026-11-04 13:41:00", kind: "message.assistant", agent: "aux",
+                        summary: "On it. I'll post here when it's done."),
+            LedgerEntry(at: "2026-11-04 13:42:00", kind: "tool.decision", agent: "aux",
+                        summary: #"{"agent":"aux","tool":"mail.send","decision":"allow","by":"you"}"#),
+        ]
+        XCTAssertEqual(SinceYouLeftPresentation.previewEntries(rows).map(\.kind), ["tool.decision"])
+        XCTAssertEqual(SinceYouLeftPresentation.previewLines(rows, language: .en).count, 1)
+    }
+
+    /// A run row is one chat turn's receipt. The owner's own trigger is not
+    /// work in itself (its tools and sends have their own rows); a scheduled
+    /// or delegated run, and a row too old to carry a trigger, stay.
+    func testRunFinishedIsAnItemOnlyWhenTheOwnerDidNotTriggerIt() {
+        let chat = LedgerEntry(at: "2026-11-04 13:40:00", kind: "run.finished", agent: "aux",
+                               summary: #"{"run_id":"r1","agent":"aux","trigger":"owner_message","status":"done"}"#)
+        let scheduled = LedgerEntry(at: "2026-11-04 13:41:00", kind: "run.finished", agent: "clients",
+                                    summary: #"{"run_id":"r2","agent":"clients","trigger":"schedule","status":"done"}"#)
+        let delegated = LedgerEntry(at: "2026-11-04 13:42:00", kind: "run.finished", agent: "mail",
+                                    summary: #"{"run_id":"r3","agent":"mail","trigger":"agent_delegation","status":"done"}"#)
+        let older = LedgerEntry(at: "2026-11-04 13:43:00", kind: "run.finished", agent: "mail",
+                                summary: #"{"run_id":"r4","agent":"mail","status":"done"}"#)
+        let sorted = SinceYouLeftPresentation.previewEntries([chat, scheduled, delegated, older])
+        XCTAssertEqual(sorted.map(\.at), ["2026-11-04 13:43:00", "2026-11-04 13:42:00", "2026-11-04 13:41:00"])
+    }
+
+    /// The loaded-and-empty line must say what is true: the owner's chat may
+    /// have run, but no action or send happened. "Nothing has happened yet"
+    /// was the false claim the owner read while 38 chat turns had run.
+    func testLoadedEmptySinceYouLeftCopyDoesNotClaimNothingHappened() {
+        XCTAssertEqual(L10n.ui(.ledgerEmpty, .en), "No actions or sends since you left.")
+        XCTAssertEqual(L10n.ui(.ledgerEmpty, .fr), "Aucune action ni aucun envoi depuis votre départ.")
+    }
+
+    /// Only a loaded ledger may say there is nothing to review. A read that
+    /// failed, is loading or is unavailable says so, instead of the empty line
+    /// the Today column used to print for all four states.
+    func testSinceYouLeftEmptyLineFollowsTheLedgerReadState() {
+        XCTAssertEqual(SinceYouLeftPresentation.emptyLine(.loading, language: .en), L10n.ui(.loading, .en))
+        XCTAssertEqual(SinceYouLeftPresentation.emptyLine(.failed, language: .en), L10n.ui(.loadFailed, .en))
+        XCTAssertEqual(SinceYouLeftPresentation.emptyLine(.unavailable, language: .fr), L10n.ui(.unavailable, .fr))
+        XCTAssertEqual(SinceYouLeftPresentation.emptyLine(.loaded([]), language: .en), L10n.ui(.ledgerEmpty, .en))
+        let chat = LedgerEntry(at: "2026-11-04 13:40:00", kind: "message.user", agent: "aux", summary: "Hello")
+        XCTAssertEqual(SinceYouLeftPresentation.emptyLine(.loaded([chat]), language: .fr), L10n.ui(.ledgerEmpty, .fr))
+        let send = LedgerEntry(at: "2026-11-04 13:42:00", kind: "skill.action", agent: "mail", summary: "Sent the quote")
+        XCTAssertNil(SinceYouLeftPresentation.emptyLine(.loaded([send]), language: .en))
     }
 }

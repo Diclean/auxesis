@@ -120,9 +120,9 @@ import Testing
         XCTAssertEqual(mark(.failing, .interrupted, at: nil, language: .en)?.text,
                        "Failed · Morning brief was interrupted twice")
         XCTAssertEqual(mark(.failing, .interrupted, at: "07:02", language: .fr)?.text,
-                       "A échoué · Morning brief a été interrompue deux fois, la dernière à 07:02")
+                       "A échoué · Morning brief : deux interruptions, la dernière à 07:02")
         XCTAssertEqual(mark(.failing, .interrupted, at: nil, language: .fr)?.text,
-                       "A échoué · Morning brief a été interrompue deux fois")
+                       "A échoué · Morning brief : deux interruptions")
     }
 
     func testTheAccessibilityLabelCarriesTheSameLocalizedReason() {

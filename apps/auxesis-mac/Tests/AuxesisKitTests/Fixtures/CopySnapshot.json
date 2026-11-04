@@ -3000,11 +3000,11 @@
     },
     "jobReasonInterrupted" : {
       "en" : "%@ was interrupted twice, the last time at %@",
-      "fr" : "%@ a été interrompue deux fois, la dernière à %@"
+      "fr" : "%@ : deux interruptions, la dernière à %@"
     },
     "jobReasonInterruptedNoTime" : {
       "en" : "%@ was interrupted twice",
-      "fr" : "%@ a été interrompue deux fois"
+      "fr" : "%@ : deux interruptions"
     },
     "jobReasonMissed" : {
       "en" : "%@ didn't run at %@",

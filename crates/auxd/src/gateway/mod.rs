@@ -37,6 +37,31 @@ pub(crate) fn truncate_utf8(text: &str, max_bytes: usize) -> String {
     text[..end].to_owned()
 }
 
+/// The largest free text a remote gateway carries after [`scrub_for_owner`].
+pub const OWNER_TEXT_MAX_BYTES: usize = 64 * 1024;
+
+/// What the kernel's display scrub writes when its detector fails.
+const DISPLAY_HIDDEN: &str = "[content hidden]";
+
+/// Mask every secret and every prohibited value (e-mail, phone, IBAN, card,
+/// national ID, health and the rest of the Private-mode detector) in free
+/// text before a remote gateway carries it to the owner (IMSG-SCRUB-1).
+/// Names stay readable (owner rule). The kernel's secret scrub runs first, then
+/// its full display detector, the same pair the app's message previews use.
+///
+/// `None` means the scrub failed (detector error or panic): the caller sends a
+/// fixed notice instead, never the text.
+pub fn scrub_for_owner(home: &std::path::Path, text: &str) -> Option<String> {
+    let scrub = || {
+        let secrets = kernel_broker::scrub_external_preview(home, text, OWNER_TEXT_MAX_BYTES);
+        kernel_broker::scrub_display_text(&secrets, OWNER_TEXT_MAX_BYTES)
+    };
+    match std::panic::catch_unwind(scrub) {
+        Ok(out) if out != DISPLAY_HIDDEN => Some(out),
+        _ => None,
+    }
+}
+
 /// Build a remote gateway unless the sandbox guard is active. A sandbox run
 /// builds none, so no approval, brief or alert can reach the owner's phone
 /// whatever the home config says; the local sink stays the only channel.

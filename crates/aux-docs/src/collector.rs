@@ -1,9 +1,9 @@
-//! The receipts collector (row C1).
+//! The receipts collector.
 //!
 //! Given one mail account, walk the recent messages through the existing
 //! `aux-mail` read path, fetch each message's attachment parts, keep the MIME
-//! types MA3 allows, and append the bytes to the evidence registry. The
-//! registry deduplicates by SHA-256; the source reference records the account,
+//! types the mail download allows, and append the bytes to the evidence registry.
+//! The registry deduplicates by SHA-256; the source reference records the account,
 //! the IMAP UID and the part id. No message body is ever stored.
 //!
 //! This is the deterministic `collect-receipts` run: it never calls a model.

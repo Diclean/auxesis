@@ -5,10 +5,10 @@
 //! the plain one-body call; `.complete_streaming` uses SSE with a transparent
 //! fallback to the plain path when the endpoint signals streaming is
 //! unsupported. The streaming path is bounded by two timeouts, not one:
-//! `DEFAULT_TIMEOUT` is the connect and idle-read budget (H-10), while one
-//! request is still capped overall at [`STREAM_TOTAL_TIMEOUT_FACTOR`] × that
-//! (F-08). The fallback is chosen from structured error fields only, never
-//! from a substring of the body (F-11).
+//! `DEFAULT_TIMEOUT` is the connect and idle-read budget, while one
+//! request is still capped overall at [`STREAM_TOTAL_TIMEOUT_FACTOR`] × that.
+//! The fallback is chosen from structured error fields only, never
+//! from a substring of the body.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -33,55 +33,55 @@ use crate::types::{
 /// Default request timeout for chat completions.
 ///
 /// For a non-streaming call this bounds the whole request. For a streaming
-/// call it is the *idle* timeout: the time allowed between two reads (H-10),
+/// call it is the *idle* timeout: the time allowed between two reads,
 /// so a long answer is never cut mid-stream just because it takes longer
 /// than this in total. One stream is still bounded overall by
 /// [`STREAM_TOTAL_TIMEOUT_FACTOR`] × this: a server that keeps dribbling
-/// bytes inside the idle window cannot hold the turn forever (F-08).
+/// bytes inside the idle window cannot hold the turn forever.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Overall deadline for one streamed completion, as a multiple of the
 /// configured connect/idle timeout: `read_timeout` resets on every read, so
 /// on its own it cannot bound a server that dribbles one byte at a time. The
 /// streaming request therefore also carries `timeout × this` as a total
-/// budget (F-08). With the default [`DEFAULT_TIMEOUT`] that is 20 minutes —
+/// budget. With the default [`DEFAULT_TIMEOUT`] that is 20 minutes —
 /// generous for a long answer and still finite.
 pub const STREAM_TOTAL_TIMEOUT_FACTOR: u32 = 10;
 
-/// Hard ceiling for the bytes buffered for one stream body (F-09): at most
-/// this many bytes may sit in `pending` (one newline-less SSE line, F-05)
-/// and the same cap bounds the pre-choice recovery copy in `raw` (F-06).
+/// Hard ceiling for the bytes buffered for one stream body: at most
+/// this many bytes may sit in `pending` (one newline-less SSE line)
+/// and the same cap bounds the pre-choice recovery copy in `raw`.
 /// One named ceiling for both buffers, bounded well above any legitimate
 /// chat delta.
 const MAX_STREAM_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Stable error-code prefix used whenever a stream cap refuses the body: the
-/// caller sees `stream_too_large` instead of a silently truncated answer
-/// (F-06, UNB-01). Every stream ceiling shares this one code so a caller can
+/// caller sees `stream_too_large` instead of a silently truncated answer.
+/// Every stream ceiling shares this one code so a caller can
 /// tell a hostile/looping endpoint from a genuine parse failure.
 const STREAM_TOO_LARGE: &str = "stream_too_large";
 
-/// Hard ceiling on the assistant text assembled for one streamed turn
-/// (UNB-01). `raw` is freed after the first choice (F-05) and the per-line cap
+/// Hard ceiling on the assistant text assembled for one streamed turn.
+/// `raw` is freed after the first choice and the per-line cap
 /// is 4 MiB, so without this a hostile or looping endpoint could grow
 /// `content` without bound for the whole stream budget (20 min by default).
 /// 1 MiB is far above any legitimate answer; crossing it ends the stream with
 /// `stream_too_large`.
 const MAX_STREAM_CONTENT_BYTES: usize = 1024 * 1024;
 
-/// Hard ceiling on the argument bytes assembled for one streamed tool call
-/// (UNB-01). Arguments are a JSON document split across deltas; 256 KiB is
+/// Hard ceiling on the argument bytes assembled for one streamed tool call.
+/// Arguments are a JSON document split across deltas; 256 KiB is
 /// already implausible for a real call. Crossing it ends the stream with
 /// `stream_too_large` *before* `finish`, so no partial call is emitted.
 const MAX_STREAM_TOOL_ARGUMENT_BYTES: usize = 256 * 1024;
 
-/// Hard ceiling on the number of distinct tool calls in one streamed message
-/// (UNB-01). Every new `delta.tool_calls[].index` used to insert an entry in
+/// Hard ceiling on the number of distinct tool calls in one streamed message.
+/// Every new `delta.tool_calls[].index` used to insert an entry in
 /// `tool_calls`; 64 distinct calls is well above any legitimate model turn.
 const MAX_STREAM_TOOL_CALLS: usize = 64;
 
 /// Hard ceiling on the function-name bytes assembled for one streamed tool
-/// call (UNB-01, same unbounded-growth class as the arguments). Names are
+/// call (same unbounded-growth class as the arguments). Names are
 /// identifiers; 4 KiB is generous. Crossing it ends the stream with
 /// `stream_too_large`.
 const MAX_STREAM_TOOL_NAME_BYTES: usize = 4 * 1024;
@@ -100,11 +100,11 @@ pub struct OpenAiCompat {
     http: Client,
     /// Client for SSE calls: connect timeout plus an *idle* read timeout, no
     /// client-wide total timeout, so an answer longer than `DEFAULT_TIMEOUT`
-    /// keeps streaming while a stalled socket still fails (H-10). The
+    /// keeps streaming while a stalled socket still fails. The
     /// per-request overall deadline `stream_total_timeout` is applied on the
     /// request itself instead.
     http_stream: Client,
-    /// Overall deadline per streamed request (F-08).
+    /// Overall deadline per streamed request.
     stream_total_timeout: Duration,
     /// Send DeepSeek's thinking toggle (`ProviderConfig::disable_thinking`).
     disable_thinking: bool,
@@ -144,17 +144,17 @@ impl OpenAiCompat {
     ///
     /// `timeout` bounds a non-streaming request in total. The streaming path
     /// gets a separate client where `timeout` is the connection and idle-read
-    /// budget only: a long answer must not be cut mid-stream (H-10). Each
+    /// budget only: a long answer must not be cut mid-stream. Each
     /// streamed request still carries `timeout × STREAM_TOTAL_TIMEOUT_FACTOR`
     /// as an overall deadline, so a trickling keep-alive endpoint is bounded
-    /// as well (F-08).
+    /// as well.
     pub fn with_key_and_timeout(
         config: &ProviderConfig,
         api_key: Option<String>,
         timeout: Duration,
     ) -> Result<Self, ProviderError> {
         config.validate()?;
-        // H-04/L-1: every key this process resolves (Keychain, `.env`,
+        // Every key this process resolves (Keychain, `.env`,
         // process environment) joins the exact-value scrubber, so a key
         // that later reaches a log line, a tool argument or a preview is
         // redacted without needing a credential-shaped name next to it.
@@ -163,7 +163,7 @@ impl OpenAiCompat {
             kernel_broker::scrub::register_known_secret(key);
         }
         let endpoint = chat_completions_url(&config.base_url)?;
-        // security-review round 2, P2: never follow a redirect. A 3xx from the
+        // Never follow a redirect. A 3xx from the
         // configured origin would otherwise forward the key and the prompt to
         // another host; the response is surfaced as a provider error instead.
         // A loopback endpoint is reached directly, never through a system or
@@ -214,7 +214,7 @@ impl OpenAiCompat {
         }
     }
 
-    /// FOLLOWUP-REASONING-400: the request to re-send when the endpoint refused
+    /// The request to re-send when the endpoint refused
     /// `req` for a tool-call row without `reasoning_content` (DeepSeek thinking
     /// mode), and that row can be backfilled. The endpoint gets the empty field
     /// from then on. `None` otherwise, so a refusal is re-sent at most once.
@@ -241,7 +241,7 @@ impl OpenAiCompat {
 /// `req` with an empty reasoning from `provider` on each assistant tool-call
 /// row since the last user message that carries none for it: DeepSeek thinking
 /// mode refuses those rows without the field, and the engine writes some itself
-/// (FOLLOWUP-READ-FIRST's pre-read). Earlier turns are left as they are. `None`
+/// (the engine's own pre-read). Earlier turns are left as they are. `None`
 /// when no row needs it.
 fn backfill_reasoning(provider: &str, req: &ChatRequest) -> Option<ChatRequest> {
     let turn = req
@@ -372,9 +372,9 @@ impl ChatProvider for OpenAiCompat {
 
         let mut response = self
             .send_request(&self.http_stream, &payload, &self.id)?
-            // The client has no total timeout (H-10); the request carries
+            // The client has no total timeout; the request carries
             // the larger overall deadline itself, so a byte-dribbling
-            // keep-alive endpoint is still cut off (F-08).
+            // keep-alive endpoint is still cut off.
             .timeout(self.stream_total_timeout)
             .send()
             .await
@@ -401,14 +401,14 @@ impl ChatProvider for OpenAiCompat {
             if stream_unsupported(status, &body) {
                 // The endpoint itself refused streaming — a refusal status
                 // whose *parsed* body names the `stream`/`stream_options`
-                // parameter (F-11/F-14), not a genuine request error. The
+                // parameter, not a genuine request error. The
                 // response body has not been read as SSE yet, so no delta can
                 // have been shown: the honest fallback is the plain path and
                 // no re-send can ever happen after a visible delta. The
                 // fallback stays inside this one `complete_streaming` call:
                 // the caller's budget reservation for the round is settled
                 // exactly once whether the answer came from SSE or from the
-                // plain re-send (H-10).
+                // plain re-send.
                 tracing::info!(
                     provider = %shown_id_plain(&self.id),
                     status = status.as_u16(),
@@ -454,7 +454,7 @@ impl ChatProvider for OpenAiCompat {
                 // `[DONE]` closes the stream: stop reading now. A keep-alive
                 // endpoint that holds the socket open after the terminator
                 // must not make the turn wait out the idle timeout and throw
-                // away an already complete answer (F-08).
+                // away an already complete answer.
                 break;
             }
         }
@@ -649,7 +649,7 @@ struct PartialToolCall {
 const STREAM_REFUSAL_STATUSES: [u16; 6] = [400, 404, 405, 415, 422, 501];
 
 /// `error.code` / `error.type` values that mean "the provider rejected a
-/// request parameter". Documented allowlist (F-11): every entry must mean a
+/// request parameter". Documented allowlist: every entry must mean a
 /// parameter was not accepted, never a generic bad request, and it is only
 /// trusted together with a message that names the stream field as an
 /// identifier (or a structured `param`/`loc`, which is a signal on its own).
@@ -665,8 +665,8 @@ const PARAMETER_REFUSAL_CODES: [&str; 4] = [
 /// Short, exact provider messages that are themselves a stream refusal.
 /// Matched case-insensitively after trimming, and only as a *whole* message:
 /// a long body that merely mentions streaming (an HTML page, an `upstream`
-/// error) must not match (F-11). `not implemented` recovers the canonical
-/// `501 Not Implemented` shape (F-14).
+/// error) must not match. `not implemented` recovers the canonical
+/// `501 Not Implemented` shape.
 const KNOWN_STREAM_REFUSALS: [&str; 10] = [
     "not implemented",
     "sse is not supported",
@@ -680,12 +680,12 @@ const KNOWN_STREAM_REFUSALS: [&str; 10] = [
     "streaming not supported",
 ];
 
-/// Narrow parameter-refusal phrasings (F-16) trusted only together with a
+/// Narrow parameter-refusal phrasings trusted only together with a
 /// token-level mention of `stream`/`stream_options`: "Unknown name
 /// \"stream_options\": Cannot find field.", "Extra inputs are not permitted:
 /// stream_options", "messages: unexpected keyword argument \"stream\"",
 /// "Invalid value for 'stream': must be a boolean". Deliberately not generic
-/// error words (`invalid`, `unknown` alone), so the F-11 negatives — e.g.
+/// error words (`invalid`, `unknown` alone), so the negatives — e.g.
 /// `Invalid api key: 'stream'` — stay genuine errors.
 const PARAMETER_REFUSAL_PHRASES: [&str; 5] = [
     "cannot find field",
@@ -706,7 +706,7 @@ const STREAM_CAPABILITY_REFUSALS: [&str; 1] = ["does not support streaming"];
 ///
 /// The status alone cannot tell those apart: `400` and `422` are ordinary
 /// request-error codes, so the error body must name the stream parameter in
-/// a *structured* way (F-11/F-14). The decision never uses
+/// a *structured* way. The decision never uses
 /// `body.contains("stream")`:
 ///
 /// - a JSON body is parsed; the stream parameter must appear as OpenAI's
@@ -720,7 +720,7 @@ const STREAM_CAPABILITY_REFUSALS: [&str; 1] = ["does not support streaming"];
 ///   JSON document and HTML error pages never match.
 ///
 /// A genuine `400` ("model not found") surfaces untouched and is never
-/// re-sent, so one turn never bills two attempts (H-10).
+/// re-sent, so one turn never bills two attempts.
 fn stream_unsupported(status: reqwest::StatusCode, body: &str) -> bool {
     STREAM_REFUSAL_STATUSES.contains(&status.as_u16()) && stream_refusal_signal(body)
 }
@@ -831,11 +831,11 @@ fn json_stream_refusal(value: &serde_json::Value) -> bool {
         }
     }
 
-    // F-16: realistic parameter refusals are often phrased without a
+    // Realistic parameter refusals are often phrased without a
     // structured `param`/`loc` or an allowlisted code. The message must both
     // name the stream field as an identifier and state a narrow
     // parameter-refusal phrase; `Invalid api key: 'stream'` and prose that
-    // merely mentions streaming stay untouched (F-11).
+    // merely mentions streaming stay untouched.
     if let Some(message) = message {
         let lowered = message.to_ascii_lowercase();
         if message_names_stream_parameter(message)
@@ -859,7 +859,7 @@ fn json_stream_refusal(value: &serde_json::Value) -> bool {
 /// True when a structured `param` or FastAPI `loc` value names the request's
 /// stream field: exactly `stream`, or any `stream_*` parameter
 /// (`stream_options`). Exact names keep `upstream`, `downstream` and
-/// `streaming_model_v2` out (F-11).
+/// `streaming_model_v2` out.
 fn names_stream_parameter(value: &str) -> bool {
     let value = value.trim().to_ascii_lowercase();
     value == "stream" || value.starts_with("stream_")
@@ -867,7 +867,7 @@ fn names_stream_parameter(value: &str) -> bool {
 
 /// True when a message names the stream field as a *token*, e.g.
 /// `unknown parameter: stream_options`. Token equality — never a `contains`
-/// test — is what keeps `upstream`/`downstream` prose out (F-11).
+/// test — is what keeps `upstream`/`downstream` prose out.
 fn message_names_stream_parameter(message: &str) -> bool {
     message
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -875,7 +875,7 @@ fn message_names_stream_parameter(message: &str) -> bool {
 }
 
 /// True only when the message *is* one of the known short stream refusals,
-/// not when it merely mentions streaming somewhere (F-11).
+/// not when it merely mentions streaming somewhere.
 fn known_stream_refusal(message: &str) -> bool {
     let message = message.trim().to_ascii_lowercase();
     KNOWN_STREAM_REFUSALS.contains(&message.as_str())
@@ -901,7 +901,7 @@ fn loc_names_stream_parameter(item: &serde_json::Value) -> bool {
 }
 
 /// Strip leading transport noise from one SSE line: any number of UTF-8 BOMs
-/// (a gateway may double one, F-12) interleaved with ASCII spaces/tabs (a
+/// (a gateway may double one) interleaved with ASCII spaces/tabs (a
 /// gateway may pad the field name: `\u{FEFF} data: …`). Only the line head is
 /// touched; the payload keeps its bytes.
 fn trim_line_noise(mut line: &[u8]) -> &[u8] {
@@ -920,7 +920,7 @@ fn trim_line_noise(mut line: &[u8]) -> &[u8] {
 /// carries: any BOM/padding, any casing, surrounding whitespace, and a
 /// trailing CR. Used both for newline-terminated lines and for the final
 /// unterminated line, so `data: [DONE]` with no line terminator still ends
-/// the read loop instead of stalling out the idle timeout (F-15).
+/// the read loop instead of stalling out the idle timeout.
 fn done_line(line: &[u8]) -> bool {
     let line = trim_line_noise(line);
     let Some(payload) = line.strip_prefix(b"data:") else {
@@ -931,7 +931,7 @@ fn done_line(line: &[u8]) -> bool {
 }
 
 /// Refuse an over-cap stream body with the stable `stream_too_large` code
-/// instead of truncating it silently (F-06/F-09).
+/// instead of truncating it silently.
 fn stream_too_large(provider: &str, detail: impl fmt::Display) -> ProviderError {
     ProviderError::InvalidResponse {
         provider: shown_id_plain(provider),
@@ -950,8 +950,8 @@ struct StreamAssembler {
     /// Bytes not yet terminated by `\n` (may include a partial line).
     pending: Vec<u8>,
     /// Raw bytes seen before the first choice, for the "server ignored
-    /// `stream:true`" recovery; dropped once a choice arrives (F-05) and
-    /// capped at [`MAX_STREAM_BODY_BYTES`] while it is still live (F-06).
+    /// `stream:true`" recovery; dropped once a choice arrives and
+    /// capped at [`MAX_STREAM_BODY_BYTES`] while it is still live.
     raw: Vec<u8>,
     content: String,
     /// Reasoning text, kept to send back; never emitted to the sink.
@@ -990,17 +990,17 @@ impl StreamAssembler {
         if self.saw_done {
             // `[DONE]` closes the event stream; everything after it is inert
             // and is not even copied, so a post-`[DONE]` flood cannot grow
-            // the buffers (mutation survivors m2/m5).
+            // the buffers.
             return Ok(());
         }
         // `raw` exists only for the "server ignored `stream: true`" recovery
         // in `finish`; once a choice has been seen that path is unreachable,
-        // so the whole-body copy must not keep growing (F-05). While it is
+        // so the whole-body copy must not keep growing. While it is
         // live it is capped like `pending`: a hostile endpoint can send many
         // short *complete* lines that never grow `pending` and would
-        // otherwise retain the whole body here (F-06). Crossing the cap is
+        // otherwise retain the whole body here. Crossing the cap is
         // refused outright — a silently truncated copy would later surface
-        // as a confusing parse error (F-06/F-09).
+        // as a confusing parse error.
         if !self.saw_choice {
             let room = MAX_STREAM_BODY_BYTES.saturating_sub(self.raw.len());
             if bytes.len() > room {
@@ -1015,12 +1015,12 @@ impl StreamAssembler {
         }
         self.pending.extend_from_slice(bytes);
         // SSE (spec §"Parsing the event stream") terminates a line on CR, LF
-        // or CRLF; `push` used to split on LF only, so a CR-only framed body
+        // or CRLF; `push` used to split on LF only, so a CR-only body was never read.
         // Parse every complete line in one forward pass and shift the buffer
         // once: draining per line made one large body chunk quadratic in the
-        // number of events (R9: 91k tiny events in a 4 MiB push took >5 s).
+        // number of events (91k tiny events in a 4 MiB push took over 5 s).
         // Take the buffer so the lines are parsed in place without a copy:
-        // the per-line `to_vec` left the release wall allocation-bound (R10).
+        // the per-line `to_vec` left the release wall allocation-bound.
         let buffer = std::mem::take(&mut self.pending);
         let mut consumed = 0usize;
         while let Some(position) = buffer[consumed..]
@@ -1056,13 +1056,13 @@ impl StreamAssembler {
         if self.pending.len() > MAX_STREAM_BODY_BYTES {
             // One line this long is hostile or broken; refusing it keeps the
             // buffer bounded instead of buffering the rest of the body, and
-            // `stream_too_large` tells the caller why (F-06/F-09).
+            // `stream_too_large` tells the caller why.
             return Err(stream_too_large(
                 &self.provider,
                 format!("stream line exceeds {MAX_STREAM_BODY_BYTES} bytes without a newline"),
             ));
         }
-        // F-15: `[DONE]` may arrive as the final, unterminated line (a
+        // `[DONE]` may arrive as the final, unterminated line (a
         // gateway that ends the body without a trailing newline on a
         // keep-alive socket). Treat it as terminal here, so `complete_streaming`
         // breaks the read loop instead of waiting out the idle timeout and
@@ -1077,7 +1077,7 @@ impl StreamAssembler {
 
     /// True once `data: [DONE]` has been seen: the caller stops reading the
     /// body then, so a keep-alive endpoint cannot hold a finished answer
-    /// hostage until a timeout (F-08).
+    /// hostage until a timeout.
     fn saw_done(&self) -> bool {
         self.saw_done
     }
@@ -1094,7 +1094,7 @@ impl StreamAssembler {
         // not an SSE field: gateways prepend one (sometimes two) to the body
         // and may pad the field name, and without this strip the first
         // `data:` line looks like an unknown field and its delta is silently
-        // dropped (F-07/F-12). The strip is per line, so noise split across
+        // dropped. The strip is per line, so noise split across
         // reads — or placed after an earlier chunk — is reassembled first.
         let line = trim_line_noise(line);
         if line.is_empty() || line.starts_with(b":") {
@@ -1113,7 +1113,7 @@ impl StreamAssembler {
         let payload = payload.strip_prefix(b" ").unwrap_or(payload);
         // A spec-legal heartbeat (`data:` with an empty or whitespace-only
         // payload) carries no event; skipping it keeps a completion alive
-        // instead of failing it on a JSON parse (GLM-P3).
+        // instead of failing it on a JSON parse.
         if payload.iter().all(|byte| byte.is_ascii_whitespace()) {
             return Ok(());
         }
@@ -1129,7 +1129,7 @@ impl StreamAssembler {
         Ok(())
     }
 
-    /// Apply one parsed chunk, enforcing the per-turn growth caps (UNB-01).
+    /// Apply one parsed chunk, enforcing the per-turn growth caps.
     ///
     /// Any cap crossing returns `stream_too_large` immediately. The caller
     /// (`complete_streaming`) propagates it out of the read loop before
@@ -1392,7 +1392,7 @@ fn status_error(
         code => ProviderError::Client {
             provider,
             status: code,
-            // The upstream body may echo the key (P2 security-review round 1):
+            // The upstream body may echo the key:
             // redact before extracting, so a truncated message can never hold
             // a partial key either.
             message: error_message(&redact_upstream(body, key)),
@@ -1456,7 +1456,7 @@ fn parse_retry_after(value: &HeaderValue) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
 
-    /// A gate that tokenises: C9 is the one covered row private mode allows.
+    /// A gate that tokenises: screenshots are the one covered path private mode allows.
     fn tokenising_gate(key: [u8; 32]) -> kernel_privacy::safetext::Gate {
         let grant = kernel_core::privacy::admit_call(
             kernel_core::privacy::PathId::C9,
@@ -1683,7 +1683,7 @@ mod tests {
 
     #[test]
     fn parse_response_reads_cached_prompt_tokens() {
-        // api.deepseek.com, 2026-10-21 (second identical call): both spellings.
+        // DeepSeek sends both spellings of the cached-token count.
         let deepseek = json!({ "prompt_tokens": 637, "completion_tokens": 10,
             "prompt_tokens_details": { "cached_tokens": 384 },
             "prompt_cache_hit_tokens": 384, "prompt_cache_miss_tokens": 253 });
@@ -1755,7 +1755,7 @@ mod tests {
         );
     }
 
-    // ---- streaming (WS-F1) ----
+    // ---- streaming ----
 
     fn collect(deltas: &std::sync::Mutex<Vec<ChatDelta>>) -> Vec<ChatDelta> {
         deltas.lock().unwrap().clone()
@@ -1949,7 +1949,7 @@ mod tests {
         }
     }
 
-    /// F-15 (B5-2): the SSE spec accepts a lone CR as a line terminator. A
+    /// The SSE spec accepts a lone CR as a line terminator. A
     /// CR-only framed body must yield its deltas, and a trailing
     /// `data: [DONE]\r` must end the read loop even if the socket is held
     /// open (no stall).
@@ -1996,7 +1996,7 @@ mod tests {
         assert_eq!(texts, "Hello");
     }
 
-    /// F-15 (B5-2) multi-event table: every CR/CRLF composition and framing
+    /// Multi-event table: every CR/CRLF composition and framing
     /// artifact, split at every byte, yields both deltas and completes.
     #[test]
     fn b5f15_cr_only_multi_event_table() {
@@ -2036,7 +2036,7 @@ mod tests {
     }
 
     /// A UTF-8 BOM at the head of the body is a transport artifact: it must
-    /// not turn the first `data:` line into an unknown field (F-07).
+    /// not turn the first `data:` line into an unknown field.
     #[test]
     fn stream_assembler_strips_a_utf8_bom() {
         const BOM: &str = "\u{FEFF}";
@@ -2075,7 +2075,7 @@ mod tests {
         }
     }
 
-    /// F-12: a doubled BOM and a BOM followed by spacing used to slip past
+    /// A doubled BOM and a BOM followed by spacing used to slip past
     /// the single `strip_prefix`, silently dropping the first `data:` line
     /// (`Ok("lo")` instead of `Ok("Hello")`).
     #[test]
@@ -2110,7 +2110,7 @@ mod tests {
         }
     }
 
-    /// F-06/F-09: one named ceiling bounds both the pre-choice recovery copy
+    /// One named ceiling bounds both the pre-choice recovery copy
     /// and `pending`, and crossing it is an explicit `stream_too_large`
     /// error, never a silently truncated answer. Many short complete lines
     /// drain `pending` after every newline, so only the `raw` cap can see
@@ -2150,10 +2150,10 @@ mod tests {
         );
     }
 
-    /// R9: one 4 MiB body chunk carrying ~89k tiny complete events must stay
+    /// One 4 MiB body chunk carrying ~89k tiny complete events must stay
     /// fast. The parser used to drain `pending` per line, shifting the rest
     /// of the chunk on every event (O(lines x chunk)); the budget below is
-    /// asserted in release, where the pre-fix code took >5 s.
+    /// asserted in release, where the pre-fix code took over 5 s.
     #[test]
     fn a_four_mib_single_chunk_with_tiny_events_is_not_quadratic() {
         let mut assembler = StreamAssembler::new("deepseek");
@@ -2185,10 +2185,10 @@ mod tests {
         }
     }
 
-    /// F-09/F-13(m1): the ceiling is one named constant and both sides of it
+    /// The ceiling is one named constant and both sides of it
     /// are pinned. A plain body just under the cap is recovered whole; one
-    /// over it fails closed with `stream_too_large`. A tighter cap (m1)
-    /// breaks the first half, a silent truncation (F-06) breaks the second.
+    /// over it fails closed with `stream_too_large`. A tighter cap
+    /// breaks the first half, a silent truncation breaks the second.
     #[test]
     fn stream_assembler_recovers_a_plain_body_up_to_the_named_ceiling() {
         assert_eq!(
@@ -2220,7 +2220,7 @@ mod tests {
         );
     }
 
-    // ---- UNB-01: per-turn content, tool-argument, name and tool-count caps ----
+    // ---- per-turn content, tool-argument, name and tool-count caps ----
 
     /// Build an SSE body that streams `total` bytes of assistant text in
     /// `chunk`-byte deltas, then terminates.
@@ -2265,7 +2265,7 @@ mod tests {
         );
     }
 
-    /// UNB-01: assistant text over one turn's cap ends the stream; only the
+    /// Assistant text over one turn's cap ends the stream; only the
     /// text that fit is shown, and nothing beyond the cap is retained.
     #[test]
     fn stream_assembler_refuses_content_over_the_turn_cap() {
@@ -2284,7 +2284,7 @@ mod tests {
         );
     }
 
-    /// UNB-01: exactly at the text cap is accepted; the ceiling is `>`, not
+    /// Exactly at the text cap is accepted; the ceiling is `>`, not
     /// `>=`, so a legitimate long answer is never cut one byte early.
     #[test]
     fn stream_assembler_accepts_content_at_the_exact_cap() {
@@ -2296,7 +2296,7 @@ mod tests {
         assert_eq!(shown_text(&deltas), MAX_STREAM_CONTENT_BYTES);
     }
 
-    /// UNB-01: one tool call's assembled arguments over the cap ends the
+    /// One tool call's assembled arguments over the cap ends the
     /// stream before `finish`; no partial call reaches the sink.
     #[test]
     fn stream_assembler_refuses_tool_arguments_over_the_cap() {
@@ -2323,7 +2323,7 @@ mod tests {
         assert_capped(&result, &deltas);
     }
 
-    /// UNB-01: an over-cap tool-call name is refused too (same unbounded
+    /// An over-cap tool-call name is refused too (same unbounded
     /// growth class as the arguments).
     #[test]
     fn stream_assembler_refuses_a_tool_name_over_the_cap() {
@@ -2336,7 +2336,7 @@ mod tests {
         assert_capped(&result, &deltas);
     }
 
-    /// UNB-01: more than `MAX_STREAM_TOOL_CALLS` distinct indices end the
+    /// More than `MAX_STREAM_TOOL_CALLS` distinct indices end the
     /// stream; a repeated index is a fragment and must not count.
     #[test]
     fn stream_assembler_refuses_too_many_tool_calls() {
@@ -2356,7 +2356,7 @@ mod tests {
         assert_capped(&result, &deltas);
     }
 
-    /// UNB-01: a normal stream under every cap is unchanged — text, several
+    /// A normal stream under every cap is unchanged — text, several
     /// tool calls, and their assembled deltas all still arrive.
     #[test]
     fn stream_assembler_normal_stream_under_the_caps_is_unchanged() {
@@ -2381,7 +2381,7 @@ mod tests {
         );
     }
 
-    /// UNB-01: a call fragmented into many small argument deltas under the
+    /// A call fragmented into many small argument deltas under the
     /// cap still reassembles exactly (the cap must not break fragmentation).
     #[test]
     fn stream_assembler_accepts_fragmented_arguments_under_the_cap() {
@@ -2408,7 +2408,7 @@ mod tests {
         );
     }
 
-    /// Mutation kill (m2): the early return after `[DONE]` is what keeps a
+    /// The early return after `[DONE]` is what keeps a
     /// post-terminator flood out of the buffers, not the line cap.
     #[test]
     fn stream_assembler_drops_everything_after_the_terminator() {
@@ -2438,7 +2438,7 @@ mod tests {
         assert_eq!(response.content(), "Hello");
     }
 
-    /// Mutation kill (m5): `[DONE]` ends the body even when more bytes follow
+    /// `[DONE]` ends the body even when more bytes follow
     /// it inside the same chunk.
     #[test]
     fn stream_assembler_terminator_drops_the_rest_of_the_chunk() {
@@ -2458,7 +2458,7 @@ mod tests {
         assert_eq!(response.content(), "Hello");
     }
 
-    /// F-15: a terminator that arrives as the final, unterminated line ends
+    /// A terminator that arrives as the final, unterminated line ends
     /// the stream immediately (no line terminator needed), for every padded/
     /// cased/BOM/no-space spelling; a partial `[DO` tail is not terminal.
     #[test]
@@ -2519,7 +2519,7 @@ mod tests {
         assert_eq!(assembler.finish(&sink).unwrap().content(), "done");
     }
 
-    /// F-19: both named ceilings are exact — a body/line of exactly
+    /// Both named ceilings are exact — a body/line of exactly
     /// `MAX_STREAM_BODY_BYTES` is accepted, only `+1` is refused. The reject
     /// side alone let `>` silently tighten to `>=`.
     #[test]
@@ -2567,7 +2567,7 @@ mod tests {
         );
     }
 
-    /// Mutation kill (m4): the recovery copy is freed the moment a choice
+    /// The recovery copy is freed the moment a choice
     /// arrives, it does not merely stop growing.
     #[test]
     fn stream_assembler_frees_the_recovery_copy_when_a_choice_arrives() {
@@ -2589,7 +2589,7 @@ mod tests {
         assert_eq!(response.content(), "hi");
     }
 
-    /// Mutation kill (m6): after a choice `raw` is empty and never grows
+    /// After a choice `raw` is empty and never grows
     /// again, so the endless-line cap must be checked on `pending` itself.
     #[test]
     fn stream_assembler_rejects_an_overlong_line_after_a_choice() {
@@ -2631,7 +2631,7 @@ mod tests {
             )
             .unwrap();
         // Body bytes that arrive after a choice can never be read again: the
-        // `raw` recovery copy must not keep growing (F-05).
+        // `raw` recovery copy must not keep growing.
         let junk = vec![b'x'; 128 * 1024];
         assembler.push(&junk, &sink).unwrap();
         assert!(
@@ -2660,7 +2660,7 @@ mod tests {
         let err = error.expect("an endless line must be refused, not buffered forever");
         // Before any choice the `raw` cap can fire first, so either cap is
         // acceptable here; both must say `stream_too_large` rather than
-        // silently truncating (F-06/F-09).
+        // silently truncating.
         assert!(
             matches!(&err, ProviderError::InvalidResponse { message, .. }
                 if message.starts_with("stream_too_large")),
@@ -2668,7 +2668,7 @@ mod tests {
         );
     }
 
-    /// F-11/F-14: the fallback decision is structured. A refusal status must
+    /// The fallback decision is structured. A refusal status must
     /// name the stream parameter in a parsed field (OpenAI `param`, FastAPI
     /// `loc`, an allowlisted parameter-refusal code plus the field named in
     /// the message), or be one of the short exact known refusals.
@@ -2684,10 +2684,10 @@ mod tests {
             // Allowlisted parameter-refusal code + the field named in the message.
             r#"{"error":{"message":"unknown parameter: stream_options","code":"unknown_parameter"}}"#,
             r#"{"error":{"message":"unknown parameter: stream_options","type":"unsupported_parameter"}}"#,
-            // F-18: every allowlisted code is pinned; dropping this one loses
+            // Every allowlisted code is pinned; dropping this one loses
             // a real provider refusal silently.
             r#"{"error":{"message":"unsupported value for stream_options","code":"unsupported_parameter_value"}}"#,
-            // F-16: realistic refusals phrased without `param`/`loc` or an
+            // Realistic refusals phrased without `param`/`loc` or an
             // allowlisted code — a token-level mention of the field plus a
             // narrow parameter-refusal phrase (or a stream-capability
             // statement) is a signal.
@@ -2718,7 +2718,7 @@ mod tests {
             );
         }
 
-        // F-13(m3): prose words like `model`/`upstream` do not disable a
+        // Prose words like `model`/`upstream` do not disable a
         // structured signal.
         assert!(stream_unsupported(
             reqwest::StatusCode::BAD_REQUEST,
@@ -2726,7 +2726,7 @@ mod tests {
         ));
     }
 
-    /// F-11: prose is never a signal. `upstream` alone used to be enough to
+    /// Prose is never a signal. `upstream` alone used to be enough to
     /// re-send a genuine 400 through `complete()` (doubling the bill).
     #[test]
     fn genuine_errors_are_not_structured_stream_refusals() {
@@ -2918,7 +2918,7 @@ mod tests {
     }
 
     /// An earlier turn's tool call, the user's message, then a tool call the
-    /// engine wrote itself (no reasoning) and its result, as FOLLOWUP-READ-FIRST
+    /// engine wrote itself (no reasoning) and its result, as the engine
     /// sends them.
     fn pre_read_request() -> ChatRequest {
         let mut gate = tokenising_gate([7u8; 32]);
@@ -2941,7 +2941,7 @@ mod tests {
         ])
     }
 
-    /// FOLLOWUP-REASONING-400: a thinking-mode endpoint refuses this turn's tool
+    /// A thinking-mode endpoint refuses this turn's tool
     /// call without reasoning. It is re-sent once with `reasoning_content: ""`
     /// on that row only; the adapter then sends the field at once (the streamed
     /// call goes out filled).
@@ -3053,7 +3053,7 @@ mod tests {
         );
     }
 
-    /// P2 (security-review round 1): a provider that echoes the key in a 400 body
+    /// A provider that echoes the key in a 400 body
     /// must not have it copied into the error, its Display or its Debug.
     #[tokio::test]
     async fn a_key_echoed_in_an_error_body_is_redacted() {

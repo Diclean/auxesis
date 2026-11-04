@@ -318,6 +318,14 @@ api() {
     | curl "${args[@]}" "http://127.0.0.1:$PORT$path")" || HTTP_CODE="000"
 }
 
+# CHIEF-BASE-1: a fresh install has the chief alone; the owner creates a
+# domain agent from its template (POST /v1/agents {template}), as the app does.
+from_template() {
+  [ -d "$WORK/home/.auxesis/agents/$1" ] && return 0
+  api POST /v1/agents "{\"template\":\"$1\"}"
+  [ "$HTTP_CODE" = 201 ] || red "creating the $1 agent from its template returned HTTP $HTTP_CODE: $(head -c 300 "$WORK/resp.json")"
+}
+
 step_health() {
   STEP="health"
   api GET /v1/health
@@ -530,8 +538,9 @@ step_m4_setup() {
   # A demo-world client (aux-fakemail world.json): fictional, known to the contacts.
   printf 'BEGIN:VCARD\nVERSION:3.0\nFN:%s\nORG:Blueharbor\nEMAIL:%s\nTZ:America/New_York\nEND:VCARD\n' "$INVITEE" "$INVITEE_EMAIL" >"$WORK/invitee.vcf"
   sbx "$AUX" contacts import "$WORK/invitee.vcf" >"$WORK/import2.log" 2>&1 || red "aux contacts import failed: $(cat "$WORK/import2.log")"
-  # The seeded Calendar agent owns send-invite: its shipped grants, and the
-  # agent.md + skill the daemon installed at start (CAL-AGENT-INSTALL).
+  # The Calendar agent owns send-invite: made from its template, it gets its
+  # shipped grants, agent.md and skill (CAL-AGENT-INSTALL).
+  from_template calendar
   local agent_dir="$WORK/home/.auxesis/agents/calendar"
   [ -f "$agent_dir/agent.md" ] || red "auxd did not install the Calendar agent.md"
   cmp -s "$agent_dir/skills/send-invite.md" "$REPO_ROOT/crates/aux-runtime/src/skills/fixtures/skills/send-invite.md" \
@@ -712,6 +721,7 @@ PY
 step_m4_followup() {
   STEP="m4-followup"
   local agent_dir="$WORK/home/.auxesis/agents/mail" before i check
+  from_template mail
   cmp -s "$agent_dir/skills/follow-up.md" "$REPO_ROOT/crates/auxd/src/agents/mail/skills/follow-up.md" \
     || red "auxd did not install the shipped follow-up skill"
   before="$(outbox_count)"

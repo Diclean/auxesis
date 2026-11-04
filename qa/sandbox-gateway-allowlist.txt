@@ -13,7 +13,7 @@ crates/aux-google/src/tests.rs | fs::write( | test-only OAuth fake .env and gran
 crates/aux-google/src/tests.rs | fs::remove_file( | test-only symlink and FIFO refusal fixtures live in TempDir homes
 crates/aux-google/src/tests.rs | fs::hard_link( | test-only hard-link fixture verifies token refusal across two TempDir paths
 crates/aux-google/src/tests.rs | OpenOptions::new( | test-only malformed grant fixtures are written into TempDir homes with mode 0600
-crates/aux-engine/src/config.rs | OpenOptions::new( | temp files beside config.toml only: the rules writer's (caller-supplied path), and a new config.toml's, created 0600 with create_new in the same dir (the verified home's real path, or the caller's path-based load) before the no-replace link
+crates/aux-engine/src/config.rs | OpenOptions::new( | temp files beside config.toml: the rules writer's and its .bak's (caller-supplied path), and a new config.toml's, created 0600 with create_new in the same dir (the verified home's real path, or the caller's path-based load) before the no-replace link; and open_config's one read-only O_NOFOLLOW + O_CLOEXEC + O_NONBLOCK open of a caller-supplied config.toml (load_or_create, append_rule), checked by fstat on that fd (a regular file the euid owns; append_rule also reads a FIFO, for 30 s at most) and read from that fd, never reopened by path
 crates/aux-engine/src/config.rs | fs::remove_file( | drops the writer's own temp file beside config.toml: the rules writer's, and a new config.toml's once the no-replace link is made or refused
 crates/aux-engine/src/config.rs | fs::rename( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
 crates/aux-engine/src/config.rs | fs::create_dir_all( | parent of a missing config.toml before it is published: the verified home's real path (already there) or the caller's home for the path-based load; nothing else is created
@@ -39,7 +39,6 @@ crates/auxd/src/delegation/source_tests.rs | fs::write( | cfg(test) fake-home co
 crates/auxd/src/delegation/where_tests.rs | fs::create_dir_all( | cfg(test) fake-home fixture
 crates/auxd/src/delegation/where_tests.rs | fs::write( | cfg(test) fake-home fixture
 crates/auxd/src/lock.rs | OpenOptions::new( | flock instance lock; an OS primitive that must be path-based
-crates/aux-engine/src/config.rs | fs::copy( | legacy engine config backup (caller-supplied path); the daemon uses Config::load_or_create_verified
 
 # The home-level paths route through the verified
 # home gateway (workspace creation in the auxd hook, real home via

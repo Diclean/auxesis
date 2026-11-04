@@ -15,12 +15,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 roun
 root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$root"
 
-# Spawners: any Rust file under crates/ or kernel/ that names an Auxesis binary
+# Spawners: any Rust file under crates/ that names an Auxesis binary
 # (`CARGO_BIN_EXE_aux*`, `Command::new("aux*")`, `cargo_bin("aux*")`). grep exits
 # 1 on no match; anything above 1 is a scan error and fails the gate.
 spawn='CARGO_BIN_EXE_aux|Command::new\("aux[a-z-]*"\)|cargo_bin\("aux[a-z-]*"\)'
 dirs=(crates)
-[[ -d kernel ]] && dirs+=(kernel)
 status=0
 spawners="$(grep -rlE --include='*.rs' "$spawn" "${dirs[@]}")" || status=$?
 if (( status > 1 )); then

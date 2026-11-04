@@ -25,7 +25,6 @@ paths = [
 
     # The shared redaction canary corpus.
     '''^test-support/redaction_canaries\.rs$''',
-    '''^kernel/test-support/redaction_canaries\.rs$''',
 
     # auxd: API and activity unit tests, and their integration fixtures.
     '''^crates/auxd/src/agent_job\.rs$''',
@@ -49,22 +48,4 @@ paths = [
     '''^crates/aux-acp/src/scrub\.rs$''',
     '''^crates/aux-acp/src/supervisor\.rs$''',
     '''^crates/aux-acp/tests/acp_integration\.rs$''',
-
-    # kernel: scrub and secret-recognizer fixtures.
-    '''^kernel/crates/kernel-broker/src/scrub\.rs$''',
-    '''^kernel/crates/kernel-broker/src/text\.rs$''',
-    '''^kernel/crates/kernel-mcp/src/error\.rs$''',
-    '''^kernel/crates/kernel-mcp/tests/mcp_secrets\.rs$''',
-    '''^kernel/crates/kernel-privacy/src/recognizers/secrets\.rs$''',
-    '''^kernel/crates/kernel-privacy/tests/k10_sensitive\.rs$''',
-    '''^kernel/crates/kernel-privacy/tests/k12_secrets_every_mode\.rs$''',
-    '''^kernel/crates/kernel-privacy/tests/prefix_key_glue\.rs$''',
-    # Read verbatim as TOML/YAML text: a same-line marker would change the fixture.
-    '''^kernel/crates/kernel-privacy/tests/k10_gate_config\.rs$''',
-
-    # Labelled privacy-eval corpora (the held-out sets are not in the tree).
-    '''^kernel/qa/privacy-eval/cases/k10-sensitive\.jsonl$''',
-    '''^kernel/qa/privacy-eval/scripts/fixtures/sample-cases\.jsonl$''',
-    # JSONL cannot carry a comment; the value is a synthetic stripe token shape.
-    '''^kernel/qa/privacy-eval/tests/fixtures/tier-c-breakdown\.jsonl$''',
 ]

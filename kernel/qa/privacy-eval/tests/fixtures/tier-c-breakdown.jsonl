@@ -1,5 +1,0 @@
-{"id":"fixture-iban-fr","lang":"fr","text":"iban FAKEIBANZZ01","spans":[{"type":"IBAN","start":5,"end":17}]}
-{"id":"fixture-card-en","lang":"en","text":"card FAKECARDZZ01","spans":[{"type":"CREDIT_CARD","start":5,"end":17}]}
-{"id":"fixture-id-af","lang":"af","text":"id FAKEIDZZ01","spans":[{"type":"NATIONAL_ID","start":3,"end":13}]}
-{"id":"fixture-health-hu","lang":"hu","text":"health fakehealthword","spans":[{"type":"HEALTH","start":7,"end":21}]}
-{"id":"fixture-secret-sl","lang":"sl","text":"key sk_live_1234567890123456789012345678901234567890","spans":[{"type":"SECRET","start":4,"end":52}]}

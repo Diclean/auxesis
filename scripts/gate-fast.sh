@@ -72,17 +72,13 @@ harness_step() { # harness_step <name> <script>
 
 # Static keychain guard. check-no-keychain.sh runs the whole test suite under
 # a scratch HOME in CI (the Mac runner), so it stays a CI step too. Only the
-# default-deny backends (aux-cli vault, aux-providers key, the kernel's single
-# allowlisted spawner keychain.rs) and the kernel's own spawn-guard tests
-# (which only use a PATH shim or a spawn hook) may name the `security` binary.
+# default-deny backends (aux-cli vault, aux-providers key) may name the
+# `security` binary.
 check_keychain() {
     local hits
     local paths=(':(glob)crates/**/*.rs' ':(glob)crates/**/Cargo.toml')
-    if [[ -d kernel ]]; then
-        paths+=(':(glob)kernel/**/*.rs' ':(glob)kernel/**/Cargo.toml')
-    fi
     hits="$(git grep --untracked -nE '"security"|/usr/bin/security|(find|add|set|delete)-(generic|internet)-password|dump-keychain|list-keychains|unlock-keychain|SecItem[A-Za-z0-9_]*|SecKeychain[A-Za-z0-9_]*|security[-_]framework|Security\.framework' -- "${paths[@]}" \
-        | grep -vE '^(crates/(aux-cli/src/vault|aux-providers/src/key)\.rs|kernel/crates/kernel-core/src/keychain\.rs|kernel/crates/kernel-core/tests/keychain_(shim|single_spawn|spawn_hook)\.rs):' || true)"
+        | grep -vE '^(crates/(aux-cli/src/vault|aux-providers/src/key)\.rs):' || true)"
     if [[ -n "$hits" ]]; then
         echo "$hits" >&2
         echo "keychain: the security binary is called outside the default-deny backends (lines above)" >&2

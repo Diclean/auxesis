@@ -124,25 +124,22 @@ allow = ["PolyForm-Noncommercial-1.0.0"]
 crate = "auxd"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
-crate = "gliner2-rs"
+crate = "auxesis-gliner2"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
-crate = "kernel-broker"
+crate = "auxesis-kernel-broker"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
-crate = "kernel-core"
+crate = "auxesis-kernel-core"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
-crate = "kernel-mcp"
+crate = "auxesis-kernel-mcp"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
-crate = "kernel-net"
+crate = "auxesis-kernel-net"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 [[licenses.exceptions]]
-crate = "kernel-privacy"
-allow = ["PolyForm-Noncommercial-1.0.0"]
-[[licenses.exceptions]]
-crate = "privacy-eval"
+crate = "auxesis-kernel-privacy"
 allow = ["PolyForm-Noncommercial-1.0.0"]
 
 [licenses.private]
@@ -155,9 +152,10 @@ ignore = false
 multiple-versions = "warn"
 
 [sources]
-# crates.io only. The kernel (`kernel/`) and the invoices library
-# (`crates/aux-invoices`) are in-tree path dependencies, so no git source is
-# allowed. Nothing broader.
+# crates.io plus exactly one git repository: the public privacy kernel pinned
+# to tag v0.1.1. The invoices library (`crates/aux-invoices`) is an in-tree
+# path dependency. Nothing broader.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/Diclean/auxesis-privacy-kernel"]

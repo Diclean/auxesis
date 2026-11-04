@@ -1,5 +1,0 @@
-# PUB-2: the held-out sets live outside the tree, in $AUXESIS_EVAL_DIR (default
-# ~/.auxesis-eval/heldout/), at these paths relative to the kernel root. One line
-# per file: path, then the SHA-256 of the whole file. A changed pin needs the maintainer.
-qa/privacy-eval/heldout-2.jsonl 4dd3991327a558740042b292a8d2ac74d7bc3174f7c5c766cf88335d4fd04155
-qa/privacy-eval/heldout.txt b7169bc6d23e717cf7b8b58a75a6c3a97d09f610ff6f3861408b9f8fe2bcaa73

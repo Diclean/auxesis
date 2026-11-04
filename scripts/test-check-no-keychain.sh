@@ -70,7 +70,7 @@ output="$(PATH="$work/bin:$PATH" bash "$root/scripts/check-no-keychain.sh" --loc
   || fail "the run must pass when cargo passes: $output"
 
 calls="$work/calls"
-[[ "$(ls "$calls" | wc -l | tr -d ' ')" == 4 ]] || fail "expected four cargo runs (1 sandboxed, 3 unflagged), got $(ls "$calls" | wc -l | tr -d ' ')"
+[[ "$(ls "$calls" | wc -l | tr -d ' ')" == 3 ]] || fail "expected three cargo runs (1 sandboxed, 2 unflagged), got $(ls "$calls" | wc -l | tr -d ' ')"
 
 # Phase 1: sandboxed, the whole workspace.
 first="$calls/1"
@@ -81,18 +81,15 @@ grep -qx 'allow_keychain=unset' "$first" || fail "the sandboxed run must never s
 grep -q '^auxesis_home=/' "$first" || fail "the sandboxed run must set AUXESIS_HOME under the scratch HOME"
 grep -qx 'args=test --workspace --locked' "$first" || fail "the sandboxed run must test the whole workspace"
 
-# Phase 2: unflagged, targeted to the Keychain-backend crates (lib, then bins),
-# then the kernel keychain tests.
-for n in 2 3 4; do
+# Phase 2: unflagged, targeted to the Keychain-backend crates (lib, then bins).
+for n in 2 3; do
   assert_scratch_home "$calls/$n"
   assert_unflagged "$calls/$n"
 done
-grep -q '^args=test -p kernel-core -p aux-providers -p auxd --lib' "$calls/2" \
+grep -q '^args=test -p aux-providers -p auxd --lib' "$calls/2" \
   || fail "the unflagged run must target the Keychain-backend library crates"
 grep -q '^args=test -p aux-cli --bins' "$calls/3" \
   || fail "the unflagged run must target the aux-cli binary (vault) tests"
-grep -q '^args=test -p kernel-core --test keychain_shim' "$calls/4" \
-  || fail "the unflagged run must include the kernel keychain tests"
 
 # The control is skipped, and the script says so.
 grep -q 'NOTE: control skipped' <<<"$output" || fail "the skipped control must print a NOTE"
@@ -111,7 +108,7 @@ nx_env=(AUX_NEXTEST_BIN="$fake_nx" AUX_NEXTEST_SHA256="$fake_sha")
 rm -rf "$calls"
 env "${nx_env[@]}" PATH="$work/bin:$PATH" bash "$root/scripts/check-no-keychain.sh" --nextest --locked >/dev/null 2>&1 \
   || fail "the --nextest run must pass when cargo passes"
-[[ "$(ls "$calls" | wc -l | tr -d ' ')" == 5 ]] || fail "expected five runs with --nextest, got $(ls "$calls" | wc -l | tr -d ' ')"
+[[ "$(ls "$calls" | wc -l | tr -d ' ')" == 4 ]] || fail "expected four runs with --nextest, got $(ls "$calls" | wc -l | tr -d ' ')"
 grep -q '/nx/cargo-nextest$' "$work/nxbin" || fail "nextest must run from the private copy"
 grep -q "^nextest-bin=$work/" "$work/nxbin" && fail "nextest must not run from its install path"
 for n in 1 2; do
@@ -125,7 +122,7 @@ grep -Eqx 'args=nextest run --config-file /.*/nx/nextest.toml --profile ci --ign
   || fail "--nextest must run the whole workspace, checked config, ci profile, no default filter: $(grep args "$calls/1")"
 grep -q '^toolchain=[0-9a-z]' "$calls/1" || fail "nextest must run with the repo's RUSTUP_TOOLCHAIN"
 grep -qx 'args=test --doc --workspace --locked' "$calls/2" || fail "--nextest must run the workspace doctests"
-for n in 3 4 5; do
+for n in 3 4; do
   assert_scratch_home "$calls/$n"
   assert_unflagged "$calls/$n"
 done

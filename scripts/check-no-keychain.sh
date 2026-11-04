@@ -11,8 +11,8 @@
 #      owner's real Keychain.
 #   2. unflagged (no `AUXESIS_*` variable at all, `env -i`): the KC-01 repro.
 #      With no opt-in, the default-deny path must not spawn `security`. Targeted
-#      to the crates that own a Keychain backend (kernel-core, aux-providers,
-#      aux-cli, auxd), so CI does not start the daemon tests on the default port.
+#      to the crates that own a Keychain backend (aux-providers, aux-cli, auxd),
+#      so CI does not start the daemon tests on the default port.
 #   3. control: not run. `keychain_allowed()` only passes when HOME is the OS
 #      account's home, so the opt-in cannot reach the shim from a scratch HOME,
 #      and under the real HOME it would touch the owner's Keychain. A NOTE says so.
@@ -179,11 +179,9 @@ unflagged_env=(
     TERM=dumb
 )
 env -i "${unflagged_env[@]}" \
-    cargo test -p kernel-core -p aux-providers -p auxd --lib "$@"
+    cargo test -p aux-providers -p auxd --lib "$@"
 env -i "${unflagged_env[@]}" \
     cargo test -p aux-cli --bins "$@"
-env -i "${unflagged_env[@]}" \
-    cargo test -p kernel-core --test keychain_shim --test keychain_spawn_hook --test keychain_single_spawn "$@"
 check_marker "the unflagged Keychain-crate run"
 echo "OK: the unflagged Keychain-crate run did not spawn the security binary"
 

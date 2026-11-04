@@ -183,7 +183,8 @@ Tick these in review before a change is merged. The checker covers the mechanica
 
 ## Public datasets
 
-Two public synthetic PII datasets are measured by `kernel/crates/kernel-privacy/examples/public_eval.rs`
+Two public synthetic PII datasets are measured by
+[`public_eval.rs`](https://github.com/Diclean/auxesis-privacy-kernel/blob/v0.1.1/crates/kernel-privacy/examples/public_eval.rs)
 together with `qa/privacy-eval/scripts/fetch-public-sample.py`. The sample is fetched into a
 directory **outside** the repo (never committed).
 
@@ -228,7 +229,9 @@ How to run:
   now and needs the same review.
 - zh passports use the Chinese layouts (E + 8, EA + 7, G + 8), with at least four zeros. Only the
   zh rules use them; other languages keep the QXZ series.
-- The golden gate in `kernel/crates/kernel-privacy/tests/golden.rs` includes the zh files. The one
+- The golden gate in
+  [`golden.rs`](https://github.com/Diclean/auxesis-privacy-kernel/blob/v0.1.1/crates/kernel-privacy/tests/golden.rs)
+  includes the zh files. The one
   gap is the 18-character zh national IDs (resident ID and USCC): the registry has no recogniser
   for them until the Chinese recogniser pack lands. Those spans are skipped by shape, and
   no other span is.

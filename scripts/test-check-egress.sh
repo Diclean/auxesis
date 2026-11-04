@@ -6,10 +6,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
-# A second throwaway tree, deliberately NOT inside the git repository in $work, for
-# the fail-closed cases: a copy of kernel/ that cannot be scanned must not pass.
-nogit="$(mktemp -d)"
-trap 'rm -rf "$work" "$nogit"' EXIT
+trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$work/scripts" "$work/docs" "$work/crates/demo/src"
 cp "$root/scripts/check-egress.sh" "$work/scripts/check-egress.sh"
@@ -41,19 +38,6 @@ git -C "$work" add -A
 run_check() {
     (cd "$work" && bash "$work/scripts/check-egress.sh")
 }
-
-# The app repo vendors the kernel, so a present kernel directory must retain
-# its own egress gate. A standalone copy with no kernel directory is allowed.
-mkdir -p "$work/kernel"
-if run_check >"$work/missing-kernel-script.log" 2>&1; then
-    echo "test-check-egress: FAIL — kernel/ without its egress script passed" >&2
-    exit 1
-fi
-if ! grep -qF 'kernel/ exists but kernel/scripts/check-egress.sh is missing' "$work/missing-kernel-script.log"; then
-    echo "test-check-egress: FAIL — missing kernel egress script had no clear error" >&2
-    exit 1
-fi
-rmdir "$work/kernel"
 
 # 1. The one allowlisted reqwest constructor passes.
 run_check >/dev/null 2>&1 || {
@@ -233,75 +217,4 @@ if run_check >/dev/null 2>&1; then
 fi
 allow_raw "crates/demo/src/split_dial.rs::split_dial"
 
-# 13. The kernel check fails CLOSED outside a git work tree. A copy of kernel/
-# that cannot be scanned once printed "OK — 0 client constructor(s)" and exited 0,
-# so a planted client passed the gate for free. It must be an error now.
-mkdir -p "$nogit/scripts" "$nogit/docs" "$nogit/crates/demo/src"
-cp "$root/kernel/scripts/check-egress.sh" "$nogit/scripts/check-egress.sh"
-# The allowlist deliberately does not name `build`, so the planted client below
-# is unlisted whenever the scan really happens.
-cat >"$nogit/docs/egress.md" <<'DOC'
-<!-- egress-allowlist:start -->
-crates/demo/src/other.rs::nothing_here
-<!-- egress-allowlist:end -->
-DOC
-cat >"$nogit/crates/demo/src/lib.rs" <<'RS'
-fn build() -> reqwest::Client {
-    reqwest::Client::new()
-}
-RS
-
-if (cd "$nogit" && bash "$nogit/scripts/check-egress.sh") >"$nogit/nogit.log" 2>&1; then
-    echo "test-check-egress: FAIL — a non-git copy passed the kernel egress check" >&2
-    exit 1
-fi
-if ! grep -qF 'is not a git work tree' "$nogit/nogit.log"; then
-    echo "test-check-egress: FAIL — a non-git copy had no clear error" >&2
-    sed -n '1,5p' "$nogit/nogit.log" >&2
-    exit 1
-fi
-
-# 14. The same copy, as a git repository, reports the planted client — so the
-# case above fails on the missing work tree, not on a broken fixture — and passes
-# once the function is listed.
-git -C "$nogit" init -q
-git -C "$nogit" add -A
-if (cd "$nogit" && bash "$nogit/scripts/check-egress.sh") >"$nogit/git-unlisted.log" 2>&1; then
-    echo "test-check-egress: FAIL — a planted kernel client passed once git was present" >&2
-    exit 1
-fi
-if ! grep -qF 'unlisted reqwest client' "$nogit/git-unlisted.log"; then
-    echo "test-check-egress: FAIL — the planted kernel client was not reported" >&2
-    sed -n '1,5p' "$nogit/git-unlisted.log" >&2
-    exit 1
-fi
-cat >"$nogit/docs/egress.md" <<'DOC'
-<!-- egress-allowlist:start -->
-crates/demo/src/lib.rs::build
-<!-- egress-allowlist:end -->
-DOC
-git -C "$nogit" add -A
-(cd "$nogit" && bash "$nogit/scripts/check-egress.sh") >/dev/null 2>&1 || {
-    echo "test-check-egress: FAIL — the listed kernel constructor was refused" >&2
-    exit 1
-}
-
-# 15. A scannable repository with no client at all is also a failure: an empty
-# file list is a broken scan, not a clean tree.
-empty="$nogit/empty"
-mkdir -p "$empty/scripts" "$empty/docs" "$empty/crates/demo/src"
-cp "$root/kernel/scripts/check-egress.sh" "$empty/scripts/check-egress.sh"
-cp "$nogit/docs/egress.md" "$empty/docs/egress.md"
-echo 'pub fn no_clients() -> u8 { 7 }' >"$empty/crates/demo/src/lib.rs"
-git -C "$empty" init -q
-git -C "$empty" add -A
-if (cd "$empty" && bash "$empty/scripts/check-egress.sh") >"$empty/empty.log" 2>&1; then
-    echo "test-check-egress: FAIL — an empty file list passed as a clean scan" >&2
-    exit 1
-fi
-if ! grep -qF 'no client constructor found' "$empty/empty.log"; then
-    echo "test-check-egress: FAIL — an empty scan had no clear error" >&2
-    exit 1
-fi
-
-echo "test-check-egress: OK — per-constructor allowlists flag new reqwest and raw clients, the cfg(test)/stem exemptions are tight, every raw spelling is caught, and the kernel check fails closed when it cannot scan."
+echo "test-check-egress: OK — per-constructor allowlists flag new reqwest and raw clients, the cfg(test)/stem exemptions are tight, and every raw spelling is caught."

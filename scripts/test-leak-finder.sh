@@ -41,7 +41,7 @@ case "\$*" in
   *worktree*)
     prev=""
     for a in "\$@"; do
-      if [ "\$prev" = "--detach" ]; then mkdir -p "\$a/kernel/qa/privacy-eval"; fi
+      if [ "\$prev" = "--detach" ]; then mkdir -p "\$a/qa/privacy-eval"; fi
       prev="\$a"
     done
     exit 0 ;;
@@ -68,7 +68,7 @@ chmod +x "$tmp/bin/ssh"
 # machine's setting.
 run_finder_stubbed() {
   set +e
-  out="$(env -i PATH="$tmp/bin:$PATH" HOME="$tmp/home" LEAK_FINDER_OUT_DIR="$tmp/out" AUX_OPS_DIR="${STUB_OPS_DIR:-}" "$finder" "$@" 2>&1)"
+  out="$(env -i PATH="$tmp/bin:$PATH" HOME="$tmp/home" LEAK_FINDER_OUT_DIR="$tmp/out" KERNEL_REPO="$tmp/kernel" AUX_OPS_DIR="${STUB_OPS_DIR:-}" "$finder" "$@" 2>&1)"
   rc=$?
   set -e
 }
@@ -111,10 +111,10 @@ if [[ "$rc" -eq 2 ]]; then ok "--cases abc exits 2"; else bad "--cases abc exits
 
 # 8. None of the cases above wrote a report or a worktree.
 if [[ ! -e "$tmp/out" ]]; then ok "no report directory created"; else bad "no report directory created"; fi
-if [[ ! -e "$root/kernel/qa/privacy-eval/leak-finder.override" ]]; then
-  ok "no override file in the checkout"
+if [[ ! -e "$tmp/kernel/qa/privacy-eval/leak-finder.override" ]]; then
+  ok "no override file in the kernel checkout"
 else
-  bad "no override file in the checkout"
+  bad "no override file in the kernel checkout"
 fi
 
 # 9. Without a build host the script fails closed: no host in the

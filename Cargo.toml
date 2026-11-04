@@ -28,7 +28,7 @@ description = "Auxesis — your own always-on agents, in Rust."
 
 [workspace.dependencies]
 # The kernel, a separate public repository. The five crates are pinned to one
-# tag and always move together: v0.1.3 is commit TBD (main). Bump one
+# tag and always move together: v0.1.3 is commit 1c7f43c (main). Bump one
 # kernel release at a time; this repository does not vendor the source.
 kernel-core = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.3", package = "auxesis-kernel-core" }
 kernel-privacy = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.3", package = "auxesis-kernel-privacy" }

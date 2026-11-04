@@ -82,7 +82,7 @@ appears without a line there.
 The kernel is also a separate Rust project:
 [`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel).
 Its crates are a git dependency of this app, pinned to tag `v0.1.3` (commit
-`TBD`); the source is not vendored here.
+`1c7f43c`); the source is not vendored here.
 
 The kernel forbids `unsafe` code in the crates that opt into that ban. Cargo
 does not apply a dependency's lints to a git dependency, so the ban is enforced

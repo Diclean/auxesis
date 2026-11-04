@@ -273,6 +273,11 @@ pub fn template(id: &str) -> Option<AgentDef> {
 
 /// Load the seed: `agents.toml` when present (strict), else the built-in five.
 pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
+    seed_for(home, chief_id(home))
+}
+
+/// [`seed`] for a chief already read from the config.
+fn seed_for(home: &Path, chief: &'static str) -> Result<Vec<AgentDef>, RegistryError> {
     let path = seed_path(home);
     let text = match read_private(home, Path::new("agents.toml")) {
         Ok(Some(text)) => text,
@@ -281,7 +286,7 @@ pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
             // An older install keeps its chief, `aux`, and its four domain
             // agents exactly as before. Elsewhere a domain agent exists once
             // it was created from its template (or an older daemon made it).
-            let legacy = chief_id(home) == LEGACY_CHIEF;
+            let legacy = chief == LEGACY_CHIEF;
             if legacy {
                 agents[0].id = LEGACY_CHIEF.to_string();
                 agents[0].grants = aux_runtime::grants::default_grants(LEGACY_CHIEF)
@@ -329,21 +334,61 @@ pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
 /// No agent ever holds more than the chief: one that would (a template agent
 /// whose directory was made by hand, with the chief lowered) is capped.
 pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
-    let mut agents = seed(home)?;
+    let chief = chief_id(home);
+    let mut agents = seed_for(home, chief)?;
     for agent in &mut agents {
         if let Some(grants) = read_agent_grants(home, &agent.id)? {
             agent.grants = grants;
         }
     }
-    let chief = chief_grants(&agents);
+    // Each ceiling as listed, before any cap. `main` is never capped here:
+    // its grants are the cap the other agents keep (on an older install, the
+    // four domain agents too); the run-time ceiling still holds it under the
+    // chief `aux` there.
+    let caps: Vec<(&str, AgentGrants)> = [CHIEF_AGENT, chief]
+        .into_iter()
+        .map(|id| (id, ceiling_grants(&agents, id)))
+        .collect();
     for agent in &mut agents {
-        if agent.id == CHIEF_AGENT || agent.id == LEGACY_CHIEF || subset(&agent.grants, &chief) {
+        if agent.id == CHIEF_AGENT {
+            continue;
+        }
+        let over: Vec<&AgentGrants> = ceilings_for(chief, &agent.id)
+            .into_iter()
+            .filter_map(|id| caps.iter().find(|(cap, _)| *cap == id))
+            .map(|(_, grants)| grants)
+            .collect();
+        if over.iter().all(|cap| subset(&agent.grants, cap)) {
             continue;
         }
         tracing::warn!(agent = %agent.id, "agent grants capped at the chief");
-        agent.grants = clamp(&agent.grants, &chief);
+        agent.grants = clamp_all(&agent.grants, &over);
     }
     Ok(agents)
+}
+
+/// `grants` capped at each ceiling in turn. If that still exceeds one of
+/// them, only their `never`s remain.
+fn clamp_all(grants: &AgentGrants, caps: &[&AgentGrants]) -> AgentGrants {
+    let mut out = grants.clone();
+    for cap in caps {
+        out = clamp(&out, cap);
+    }
+    if caps.iter().all(|cap| subset(&out, cap)) {
+        return out;
+    }
+    let mut never: Vec<String> = Vec::new();
+    for denied in caps.iter().flat_map(|cap| &cap.never) {
+        if !never.contains(denied) {
+            never.push(denied.clone());
+        }
+    }
+    AgentGrants {
+        see: Vec::new(),
+        can_do: Vec::new(),
+        never,
+        egress_note: grants.egress_note.clone(),
+    }
 }
 
 /// `grants` capped at `chief`: each level at most the chief's, each chief
@@ -429,15 +474,45 @@ pub fn chief_id(home: &Path) -> &'static str {
     }
 }
 
-/// The ceiling every added agent stays under: the `main` chief's grants, or
-/// its shipped grants when this home does not list it (an older install).
-pub fn chief_grants(agents: &[AgentDef]) -> AgentGrants {
+/// The agents whose grants, tools lists and owner rules cap `agent`; none
+/// for the chief itself.
+///
+/// Every other agent stays under `main`, the shipped ceiling, as before. On
+/// an older install the chief is `aux`, so an added agent stays under `aux`
+/// too: it never gets a tool its actual chief lacks. The four domain agents
+/// `aux` hands work to keep their shipped access there.
+pub fn ceilings(home: &Path, agent: &str) -> Vec<&'static str> {
+    ceilings_for(chief_id(home), agent)
+}
+
+/// [`ceilings`] for a chief already read from the config.
+fn ceilings_for(chief: &'static str, agent: &str) -> Vec<&'static str> {
+    let mut ids = Vec::new();
+    if agent == chief {
+        return ids;
+    }
+    if agent != CHIEF_AGENT {
+        ids.push(CHIEF_AGENT);
+    }
+    if chief != CHIEF_AGENT && !DOMAIN_AGENTS.contains(&agent) {
+        ids.push(chief);
+    }
+    ids
+}
+
+/// The grants of one ceiling: its entry in `agents`, or its shipped grants
+/// when this home does not list it. An id with neither has no scoped access.
+pub fn ceiling_grants(agents: &[AgentDef], id: &str) -> AgentGrants {
     agents
         .iter()
-        .find(|agent| agent.id == CHIEF_AGENT)
+        .find(|agent| agent.id == id)
         .map(|agent| agent.grants.clone())
-        .unwrap_or_else(|| {
-            aux_runtime::grants::default_grants(CHIEF_AGENT).expect("the chief has grants")
+        .or_else(|| aux_runtime::grants::default_grants(id))
+        .unwrap_or_else(|| AgentGrants {
+            see: Vec::new(),
+            can_do: Vec::new(),
+            never: Vec::new(),
+            egress_note: String::new(),
         })
 }
 
@@ -766,9 +841,17 @@ pub fn validate_grants(home: &Path, id: &str, proposed: &AgentGrants) -> Result<
         {
             return Err(RegistryError::ExceedsChief);
         }
-        return Ok(());
     }
-    if !subset(proposed, &chief_grants(&agents)) {
+    let chief = chief_id(home);
+    let mut caps = ceilings_for(chief, id);
+    // The chief of an older install stays under `main`'s grants, as before.
+    if id == chief && id != CHIEF_AGENT {
+        caps.push(CHIEF_AGENT);
+    }
+    if caps
+        .into_iter()
+        .any(|cap| !subset(proposed, &ceiling_grants(&agents, cap)))
+    {
         return Err(RegistryError::ExceedsChief);
     }
     Ok(())
@@ -1537,7 +1620,7 @@ mod tests {
             std::fs::create_dir_all(home.join("agents").join(id)).unwrap();
         }
         let agents = registry(home).unwrap();
-        let chief = chief_grants(&agents);
+        let chief = ceiling_grants(&agents, CHIEF_AGENT);
         for id in DOMAIN_AGENTS {
             let agent = agents.iter().find(|a| a.id == id).expect("listed");
             assert!(subset(&agent.grants, &chief), "{id}");
@@ -1564,6 +1647,85 @@ mod tests {
         narrow.can_do.retain(|g| g.skill != "mail.read");
         let refused = write_grants(home, CHIEF_AGENT, &narrow);
         assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+    }
+
+    /// An older install's chief is `aux`: an added agent (and `main`, which
+    /// is not the chief there) stays under it as well as under `main`; the
+    /// four domain agents `aux` hands work to keep `main`'s cap only. A
+    /// `main` home is as before.
+    #[test]
+    fn every_agent_stays_under_the_chief_this_home_runs() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
+        assert!(ceilings(home, LEGACY_CHIEF).is_empty());
+        assert_eq!(ceilings(home, "scout"), [CHIEF_AGENT, LEGACY_CHIEF]);
+        assert_eq!(ceilings(home, CHIEF_AGENT), [LEGACY_CHIEF]);
+        for id in DOMAIN_AGENTS {
+            assert_eq!(ceilings(home, id), [CHIEF_AGENT], "{id}");
+        }
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        assert!(ceilings(home, CHIEF_AGENT).is_empty());
+        assert_eq!(ceilings(home, "scout"), [CHIEF_AGENT]);
+        assert_eq!(ceilings(home, LEGACY_CHIEF), [CHIEF_AGENT]);
+        for id in DOMAIN_AGENTS {
+            assert_eq!(ceilings(home, id), [CHIEF_AGENT], "{id}");
+        }
+    }
+
+    /// On an older install a child listed in `agents.toml` never holds a
+    /// tool the chief `aux` lacks: its grants are capped and a wider set is
+    /// refused. Mail keeps reading mail, and a `main` home is as before.
+    #[test]
+    fn a_child_of_the_legacy_chief_never_holds_mail() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let seed = r#"
+[[agents]]
+id = "aux"
+name = "Aux"
+role = "chief"
+glyph = "aux"
+
+[[agents]]
+id = "mail"
+name = "Mail"
+role = "domain"
+glyph = "envelope"
+
+[[agents.grants.do]]
+skill = "mail.read"
+level = "auto"
+
+[[agents]]
+id = "scout"
+name = "Scout"
+role = "domain"
+glyph = "scout"
+
+[[agents.grants.do]]
+skill = "mail.read"
+level = "auto"
+"#;
+        std::fs::write(seed_path(home), seed).unwrap();
+        let reader = grants(home, "mail").unwrap();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
+        assert!(grants(home, LEGACY_CHIEF)
+            .unwrap()
+            .check_tool(LEGACY_CHIEF, "mail_read")
+            .is_err());
+        let scout = grants(home, "scout").unwrap();
+        assert!(scout.check_tool("scout", "mail_read").is_err());
+        let refused = validate_grants(home, "scout", &reader);
+        assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+        let mail = grants(home, "mail").unwrap();
+        assert!(mail.check_tool("mail", "mail_read").is_ok());
+        assert!(validate_grants(home, "mail", &reader).is_ok());
+
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let scout = grants(home, "scout").unwrap();
+        assert!(scout.check_tool("scout", "mail_read").is_ok());
+        assert!(validate_grants(home, "scout", &reader).is_ok());
     }
 
     fn calendar_file(home: &Path, file: &str) -> Option<Vec<u8>> {

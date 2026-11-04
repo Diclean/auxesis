@@ -120,7 +120,8 @@ impl Rig {
         std::fs::write(
             config_path(&home),
             format!(
-                "version = 1\n\n[privacy]\nmode = \"{mode}\"\n\n[ui]\nlanguage = \"en\"\n\n\
+                "version = 1\ndefault_agent = \"main\"\n\n[privacy]\nmode = \"{mode}\"\n\n\
+                 [ui]\nlanguage = \"en\"\n\n\
                  [connectors.mail]\n\n[[connectors.mail.accounts]]\nid = \"mailsim\"\n\
                  email = \"owner@mailsim.test\"\n\n[connectors.mail.accounts.imap]\n\
                  host = \"127.0.0.1\"\nport = {port}\nsecurity = \"tls\"\nca_file = \"{}\"\n\n\

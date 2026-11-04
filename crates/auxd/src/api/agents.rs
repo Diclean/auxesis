@@ -188,8 +188,6 @@ pub struct ControlJson {
 // handlers
 // ---------------------------------------------------------------------------
 
-/// `POST /v1/agents`.
-#[allow(clippy::result_large_err)]
 /// `GET /v1/agent-templates`: the starter agents the owner can create, with
 /// the grants each would get and whether it already exists.
 pub async fn templates(State(state): State<Arc<ApiState>>) -> Response {
@@ -217,6 +215,7 @@ pub async fn templates(State(state): State<Arc<ApiState>>) -> Response {
     }
 }
 
+/// `POST /v1/agents`.
 #[allow(clippy::result_large_err)]
 pub async fn create(
     State(state): State<Arc<ApiState>>,
@@ -756,40 +755,40 @@ fn validate_selection(
 
 /// CHIEF-BASE-1: a tools list names only tools the chief may use (its
 /// grants, its own tools list, its config deny rules). The run-time ceiling
-/// enforces the same every turn; this refuses early with a clear error.
+/// enforces the same every turn; this refuses early with a clear error. The
+/// chief is the one this home runs: on an older install an added agent stays
+/// under `aux` as well as under `main` ([`crate::agents::ceilings`]).
 #[allow(clippy::result_large_err)]
 fn validate_tool_ceiling(home: &Path, id: &str, config: &AgentConfig) -> Result<(), Response> {
-    use aux_runtime::grants::CHIEF_AGENT;
-    let chief_like = id == CHIEF_AGENT || id == crate::agents::chief_id(home);
-    let Some(tools) = config.tools.as_ref().filter(|_| !chief_like) else {
+    let caps = crate::agents::ceilings(home, id);
+    let Some(tools) = config.tools.as_ref().filter(|_| !caps.is_empty()) else {
         return Ok(());
     };
     let agents = crate::agents::registry(home).map_err(|_| internal_error())?;
-    let chief = crate::agents::chief_grants(&agents);
-    let chief_tools = agent::config(home, CHIEF_AGENT)
-        .map_err(|_| internal_error())?
-        .tools;
     let path = config_path(home);
     let rules = if path.exists() {
         aux_engine::config::load_rules(&path).map_err(|_| internal_error())?
     } else {
         Vec::new()
     };
-    let chief_rules: Vec<_> = rules
-        .into_iter()
-        .filter(|r| r.agent == CHIEF_AGENT)
-        .collect();
-    let refused = tools.iter().any(|tool| {
-        let denied = kernel_broker::matching_rule(&chief_rules, CHIEF_AGENT, tool, false)
-            .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
-        denied
-            || chief.check_tool(CHIEF_AGENT, tool).is_err()
-            || chief_tools
-                .as_ref()
-                .is_some_and(|list| !list.contains(tool))
-    });
-    if refused {
-        return Err(crate::agents::exceeds_chief());
+    for cap in caps {
+        let chief = crate::agents::ceiling_grants(&agents, cap);
+        let chief_tools = agent::config(home, cap)
+            .map_err(|_| internal_error())?
+            .tools;
+        let chief_rules: Vec<_> = rules.iter().filter(|r| r.agent == cap).cloned().collect();
+        let refused = tools.iter().any(|tool| {
+            let denied = kernel_broker::matching_rule(&chief_rules, cap, tool, false)
+                .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
+            denied
+                || chief.check_tool(cap, tool).is_err()
+                || chief_tools
+                    .as_ref()
+                    .is_some_and(|list| !list.contains(tool))
+        });
+        if refused {
+            return Err(crate::agents::exceeds_chief());
+        }
     }
     Ok(())
 }
@@ -1211,6 +1210,29 @@ kind = "openai-compat"
         assert_eq!(config.provider.as_deref(), Some("deepseek"));
         let events = aux_store::Store::open(&db).unwrap();
         assert_eq!(events.event_count("agent.created").unwrap(), 1);
+    }
+
+    /// On an older install the chief is `aux`, which may not read mail: a
+    /// tools list naming `mail_read` is refused when an agent is created or
+    /// changed, for an added agent and for `main` (not the chief there). Mail,
+    /// which `aux` hands work to, keeps it; a `main` home is as before.
+    #[test]
+    fn a_tools_list_is_held_to_the_chief_this_home_runs() {
+        let reader = AgentConfig {
+            tools: Some(vec!["mail_read".to_string()]),
+            ..AgentConfig::default()
+        };
+        let dir = home_with_config("version = 1\ndefault_agent = \"aux\"\n");
+        let home = dir.path();
+        for id in ["scout", "main"] {
+            let refused = validate_tool_ceiling(home, id, &reader).unwrap_err();
+            assert_eq!(refused.status(), StatusCode::CONFLICT, "{id}");
+        }
+        assert!(validate_tool_ceiling(home, "aux", &reader).is_ok());
+        assert!(validate_tool_ceiling(home, "mail", &reader).is_ok());
+
+        let dir = home_with_config("version = 1\ndefault_agent = \"main\"\n");
+        assert!(validate_tool_ceiling(dir.path(), "scout", &reader).is_ok());
     }
 
     #[test]

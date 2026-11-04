@@ -1580,7 +1580,7 @@ mod tests {
         assert!(gone, "terminal kill must reap the whole tree");
     }
 
-    // ---- security-review 1 regressions ----
+    // ---- security regressions ----
 
     /// The adversary: while the owner is deciding, swap the approved path for
     /// a symlink (final-component or parent-directory) pointing outside the
@@ -2005,7 +2005,7 @@ mod tests {
         (workspace, root, handlers)
     }
 
-    /// Security-review round 3, P1: a read-only ACP brain may not run a terminal,
+    /// A read-only ACP brain may not run a terminal,
     /// whatever the skill declares.
     #[tokio::test]
     async fn read_only_refuses_terminal_create_and_writes_no_marker() {
@@ -2027,7 +2027,7 @@ mod tests {
         assert!(!marker.exists(), "the terminal must not have run");
     }
 
-    /// Security-review round 3, P1: a read-only ACP brain may not write a file.
+    /// A read-only ACP brain may not write a file.
     #[tokio::test]
     async fn read_only_refuses_fs_write_text_file() {
         let (_dir, root, handlers) = read_only_handlers();

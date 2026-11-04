@@ -1056,7 +1056,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unrelated_process_in_the_workspace_survives_the_reap() {
-        // Round-2 security review P2: a cwd-based sweep kills collateral owner
+        // A cwd-based sweep kills collateral owner
         // processes; the env marker replaces it and must never touch them.
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().canonicalize().unwrap();

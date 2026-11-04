@@ -465,7 +465,7 @@ async fn one_approval_resolves_everywhere_and_later_can_be_undone() {
     assert_eq!(updated["state"]["state"], "deferred");
 
     // `later` is a fail-closed no: the turn ends on it. Wait for that end
-    // before the undo, or the turn's own clean-up (P2-1) can retire the
+    // before the undo, or the turn's own clean-up can retire the
     // re-opened id between the undo and the next step.
     let sent = tokio::time::timeout(Duration::from_secs(10), send)
         .await
@@ -542,7 +542,7 @@ async fn stop_all_is_visible_through_get_stop() {
 }
 
 // ---------------------------------------------------------------------------
-// security-review round 1: the six findings each get a regression test.
+// Security regressions: each finding gets a regression test.
 // ---------------------------------------------------------------------------
 
 /// A configurable test tool: flags when it ran (and when it started/completed),
@@ -978,7 +978,7 @@ async fn a_grants_change_requires_its_own_approved_approval() {
     t.stop();
 }
 
-/// #P2 (round 2): a connector tool that does not name a known scope is denied
+/// A connector tool that does not name a known scope is denied
 /// because it is not a builtin, whatever its name looks like.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_connector_tool_with_an_unknown_name_is_refused() {
@@ -1018,7 +1018,7 @@ async fn a_connector_tool_with_an_unknown_name_is_refused() {
     t.stop();
 }
 
-/// #P2 (round 2): a hyphenated `google-export` is not matched by the `google_`
+/// A hyphenated `google-export` is not matched by the `google_`
 /// prefix, so the registered origin must deny it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_connector_tool_named_google_export_is_refused() {
@@ -1056,7 +1056,7 @@ async fn a_connector_tool_named_google_export_is_refused() {
     t.stop();
 }
 
-/// #P2 (round 2): a builtin tool is untouched by the origin check.
+/// A builtin tool is untouched by the origin check.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_builtin_tool_still_runs() {
     let provider = Arc::new(FakeProvider::scripted(
@@ -1085,7 +1085,7 @@ async fn a_builtin_tool_still_runs() {
     t.stop();
 }
 
-/// #P2 (round 3): an `Unknown`-origin tool is refused for Mail even when its
+/// An `Unknown`-origin tool is refused for Mail even when its
 /// name resolves to the granted `mail` scope.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unknown_origin_tool_named_mail_read_is_refused_for_mail() {
@@ -1127,7 +1127,7 @@ async fn an_unknown_origin_tool_named_mail_read_is_refused_for_mail() {
     t.stop();
 }
 
-/// #P2 (round 4): an Unknown-origin tool is denied for the chief too, even
+/// An Unknown-origin tool is denied for the chief too, even
 /// when the chief holds the matching Auto grant; the builtin `delegate` keeps
 /// working (the hero test above).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1180,7 +1180,7 @@ async fn an_unknown_origin_tool_is_refused_for_the_chief_even_with_a_grant() {
     t.stop();
 }
 
-/// #P2 (round 5): a hook tool named `delegate` does not stale the builtin
+/// A hook tool named `delegate` does not stale the builtin
 /// origin. The builtin `DelegateTool` replaces it and must take the Builtin
 /// origin, so the chief can still delegate.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

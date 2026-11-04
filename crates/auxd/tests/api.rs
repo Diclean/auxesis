@@ -339,7 +339,7 @@ async fn every_route_rejects_a_missing_or_wrong_token() {
 async fn host_and_origin_validation_blocks_dns_rebinding() {
     let mut t = TestApi::start().await;
 
-    // F-17/C P3-2: a rebinding page presents its own Host.
+    // A rebinding page presents its own Host.
     for host in ["evil.example", "localhost.evil.com", "127.0.0.1.nip.io"] {
         let response = call_with_headers(&t, "GET", "/v1/health", &[("Host", host)]).await;
         assert_error(&response, 403, "forbidden_host");
@@ -349,7 +349,7 @@ async fn host_and_origin_validation_blocks_dns_rebinding() {
         let response = call_with_headers(&t, "GET", "/v1/health", &[("Origin", origin)]).await;
         assert_error(&response, 403, "forbidden_origin");
     }
-    // Round-1 P3-9: a duplicated Host/Origin is refused outright — the first
+    // A duplicated Host/Origin is refused outright — the first
     // value must not launder the last for whatever reads it next.
     for headers in [
         [("Host", "127.0.0.1"), ("Host", "evil.example")],
@@ -680,8 +680,8 @@ async fn message_pages_are_capped_and_cursor_bounded() {
 }
 
 /// Private mode with no contacts: names are not checked, but the turn runs
-/// with its pattern values tokenised (owner, 2026-10-14: the filter tokenises,
-/// it never blocks). The store keeps the rows (G1) but no title.
+/// with its pattern values tokenised (the filter tokenises,
+/// it never blocks). The store keeps the rows but no title.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn private_mode_without_contacts_answers_and_stores_no_title() {
     let mut t = TestApi::start_with(|home| {
@@ -696,7 +696,7 @@ async fn private_mode_without_contacts_answers_and_stores_no_title() {
     let response = post_auth(&t, "/v1/threads/main/messages", r#"{"content":"ping"}"#).await;
     assert_eq!(response.status, 200, "body: {}", response.body);
 
-    // A private turn stores its rows (G1, PRIVATE-TRANSCRIPT) but no title.
+    // A private turn stores its rows but no title.
     for session in t.store().list_sessions().unwrap() {
         assert!(session.title.is_none(), "{session:?}");
         let roles: Vec<String> = t
@@ -711,7 +711,7 @@ async fn private_mode_without_contacts_answers_and_stores_no_title() {
     t.stop();
 }
 
-/// CONV-SIDEBAR-1: a Private-mode Aux chat persists as a `chat` row (G1) but
+/// A Private-mode Aux chat persists as a `chat` row but
 /// must never be listed, and its fallback title must not leak either.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn conversations_never_list_a_private_aux_chat() {
@@ -778,7 +778,7 @@ async fn aux_turn(t: &TestApi, content: &str) -> i64 {
 }
 
 /// A chat that ran in Private mode: the gated row the provider saw, the token
-/// table that resolves it, and the sticky mark (CONV-PRIVATE-MIX).
+/// table that resolves it, and the sticky mark.
 fn private_chat(home: &Path) -> i64 {
     let store = Store::open(&store_path(home)).unwrap();
     let session = store.create_session("aux", Some("Atlas planning")).unwrap();
@@ -798,7 +798,7 @@ fn private_chat(home: &Path) -> i64 {
     session.id
 }
 
-/// CONV-PRIVATE-MIX: the agent's CURRENT session is exempt from the Private
+/// The agent's CURRENT session is exempt from the Private
 /// filter for the transcript read, so a live Private chat survives the app's
 /// reload on launch. Once the owner starts a new chat, the old Private one
 /// is no longer current: it is gone from the transcript read and refused by
@@ -839,7 +839,7 @@ async fn a_live_private_chat_survives_a_reload() {
     t.stop();
 }
 
-/// CONV-PRIVATE-MIX: a chat that ran in Private mode is not in the activity:
+/// A chat that ran in Private mode is not in the activity:
 /// its rows are left out entirely, never rehydrated.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_private_chat_is_not_in_the_activity() {
@@ -861,7 +861,7 @@ async fn a_private_chat_is_not_in_the_activity() {
     t.stop();
 }
 
-/// CONV-PRIVATE-MIX: a chat that ran in Private mode cannot be reopened: the
+/// A chat that ran in Private mode cannot be reopened: the
 /// select refuses it, as it refuses an unknown thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_private_chat_cannot_be_selected() {
@@ -883,7 +883,7 @@ async fn a_private_chat_cannot_be_selected() {
     t.stop();
 }
 
-/// CONV-PRIVATE-MIX: a chat that ran in Private mode does not drive the
+/// A chat that ran in Private mode does not drive the
 /// agents snapshot's unread flag.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_private_chat_does_not_drive_unread() {
@@ -922,7 +922,7 @@ async fn listed(t: &TestApi) -> (Vec<i64>, String) {
     (ids, list.body)
 }
 
-/// CONV-PRIVATE-MIX: a chat that ever ran in Private mode is never listed,
+/// A chat that ever ran in Private mode is never listed,
 /// whichever order the two modes come in.
 ///
 /// The Private turns here say nothing the gate would tokenise, so the stored
@@ -970,7 +970,7 @@ async fn a_chat_that_was_ever_private_is_never_listed() {
     t.stop();
 }
 
-/// CONV-PRIVATE-MIX: a chat written before the mark existed cannot be
+/// A chat written before the mark existed cannot be
 /// proven Open — a Private turn that detected nothing leaves no marker — so
 /// the migration marks every old chat and the reader leaves them out. The
 /// markerless mixed chat (an Open system row and title, then a Private turn)
@@ -1024,8 +1024,8 @@ async fn a_session_written_before_the_mark_never_lists() {
     t.stop();
 }
 
-/// CONV-PRIVATE-MIX: the agent's threads leave out a chat that ran in
-/// Private mode, title included (the follow-up finding on `/v1/agents`).
+/// The agent's threads leave out a chat that ran in
+/// Private mode, title included.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_agent_threads_leave_out_a_private_chat() {
     let mut t = TestApi::start_with(|_| fast_options()).await;
@@ -1058,7 +1058,7 @@ async fn the_agent_threads_leave_out_a_private_chat() {
     t.stop();
 }
 
-/// CONV-PRIVATE-MIX: the marker is the kernel's own token shape: a stored
+/// The marker is the kernel's own token shape: a stored
 /// gated copy excludes the chat, while a literal `⟦` in an Open message is
 /// not a token and the chat stays listed. The kernel's collision suffix
 /// (`_1` to `_9` and a longer digit run) is part of that shape.
@@ -1240,7 +1240,7 @@ async fn private_api_turn_masks_values_with_the_deep_model() {
     private_egress_e2e(true).await;
 }
 
-/// IBAN-RECEIPT: an open-mode chief turn replaces a pasted IBAN with its
+/// An open-mode chief turn replaces a pasted IBAN with its
 /// class marker and still records that class in the run receipt. The receipt
 /// keeps the kind and count only, never the value.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1880,8 +1880,7 @@ impl Tool for FakeMailSend {
 
 /// The owner edits a mail send and adds a `bcc`: the SMTP path never sends
 /// one, so the card could promise a hidden recipient that no message
-/// carries. The edit is refused with the reason and the ask stays pending
-/// (SEND-REAL-ARGS-1).
+/// carries. The edit is refused with the reason and the ask stays pending.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_edit_that_adds_a_bcc_to_a_mail_send_is_refused() {
     let provider = Arc::new(FakeProvider::scripted(
@@ -2772,7 +2771,7 @@ async fn a_tainted_conversation_refuses_allow_always() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unsandboxed_shell_asks_first_and_refuses_allow_always() {
-    // P1 regression (security-review round 5): `[shell] sandbox = false` +
+    // `[shell] sandbox = false` +
     // `allow_unsandboxed = true` with an `allow shell` rule. The first call
     // must ask (no taint mark is involved), the card must carry
     // `unsandboxed: true`, and `allow_always` must be refused with the same
@@ -2871,7 +2870,7 @@ async fn an_unsandboxed_shell_asks_first_and_refuses_allow_always() {
 /// row only), while an effectful tool and a tainted turn still ask.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn read_only_tools_run_free_while_effectful_and_tainted_calls_still_ask() {
-    // Round 1: `read_file` (read-only) — no rule anywhere.
+    // First, `read_file` (read-only) — no rule anywhere.
     let read_provider = Arc::new(FakeProvider::scripted(
         "fakey",
         vec![
@@ -3573,7 +3572,7 @@ mod app_wire {
         You,
         Agent(String),
         System,
-        /// UMF-05: a tool-role result has its own author, never `system`.
+        /// A tool-role result has its own author, never `system`.
         Tool,
     }
 
@@ -3814,7 +3813,7 @@ async fn ws_streams_the_ordered_live_turn_events_with_app_shapes() {
         }
         other => panic!("expected tool.end, got {other:?}"),
     }
-    // UMF-05: the tool-role result is its own author — the app folds it into
+    // The tool-role result is its own author — the app folds it into
     // the run instead of a `System context` line.
     match &parsed[7] {
         app_wire::Frame::MessageNew { message } => {
@@ -3993,7 +3992,7 @@ async fn activity_and_ws_scrub_secrets_like_the_messages_view() {
 }
 
 // ---------------------------------------------------------------------------
-// workspace trust (WS-C fix round 4: owner-presence proof)
+// workspace trust (owner-presence proof)
 // ---------------------------------------------------------------------------
 
 /// Create `<home>/agents/<agent>/workspace` and return its path + canonical key.
@@ -4066,7 +4065,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_trust_requires_the_owner_token_and_the_notified_code() {
-    // P1 regression (security-review round 3): the owner token alone (the shell can
+    // The owner token alone (the shell can
     // read `api.token`) must not disarm the taint. The route is a two-step
     // owner-presence proof: request a code (delivered only to the owner's
     // notification), complete with the code.
@@ -4191,7 +4190,7 @@ async fn workspace_trust_requires_the_owner_token_and_the_notified_code() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_trust_is_refused_while_the_shell_can_run_unsandboxed() {
-    // P1 regression (security-review round 5): with the escape hatch on, the trust
+    // With the escape hatch on, the trust
     // action is refused and audited (`workspace.trust_refused`); no code is
     // issued or consumed. Tightening the config re-enables the action, and
     // the seeded code still completes.
@@ -4401,7 +4400,7 @@ async fn workspace_trust_attempt_cap_cancels_the_request() {
     assert_eq!(spent.attempts, 3);
     assert!(t.store().workspace_taint(&key).unwrap().is_some());
 
-    // P2-1 regression (security-review round 4): burning the attempt cap must not
+    // Burning the attempt cap must not
     // reset the cooldown, so an immediate new request is refused and no
     // second notification is shown.
     let flooded = post_auth(&t, "/v1/workspaces/trust", &trust_body(&workspace, None)).await;
@@ -5266,7 +5265,7 @@ async fn a_partial_request_head_is_disconnected_after_the_header_timeout() {
     t.stop();
 }
 
-/// The regression behind round 2: hyper-util's `auto` builder waited for the
+/// Hyper-util's `auto` builder waited for the
 /// protocol-sniff byte before arming the header timer, so a socket that sent
 /// nothing held its connection slot until the daemon restarted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -1,4 +1,4 @@
-//! M4: RFC822 bytes become a decoded [`MailItem`].
+//! RFC822 bytes become a decoded [`MailItem`].
 //!
 //! `mail-parser` (built with `full_encoding`) owns MIME walking and charset
 //! decoding. `text/plain` is always preferred; an HTML-only message goes

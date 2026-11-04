@@ -31,13 +31,13 @@
 //! SMTP pair, bound to `127.0.0.1:0`, covers the wire protocol; it now lives in
 //! the `aux-fakemail` crate, which this crate's dev-dependencies link.
 //!
-//! # Slice status
+//! # Scope
 //!
-//! M1 + M1b + M2 + M2b (presets, error vocabulary, dial/TLS, the fakes) landed
-//! first. M3 + M4 (the read path, `folders`/`parse`/`sanitize`) land here too:
-//! [`MailService`] lists, searches, threads and reads, and every returned
-//! string is sanitised and banner-wrapped before a model can see it. The tools
-//! and the SMTP path land in later slices, each behind its own work order.
+//! The crate covers presets, the error vocabulary, dial/TLS, the fakes, and
+//! the read path (`folders`/`parse`/`sanitize`): [`MailService`] lists,
+//! searches, threads and reads, and every returned string is sanitised and
+//! banner-wrapped before a model can see it. The tools and the SMTP send path
+//! are not here.
 
 pub mod config;
 pub mod dial;

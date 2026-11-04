@@ -304,7 +304,7 @@ async fn no_connected_app_is_unavailable_at_once() {
         "no socket must not wait for the 30 s deadline: {:?}",
         started.elapsed()
     );
-    // P3-5a: even a no-app call pairs its request and result rows.
+    // Even a no-app call pairs its request and result rows.
     let requests = t.store().event_payloads("bridge.request").unwrap();
     let results = t.store().event_payloads("bridge.result").unwrap();
     assert_eq!(requests.len(), 1, "one request row: {requests:?}");
@@ -374,7 +374,7 @@ async fn an_aborted_call_retires_its_id() {
     call.abort();
     assert!(call.await.unwrap_err().is_cancelled());
 
-    // P2-2: the dropped caller's entry is retired, so the app's answer is a
+    // The dropped caller's entry is retired, so the app's answer is a
     // 409 rather than a 200 into a channel nobody reads (which would lose the
     // result and let an event retry create a duplicate).
     let posted = post_auth(
@@ -392,7 +392,7 @@ async fn an_aborted_call_retires_its_id() {
 async fn per_op_timeouts_are_mapped_by_op() {
     let mut t = TestApi::start().await;
     // Very different values for the two classes, so a swapped mapping cannot
-    // pass (P3-6). The long fixture is deliberately far above the short one:
+    // pass. The long fixture is deliberately far above the short one:
     // the test waits for the short class to time out instead of sleeping, so
     // the long class only has to still be pending at that point, whatever the
     // runner's scheduling jitter does to the answer's HTTP hop.

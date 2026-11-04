@@ -408,7 +408,7 @@ async fn providers_test_is_cheap_spend_free_and_never_echoes_a_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn providers_test_never_contacts_the_configured_service() {
-    // M12: the cheap check must stay spend-free. The configured provider
+    // The cheap check must stay spend-free. The configured provider
     // points at a counting loopback endpoint: if the route built a provider
     // and sent a completion, the endpoint sees a connection.
     let mut endpoint = CountingEndpoint::start();
@@ -544,7 +544,7 @@ async fn create_agent_writes_real_artifacts_is_idempotent_and_audited() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agent_instructions_are_scrubbed_in_the_api_view_only() {
-    // B3-02: the detail view goes through the same sanitize + scrub as
+    // The detail view goes through the same sanitize + scrub as
     // messages/tool content; the stored `soul.md` stays raw.
     let mut t = TestApi::start().await;
     let hostile = format!(
@@ -594,8 +594,7 @@ async fn agent_instructions_are_scrubbed_in_the_api_view_only() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_request_body_limit_is_the_one_instructions_cap() {
-    // B3-03: the old 1 MiB `invalid_role` check was unreachable behind the
-    // 128 KiB body limit. The body limit is now the single, tested cap, with
+    // The body limit is the single, tested cap, with
     // a plain-language message; the API view still caps at MESSAGE_MAX_BYTES
     // and flags the cut.
     let mut t = TestApi::start().await;
@@ -888,7 +887,7 @@ async fn skills_list_and_agent_update_are_authenticated_and_bounded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn put_with_an_unconfigured_provider_is_a_clean_4xx() {
-    // B3-05 / mutation M17: `POST /v1/agents` already validated the provider;
+    // `POST /v1/agents` already validated the provider;
     // `PUT` must too, or an agent ends up pointed at a service that does not
     // exist and only fails later, at turn time.
     let mut t = TestApi::start().await;
@@ -1009,7 +1008,7 @@ async fn stop_all_engages_the_kill_switch_is_idempotent_and_audited() {
     assert_eq!(release.status, 200, "body: {}", release.body);
     assert_eq!(release.json()["stop"], false);
 
-    // RESUME-AFTER-STOP: Resume leaves the lifted stop as the last row.
+    // Resume leaves the lifted stop as the last row.
     let page = get_auth(&t, "/v1/threads/main/messages").await.json();
     let last = page["messages"]
         .as_array()

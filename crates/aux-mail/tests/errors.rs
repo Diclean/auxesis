@@ -1,4 +1,4 @@
-//! M1: the error vocabulary — bilingual, non-empty, port-bearing.
+//! The error vocabulary — bilingual, non-empty, port-bearing.
 
 use std::time::Duration;
 

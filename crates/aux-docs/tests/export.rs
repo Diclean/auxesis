@@ -1,4 +1,4 @@
-//! M5-2 acceptance: a fixture XML receipt in the registry exports to a CSV row
+//! A fixture XML receipt in the registry exports to a CSV row
 //! and a byte-identical original, for an accountant. Fictional data only.
 
 use std::path::{Path, PathBuf};

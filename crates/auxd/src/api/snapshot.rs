@@ -1928,6 +1928,7 @@ pub fn jobs_snapshot(home: &Path) -> anyhow::Result<Vec<JobJson>> {
         None => Vec::new(),
     };
     let now = chrono::Utc::now();
+    let stopped = kernel_core::killswitch::is_stopped(home);
     jobs.into_iter()
         .map(|job| {
             let name = preview_capped(home, &job.name, ACTIVITY_SUMMARY_MAX_CHARS);
@@ -1935,7 +1936,10 @@ pub fn jobs_snapshot(home: &Path) -> anyhow::Result<Vec<JobJson>> {
                 Some(conn) => read_recent_runs(conn, job.id)?,
                 None => Vec::new(),
             };
-            let paused = !job.enabled || crate::agent::state(home, &job.agent).blocks_work();
+            // The global STOP holds every job (the scheduler does not tick), so
+            // a stopped Mac reads as paused, never as late.
+            let paused =
+                stopped || !job.enabled || crate::agent::state(home, &job.agent).blocks_work();
             let health = crate::job_health::assess(
                 now,
                 &job.schedule,
@@ -3397,6 +3401,13 @@ mod tests {
         assert_eq!(jobs[0].health, "late");
         let reason = jobs[0].reason.as_deref().unwrap_or_default();
         assert!(reason.contains("did not run at"), "{reason}");
+
+        // Under the global STOP the scheduler does not tick: the same missed
+        // run reads as held, never as late.
+        let home = dir.path().join("home");
+        kernel_core::killswitch::engage(&home).unwrap();
+        let jobs = jobs_snapshot(&home).unwrap();
+        assert_ne!(jobs[0].health, "late", "STOP holds jobs on purpose");
     }
 
     #[test]

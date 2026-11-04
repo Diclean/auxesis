@@ -106,12 +106,12 @@ where
         };
     };
     if last.status == RUN_FAILED {
-        let at = last
-            .finished_at
-            .as_deref()
-            .and_then(parse_at)
-            .unwrap_or(now);
-        return JobHealth::failing(format!("failed at {}", clock(at, tz)));
+        // No finish time: say "failed" rather than a time that moves on each poll.
+        let reason = match last.finished_at.as_deref().and_then(parse_at) {
+            Some(at) => format!("failed at {}", clock(at, tz)),
+            None => "failed".to_string(),
+        };
+        return JobHealth::failing(reason);
     }
     if runs.len() >= 2
         && runs
@@ -129,8 +129,12 @@ where
         return JobHealth::new(HealthState::Unknown, None);
     };
     if last.status == RUN_RUNNING {
-        // A run in flight past the grace window is a hang.
-        return if now > started + grace_window(&schedule, started, tz) {
+        // The scheduler renews a live run's lease (`next_run_at`) every
+        // lease / 3, so a lease still ahead of `now` means the run is alive,
+        // however long it takes. Only a run whose lease ran out and which is
+        // past the grace window is a hang.
+        let alive = next.is_some_and(|lease| lease >= now);
+        return if !alive && now > started + grace_window(&schedule, started, tz) {
             JobHealth::late(format!(
                 "started at {} and has not finished",
                 clock(started, tz)
@@ -278,6 +282,46 @@ mod tests {
             &[done("2026-10-03 08:00:00")],
         );
         assert_eq!(paused.state, HealthState::Ok);
+    }
+
+    #[test]
+    fn a_long_run_with_a_live_lease_is_not_late() {
+        // Started 40 min ago, far past the 15 min grace, but its lease was
+        // renewed to 08:45, after now: the run is alive.
+        let running = [run("2026-10-03 08:00:00", None, RUN_RUNNING)];
+        let live = h(
+            "2026-10-03T08:40:00Z",
+            Some("2026-10-03 08:45:00"),
+            false,
+            &running,
+        );
+        assert_eq!(live.state, HealthState::Ok);
+        // Within the grace window and with no lease, still Ok.
+        assert_eq!(
+            h("2026-10-03T08:05:00Z", None, false, &running).state,
+            HealthState::Ok
+        );
+    }
+
+    #[test]
+    fn a_job_created_after_its_slot_or_paused_before_any_run_is_not_late() {
+        let created_late = assess_in(
+            at("2026-10-03T09:00:00Z"),
+            "every 15m",
+            "2026-10-03 08:50:00",
+            Some("2026-10-03 08:15:00"),
+            false,
+            &[],
+            Utc,
+        );
+        assert_eq!(created_late.state, HealthState::Unknown);
+        let paused_never = h(
+            "2026-10-03T10:00:00Z",
+            Some("2026-10-03 08:15:00"),
+            true,
+            &[],
+        );
+        assert_eq!(paused_never.state, HealthState::Unknown);
     }
 
     #[test]

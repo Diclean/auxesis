@@ -6,10 +6,6 @@
 //! brain, else `[brain] default`, with `[brain] fallback` hops admitted live.
 //! When the file is absent the caller keeps the legacy `config.toml` path.
 
-// This module is compiled into both the lib and the bin; a few helpers are
-// used by the lib's turn path only, so silence dead-code in the bin copy.
-#![allow(dead_code)]
-
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 

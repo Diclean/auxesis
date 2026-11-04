@@ -617,7 +617,11 @@ fn clean(value: &str, limit: usize) -> String {
     kernel_core::truncate_chars(&flat, limit)
 }
 
-fn cap_chars(value: &str, max: usize) -> String {
+/// Cut `value` to at most `max` characters, ending with `…` when cut.
+///
+/// Counts characters, not bytes. Shared by the brief itself and the daemon's
+/// job and API previews, so a cut preview reads the same everywhere.
+pub fn cap_chars(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
     }

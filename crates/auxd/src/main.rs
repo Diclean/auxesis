@@ -4,33 +4,29 @@
 //! readiness on stdout, then wait for Ctrl-C or SIGTERM.
 //!
 //! M2 scope: a scheduler task ticks every [`TICK_INTERVAL`], claims due jobs,
-//! runs each one through a [`scheduler::JobRunner`] on its own store
+//! runs each one through an [`auxd::scheduler::JobRunner`] on its own store
 //! connection and records each run in the store. Scheduled `agent` jobs execute
-//! a real turn through `aux-engine` ([`agent_job::AgentJobRunner`]). The daemon
-//! holds a single-instance lock ([`lock::InstanceLock`]) so two daemons can
+//! a real turn through `aux-engine` ([`auxd::agent_job::AgentJobRunner`]). The daemon
+//! holds a single-instance lock ([`auxd::lock::InstanceLock`]) so two daemons can
 //! never share one home. The local API and channels still arrive later.
 
-mod agent_job;
-mod brains;
-mod brief_job;
-mod lock;
-mod scheduler;
-mod shutdown;
-
-use agent_job::daemon_runner;
 use aux_notify::{system_notifier, Notifier, StopSwitchNotifier};
 use aux_store::Store;
+use auxd::agent_job::daemon_runner;
 use auxd::api;
+use auxd::brief_job;
 use auxd::gateway::imessage::{self, MessagesGateway};
 use auxd::gateway::local::LocalGateway;
 use auxd::gateway::policy::{NotifyPolicy, PolicyConfig};
 use auxd::gateway::router::{GatewaySink, NotifyRouter, SystemClock as RouterClock};
 use auxd::gateway::Gateway;
+use auxd::lock::InstanceLock;
 use auxd::logging;
+use auxd::scheduler;
+use auxd::scheduler::{FileStoreOpener, StopSwitch, SystemClock, CLAIM_LEASE, TICK_INTERVAL};
+use auxd::shutdown;
 use clap::Parser;
 use kernel_core::{config_path, ensure_home, killswitch, Config};
-use lock::InstanceLock;
-use scheduler::{FileStoreOpener, StopSwitch, SystemClock, CLAIM_LEASE, TICK_INTERVAL};
 use std::io::Write;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, MutexGuard};

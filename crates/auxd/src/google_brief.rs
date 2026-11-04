@@ -125,6 +125,9 @@ fn local_midnight(date: NaiveDate) -> Option<chrono::DateTime<Local>> {
     }
 }
 
+/// Cut to at most `max` characters with no marker. Deliberately not
+/// [`aux_brief::cap_chars`]: these are calendar and mail fields, not previews,
+/// so a cut must not add a character.
 fn truncate(value: &str, max: usize) -> String {
     let mut chars = value.chars();
     let output = chars.by_ref().take(max).collect::<String>();

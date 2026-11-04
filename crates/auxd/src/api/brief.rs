@@ -10,8 +10,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use aux_brief::{
-    run_once, BriefError, BriefResult, BriefSource, BriefSourceError, CalendarItem, MailHeader,
-    Prospect, WeatherSummary, MAX_SOURCE_READS,
+    cap_chars, run_once, BriefError, BriefResult, BriefSource, BriefSourceError, CalendarItem,
+    MailHeader, Prospect, WeatherSummary, MAX_SOURCE_READS,
 };
 use aux_notify::{Notification, Notifier};
 use aux_store::Store;
@@ -416,15 +416,6 @@ fn run_inner(
         }
     }
     Ok((result, delivery, cause))
-}
-
-fn cap_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        return value.to_string();
-    }
-    let mut output: String = value.chars().take(max.saturating_sub(1)).collect();
-    output.push('…');
-    output
 }
 
 /// One failed run, before the response is shaped.

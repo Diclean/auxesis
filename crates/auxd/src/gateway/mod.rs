@@ -23,6 +23,20 @@ use kernel_core::privacy::{admit_call, Destination, Grant, PathId, PrivacyMode, 
 
 pub use policy::Level;
 
+/// Cut `text` to at most `max_bytes` bytes without splitting a UTF-8
+/// character. Shared by the notify router and policy so queued text has one
+/// ceiling.
+pub(crate) fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
 /// Build a remote gateway unless the sandbox guard is active. A sandbox run
 /// builds none, so no approval, brief or alert can reach the owner's phone
 /// whatever the home config says; the local sink stays the only channel.

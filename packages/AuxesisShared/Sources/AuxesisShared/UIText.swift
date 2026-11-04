@@ -106,6 +106,7 @@ public enum UIKey: String, CaseIterable {
     case privacyLede, privateMode, privateModeOn, privateModeHint, coverageTitle, coverageSummary
     case covCovered, covPartial, covMissed, covRunsPrivate, covAsksPrivate, covOffPrivate, acpReadsAsk
     case budgetsLede, spentToday, spentTodayValue, capsTitle, capsHint, stopRowTitle, stopRowHint, stopNow
+    case budgetUsedPercent, budgetCapHit
 
     // Agent profile
     case brain, brainDefault, change, canSee, canDo, never, worksWith, memory, forget, skills, workshop
@@ -697,7 +698,9 @@ public extension L10n {
         .spentToday: "Spent today",
         .spentTodayValue: "%@ · %@ tokens in, %@ out",
         .capsTitle: "Daily caps",
-        .capsHint: "Caps are set per agent on this Mac. A capped agent stops and tells you.",
+        .capsHint: "Set in config.toml: [budgets.agents.<agent>] overrides [budgets.default]. Settings has no cap editor yet.",
+        .budgetUsedPercent: "%d%% of the daily cap",
+        .budgetCapHit: "daily cap reached",
         .stopRowTitle: "Stop",
         .stopRowHint: "Halts every agent and cancels sends that are waiting. Also in the menu bar.",
         .stopNow: "Stop now",
@@ -1304,8 +1307,10 @@ public extension L10n {
         .calendarSaved: "Le calendrier est à jour sur ce Mac.",
         .canDo: "Peut faire",
         .canSee: "Peut voir",
-        .capsHint: "Les plafonds se règlent par agent sur ce Mac. Un agent plafonné s’arrête et vous prévient.",
+        .capsHint: "Réglés dans config.toml : [budgets.agents.<agent>] remplace [budgets.default]. Réglages n’a pas encore d’éditeur de plafond.",
         .capsTitle: "Plafonds quotidiens",
+        .budgetUsedPercent: "%d %% du plafond quotidien",
+        .budgetCapHit: "plafond quotidien atteint",
         .change: "Modifier",
         .chief: "Chef",
         .chiefStopped: "Arrêté. Tous les agents en pause",

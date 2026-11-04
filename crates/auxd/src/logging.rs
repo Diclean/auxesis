@@ -108,7 +108,7 @@ impl<W: Write> Write for CappedWriter<W> {
             );
             let _ = state.inner.flush();
         }
-        // H-01: always report the *input* length. `Write::write` reports how
+        // Always report the *input* length. `Write::write` reports how
         // many bytes of `buf` were consumed, and `tracing`'s fmt layer calls
         // `write_all`: returning the scrubbed length made it re-send
         // `buf[scrubbed_len..]`, which is the raw tail of a record whose
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_record_is_consumed_once_even_when_redaction_changes_its_length() {
-        // H-01: returning the *scrubbed* length from `write` made tracing's
+        // Returning the *scrubbed* length from `write` made tracing's
         // `write_all` re-send `raw[scrubbed_len..]` — for a long secret near
         // the end of a record, that tail is the secret itself. Redaction that
         // *grows* the record (a short secret) made the old code report a

@@ -38,7 +38,7 @@ pub(crate) struct ByteLimit {
 ///
 /// `literal_limit` is the largest `{N}` declaration accepted, refused at the
 /// header so `async-imap` never sizes a buffer from a hostile `N`. It defaults
-/// to `limit` (sealed MA2's behaviour); callers that fetch a bounded partial
+/// to `limit` (the established behaviour); callers that fetch a bounded partial
 /// arm it lower than the connection total.
 #[derive(Debug)]
 pub(crate) struct GuardedStream<S> {

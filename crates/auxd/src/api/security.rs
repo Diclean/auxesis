@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn duplicate_host_or_origin_headers_are_refused() {
-        // Round-1 P3-9: hyper answers from the first value, so
+        // Hyper answers from the first value, so
         // `Host: 127.0.0.1` + `Host: evil.example` used to pass. Neither
         // value may decide; a duplicate is refused.
         let mut host = HeaderMap::new();

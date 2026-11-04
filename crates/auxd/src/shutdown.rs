@@ -668,7 +668,7 @@ mod tests {
         let ready = PidFileGuard::new(temp_file("a3l-ready.pid"));
 
         // Root traps TERM: the trap forks `sleep 10`, records its pid and
-        // exits. This is the exact shape the breaker used to escape the ppid
+        // exits. This is the exact shape a process can use to escape the ppid
         // walk (`shim traps SIGTERM; its trap forks sleep and exits`).
         let mut root = ChildGuard::new(
             Command::new("sh")

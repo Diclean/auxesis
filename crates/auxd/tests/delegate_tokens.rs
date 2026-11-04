@@ -344,7 +344,7 @@ async fn a_forged_token_is_never_rehydrated_nor_read_as_another_kind() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_handed_token_is_never_honoured_in_a_later_delegation() {
     let rig = Rig::start(false, FOUND);
-    // The seal's seed: an Open-mode Mail chat, so every delegation reuses it.
+    // The seed: an Open-mode Mail chat, so every delegation reuses it.
     let config = config_path(&rig.home);
     let private = std::fs::read_to_string(&config).unwrap();
     std::fs::write(

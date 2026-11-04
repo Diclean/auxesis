@@ -99,7 +99,7 @@ pub fn fallback_reason(err: &ProviderError) -> &'static str {
 ///
 /// The primary provider is admitted by [`GatedChat`](crate::GatedChat); every
 /// fallback destination is a *different* vendor and must be admitted too
-/// (security-review round 1, P2). A refusal stops the chain: no request is sent and
+/// A refusal stops the chain: no request is sent and
 /// no Ledger row is written.
 pub trait FallbackAdmission: Send + Sync {
     /// Admit `provider` for `path` (`A1` streaming, `A2` one body).
@@ -260,7 +260,7 @@ impl ChatProvider for FallbackProvider {
         for (index, provider) in self.providers.iter().enumerate() {
             // The primary provider was admitted by `GatedChat`; each fallback
             // destination is admitted live here, before the hop is sent
-            // (security-review round 1, P2). A refusal returns before any request.
+            // A refusal returns before any request.
             let _grant = if index == 0 {
                 None
             } else {
@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
-    /// P2 (security-review round 1): a fallback destination that is not admitted must
+    /// A fallback destination that is not admitted must
     /// get zero requests and leave no Ledger hop row.
     #[tokio::test]
     async fn private_mode_fallback_is_not_admitted_and_gets_no_request() {
@@ -710,7 +710,7 @@ mod tests {
         );
     }
 
-    /// P2 (security-review round 1): when the hop *is* admitted, the fallback runs and
+    /// When the hop *is* admitted, the fallback runs and
     /// the `provider.fallback` row still appears.
     #[tokio::test]
     async fn an_admitted_hop_writes_the_ledger_row_and_reaches_the_fallback() {

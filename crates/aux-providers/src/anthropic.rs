@@ -96,11 +96,11 @@ impl AnthropicCompat {
             .expect("validate requires a base_url");
         let endpoint = anthropic_messages_url(base)?;
         if let Some(key) = &api_key {
-            // H-04/L-1: the exact value joins the scrubber so it is redacted
+            // The exact value joins the scrubber so it is redacted
             // if it ever reaches a log or a preview. Never logged directly.
             kernel_broker::scrub::register_known_secret(key);
         }
-        // security-review round 2, P2: never follow a redirect. A 3xx from the
+        // Never follow a redirect. A 3xx from the
         // configured origin would otherwise forward the key and the prompt to
         // another host; the response is surfaced as a provider error instead.
         let http = Client::builder()
@@ -1193,7 +1193,7 @@ effort = "high"
         );
     }
 
-    /// P2 (security-review round 1): an SSE `error` event that echoes the key must
+    /// An SSE `error` event that echoes the key must
     /// not have it copied into the InvalidResponse message, Display or Debug.
     #[tokio::test]
     async fn a_key_echoed_in_an_sse_error_event_is_redacted() {
@@ -1232,7 +1232,7 @@ effort = "high"
         }
     }
 
-    /// Security-review round 2, P2: a 3xx is surfaced as a provider error and the
+    /// A 3xx is surfaced as a provider error and the
     /// redirect target receives nothing.
     #[tokio::test]
     async fn a_redirect_is_not_followed_and_the_target_gets_nothing() {

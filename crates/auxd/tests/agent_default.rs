@@ -390,7 +390,7 @@ async fn a_private_delegation_never_sends_the_agents_names_in_clear() {
     tokio::task::block_in_place(|| assert_delegation_masked("private", &[], false));
 }
 
-/// Seal P1b: under global Open, a Private Aux makes an Open Mail agent run
+/// Under global Open, a Private Aux makes an Open Mail agent run
 /// Private: its provider sees tokens, never the contact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_private_chief_makes_an_open_mail_agent_private() {

@@ -1,4 +1,4 @@
-//! MA4: the SMTP send path against the in-process fake. Offline only.
+//! The SMTP send path against the in-process fake. Offline only.
 //!
 //! Every test asserts the no-retry rule: the fake's `mail_from_count` is one on
 //! success and stays one on a `421`.

@@ -201,7 +201,7 @@ private enum ReceiptFixtures {
         XCTAssertEqual(ReceiptDetailCopy.friendlyTool("mail.send", .en), "send an email")
     }
 
-    /// Regression (PR #104, GLM r3 P3): for an unknown id, `escapedStrict`
+    /// Regression: for an unknown id, `escapedStrict`
     /// escapes every scalar outside printable ASCII — the line/paragraph
     /// separators (U+2028, U+2029), the Arabic letter mark (U+061C), the
     /// invisible operators (U+2061–U+2065), the interlinear annotation controls
@@ -238,7 +238,7 @@ private enum ReceiptFixtures {
         }
     }
 
-    /// Regression (PR #104, GLM r3 P3): an unknown id made only of spaces used to
+    /// Regression: an unknown id made only of spaces used to
     /// render as a blank quote block, and two all-space ids looked identical. For
     /// an unknown id, space U+0020 and NBSP U+00A0 are now escaped like the rest
     /// of the strict set, so all-space ids stay tellable apart.
@@ -262,7 +262,7 @@ private enum ReceiptFixtures {
         )
     }
 
-    /// Regression (PR #104, security review FAIL P2 d): the unknown id is rendered through
+    /// Regression: the unknown id is rendered through
     /// `ServerText.quoted`, so it can never close the quote block or pass for a
     /// card label. The stricter unknown-id escape now spells out the smuggled
     /// closer instead of demoting it; the block boundary is still unambiguous.
@@ -273,7 +273,7 @@ private enum ReceiptFixtures {
         XCTAssertTrue(label.contains("\\u{00BB}"), "the smuggled closer is escaped: \(label)")
     }
 
-    /// Regression (PR #104, security review R5 P2 B): the strict escape spelling uses a
+    /// Regression: the strict escape spelling uses a
     /// backslash (`\u{200B}`), but a literal ASCII backslash was not escaped, so
     /// an unknown id spelled `probe\u{200B}` (literal backslash) rendered exactly
     /// like `probe` + U+200B and the two were confusable. The ASCII backslash is
@@ -306,7 +306,7 @@ private enum ReceiptFixtures {
         XCTAssertEqual(ReceiptDetailCopy.friendlyTool("open_url", .fr), "ouvrir un lien")
     }
 
-    /// Regression (PR #104, GLM r4 P2): a quote delimiter smuggled into an
+    /// Regression: a quote delimiter smuggled into an
     /// unknown id was demoted by `quoted` — `x«y`, `x‹y` and `x❝y` all rendered
     /// `« x‹y »` — so two distinct unknown ids shared one visible label and
     /// "Allow once" stayed available. An unknown id now spells out every quote
@@ -369,7 +369,7 @@ private enum ReceiptFixtures {
         )
     }
 
-    /// Regression (PR #104, security review R5 P2 A): the command aliases the card labels
+    /// Regression: the command aliases the card labels
     /// "lancer une commande" are one class for the "Always" gate. The shared
     /// predicate is driven by the label, not by the raw `shell` prefix, and known
     /// non-command tools keep their plain label and behaviour.
@@ -385,7 +385,7 @@ private enum ReceiptFixtures {
         XCTAssertFalse(ReceiptDetailCopy.isCommandTool("totally_new_tool_9000"))
     }
 
-    /// Regression (PR #104, security review FAIL P2 c): the bound counts Unicode scalars, not
+    /// Regression: the bound counts Unicode scalars, not
     /// grapheme clusters. 10 000 combining marks are one cluster, so the label must
     /// still be capped and say how many scalars it hid.
     func testUnknownToolBoundCountsUnicodeScalars() {
@@ -400,7 +400,7 @@ private enum ReceiptFixtures {
         )
     }
 
-    /// Regression (PR #104, security review FAIL P2): two unknown ids sharing their first
+    /// Regression: two unknown ids sharing their first
     /// 80 characters used to render identically — the card showed the generic
     /// "un outil" plus a scope line truncated at 80. They must be tellable
     /// apart now, and a known id must keep its plain label.

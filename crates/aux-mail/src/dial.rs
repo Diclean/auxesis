@@ -173,7 +173,7 @@ impl Dialer {
 
     /// [`Dialer::connect_guarded`] with explicit ceilings: `total` bounds every
     /// byte the connection reads and `literal_limit` the largest single `{N}`
-    /// declaration it accepts. MA3's attachment fetch arms the literal ceiling
+    /// declaration it accepts. The attachment fetch arms the literal ceiling
     /// at the per-part cap plus one (the partial it asks for) while the total
     /// follows the per-call attachment budget.
     pub async fn connect_guarded_caps(

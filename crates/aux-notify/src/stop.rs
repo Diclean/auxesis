@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(notifier.stop_marker(), marker);
     }
 
-    /// Regression for the M2 security-review C-01 finding: a dangling `STOP`
+    /// A dangling `STOP`
     /// symlink must read as engaged, exactly like
     /// `kernel_core::killswitch::is_stopped`.
     #[cfg(unix)]

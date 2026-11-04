@@ -79,8 +79,8 @@ impl ApiToken {
             }
             None if path.exists() => {
                 // Corrupt (empty / non-UTF-8 / oversized) regular file: rewrite
-                // it in place through the verified home handle (J-02 write
-                // gateway), keeping the path's ownership and mode.
+                // it in place through the verified home handle, keeping the
+                // path's ownership and mode.
                 write_fresh_via(home, false)?;
                 let token = read_token(&path)?.ok_or_else(|| {
                     std::io::Error::new(
@@ -170,7 +170,7 @@ pub async fn require_token(
 
 /// Read and validate the token file, if it exists.
 ///
-/// F-17 (audit C P3-3): the path is checked and opened with `O_NOFOLLOW`, so
+/// The path is checked and opened with `O_NOFOLLOW`, so
 /// a symlink placed at `api.token` is an error, never something the daemon
 /// reads through or rewrites. The open handle is `fchmod`'ed to `0600` and
 /// the mode is verified before the value is used.
@@ -235,7 +235,7 @@ fn open_token_file(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 /// `fchmod` an already-open token handle to `0600` and verify no group or
-/// other access remains (F-17).
+/// other access remains.
 fn tighten_open_file(file: &std::fs::File, path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -257,7 +257,7 @@ fn tighten_open_file(file: &std::fs::File, path: &Path) -> std::io::Result<()> {
 }
 
 /// Write a fresh random token through the verified sandbox home handle
-/// (J-02 write gateway), optionally with `create_new` (race-safe).
+/// with an optional `create_new` (race-safe).
 ///
 /// The handle resolves `api.token` relative to the verified home directory
 /// fd, so a symlink swapped at the home root after `ensure_home` cannot
@@ -435,7 +435,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_symlinked_token_path_is_refused_and_the_target_is_untouched() {
-        // F-17/C P3-3: a symlink at `api.token` used to be rewritten through,
+        // A symlink at `api.token` used to be rewritten through,
         // truncating an arbitrary same-uid file (and chmod'ing it 0600).
         use std::os::unix::fs::symlink;
         let dir = tempdir().unwrap();
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
     }
 
-    /// M04 (DAEMON-HARDEN-1 security-review round 1): the pre-check above is not the
+    /// The pre-check above is not the
     /// TOCTOU defence — it cannot see a symlink swapped in between the check
     /// and the open. This calls the exact open helper `read_token` uses, with
     /// the pre-check bypassed, and requires `O_NOFOLLOW` to refuse the link.

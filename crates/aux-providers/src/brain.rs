@@ -303,7 +303,7 @@ pub fn build_chain(
         Ok(Some(chain.pop().expect("one provider")))
     } else {
         // A gated chain admits every fallback destination live before its hop
-        // (security-review round 1, P2); `None` keeps the Open-only chain.
+        // `None` keeps the Open-only chain.
         let provider: Box<dyn ChatProvider> = match admission {
             Some(admission) => Box::new(FallbackProvider::with_admission(chain, ledger, admission)),
             None => Box::new(FallbackProvider::with_ledger(chain, ledger)),

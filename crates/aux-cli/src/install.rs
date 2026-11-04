@@ -656,7 +656,7 @@ impl StatusReport {
 
 /// Refuse install management while the sandbox guard is active: it would
 /// resolve the *real* `~/Library/LaunchAgents` through `$HOME` and bootstrap
-/// a real agent (security review J02-2-BI2-04). Tests use a fake `$HOME` and assert this
+/// a real agent. Tests use a fake `$HOME` and assert this
 /// refusal before any write.
 fn refuse_when_sandboxed(action: &str) -> Result<(), String> {
     if kernel_core::sandbox_guard_active() {

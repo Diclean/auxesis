@@ -204,7 +204,7 @@ impl Store {
     /// cap, the code can never match again, [`Self::complete_trust_request`]
     /// refuses it), because the row's `created_at` is also the cooldown
     /// watermark — deleting it let three wrong codes reset the rate limit
-    /// (security-review round 4, P2-1). A fresh request replaces the spent row once
+    /// A fresh request replaces the spent row once
     /// the cooldown has passed. The `workspace.trust_failed` row is written
     /// atomically and never contains a code.
     pub fn bump_trust_attempts(
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn trust_attempt_cap_spends_the_request_but_keeps_the_cooldown() {
-        // P2 regression (security-review round 4, P2-1): the cap used to DELETE the
+        // The cap used to DELETE the
         // request row, which was also the only record of the cooldown, so
         // three wrong codes bought unlimited notifications and guesses. The
         // spent row now stays as the rate-limit watermark.
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn trust_audit_failure_rolls_the_clear_back() {
-        // P2 regression (security-review round 3): the old owner action cleared the
+        // The old owner action cleared the
         // mark first and only then tried to write the audit row, so a failing
         // audit insert left the workspace cleared with no record. Completion
         // is one transaction: if the audit cannot be written, nothing is.

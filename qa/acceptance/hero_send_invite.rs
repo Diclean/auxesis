@@ -1,4 +1,4 @@
-//! Hero acceptance test: the invite skill end to end, rewired for MA4 to
+//! Hero acceptance test: the invite skill end to end, against
 //! **fake SMTP plus the fake EventKit bridge**. Every GIVEN / WHEN / THEN of
 //! the flow is an assertion below.
 //!

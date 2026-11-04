@@ -236,7 +236,7 @@ impl MailAccount {
     }
 }
 
-/// The `.env` key for one account id (MA1 naming): `AUX_MAIL_<ID_UPPER>`, with
+/// The `.env` key for one account id (the account-key naming): `AUX_MAIL_<ID_UPPER>`, with
 /// every `-` folded to `_`. [`MailAccount::secret_key`] resolves the same key;
 /// this free form lets the credential source and the CLI share it.
 pub fn env_var_name(account_id: &str) -> String {

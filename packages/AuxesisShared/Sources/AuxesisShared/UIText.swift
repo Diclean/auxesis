@@ -39,6 +39,7 @@ public enum UIKey: String, CaseIterable {
     case stepsDoneV5, stepsRunningV5, stepsHaltedV5, stepsHereV5, stepsLeftV5, stepsUnknownV5, handoffLineV5, handoffAnd
     case stepMarkDone, stepMarkRunning, stepMarkHalted, stepSource
     case workActive, workUpNext, workSteer, workStop, workStepsOf, workToday, workTomorrow, workNothingActive, workNothingNext, workMore
+    case jobHealthLate, jobHealthFailing
     case modelSawLink, modelSawHide, modelSawAux, sentBy, sentTo, sentWhen, stayedOnMac, leftMac
     case modelSawGone, modelSawNoTokens, openLedger
 
@@ -339,6 +340,8 @@ public extension L10n {
         .workNothingActive: "Nothing is running.",
         .workNothingNext: "Nothing is planned.",
         .workMore: "%d more",
+        .jobHealthLate: "Late",
+        .jobHealthFailing: "Failed",
         .workForAux: "Work for Aux",
         .typing: "%@ is writing",
         .modelSawLink: "What %@ sent to its brain",
@@ -991,6 +994,8 @@ public extension L10n {
         .workNothingActive: "Rien ne tourne.",
         .workNothingNext: "Rien n’est prévu.",
         .workMore: "%d de plus",
+        .jobHealthLate: "En retard",
+        .jobHealthFailing: "A échoué",
         .stepsStayed: "%d traitées par un modèle sur ce Mac",
         .stepsUnrecorded: "%d sans lieu d’exécution enregistré",
         .sidebarRoleAux: "chef",

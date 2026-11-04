@@ -2974,6 +2974,14 @@
       "en" : "Unknown send outcome",
       "fr" : "Résultat de l’envoi inconnu"
     },
+    "jobHealthFailing" : {
+      "en" : "Failed",
+      "fr" : "A échoué"
+    },
+    "jobHealthLate" : {
+      "en" : "Late",
+      "fr" : "En retard"
+    },
     "keptChief" : {
       "en" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them.",
       "fr" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them."

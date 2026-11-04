@@ -1,8 +1,8 @@
-//! TOK-DELEGATE acceptance: in private mode the chief hands Mail a task with
+//! In private mode the chief hands Mail a task with
 //! its own tokens. Mail keeps them whole for its model, its local mail search
 //! gets the real value, and Mail's own tokens reach the owner as values.
 //!
-//! Names pass as written since NAMES-OFF (owner, 2026-10-19): the handed value
+//! Names pass as written: the handed value
 //! is an e-mail address.
 //! (a) the mail search argument is the real address; no request body holds it.
 //! (b) an address only Mail tokenised is shown to the owner as the address.
@@ -299,7 +299,7 @@ async fn the_mail_search_uses_the_real_address_and_hides_the_owner_mail_link() {
     );
 }
 
-/// LANG-DRIFT-1: the chief and the agent it delegates to are both told the
+/// The chief and the agent it delegates to are both told the
 /// reply language, through the private gate, on every request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_chief_and_the_delegated_agent_are_told_the_reply_language() {
@@ -337,7 +337,7 @@ async fn a_forged_token_is_never_rehydrated_nor_read_as_another_kind() {
     assert!(!answer.contains("camille@"), "{answer}");
 }
 
-/// Seal r1 P1: a handoff is one run's. The chief hands Mail its token in one
+/// A handoff is one run's. The chief hands Mail its token in one
 /// session; a token-free delegation from ANOTHER chief session, where Mail
 /// replays that token, gets no value from it: the search refuses and the
 /// second chief's owner never sees the name.

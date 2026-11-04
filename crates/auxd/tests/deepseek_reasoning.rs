@@ -1,4 +1,4 @@
-//! DEEPSEEK-REASONING acceptance: in thinking mode DeepSeek refuses a request
+//! In thinking mode DeepSeek refuses a request
 //! whose assistant tool-call message lacks `reasoning_content` (HTTP 400),
 //! even when the reasoning it streamed was empty (`""` in the first delta).
 //! The reasoning, empty or not, goes back to the provider that produced it.

@@ -305,8 +305,8 @@ async fn handle_fetch(stream: &mut Stream, tag: &str, args: &str, shared: &Share
                     let Some((_, bytes)) = message.parts.iter().find(|(name, _)| *name == part)
                     else {
                         // A real server refuses a part it does not have; it
-                        // never answers an empty one (DOC-COLLECT-1). The
-                        // client must see the refusal, not a 0-byte part.
+                        // never answers an empty one. The client must see the
+                        // refusal, not a 0-byte part.
                         let reply = format!("{tag} NO [NONEXISTENT] unknown part\r\n");
                         let _ = write(stream, reply.as_bytes()).await;
                         return;

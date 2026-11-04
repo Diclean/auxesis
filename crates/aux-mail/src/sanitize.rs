@@ -1,4 +1,4 @@
-//! M4: the untrusted-content banner and the two kernel sanitisers.
+//! The untrusted-content banner and the two kernel sanitisers.
 //!
 //! Every string that came out of a mailbox is hostile until proven otherwise.
 //! Nothing reaches a model through this module without going through

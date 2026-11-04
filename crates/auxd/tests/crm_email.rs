@@ -1,4 +1,4 @@
-//! CRM-EMAIL: a client's email survives the search and the read.
+//! A client's email survives the search and the read.
 
 use std::path::PathBuf;
 use std::sync::Arc;

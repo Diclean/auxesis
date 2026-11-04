@@ -1,18 +1,17 @@
-//! B-API v2 residual-fix regressions (carry list from the reverify #2 CLEAR
-//! verdict, 2026-10-04).
+//! Residual regressions for the v2 API.
 //!
-//! Covered findings:
-//! - **RV2-01**: a stalled `allow_always` rule write past the 500 ms grace
+//! Covered rules:
+//! - A stalled `allow_always` rule write past the 500 ms grace
 //!   must not answer `200 allowed` after the turn was denied; the expired
 //!   resolution must precede `tool.end`/`message.done`.
-//! - **RV2-02**: `GET /v1/threads/{id}/messages` (and the POST result) scrubs
+//! - `GET /v1/threads/{id}/messages` (and the POST result) scrubs
 //!   tool-role content exactly like the live `message.new`; the store row
 //!   stays raw.
-//! - **RV2-03**: a degraded audit still emits a numeric `audit_id` (0 = not
+//! - A degraded audit still emits a numeric `audit_id` (0 = not
 //!   recorded) so the app's required `u64` frame keeps decoding.
-//! - **RV2-05**: the legacy `job <name>` title heuristic only applies to
+//! - The legacy `job <name>` title heuristic only applies to
 //!   sessions at or below the v8 watermark.
-//! - **RV2-06**: a stalled rule write (fsync under the process-wide lock)
+//! - A stalled rule write (fsync under the process-wide lock)
 //!   never pins a tokio worker; the API keeps serving.
 //!
 //! Everything is in-process: ephemeral 127.0.0.1 port, temp home, fake
@@ -65,7 +64,7 @@ const SECRET: &str = "sk-live-SECRET0123456789";
 mod app_wire {
     use serde::Deserialize;
 
-    /// `model.rs::Approval` — `audit_id` is a required `u64` (RV2-03).
+    /// `model.rs::Approval` — `audit_id` is a required `u64`.
     #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     pub struct Approval {
@@ -385,7 +384,7 @@ fn make_fifo(dir: &std::path::Path) -> PathBuf {
 }
 
 // ===========================================================================
-// RV2-01 — the grace-window late answer tells the truth
+// The grace-window late answer tells the truth
 // ===========================================================================
 
 /// An `allow_always` answer that claims just before the approval deadline but
@@ -522,7 +521,7 @@ async fn late_grace_window_answer_reports_expired_and_stays_ordered() {
 }
 
 // ===========================================================================
-// RV2-02 — REST history scrubs tool-role content like the live frame
+// REST history scrubs tool-role content like the live frame
 // ===========================================================================
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -569,7 +568,7 @@ async fn rest_reload_scrubs_tool_results_like_the_live_frame() {
     let thread_id = response.json()["thread"]["id"].as_i64().unwrap();
 
     // The live frame is scrubbed (pre-existing behaviour, kept as a guard).
-    // UMF-05: a tool-role message carries its own `tool` author kind.
+    // A tool-role message carries its own `tool` author kind.
     let frames = drain_ws(&mut ws, Duration::from_millis(1200)).await;
     let live_tool = frames
         .iter()
@@ -586,7 +585,7 @@ async fn rest_reload_scrubs_tool_results_like_the_live_frame() {
         "the POST result leaked the tool result: {post_tool:?}"
     );
 
-    // …and the reload path must agree (RV2-02).
+    // …and the reload path must agree.
     let page = get_auth(&t, &format!("/v1/threads/{thread_id}/messages")).await;
     assert_eq!(page.status, 200, "body: {}", page.body);
     let tool = messages_with_role(&page, "tool");
@@ -616,13 +615,12 @@ async fn rest_reload_scrubs_tool_results_like_the_live_frame() {
 }
 
 // ===========================================================================
-// RV2-03 — the degraded audit keeps the app's required numeric `audit_id`
+// The degraded audit keeps the app's required numeric `audit_id`
 // ===========================================================================
 
 /// Budget for one step of the degraded-audit test on a saturated CI runner.
-/// The happy path is about 1.3 s (the provider's own delay); 5 s produced
-/// "no pending appeared" on #227, #228 and #235 while other jobs shared the
-/// runner, and passed on every rerun (LEDGER "CI flake").
+/// The happy path is about 1.3 s (the provider's own delay); the limit is
+/// generous so a shared runner does not time out.
 const LOADED_RUNNER_WAIT: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -706,7 +704,7 @@ async fn degraded_audit_still_emits_a_numeric_audit_id() {
 }
 
 // ===========================================================================
-// RV2-05 — the legacy title heuristic stops at the v8 watermark
+// The legacy title heuristic stops at the v8 watermark
 // ===========================================================================
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -837,7 +835,7 @@ async fn a_legacy_job_titled_session_is_still_hidden() {
 }
 
 // ===========================================================================
-// RV2-06 — the stalled fsync never pins a tokio worker
+// The stalled fsync never pins a tokio worker
 // ===========================================================================
 
 /// A one-worker runtime turns "the rule write runs on the async runtime" into

@@ -128,7 +128,7 @@ impl StoreTurnHost {
         self
     }
 
-    /// Record a failed settle under this turn's run identity (P3), so the
+    /// Record a failed settle under this turn's run identity, so the
     /// receipt can mark usage as unverifiable instead of implying it settled.
     ///
     /// Best-effort: the settle error is still returned (and logged by the
@@ -239,7 +239,7 @@ impl TurnHost for StoreTurnHost {
             }
         };
         if let Err(err) = &outcome {
-            // P3: the caller keeps logging the returned error; record it under
+            // The caller keeps logging the returned error; record it under
             // the run too, so the receipt marks usage as unverifiable instead
             // of implying the fixed estimate settled at zero.
             self.note_settle_failure(&err.to_string());
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn unlimited_budgets_still_record_the_fixed_estimate_under_the_run_id() {
-        // P2-A: an unlimited agent takes no reservation, but dropping the fixed
+        // An unlimited agent takes no reservation, but dropping the fixed
         // estimate there loses the turn's cost from its receipt entirely.
         let (host, store) = host(unlimited_budgets());
         let run_id = "turn-unlimited-1";
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn a_failed_settle_records_a_marker_for_the_run() {
-        // P3: an estimate above i64::MAX is admitted, then cannot be written
+        // An estimate above i64::MAX is admitted, then cannot be written
         // to the usage table, so the settle fails. The failure must be
         // recorded under the run for the receipt to mark usage unverified.
         let (host, store) = host(capped_budgets(u64::MAX));

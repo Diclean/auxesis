@@ -38,7 +38,7 @@ const LOGIN_MALFORMED_TAGGED: u8 = 3;
 /// Echo the command as an invalid response, then drop the socket.
 const LOGIN_ECHO_THEN_CLOSE: u8 = 4;
 
-/// How a spawned fake misbehaves, for the M3 error-path tests.
+/// How a spawned fake misbehaves, for the error-path tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Behavior {
     /// Answer every command normally.

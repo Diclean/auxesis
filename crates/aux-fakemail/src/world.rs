@@ -174,7 +174,7 @@ fn build_multipart(
     body.push_str(&format!("--{}--\r\n", boundary));
     // RFC 3501 body-type-mpart is `1*body SP media-subtype`: the child parts are
     // concatenated with no separator. A space between them is a parse error for
-    // the real client (FAKEMAIL-MULTIPART).
+    // the real client.
     let bodystructure = format!(
         "({} \"MIXED\" (\"BOUNDARY\" \"{}\") NIL NIL)",
         bs_parts.concat(),
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(a[0].subject, b[0].subject);
     }
 
-    /// FAKEMAIL-MULTIPART: demo mails with attachments must read through the real
+    /// Demo mails with attachments must read through the real
     /// aux-mail client. The client's `BODYSTRUCTURE` parser is strict RFC 3501, so
     /// one attachment (uid 114, a demo-world invoice) and two attachments (uid
     /// 9001, built here) must both list every part with its MIME type.

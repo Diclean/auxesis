@@ -90,8 +90,7 @@ fn secrets(case: &PartyCase) -> Vec<String> {
     secrets
 }
 
-/// The values of `case` a private turn still hides: names pass as written
-/// (NAMES-OFF, owner 2026-10-19).
+/// The values of `case` a private turn still hides: names pass as written.
 fn hidden(case: &PartyCase) -> Vec<String> {
     vec![case.2.clone(), case.3.clone()]
 }
@@ -178,7 +177,7 @@ fn request_with(system: &str, rest: Value) -> Value {
     json!({"model": "fake", "messages": messages, "tools": []})
 }
 
-/// PRIV-CRM-LEAK: the shrunk seed's name "Sav" is a prefix of the prompt's
+/// The shrunk seed's name "Sav" is a prefix of the prompt's
 /// "Save"; a masked turn over the unchanged prompt holds no leak.
 #[test]
 fn a_name_inside_an_unchanged_prompt_word_is_not_a_leak() {
@@ -195,8 +194,8 @@ fn a_name_inside_an_unchanged_prompt_word_is_not_a_leak() {
     assert_eq!(leaked(&scanned(&changed, &baseline), &secrets), ["Use"]);
 }
 
-/// Seal r1 P2: the prompt's "Use" becomes a token while the user content says
-/// "Use". The counts tie; the old baseline subtraction saw no leak.
+/// The prompt's "Use" becomes a token while the user content says
+/// "Use". The counts tie, so baseline subtraction must not hide the leak.
 #[test]
 fn a_replaced_prompt_word_does_not_hide_a_leak() {
     let baseline = request_with(PROMPT, json!([]));

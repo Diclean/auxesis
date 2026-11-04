@@ -23,14 +23,11 @@
 # (audit B-03) — those need the rusqlite bump, not this file.
 unmaintained = "workspace" # fail only for direct workspace deps; transitive stays a warning
 yanked = "deny"
-# `paste` 1.0.15 is unmaintained (RUSTSEC-2024-0436) and has no fixed release.
-# It reaches the graph only through `tokenizers 0.21.4`, itself a transitive
-# dependency of the optional `ner-gliner` feature. Updating tokenizers beyond
-# 0.21.4 is a separate dependency decision, so record the reason here instead
-# of leaving an unfixable advisory in the report.
-ignore = [
-    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained and has no fixed release; reached only via tokenizers 0.21.4 (gliner2-rs, optional ner-gliner feature), and a tokenizers major update is a separate decision" },
-]
+# No advisory ignore is needed for `paste` (RUSTSEC-2024-0436, unmaintained).
+# It reaches the graph only through `tokenizers 0.21.4` (the kernel's
+# `auxesis-gliner2` crate, the optional `ner-gliner` feature), so it is
+# transitive: `unmaintained = "workspace"` above leaves it out of the report.
+# An ignore for it only made cargo-deny warn that it matched no advisory.
 
 [licenses]
 # Allow-list agreed in the audit decision. Every atom in every licence

@@ -40,9 +40,9 @@ fi
 if [ "$BUILD" = 1 ] && [ -z "${AUXD:-}" ]; then
   echo "building auxd (release)…"
   if [ -x "$MAC_BUILD" ]; then
-    (cd "$REPO_ROOT" && "$MAC_BUILD" build -p auxd -p aux-cli --release)
+    (cd "$REPO_ROOT" && "$MAC_BUILD" build -p auxd -p aux-cli --locked --release)
   else
-    (cd "$REPO_ROOT" && cargo build -p auxd -p aux-cli --release)
+    (cd "$REPO_ROOT" && cargo build -p auxd -p aux-cli --locked --release)
   fi
 fi
 AUXD="${AUXD:-$TARGET/release/auxd}"

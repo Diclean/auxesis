@@ -2758,9 +2758,15 @@ pub fn constrain_non_api_turn(
     rules: &mut Vec<Rule>,
 ) {
     use aux_runtime::grants::ToolOrigin;
+    // These registries do not record their stages, so a name is never taken
+    // as built-in when it could be a connector or MCP tool: any name with a
+    // scope (a domain word, a connector prefix) is a connector, and the
+    // grants then resolve it exactly as the API path does.
     let origin = |name: &str| {
         if name.starts_with("mcp__") {
             ToolOrigin::Mcp
+        } else if aux_runtime::grants::tool_scope(name).is_some() {
+            ToolOrigin::Connector
         } else {
             ToolOrigin::Builtin
         }
@@ -3973,6 +3979,28 @@ mod tests {
         fn class(&self) -> kernel_broker::ToolClass {
             kernel_broker::ToolClass::default()
         }
+    }
+
+    /// Break-It D: the CLI/job ceiling does not label a connector-shaped
+    /// tool built-in, so the chief's refusal of an unknown connector caps
+    /// every other agent too.
+    #[test]
+    fn the_non_api_ceiling_treats_a_connector_name_as_a_connector() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let mut registry = kernel_broker::ToolRegistry::new();
+        registry.register_native(Box::new(NamedTestTool("google_mail_send_x")));
+        registry.register_native(Box::new(NamedTestTool("mail_read")));
+        let mut rules = Vec::new();
+        constrain_non_api_turn(home, "scout", &registry, &mut rules);
+        let denied = |tool: &str| {
+            rules
+                .iter()
+                .any(|r| r.agent == "scout" && r.tool == tool && r.action == Action::Deny)
+        };
+        assert!(denied("google_mail_send_x"));
+        assert!(!denied("mail_read"));
     }
 
     #[test]

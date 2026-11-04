@@ -378,12 +378,16 @@ fn smaller(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 
 /// `css` lowercased, with each comment replaced by a space and the inside of
 /// each string and unquoted `url(…)` by spaces, so that no `;`, brace, quote
-/// or `/*` in them ends a declaration or a rule. An escape keeps its `\`.
+/// or `/*` in them ends a declaration or a rule. An escape keeps its `\`, and
+/// a string, `url(` or comment still open at the end adds a stray `\` there:
+/// [`declarations`] fails closed on both, for the whole style attribute or
+/// the [`Sheet`] rule still open.
 fn clean(css: &str) -> String {
-    let mut out = String::with_capacity(css.len());
+    let mut out = String::with_capacity(css.len() + 2);
     let mut rest = css.chars();
     // The quote or `)` that ends the string or `url(` being read.
     let mut close = None;
+    let mut open_comment = false;
     while let Some(c) = rest.next() {
         let url = c == '(' && out.ends_with("url");
         match close {
@@ -406,13 +410,15 @@ fn clean(css: &str) -> String {
             None if c == '/' && rest.as_str().starts_with('*') => {
                 out.push(' ');
                 let comment = &rest.as_str()[1..];
-                rest = comment
-                    .find("*/")
-                    .map_or("", |end| &comment[end + 2..])
-                    .chars();
+                let end = comment.find("*/");
+                open_comment |= end.is_none();
+                rest = end.map_or("", |end| &comment[end + 2..]).chars();
             }
             None => out.push(c.to_ascii_lowercase()),
         }
+    }
+    if open_comment || close.is_some() {
+        out.push_str(";\\");
     }
     out
 }
@@ -1318,6 +1324,11 @@ mod tests {
         r#"<style>.h{font-size:0}</style><p class="note h">PAYLOAD</p>"#,
         r#"<style>@import url(a.css); <!-- b.q, #y{visibility:hidden} --></style><b class="Q">PAYLOAD</b>"#,
         r#"<style>.n{font-family:"}";display:none}</style><i class="n">PAYLOAD</i>"#,
+        r#"<div style="font-family:'oops;display:none">PAYLOAD</div>"#,
+        r#"<div style="background:url(oops">PAYLOAD</div>"#,
+        r#"<p style="color:red/* oops">PAYLOAD</p>"#,
+        r#"<style>.u{font-family:'oops}</style><p class="u">PAYLOAD</p>"#,
+        r#"<div style="visibility:hidden"><b style="x:'a;visibility:visible'">PAYLOAD</b></div>"#,
     ];
 
     #[test]

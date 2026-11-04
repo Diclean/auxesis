@@ -8,6 +8,18 @@ private struct StubAuth: DraftAuthenticating {
 
 @MainActor
 final class PhoneModelTests: XCTestCase {
+    func testSharedCopyKeepsBothPhoneLanguages() {
+        let expected: [(String, String, String)] = [
+            ("newAgent", "New agent", "Nouvel agent"), ("cancel", "Cancel", "Annuler"),
+            ("send", "Send", "Envoyer"), ("allowOnce", "Allow once", "Autoriser une fois"),
+            ("deny", "Deny", "Refuser"), ("name", "Name", "Nom"),
+        ]
+        for (key, english, french) in expected {
+            XCTAssertEqual(Copy(french: false)(key), english, key)
+            XCTAssertEqual(Copy(french: true)(key), french, key)
+        }
+    }
+
     func testRequestStaysInWaitingUntilMacConfirms() {
         let model = PhoneModel(authenticator: StubAuth(succeeds: true), autoConfirm: false)
         XCTAssertEqual(model.waitingCount, 2)

@@ -1,4 +1,4 @@
-//! DELEG-WHERE-1: a loopback brain is reached directly, never through a proxy
+//! A loopback brain is reached directly, never through a proxy
 //! from the environment, so `on_this_mac` is never claimed for a prompt a
 //! proxy could forward. Its own test binary: the proxy variables are
 //! process-wide and must not reach any other test.

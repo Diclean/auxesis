@@ -1,4 +1,4 @@
-// WAITING-ROW-DELEGATE: a delegated agent's card is on the Waiting page at
+// A delegated agent's card is on the Waiting page at
 // once, from its frame or from the pending-list refresh, named by its agent.
 import XCTest
 @testable import AuxesisKit

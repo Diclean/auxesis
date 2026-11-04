@@ -102,7 +102,7 @@ proptest! {
             body.contains('⟦'),
             "the turn was not masked into placeholders: {body}"
         );
-        // NAMES-OFF (owner, 2026-10-19): names stay clear. A prohibited substring
+        // Names stay clear. A prohibited substring
         // inside the address may label its one whole token HEALTH or SECRET.
         prop_assert!(!body.contains("⟦PERSON_"), "{body}");
         assert_address_is_one_token(body, &email);

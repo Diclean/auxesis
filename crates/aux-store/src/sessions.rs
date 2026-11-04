@@ -40,7 +40,7 @@ impl Store {
 
     /// Create a session of `kind`: `chat` for conversations, `job` for a
     /// scheduled-run transcript. Only `chat` sessions can become an agent's
-    /// current thread (BAPIV2-08), so a job run never hijacks the chat.
+    /// current thread, so a job run never hijacks the chat.
     pub fn create_session_of_kind(
         &self,
         agent: &str,
@@ -329,7 +329,7 @@ impl Store {
     /// Append several messages to a session **atomically** and return the
     /// stored rows in insertion order.
     ///
-    /// Used to close a tool batch the turn will never answer (P2-2): either
+    /// Used to close a tool batch the turn will never answer: either
     /// every synthetic tool result is written, or none is — a partial repair
     /// would still leave the assistant `tool_calls` row dangling.
     pub fn append_messages_atomic(

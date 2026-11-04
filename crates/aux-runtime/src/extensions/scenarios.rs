@@ -405,7 +405,7 @@ async fn a_sensitive_extension_is_offered_in_private_mode_too() {
     let host = ExtensionHost::start(home.path()).await;
     let mut registry = ToolRegistry::new();
     assert_eq!(host.register_for_agent("alice", &mut registry), 2);
-    // Private (TOK-7): B14 is covered, so the next turn still offers the tools.
+    // Private: B14 is covered, so the next turn still offers the tools.
     set_mode(home.path(), "private");
     let mut registry = ToolRegistry::new();
     assert_eq!(host.register_for_agent("alice", &mut registry), 2);
@@ -632,8 +632,8 @@ async fn proxy_allows_only_the_listed_host_and_port() {
 
 // ---- Tests 4 and 5: the real macOS sandbox --------------------------------
 //
-// The seatbelt profile currently aborts every child on macOS 27 (kernel WO
-// K08 fixes it), so these stay `#[ignore]`d. Each test runs a **positive
+// The seatbelt profile currently aborts every child on macOS 27 (a kernel
+// fix is pending), so these stay `#[ignore]`d. Each test runs a **positive
 // control** first — `/usr/bin/true` under the same profile must exit 0, and in
 // the proxy case a child must reach the allowed loopback port. If the profile
 // aborts everything, the control fails and the test cannot pass vacuously.

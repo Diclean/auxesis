@@ -406,7 +406,7 @@ public enum ClientText {
     }
 }
 
-/// The import sheet's text helpers (WO-CRMIO-2): the file's format, the columns
+/// The import sheet's text helpers: the file's format, the columns
 /// it read, the rows it left out, the country code the owner types. They work on
 /// the daemon's counts and column names only; no contact value passes through.
 public enum ContactsImportText {

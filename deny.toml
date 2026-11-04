@@ -33,7 +33,7 @@ yanked = "deny"
 # Allow-list agreed in the audit decision. Every atom in every licence
 # expression of a non-ignored crate must resolve through this list.
 #
-# NOTE (rh-1-2, updated by the egui removal): the list below is the owner's
+# NOTE (updated by the egui removal): the list below is the owner's
 # enumerated permissive set. As of the SwiftUI-only tree, every licence atom
 # in the graph resolves against it — the egui font licences
 # (`epaint_default_fonts`: OFL-1.1 + Ubuntu-font-1.0) and the BSL-1.0
@@ -67,6 +67,14 @@ allow = [
 # `OpenSSL` is deliberately NOT allowed: Cargo.lock contains no `openssl-sys`
 # (only `openssl-probe`, which is MIT OR Apache-2.0), so no crate needs it.
 confidence-threshold = 0.9
+
+# sqlcipher-src carries the SQLCipher/SQLite C sources that libsqlite3-sys
+# bundled before rusqlite 0.41 split them out. Its expression adds SQLite's
+# public-domain "blessing" and WTFPL: both are more permissive than MIT,
+# so they are allowed for this one crate only, never for the whole graph.
+[[licenses.exceptions]]
+crate = "sqlcipher-src"
+allow = ["blessing", "WTFPL"]
 
 # Our own crates. PolyForm Noncommercial 1.0.0 is the licence of this
 # repository (see LICENSE), so the workspace crates are allowed that licence

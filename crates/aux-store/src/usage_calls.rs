@@ -1,4 +1,4 @@
-//! Per-call brain usage (INFER-COST-1): fresh, cached and output tokens of
+//! Per-call brain usage: fresh, cached and output tokens of
 //! each provider call. Counts and names only, never a prompt or a reply.
 
 use crate::{Store, StoreError};

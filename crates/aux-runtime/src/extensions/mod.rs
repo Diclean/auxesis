@@ -1,4 +1,4 @@
-//! Extensions, slice 1 (WO-13b) — the app side.
+//! Extensions, slice 1 — the app side.
 //!
 //! An extension is a pinned `mcp` server listed in a signed catalog, installed
 //! explicitly, mounted per agent and run on the Mac under a Seatbelt profile

@@ -1,4 +1,4 @@
-//! WS-F1 streaming integration tests: `message.delta` end to end.
+//! Streaming integration tests: `message.delta` end to end.
 //!
 //! Everything runs in-process on an ephemeral loopback port with temp homes
 //! and fake providers: no network, no Keychain, no real `~/.auxesis`.

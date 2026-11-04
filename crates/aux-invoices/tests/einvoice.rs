@@ -424,7 +424,7 @@ fn an_allowance_without_a_vat_rate_is_reported_as_unverifiable() {
 
 #[test]
 fn a_cii_allowance_without_a_vat_rate_is_reported_as_unverifiable() {
-    // P3 (#151): the CII shape of the UBL case above. A 10 € document allowance
+    // The CII shape of the UBL case above. A 10 € document allowance
     // with no `CategoryTradeTax` rate cannot be attributed to a rate group, so
     // the per-rate basis can no longer be checked: the reader must say so
     // rather than stay silent.

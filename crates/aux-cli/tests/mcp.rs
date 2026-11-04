@@ -1,4 +1,4 @@
-//! M6-2b acceptance: `aux mcp` never contacts a server the daemon would
+//! Acceptance: `aux mcp` never contacts a server the daemon would
 //! refuse for lack of the owner's one approval.
 //!
 //! The endpoint is a loopback fake that counts every TCP connection. The CLI
@@ -86,8 +86,8 @@ fn an_unapproved_http_server_is_never_contacted_and_lists_needs_approval() {
     std::fs::write(home.join("mcp.toml"), config.to_toml_string().unwrap()).unwrap();
 
     // The approval gate releases the server to the transport. The loopback
-    // origin is then refused by the existing SSRF guard (as it was before
-    // M6-2), so the state is `failed`, never `needs approval`.
+    // origin is then refused by the existing SSRF guard, so the state is
+    // `failed`, never `needs approval`.
     let stdout = run(dir.path(), &home, &["mcp", "list"]);
     assert!(!stdout.contains("needs approval"), "{stdout}");
     assert!(stdout.contains("failed"), "{stdout}");

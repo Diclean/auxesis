@@ -1,4 +1,4 @@
-//! ASK-1: `owner_profile` hands the agents what the Mac already knows about
+//! `owner_profile` hands the agents what the Mac already knows about
 //! the owner, and lists what is still missing.
 
 use std::sync::{Arc, Mutex};

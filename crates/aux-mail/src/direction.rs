@@ -1,4 +1,4 @@
-//! WHO-OWES-DIRECTION: who owes whom for one mail, decided in code.
+//! Who owes whom for one mail, decided in code.
 //!
 //! The same words read opposite ways: a reminder the owner sent is money a
 //! client owes the owner, the same reminder received from a supplier is money

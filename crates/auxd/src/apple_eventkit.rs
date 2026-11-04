@@ -96,13 +96,13 @@ pub struct EventItem {
     /// unknown guests, never "no guests" (CAL-UPDATE-1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attendees: Option<Vec<String>>,
-    /// The id of the calendar this event sits on (CAL-DEFAULT-ID): the daemon
+    /// The id of the calendar this event sits on: the daemon
     /// tells the default calendar from a shared one by id, never by title.
     /// Absent on an older copy: then the event's calendar is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_id: Option<String>,
     /// The event is part of a recurring series, or a detached occurrence of
-    /// one (CAL-DEFAULT-ID r2). Such an event never takes the approval-free
+    /// one. Such an event never takes the approval-free
     /// path: EventKit's lookup can return the first occurrence, not the one
     /// the copy saw. Absent on an older copy: then it is not marked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -337,7 +337,7 @@ fn clean(value: &str, cap: usize) -> String {
     kernel_broker::sanitize_external_text(value, cap)
 }
 
-/// Store a snapshot encrypted, in every mode (B11).
+/// Store a snapshot encrypted, in every mode.
 ///
 /// The snapshot is local data at rest on this Mac, written as an encrypted
 /// database and never a plaintext copy, so private mode keeps it too. What a

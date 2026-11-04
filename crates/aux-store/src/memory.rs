@@ -422,7 +422,7 @@ impl Store {
     }
 
     /// The memory list of `agent`: every active or quarantined item, oldest
-    /// first, as `remember` wrote it (MEM-FORGET-HANG).
+    /// first, as `remember` wrote it.
     pub fn memory_items_for_agent(
         &self,
         agent: &str,

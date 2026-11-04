@@ -1,4 +1,4 @@
-//! B3 round 5, F2: in Private mode the `crm-timeline` refresh runs only when
+//! In Private mode the `crm-timeline` refresh runs only when
 //! every IMAP host is loopback (the brief's rule); any other config stops it
 //! before any IMAP socket. The Open path is unchanged.
 //!
@@ -204,7 +204,7 @@ fn start_mailbox(dir: &Path, mailbox: &[StoredMail]) -> (u16, std::path::PathBuf
         .expect("the simulator started")
 }
 
-/// P1: every IMAP host is loopback, so Private refreshes the timeline and the
+/// Every IMAP host is loopback, so Private refreshes the timeline and the
 /// client's mail lands on her card.
 #[test]
 fn private_mode_refreshes_the_timeline_from_a_loopback_mailbox() {
@@ -263,7 +263,7 @@ fn private_mode_refreshes_the_timeline_from_a_loopback_mailbox() {
     assert!(rows.iter().any(|row| row.kind == "mail"), "no mail row");
 }
 
-/// P2: one remote account makes the whole refresh refuse, before any socket,
+/// One remote account makes the whole refresh refuse, before any socket,
 /// even to the loopback account (all-or-nothing, as the brief).
 #[test]
 fn private_mode_refuses_when_any_mailbox_is_remote_and_dials_none() {
@@ -351,7 +351,7 @@ fn a_config_turning_remote_after_the_check_never_dials_the_remote_host() {
     assert!(remote.accept().is_err(), "the remote host was dialled");
 }
 
-/// P4: a mail config that does not parse is not local: Private refuses.
+/// A mail config that does not parse is not local: Private refuses.
 #[test]
 fn private_mode_refuses_an_unparsable_mail_config() {
     let (_dir, home) = open_home();
@@ -372,7 +372,7 @@ fn private_mode_refuses_an_unparsable_mail_config() {
     assert_eq!(spy.connections(), 0, "an unparsable config was dialled");
 }
 
-/// P6: the kill switch still refuses in both modes, before any socket.
+/// The kill switch still refuses in both modes, before any socket.
 #[test]
 fn the_kill_switch_refuses_the_refresh_in_both_modes() {
     let (_dir, home) = open_home();
@@ -388,7 +388,7 @@ fn the_kill_switch_refuses_the_refresh_in_both_modes() {
     assert_eq!(spy.connections(), 0, "a stopped refresh dialled");
 }
 
-/// P5: Open mode reaches the dial exactly as before; the spy is not a real
+/// Open mode reaches the dial exactly as before; the spy is not a real
 /// IMAP server, so the exchange then fails.
 #[test]
 fn open_mode_still_dials_the_configured_mailbox() {

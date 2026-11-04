@@ -1,5 +1,5 @@
 //! Per-agent state owned by the daemon: the `<home>/agents/<agent>/agent.toml`
-//! sidecar and the `PAUSED` / `KILLED` markers (B-API v3).
+//! sidecar and the `PAUSED` / `KILLED` markers.
 //!
 //! The engine reads an agent's soul (`soul.md`) and the global `[[rules]]`; it
 //! has no notion of a per-agent provider or of a paused agent. This module adds
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 /// Sidecar file holding the daemon-owned part of an agent's configuration.
 pub const AGENT_CONFIG_FILE: &str = "agent.toml";
 
-/// Pre-WO-07 name of the sidecar. Read only while `agent.toml` is absent; it
+/// Older name of the sidecar, read only while `agent.toml` is absent; it
 /// is never written again.
 pub const LEGACY_AGENT_CONFIG_FILE: &str = "dot.toml";
 
@@ -129,7 +129,7 @@ pub fn state(home: &Path, agent: &str) -> AgentState {
 }
 
 /// The sidecar a read should use: `agent.toml`, or the legacy `dot.toml` while
-/// `agent.toml` does not exist yet (WO-07 alias). Writes always use `agent.toml`.
+/// `agent.toml` does not exist yet. Writes always use `agent.toml`.
 fn config_read_path(home: &Path, agent: &str) -> PathBuf {
     let current = agent_dir(home, agent).join(AGENT_CONFIG_FILE);
     let legacy = agent_dir(home, agent).join(LEGACY_AGENT_CONFIG_FILE);
@@ -197,7 +197,7 @@ pub fn config(home: &Path, agent: &str) -> Result<AgentConfig, AgentError> {
 
 /// Write the sidecar atomically (`0600`, last writer wins under the lock).
 ///
-/// J-02 write gateway: relative to the verified home directory fd.
+/// The write goes through the verified home directory fd.
 pub fn write_config(home: &Path, agent: &str, config: &AgentConfig) -> Result<(), AgentError> {
     let mut clean = config.clone();
     if clean
@@ -225,7 +225,7 @@ pub fn read_soul(home: &Path, agent: &str) -> Option<String> {
 /// Read an agent's soul through the verified home handle, or `None` when no soul
 /// file exists.
 ///
-/// J-02 read gateway: the walk is fd-relative — `agents`, then the agent
+/// The read is fd-relative: `agents`, then the agent
 /// directory, then `soul.md` — every component opened with `O_NOFOLLOW`
 /// (`O_DIRECTORY` for the directories), so a symlinked agent directory or soul
 /// is refused instead of followed, and the leaf additionally with
@@ -298,7 +298,7 @@ pub fn read_soul_for_edit(home: &Path, agent: &str) -> Result<Option<String>, Ag
 /// `O_EXCL|O_NOFOLLOW` and renamed over `soul.md`, relative to the verified
 /// home handle. An existing symlink is replaced, never followed.
 ///
-/// J-02 write gateway: relative to the verified home directory fd.
+/// The write goes through the verified home directory fd.
 pub fn write_soul(home: &Path, agent: &str, text: &str) -> Result<(), AgentError> {
     let rel = Path::new("agents").join(agent).join("soul.md");
     write_private_atomically(home, &rel, text.as_bytes()).map_err(AgentError::Io)
@@ -313,7 +313,7 @@ pub fn default_instructions(agent: &str) -> String {
 /// when it already existed. `create_dir` is atomic, which is what makes
 /// concurrent creates of the same name race safely.
 pub fn claim_dir(home: &Path, agent: &str) -> Result<bool, AgentError> {
-    // J-02 write gateway: relative to the verified home directory fd.
+    // The write goes through the verified home directory fd.
     let handle =
         kernel_core::SandboxHome::open(home).map_err(|err| AgentError::Io(err.to_string()))?;
     let rel = Path::new("agents").join(agent);
@@ -330,7 +330,7 @@ pub fn claim_dir(home: &Path, agent: &str) -> Result<bool, AgentError> {
 /// Remove an agent directory created by a failed create (best effort, empty or
 /// daemon-written files only; never follows into unrelated content).
 pub fn abandon_dir(home: &Path, agent: &str) {
-    // J-02 round 4: fd-relative deletes on the verified home handle.
+    // Deletes are fd-relative on the verified home handle.
     let Ok(handle) = kernel_core::SandboxHome::open_existing(home) else {
         return;
     };
@@ -343,7 +343,7 @@ pub fn abandon_dir(home: &Path, agent: &str) {
 
 /// Create a marker; `Ok(true)` when it was created, `Ok(false)` when present.
 pub fn set_marker(home: &Path, agent: &str, marker: &str) -> Result<bool, AgentError> {
-    // J-02 write gateway: relative to the verified home directory fd.
+    // The write goes through the verified home directory fd.
     let handle =
         kernel_core::SandboxHome::open(home).map_err(|err| AgentError::Io(err.to_string()))?;
     let rel_dir = Path::new("agents").join(agent);
@@ -357,7 +357,7 @@ pub fn set_marker(home: &Path, agent: &str, marker: &str) -> Result<bool, AgentE
 
 /// Remove a marker; `Ok(true)` when it was present.
 pub fn clear_marker(home: &Path, agent: &str, marker: &str) -> Result<bool, AgentError> {
-    // J-02 round 4: fd-relative delete on the verified home handle.
+    // The delete is fd-relative on the verified home handle.
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => handle,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -378,8 +378,8 @@ pub fn dir_of(home: &Path, agent: &str) -> PathBuf {
 
 /// Write bytes through a sibling temp file, fsync and rename.
 ///
-/// J-02 write gateway: the temp file and `renameat` live in the verified
-/// parent directory fd, never through a home path string.
+/// The temp file and `renameat` live in the verified parent directory fd,
+/// never through a home path string.
 fn write_private_atomically(home: &Path, rel: &Path, bytes: &[u8]) -> Result<(), String> {
     let _guard = WRITE_LOCK
         .lock()

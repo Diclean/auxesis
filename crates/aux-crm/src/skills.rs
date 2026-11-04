@@ -398,7 +398,7 @@ impl Crm<'_> {
                 fact_key: None,
                 confidence: None,
                 source: LOG_INTERACTION_PROVENANCE,
-                // CRM-NOTE-P3: a write made while the turn was tainted keeps
+                // A write made while the turn was tainted keeps
                 // `remember`'s rule: it is not owner memory, it is quarantined
                 // and never shown on the card or recalled.
                 trust: if tainted { "tainted" } else { "owner" },

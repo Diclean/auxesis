@@ -179,7 +179,7 @@ pub fn classify(tool: &str, arguments: &Value, class: Option<&ToolClass>) -> Act
 /// CAL-PRIMARY-1: `primary` is Google's id for the default. An
 /// Apple calendar is found by its title, so `primary` is never taken for the
 /// default; and a blank name is only the default on a create — on an update it
-/// names a calendar and keeps the card (#397).
+/// names a calendar and keeps the card.
 ///
 /// The calendar an *updated* event already sits on (`event_calendar`) is not a
 /// target: it is a title, and a title never proves the default one
@@ -382,7 +382,7 @@ mod tests {
 
     /// CAL-PRIMARY-1: an Apple calendar titled `primary` may be
     /// shared, so a create on it keeps the card. A blank name on an update
-    /// still names a calendar: #397 kept that rule.
+    /// still names a calendar: that rule holds.
     #[test]
     fn an_apple_calendar_titled_primary_or_blank_keeps_its_card_on_an_update() {
         let create = json!({ "title": "Focus", "calendar": "primary" });

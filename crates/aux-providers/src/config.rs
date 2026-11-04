@@ -80,7 +80,7 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub base_url: String,
     /// Default model for this provider. Empty for `kind = "acp"`: the ACP
-    /// agent picks its own default in A0.
+    /// agent picks its own default.
     #[serde(default)]
     pub model: String,
     /// Keychain account, e.g. `deepseek`. Omit for local endpoints that need
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn a_base_url_error_never_shows_userinfo_query_or_a_secret_id() {
-        // CONFIG-ERR-ECHO-2: a key in the URL stays out of the error; the
+        // A key in the URL stays out of the error; the
         // scheme, host and path stay readable.
         for (id, base_url, kept) in [
             (
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn a_percent_encoded_key_never_shows_in_a_base_url_error() {
-        // CONFIG-ERR-ECHO-2 (review): `%73k-…` is the same key as `sk-…`, and
+        // `%73k-…` is the same key as `sk-…`, and
         // so are `%2573k-…` (encoded twice) and `%53K-…` (the same bytes,
         // another case). None of them may reach the error, in the URL, in the
         // userinfo or as the provider id.
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_key_hidden_however_many_times_it_is_encoded_never_shows() {
-        // CONFIG-ECHO-DECODE-LOOP: `%25252573k-…` is the same key as `sk-…`,
+        // `%25252573k-…` is the same key as `sk-…`,
         // four escape layers deep, and `%252525252573k-…` six layers deep. The
         // decoder peels every layer, so neither reaches the error, in the URL,
         // in the userinfo or as the provider id.
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn a_key_encoded_once_four_or_ten_times_never_shows_in_a_url_or_id() {
-        // CONFIG-ECHO-DECODE-LOOP: the key stays out of the echo at 1, 4 and
+        // The key stays out of the echo at 1, 4 and
         // 10 escape layers, in the query, the userinfo, the path and the id.
         for layers in [1usize, 4, 10] {
             // Built at runtime so no scanner sees a key literal.
@@ -683,7 +683,7 @@ mod tests {
         // 40 nested escapes: 32 rounds are not enough to settle, so the value
         // is never quoted — a fixed "[hidden]" takes its place.
         let value = format!("%{}73", "25".repeat(39));
-        // SCRUB-U-ESC (#456): the kernel may now settle the value and hide it
+        // The kernel may now settle the value and hide it
         // as a key ("<id>"); either fixed placeholder keeps it unquoted.
         let id = shown_id(&value);
         assert!(id == "[hidden]" || id == "<id>", "{id}");
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn a_megabyte_of_nested_escapes_is_hidden_and_the_work_stays_bounded() {
-        // CONFIG-ECHO-DECODE-LOOP (review): a value that nests its escapes
+        // A value that nests its escapes
         // deeply must not make the decoder work without bound. The decoder
         // stops at its budget while the text is still changing, so the value
         // is hidden — and it stops fast.
@@ -732,7 +732,7 @@ mod tests {
         let started = std::time::Instant::now();
         let shown = shown_id(&value);
         let elapsed = started.elapsed();
-        // SCRUB-U-ESC (#456): hidden either at the decode cap or as a key.
+        // Hidden either at the decode cap or as a key.
         assert!(shown == "[hidden]" || shown == "<id>", "{shown}");
         assert!(!shown.to_lowercase().contains("canary"), "{shown}");
         assert!(

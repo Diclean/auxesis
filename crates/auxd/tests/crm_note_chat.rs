@@ -1,4 +1,4 @@
-//! CRM-NOTE-CHAT-1: a note asked for in chat is saved on the client's card.
+//! A note asked for in chat is saved on the client's card.
 //!
 //! The Clients agent runs through the real turn runner over a temp home whose
 //! store holds fictional clients; the fake provider calls `crm_add_note`. The

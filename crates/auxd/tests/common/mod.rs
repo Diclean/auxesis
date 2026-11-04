@@ -26,7 +26,7 @@ pub const LOADED_RUNNER_WAIT: Duration = Duration::from_secs(30);
 ///
 /// Every integration helper that spawns `auxd` (or `aux`) must use this: it
 /// pins `HOME` and `AUXESIS_HOME` to the temp dir, marks the child as
-/// sandboxed (`AUXESIS_SANDBOX=1`, the H-03 tripwire in `aux-core`), pins the
+/// sandboxed (`AUXESIS_SANDBOX=1`, the tripwire that keeps a sandbox off real data), pins the
 /// API to an explicit ephemeral port (`AUXESIS_API_PORT=0`, so a sandbox can
 /// never bind or probe the real daemon's 2893) and asserts the home is
 /// literally under that temp dir — a shell/`$HOME` expansion mistake can then

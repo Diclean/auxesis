@@ -1,4 +1,4 @@
-//! In-flight turn cancellation tokens, keyed by agent (B-API v3 × E-18).
+//! In-flight turn cancellation tokens, keyed by agent.
 //!
 //! EH-1 made one turn cancellable through a per-turn [`TurnCancel`] token
 //! (client disconnect, request timeout). B-API v3 made per-agent pause/kill
@@ -6,7 +6,7 @@
 //! control endpoints also fire the tokens of every turn currently running for
 //! that agent (every agent for stop-all), so a kill lands immediately: the engine
 //! aborts its provider/tool await, the shell tool reaps its process tree, and
-//! the runner retires the turn's pending approvals (P2-1) — the same cleanup
+//! the runner retires the turn's pending approvals — the same cleanup
 //! a client-disconnect cancellation gets, instead of waiting for the next
 //! boundary.
 //!

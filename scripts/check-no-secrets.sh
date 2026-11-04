@@ -8,7 +8,7 @@
 # scripts/secret-scan-allowlist.txt.
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 root="$(cd "$here/.." && pwd -P)"
@@ -33,7 +33,7 @@ if [[ -n "$target" ]]; then
     fi
 else
     # A scan that can see no git tree proves nothing: fail loudly instead of
-    # printing the clean-pass line (UIF2-12).
+    # printing the clean-pass line.
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         echo "FAIL: not inside a git work tree — refusing to report a clean scan" >&2
         exit 1

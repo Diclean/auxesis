@@ -22,8 +22,8 @@
 //!   conversation tainted and settles the budget conservatively through
 //!   [`ledger::TurnHost`].
 //!
-//! Everything ships behind `[acp] enabled = false` (A0: config-only, no UI,
-//! until the security review passes).
+//! Everything ships behind `[acp] enabled = false` (config-only, no UI,
+//! until the security review signs it off).
 
 pub mod backend;
 pub mod client;

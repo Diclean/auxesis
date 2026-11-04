@@ -1,4 +1,4 @@
-//! Documents extraction routes (C2b; path B25, `docs/phase1.md` §2).
+//! Documents extraction routes (path B25, `docs/phase1.md` §2).
 //!
 //! The Mac app is the bridge. It polls the queue, downloads the original
 //! through the blob route, runs PDFKit (native text) and then Vision (OCR) on

@@ -179,7 +179,7 @@ pub(super) fn bounded_window(mut window: Vec<Message>, context: &ContextConfig) 
     }
     window.drain(..keep_from);
 
-    // The trim above can start on a `tool` row (P2-4) and can cut a
+    // The trim above can start on a `tool` row and can cut a
     // `tool_call`/`tool_result` pair; normalise until stable.
     loop {
         let before = window.len();
@@ -626,8 +626,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_multi_round_turn_reuses_one_conversation_buffer() {
-        // E-13 regression: every round's request shares the session's buffer
-        // (no `messages.clone()` per round).
+        // Every round's request shares the session's buffer (no
+        // `messages.clone()` per round).
         let harness = Harness::new();
         let provider = PointerProvider {
             responses: Mutex::new(vec![
@@ -653,7 +653,7 @@ mod tests {
         );
     }
 
-    // ---- ENGINE-HEALTH-1 fix round 1 regressions ----
+    // ---- Turn-health regressions ----
 
     /// A persisted message row, for `bounded_window` tests.
     fn store_message(id: i64, role: &str, content: &str, meta: Option<String>) -> Message {
@@ -669,8 +669,8 @@ mod tests {
 
     #[test]
     fn bounded_window_strips_a_leading_orphan_after_the_token_trim() {
-        // M5/P2-4: the token trim can start on a `tool` row even though the
-        // count bound stripped the leading orphan first.
+        // The token trim can start on a `tool` row even though the count
+        // bound stripped the leading orphan first.
         let window = vec![
             store_message(1, "system", &"s".repeat(4000), None),
             store_message(
@@ -697,8 +697,8 @@ mod tests {
 
     #[test]
     fn bounded_window_drops_an_unanswered_assistant_tool_calls_row() {
-        // P2-2 read-side: a batch cancelled before the writer-side repair
-        // left this shape; every provider rejects it.
+        // A batch cancelled before the writer-side repair left this shape;
+        // every provider rejects it.
         let call_meta =
             tool_calls_meta(&[ToolCall::new("c1", "shell", json!({"command": "echo hi"}))]);
         let window = vec![

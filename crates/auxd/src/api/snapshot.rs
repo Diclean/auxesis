@@ -636,7 +636,7 @@ pub fn agent_detail(home: &Path, name: &str) -> anyhow::Result<Option<AgentDetai
 /// documented secret shape redacted — headers, colon/`=` assignments, URL
 /// userinfo, vendor prefixes, JWTs, PEM blocks — capped at
 /// [`MESSAGE_MAX_BYTES`]) plus an honest `truncated` flag. The file on disk
-/// is never touched (B3-02).
+/// is never touched.
 fn instructions_view(home: &Path, raw: Option<String>) -> (Option<String>, bool) {
     let Some(raw) = raw else {
         return (None, false);
@@ -970,7 +970,7 @@ fn read_current_sessions(conn: &Connection) -> anyhow::Result<HashMap<String, Se
 /// legacy rows**: sessions whose id is at or below the v8 watermark
 /// (`meta.sessions_kind_legacy_max_id`), which predate the column or were
 /// backfilled by title at v7. A genuine post-v8 chat is never hidden by a
-/// title collision (RV2-05).
+/// title collision.
 fn chat_session_filter(conn: &Connection, alias: &str) -> anyhow::Result<String> {
     let mut filter = format!("{alias}.kind = 'chat'");
     if table_exists(conn, "jobs")? {
@@ -1355,7 +1355,7 @@ fn message_source(message: &Message) -> Option<String> {
 /// Message → JSON for a client response (REST page, POST result, live frame):
 /// the same shape as [`message_json`], except that **content is scrubbed on
 /// every role** — home path → `<home>`, every documented secret shape
-/// redacted (RV2-02, P2-5).
+/// redacted.
 ///
 /// The persisted row stays raw: the model's resume history needs the real
 /// value, and only the display framing is redacted. Scrubbing `assistant`
@@ -2990,7 +2990,7 @@ mod tests {
             .create_job("main", "morning", "every 15m", "{}", None)
             .unwrap();
         // A session written after the v8 watermark: its explicit kind is
-        // authoritative even though its title collides with a job (RV2-05).
+        // authoritative even though its title collides with a job.
         let chat = store.create_session("main", Some("job morning")).unwrap();
         store
             .append_message(chat.id, "user", "job morning", None)

@@ -1,4 +1,4 @@
-//! WO-M2-BRIEFNOW-1: `aux brief now` still writes the offline fixture brief
+//! `aux brief now` still writes the offline fixture brief
 //! with `--offline`, and refuses cleanly with the exact message when no
 //! daemon answers.
 //!

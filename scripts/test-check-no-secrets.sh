@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Negative test for scripts/check-no-secrets.sh + scripts/check-personal-data.sh
-# (rh-1-2). Builds a throwaway git work tree in a mktemp directory (removed on
+# Builds a throwaway git work tree in a mktemp directory (removed on
 # exit) and proves from the outside that:
 #   1. tracked text containing a generic CI account name ("runner") does NOT
-#      fail the scan — the CI runner account is not the owner (rh-1-2);
+#      fail the scan — the CI runner account is not the owner;
 #   2. a planted real-shaped secret IS still caught (exit 1, "secret-looking"
 #      in the output), so the scanner cannot silently rot;
 #   3. a planted owner username IS caught when a real (non-generic) account
@@ -12,7 +12,7 @@
 # Runs from CI (`No secrets tracked` step) and by hand.
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 here="$(cd "$(dirname "$0")" && pwd -P)"
 root="$(cd "$here/.." && pwd -P)"
@@ -23,7 +23,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts"
 cp "$root/scripts/check-no-secrets.sh" "$root/scripts/check-personal-data.sh" \
     "$root/scripts/secret-scan-allowlist.txt" "$tmp/scripts/"
-# The scanners source scripts/lib/guard.sh (J-02 round 7): the fixture needs it.
+# The scanners source scripts/lib/guard.sh: the fixture needs it.
 cp -R "$root/scripts/lib" "$tmp/scripts/"
 
 git -C "$tmp" init -q

@@ -1441,10 +1441,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_carried_secret_on_a_seen_host_asks_in_a_private_data_turn() {
-        // P3-1 (re-rated P2): host history alone used to pass any query-free
-        // URL, so a secret in the path left silently. On a sensitive turn only
-        // the bare root of a seen origin is silent; any path or query asks,
-        // and so does a re-fetch of a URL that already ran.
+        // Host history alone must not pass a query-free URL: on a sensitive
+        // turn only the bare root of a seen origin is silent; any path or query
+        // asks, and so does a re-fetch of a URL that already ran.
         let harness = Harness::new();
         harness
             .registry
@@ -1514,7 +1513,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sensitive_turn_treats_http_and_https_as_different_origins() {
-        // R3: seen URLs used to key on host+path+query, so a clean fetch of
+        // Seen URLs used to key on host+path+query, so a clean fetch of
         // `http://seen.example/` made `https://seen.example/` an exact
         // re-fetch. Origins are (scheme, host, port), so the https root asks.
         let harness = Harness::new();
@@ -1589,7 +1588,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sensitive_turn_treats_a_new_port_as_a_different_origin() {
-        // R3: the effective port was dropped from the seen identity too.
+        // The effective port was dropped from the seen identity too.
         // Seeing `https://seen.example:443/` must not make `:8443/` silent.
         let web = kernel_core::WebConfig {
             port_allowlist: vec![80, 443, 8443],
@@ -1665,7 +1664,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sensitive_turn_asks_for_the_bare_root_of_a_seen_origin() {
-        // R4 red by design: the origin was fetched earlier in this same
+        // Red by design: the origin was fetched earlier in this same
         // private-data turn, so it is seen — and its bare root still asks,
         // because any silent request is a channel.
         let harness = Harness::new();

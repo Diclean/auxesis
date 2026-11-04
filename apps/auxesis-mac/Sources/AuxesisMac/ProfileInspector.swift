@@ -1,6 +1,6 @@
 // The agent profile (⌥⌘I, 360 on the right): identity, brain, Can see, Can do,
 // Never, the green "stays on this Mac" line, Works with, Memory, Skills,
-// Workshop and Pause. Grants and memory are NEW routes (E0): when the daemon
+// Workshop and Pause. Grants and memory are separate routes: when the daemon
 // does not serve them yet the panel says so, in one quiet line.
 import AuxesisKit
 import SwiftUI
@@ -73,7 +73,7 @@ struct ProfileInspector: View {
                         .foregroundStyle(palette.muted.color)
                 }
                 Spacer()
-                // MASCOT-2: the agent's look, in its own sheet.
+                // The agent's look, in its own sheet.
                 Button(copy(.mascotMenu)) { mascotOpen = true }
                     .buttonStyle(AuxButtonStyle())
                     .accessibilityLabel(copy(.mascotMenu)).accessibilityIdentifier("agent-profile-mascot")

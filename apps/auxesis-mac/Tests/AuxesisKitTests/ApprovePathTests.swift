@@ -1,4 +1,4 @@
-// The yes path as the owner sees it (2026-10-30): real states, one count, plain
+// The yes path as the owner sees it: real states, one count, plain
 // words only for mapped ids, no placeholder line, and Stop never loses a card.
 import Testing
 @testable import AuxesisKit
@@ -60,7 +60,7 @@ import Testing
         XCTAssertEqual(PlainLabel.action("run skill__follow-up"), "Run “Follow-up” once, as shown")
         XCTAssertEqual(PlainLabel.action("run skill__send-invite", language: .fr), "Lancer « Invitation » une fois, tel qu’affiché")
         XCTAssertEqual(PlainLabel.action("run mail_send"), "Send this mail")
-        // A calendar event with guests sends them invites: the label says so (#391).
+        // A calendar event with guests sends them invites: the label says so.
         XCTAssertEqual(PlainLabel.action("run google_calendar_create_event"), "Create this event and send its invites")
         XCTAssertEqual(PlainLabel.action("run apple_calendar_create_event", language: .fr), "Créer cet événement et envoyer les invitations")
         // A calendar move has its own words, in both languages.

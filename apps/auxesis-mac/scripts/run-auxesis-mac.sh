@@ -14,7 +14,7 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$APP_DIR/../.." && pwd)"
 
-# Shared guard + explicit real-home refusal (J-02 round 7). `TMPDIR` pointing
+# Shared guard + explicit real-home refusal. `TMPDIR` pointing
 # at the real home would make `mktemp -d` create the sandbox inside it.
 # shellcheck source=../../../scripts/lib/guard.sh
 source "$REPO_ROOT/scripts/lib/guard.sh"

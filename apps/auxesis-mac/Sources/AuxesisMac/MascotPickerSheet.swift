@@ -1,4 +1,4 @@
-// The "<Agent>'s mascot" sheet (MASCOT-2): a live preview, the ten mascots in
+// The "<Agent>'s mascot" sheet: a live preview, the ten mascots in
 // a 5 × 2 grid, the five tints. Nothing is saved until Done (↩); Cancel (esc)
 // drops the pick. Done saves through `AgentLooks.set`, so every mascot on
 // screen changes at once. App-only presentation: nothing goes to the daemon.

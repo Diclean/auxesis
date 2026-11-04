@@ -1,5 +1,5 @@
-//! J-02 round 4, item (B): the sandbox-home invariant is enforced
-//! structurally, not by a "does this file mention home" heuristic.
+//! The sandbox-home invariant is enforced structurally, not by a "does this
+//! file mention home" heuristic.
 //!
 //! Outside `aux-core` (the single source of truth), workspace code must not:
 //!

@@ -7,11 +7,11 @@
 //! one calendar insert and one Gmail send, both with the real recipient and no
 //! token delimiters left in the body.
 //!
-//! The Private variant runs on kernel-0.0.2 (K07): private-mode chat (A1/A2) is
-//! covered, and the owner's contact supplies the names the gate masks. The
-//! session and the skill run read the same contacts index.
+//! The Private variant covers private-mode chat (A1/A2), and the owner's
+//! contact supplies the names the gate masks. The session and the skill run
+//! read the same contacts index.
 
-// MA4: the frozen Google writes only exist when the `google` feature is on.
+// The frozen Google writes only exist when the `google` feature is on.
 #![cfg(feature = "google")]
 
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ use tempfile::{tempdir, TempDir};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-// MA4: this Google-only test keeps its own Google skill text; the shared
+// This Google-only test keeps its own Google skill text; the shared
 // fixture now points at the EventKit create and the SMTP send.
 const SEND_INVITE: &str = "---
 name: send-invite
@@ -580,7 +580,7 @@ impl Approver for NeverAnswers {
     }
 }
 
-/// P2-3: a cancel while the card is pending ends the turn, and Google sees
+/// A cancel while the card is pending ends the turn, and Google sees
 /// nothing and the run writes no `skill.run` row.
 #[tokio::test]
 async fn hero_cancel_while_approval_is_pending_sends_nothing() {

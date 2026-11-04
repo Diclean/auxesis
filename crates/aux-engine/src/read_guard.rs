@@ -1,4 +1,4 @@
-//! CAL-NO-TOOL-GUESS: an agent never states a calendar, mail, client or
+//! An agent never states a calendar, mail, client or
 //! reminder fact it did not read with a tool in the same turn.
 //!
 //! A question about a domain whose read tools (or `delegate`) the session
@@ -231,7 +231,7 @@ pub(crate) fn states_fact(answer: &str) -> bool {
         .any(|word| padded.contains(&format!(" {word} ")))
 }
 
-/// MEM-FORGET-HANG: the one nudge when an answer says something was saved
+/// The one nudge when an answer says something was saved
 /// but no memory write ran this turn. Static text.
 pub(crate) const SAVE_NUDGE: &str = "No memory item was saved this turn. Call `remember` only when the owner asked you to save it; use `suggest_memory` only to propose a stable fact the owner stated or confirmed here, and say it awaits owner review.";
 

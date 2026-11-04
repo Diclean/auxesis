@@ -1,4 +1,4 @@
-//! M3: the bounded IMAP read path.
+//! The bounded IMAP read path.
 //!
 //! Every method opens one connection, does one bounded unit of work and closes
 //! it. The whole operation runs inside
@@ -515,7 +515,7 @@ impl MailService {
             .iter()
             .find(|account| account.id == id)
             // A name this Mac does not have is a configuration mistake, not a
-            // broken server: it never reads as one (DOC-COLLECT-1).
+            // broken server: it never reads as one.
             .ok_or(MailError::Config { field: "account" })
     }
 
@@ -776,7 +776,7 @@ async fn fetch_parts(
                 let size = bytes.len();
                 // An empty answer for a part the server declared as a file is
                 // a broken answer, never a document: a 0-byte receipt would
-                // reach the registry and the Documents page (DOC-COLLECT-1).
+                // reach the registry and the Documents page.
                 if size == 0 && info.size > 0 {
                     skipped.push(SkippedAttachment {
                         part: info.part,

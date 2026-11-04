@@ -131,7 +131,7 @@ private struct StopCopy {
     var routines: String { french ? "État des routines indisponible." : "Routine status unavailable." }
     var resumeSemantics: String { french ? "Reprendre débloque l’utilisation. Aucun envoi ni rejeu de travail." : "Resume unblocks use. It does not send or replay work." }
     var left: String { french ? "A quitté ce Mac" : "Left this Mac" }
-    /// DELEG-WHERE-COPY-1: the stop report says who handled the work, not that
+    /// The stop report says who handled the work, not that
     /// the data stayed here. A local brain can be an alias of a cloud model.
     var stayed: String { L10n.ui(.stayedOnMac, language) }
 }

@@ -508,7 +508,7 @@ mod tests {
 
         let requests = provider.requests();
         let last = serde_json::to_string(&requests.last().unwrap().messages).unwrap();
-        // A name is no hidden value (NAMES-OFF, owner 2026-10-19).
+        // A name is no hidden value.
         assert!(
             !last.contains("camille@exemple.fr"),
             "the private turn sent raw text: {last}"

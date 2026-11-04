@@ -27,7 +27,7 @@ pub fn today_line_now() -> String {
 /// then the three ranges the owner means by "this week", "the next seven days"
 /// and "next week".
 ///
-/// CAL-THIS-WEEK: the model used to pick the week range itself. On a Sunday
+/// The model used to pick the week range itself. On a Sunday
 /// 25 October it answered "what do I have this week?" with the days of
 /// Monday 26 October to Sunday 1 November and called them this week. The
 /// ranges are computed here, from the local date, so the model only reads them
@@ -114,7 +114,7 @@ mod tests {
             .fixed_offset()
     }
 
-    /// CAL-THIS-WEEK: the owner asked "what do I have this week?" on Sunday
+    /// The owner asked "what do I have this week?" on Sunday
     /// 25 October 2026 and got the days of the next week, called this week.
     /// The context names the weekday and the ranges, so the model reads them
     /// instead of choosing one.

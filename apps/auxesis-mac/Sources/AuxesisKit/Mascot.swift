@@ -1,4 +1,4 @@
-// Agent mascots (MASCOT-1): one family drawn from the Open Alpha "a" — the
+// Agent mascots: one family drawn from the Open Alpha "a" — the
 // open loop is the body, the stem the antenna, the clay dot the one accent.
 // The look of each agent (mascot + tint) is app-only presentation: it lives
 // in UserDefaults under `agentLook.<id>` and never goes to the daemon.
@@ -110,7 +110,7 @@ public struct AgentLooks {
     }
 }
 
-/// The "<Agent>'s mascot" sheet (MASCOT-2): the pick lives here until Done
+/// The "<Agent>'s mascot" sheet: the pick lives here until Done
 /// saves it; Cancel just drops it.
 public struct MascotPicker {
     public static let columns = 5

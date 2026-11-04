@@ -1,4 +1,4 @@
-// Private answers (PRIV-ANSWERS-UI): the top section of Today. One row per
+// Private answers: the top section of Today. One row per
 // answer, newest first: time, the answer text (selectable, six lines, then
 // "Show more"), and Dismiss. Hidden when there are none. Polls while Today is
 // on screen and refreshes once when the app becomes active.

@@ -1,4 +1,4 @@
-// Agent mascots (MASCOT-1): each agent's default look, the owner's pick
+// Agent mascots: each agent's default look, the owner's pick
 // kept across launches in a file-backed UserDefaults suite, a broken value
 // falling back, and tints that never borrow a meaning hue.
 import Foundation
@@ -98,7 +98,7 @@ import Testing
         XCTAssertEqual(missing.map(\.text).joined(), "Aux asked Mail")
     }
 
-    // MASCOT-P3: the guard the SVG badges had (BRAND-1), ported to the
+    // The guard the SVG badges had, ported to the
     // mascots. The names of the old brand sheet are the brand's, not the
     // app's: no mascot, no tint and no source file that draws a mascot says
     // one. The scan walks every source file, not a hand-kept list, so a new

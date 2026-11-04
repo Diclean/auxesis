@@ -288,7 +288,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .merge(super::clients::routes())
         // Private-mode iMessage answers held in memory (PRIV-IMSG).
         .merge(super::private_answers::routes())
-        // Import clients from a contacts file (WO-CRMIO-1).
+        // Import clients from a contacts file.
         .merge(super::contacts::routes())
         .route("/v1/screen", get(screen_not_implemented))
         .route("/v1/audit/{id}", get(audit_not_implemented))
@@ -300,7 +300,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
         ))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         // Outermost: a non-loopback Host or a cross-origin browser request
-        // is refused before auth and before any route (F-17/C P3-2).
+        // is refused before auth and before any route.
         .layer(middleware::from_fn(security::validate_host_origin))
         .with_state(state)
 }
@@ -1963,7 +1963,7 @@ async fn resolve_approval(
             // `append_rule` is a read-modify-write of `config.toml`; it takes
             // the same shared lock so it cannot be lost to a concurrent
             // settings rewrite (P2, #133), and the `<home>/.config.lock` file
-            // lock extends that to writers in other processes (security review P2).
+            // lock extends that to writers in other processes.
             let _guard = config_write
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2038,7 +2038,7 @@ async fn resolve_approval(
     // `resolved` always precedes `tool.end`/`message.done`. `complete_with`
     // returns `Abandoned` when the turn already gave up (the timeout grace
     // expired); then nothing is broadcast and the answer is reported as
-    // expired instead of `allowed` (RV2-01).
+    // expired instead of `allowed`.
     let db_path = state.db_path.clone();
     let events = state.events.clone();
     let id_for_effects = id.clone();
@@ -2245,7 +2245,7 @@ fn invalid_scope(message: &'static str) -> Response {
 }
 
 /// Blocking `approval.answered` audit write. Callers run it on a blocking
-/// thread (`spawn_blocking`), never directly on a tokio worker (RV2-06).
+/// thread (`spawn_blocking`), never directly on a tokio worker.
 ///
 /// `edited_text` is `Some` only for an `edit` decision: the scrubbed draft is
 /// stored with the answer so the journal shows exactly what the owner sent.
@@ -2302,7 +2302,7 @@ fn audit_answered_late_sync(
     }
 }
 
-/// Audit an answer for an approval whose turn was already abandoned (P2-1):
+/// Audit an answer for an approval whose turn was already abandoned:
 /// the answer is rejected with `410`, nothing was written and nothing ran.
 fn audit_answered_abandoned_sync(
     db_path: &std::path::Path,
@@ -2538,13 +2538,13 @@ async fn settings_update(State(state): State<Arc<ApiState>>, body: Bytes) -> Res
     let result = tokio::task::spawn_blocking(move || {
         // The whole read-modify-write runs under the one shared config writer
         // lock, so a concurrent provider append cannot be silently dropped by
-        // this atomic replacement (P2, #133).
+        // this atomic replacement.
         let _guard = config_write
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // The file lock extends that serialization across processes (a CLI or
         // another writer in a different process): the read below must happen
-        // inside it, never on a stale snapshot (security review P2).
+        // inside it, never on a stale snapshot.
         kernel_core::with_config_lock(&home, || {
             crate::api::load_config_verified(&home).map_err(|err| err.to_string())?;
             let handle = kernel_core::SandboxHome::open(&home).map_err(|err| err.to_string())?;

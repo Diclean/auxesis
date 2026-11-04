@@ -49,7 +49,7 @@ impl NativeTool for WriteFileTool {
     }
 }
 
-/// Whether `path` lands in Git metadata under `workspace` (TOK-3b).
+/// Whether `path` lands in Git metadata under `workspace`.
 ///
 /// The check is case-folded, since APFS is case-insensitive by default and
 /// `.GIT/config` is `.git/config` there. It runs on the lexical path and on
@@ -214,7 +214,7 @@ impl Tool for WriteFileTool {
         }
         // A parent can be swapped for a symlink between the checks above and
         // `open` (O_NOFOLLOW guards only the last component), so the opened
-        // descriptor itself must not sit in Git metadata (TOK-3b).
+        // descriptor itself must not sit in Git metadata.
         // Nothing is removed on refusal: under a race the file may be a real
         // Git file, and one this call created is empty and not executable,
         // so Git never runs it. The sandboxed shell cannot rename anything

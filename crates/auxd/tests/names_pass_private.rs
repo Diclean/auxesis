@@ -1,10 +1,10 @@
-//! NAMES-OFF acceptance (owner, 2026-10-19): in private mode a person's or a
+//! In private mode a person's or a
 //! company's name reaches the model as written. Cards, IBANs, IDs, secrets,
 //! health terms, e-mail addresses and phone numbers are still masked.
 //!
 //! The owner's contacts hold the person, and a stand-in for the local name
 //! model tags the company, the `delegate` tool and "clients agent" as names,
-//! as the real model did on 2026-10-18. A real server on a loopback port and a
+//! as the local model did. A real server on a loopback port and a
 //! scripted brain that records every request. No network, Keychain or real home.
 
 mod common;
@@ -27,7 +27,7 @@ const EXTRA: &str = "\n[[providers]]\nid = \"fakey\"\nbase_url = \"http://127.0.
 model = \"fake-model\"\nkind = \"fake\"\n\n[ui]\nlanguage = \"en\"\n";
 const ASK: &str = "Call Camille Exemple at Northwind about the quote";
 
-/// What the local name model tagged on 2026-10-18.
+/// What the local name model tagged.
 struct ModelStandIn;
 
 impl NameSpotter for ModelStandIn {

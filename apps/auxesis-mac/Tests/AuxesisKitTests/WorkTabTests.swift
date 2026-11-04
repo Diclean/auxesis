@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AuxesisKit
 
-/// UI-V5-FINISH-3: the right panel's Work tab.
+/// The right panel's Work tab.
 @objcMembers @MainActor final class WorkTabTests: XCTestCase {
     private let mira = Approval(
         id: "ap-1", auditId: 1, agent: "mail", threadId: "mail", ts: 1, action: "mail.send",

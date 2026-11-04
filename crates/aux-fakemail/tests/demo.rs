@@ -54,7 +54,7 @@ fn a_seed_batch_continues_the_uids_and_changes_lead_from_day_to_day() {
     assert_ne!(first[1].from, next_day[1].from, "a different lead each day");
 }
 
-/// DOC-REEXTRACT-1: a demo mailbox written before the real PDF receipt is
+/// A demo mailbox written before the real PDF receipt is
 /// re-seeded when the simulator starts: the old receipt attachment becomes
 /// the real PDF, and a message the owner added is never touched.
 #[tokio::test]

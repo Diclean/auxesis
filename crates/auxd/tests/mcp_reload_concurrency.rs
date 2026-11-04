@@ -1,6 +1,6 @@
 //! A slow MCP reload must never resurrect a server the owner disabled while it
-//! was discovering, and the replaced stdio server must be reaped (security review P2 on
-//! #139: mutations are serialized under one MCP lock with a generation check).
+//! was discovering, and the replaced stdio server must be reaped. Mutations are
+//! serialized under one MCP lock with a generation check.
 
 mod common;
 use auxd::api::{self, ApiOptions};

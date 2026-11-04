@@ -105,7 +105,7 @@ public enum TeamMap {
         let live = record?.state == .working || record?.state == .thinking
         guard open != nil || live else { return .idle }
         let steps = open?.steps ?? []
-        // The current step names the tool in plain words (STEP-TOOL-LABELS),
+        // The current step names the tool in plain words,
         // never its id. A delegate step carries no target: the map says
         // "Asking an agent".
         let current = steps.last { $0.state == .working }.map {

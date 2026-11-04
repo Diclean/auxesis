@@ -1,5 +1,5 @@
 // The right panel's Privacy tab: today's privacy record for
-// the open conversation, in neutral ink (SOBER-1): `ink2` words and an `ink3`
+// the open conversation, in neutral ink: `ink2` words and an `ink3`
 // glyph — arrow for a run that left this Mac, shield only for one with local-host
 // evidence, dashed circle for one that recorded no host, "?" when not known.
 // The rules live in `PrivacyTabModel`.

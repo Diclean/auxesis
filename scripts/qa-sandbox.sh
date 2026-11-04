@@ -2,12 +2,12 @@
 # Boots Auxesis in a throwaway sandbox: fresh HOME/AUXESIS_HOME, no real keys.
 # Used by builders and breakers alike. Never touches your real ~/.auxesis.
 #
-# J-02: the guard is armed (AUXESIS_SANDBOX=1) and both HOME and AUXESIS_HOME
+# The guard is armed (AUXESIS_SANDBOX=1) and both HOME and AUXESIS_HOME
 # are literal mktemp paths; auxd binds an explicit ephemeral port
 # (AUXESIS_API_PORT=0) and doctor probes the port auxd actually announced.
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REAL_HOME="$(guard_real_home)"

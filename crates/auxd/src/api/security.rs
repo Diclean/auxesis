@@ -1,4 +1,4 @@
-//! Host and `Origin` validation for the local API (F-17, audit C P3-2).
+//! Host and `Origin` validation for the local API.
 //!
 //! The API binds loopback only and every route needs the bearer token, so a
 //! DNS-rebinding page cannot read a response today (it can neither set
@@ -20,7 +20,7 @@ use super::error;
 
 /// Reject non-loopback `Host` and cross-origin browser requests.
 ///
-/// A duplicated `Host`/`Origin` header is refused outright (round-1 P3-9):
+/// A duplicated `Host`/`Origin` header is refused outright:
 /// hyper answers from the first value while a downstream proxy or a browser
 /// may read the last, so "first one is loopback" is not a decision this layer
 /// can make. An absent header stays the caller's business.
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn duplicate_host_or_origin_headers_are_refused() {
-        // Round-1 P3-9: hyper answers from the first value, so
+        // Hyper answers from the first value, so
         // `Host: 127.0.0.1` + `Host: evil.example` used to pass. Neither
         // value may decide; a duplicate is refused.
         let mut host = HeaderMap::new();

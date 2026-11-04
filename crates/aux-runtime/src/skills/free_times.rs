@@ -1,4 +1,4 @@
-//! The owner's free times, computed by the runtime before a card (M4-3b).
+//! The owner's free times, computed by the runtime before a card.
 //!
 //! A skill whose body names [`MARKER`] has its `mail.send` body's marker
 //! replaced with the owner's free windows: 09:00–18:00 in the owner's zone,

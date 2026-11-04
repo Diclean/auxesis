@@ -161,7 +161,7 @@ async fn a_party_edited_in_the_ui_has_its_address_tokenised_in_the_next_brain_ca
     // The app opens the card, then saves the editor.
     let card = t.call("GET", &format!("/v1/clients/{id}"), None).await;
     assert_eq!(card.status, 200, "body: {}", card.body);
-    // CLIENT-TZ-FIELD: the card carries the client's stored zone.
+    // The card carries the client's stored zone.
     assert_eq!(card.json()["party"]["time_zone"], "Europe/Paris");
     let saved = t
         .call(

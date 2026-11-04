@@ -216,7 +216,7 @@ pub fn build_turn_chain(
 /// What a forced `brain: none` skill says when it cannot reach a mailbox.
 pub const NO_MAILBOX: &str = "No mailbox is configured to collect receipts from.";
 
-/// The chat path's stand-in for a forced `brain: none` skill (M5-5). No model
+/// The chat path's stand-in for a forced `brain: none` skill. No model
 /// runs and nothing leaves the Mac: the first round calls the skill with its
 /// fixed fill, the next one reports the run's counts. The turn keeps its
 /// executor, broker, Ledger rows and stored thread.
@@ -245,7 +245,7 @@ impl NoModelSkill {
         for logical in &skill.effective_tools {
             let wire = aux_runtime::skills::tool_map::lookup(logical)?.wire;
             // The collector names no account: it reads every configured
-            // mailbox, one after another (DOC-COLLECT-1).
+            // mailbox, one after another.
             if logical == "docs.ingest" && !mailbox.take().map(|ask| ask()).unwrap_or(false) {
                 return Some(Self { call: None });
             }

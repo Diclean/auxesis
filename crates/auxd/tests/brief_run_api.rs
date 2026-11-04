@@ -1,4 +1,4 @@
-//! WO-M2-BRIEFNOW-1: `POST /v1/brief/run` runs the daemon's morning brief on
+//! `POST /v1/brief/run` runs the daemon's morning brief on
 //! demand, through the same inner path as the scheduled 08:00 job.
 //!
 //! Sandbox only: a temp home, a loopback `aux-fakemail` simulator with a
@@ -377,7 +377,7 @@ async fn brief_run_api_writes_once_and_notifies_counts_only() {
     api_handle.shutdown();
 }
 
-/// WO-M2-BRIEFSTATUS-1: `GET /v1/brief/status` says whether today's brief ran,
+/// `GET /v1/brief/status` says whether today's brief ran,
 /// when, how and what happened to the delivery, and never carries content.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn brief_status_reports_the_run_and_delivery_without_content() {
@@ -526,7 +526,7 @@ async fn brief_status_reports_the_run_and_delivery_without_content() {
     api_handle.shutdown();
 }
 
-/// LEAD-1: the brief reads the mailbox, suggests one unknown sender asking for a
+/// The brief reads the mailbox, suggests one unknown sender asking for a
 /// quote (not the newsletter or the auto-reply), and the add / ignore routes act.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn brief_suggests_a_possible_client_and_add_and_ignore_act() {

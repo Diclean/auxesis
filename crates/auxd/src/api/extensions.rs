@@ -1,4 +1,4 @@
-//! Local OAuth 2.0 (PKCE) for extensions (E5).
+//! Local OAuth 2.0 (PKCE) for extensions.
 //!
 //! Three authenticated routes:
 //!

@@ -1,4 +1,4 @@
-//! M3: the IMAP read path against the in-process fake. Offline only.
+//! The IMAP read path against the in-process fake. Offline only.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,7 +166,7 @@ async fn search_sends_a_bounded_since_and_clamps_the_window() {
     assert_read_only(&commands);
 }
 
-/// WHO-OWES-2: the demo world's late-payment mails are received from the
+/// The demo world's late-payment mails are received from the
 /// clients (the owner replies "sorry for the delay, paying this week"), not
 /// owner-sent reminders. The model asks for a bounded page (`limit`); a
 /// server that ignores `TEXT` hands it the newest mail of the folder
@@ -212,13 +212,13 @@ async fn a_who_owes_search_returns_both_overdue_invoices_of_the_demo_world() {
         !rendered.contains("General update") && !rendered.contains("Studio Weekly"),
         "unrelated mail filled the page: {rendered}"
     );
-    // WHO-OWES-DIRECTION: a reminder received from the client is money the
+    // A reminder received from the client is money the
     // owner owes, never money owed to the owner.
     assert!(rendered.contains("direction: you_owe"), "{rendered}");
     assert!(!rendered.contains("direction: owed_to_you"), "{rendered}");
 }
 
-/// WHO-OWES-DIRECTION: the same words, "Invoice overdue", in both directions.
+/// The same words, "Invoice overdue", in both directions.
 /// A reminder the owner sent to a client is money owed to the owner; the same
 /// words received from a supplier are money the owner owes. The mail tool
 /// labels the rows itself, so the model never has to infer the direction.

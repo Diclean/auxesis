@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn claim_due_jobs_is_bounded_by_the_batch_limit() {
-        // F-17: a store with many due jobs must not fan out one engine turn
+        // A store with many due jobs must not fan out one engine turn
         // per row in a single tick.
         let mut store = Store::open_in_memory().unwrap();
         for index in 0..(CLAIM_BATCH_LIMIT + 8) {
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn a_live_running_run_blocks_a_re_claim_even_with_a_backdated_lease() {
-        // NEW-A2: the lease alone must not be the last line of defence. If a
+        // The lease alone must not be the last line of defence. If a
         // clock jump (or a missed renewal) back-dates `next_run_at` while run
         // #1 is still `running`, the next claim must not start run #2.
         let mut store = Store::open_in_memory().unwrap();

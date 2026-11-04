@@ -1,4 +1,4 @@
-//! NEW-CHAT-1: `POST /v1/threads/{agent}/new` starts a fresh chat session; the old one
+//! `POST /v1/threads/{agent}/new` starts a fresh chat session; the old one
 //! stays stored, and in private mode nothing of it is restored or sent.
 
 mod common;

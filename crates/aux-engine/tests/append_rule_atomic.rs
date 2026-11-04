@@ -1,9 +1,5 @@
-//! Regression tests for BAPIV2-02: `append_rule` must be concurrency-safe
-//! (no lost updates, no torn `config.toml`) and must refuse to append to a
-//! file that is already broken.
-//!
-//! This file compiles against the pre-fix code on purpose: it is the
-//! isolated reproduction for the release blocker (see the fix report).
+//! `append_rule` must be concurrency-safe (no lost updates, no torn
+//! `config.toml`) and must refuse to append to a file that is already broken.
 
 use std::sync::{Arc, Barrier};
 use std::time::Duration;

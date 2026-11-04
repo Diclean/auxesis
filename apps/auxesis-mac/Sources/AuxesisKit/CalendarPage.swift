@@ -1,4 +1,4 @@
-// The Calendar page (CAL-PAGE-1): the next 8 days from this Mac's EventKit
+// The Calendar page: the next 8 days from this Mac's EventKit
 // read, the same data the app publishes to auxd, plus how fresh auxd's copy
 // is and the "keep running at login" switch that keeps it fresh.
 import Foundation

@@ -1,10 +1,10 @@
-//! TURN2-HANG: a chief turn queued behind a running turn of the same thread
+//! A chief turn queued behind a running turn of the same thread
 //! never parks silently.
 //!
 //! - Turn 1 delegates to Clients, whose call waits on a card nobody answers:
-//!   turn 2 runs beside it and answers at once, and the card still waits
-//!   (CARD-NEVER-BLOCKS). Before TURN2-HANG it parked on the thread lock until
-//!   turn 1 ended; before CARD-NEVER-BLOCKS it failed `409 thread_busy`.
+//!   turn 2 runs beside it and answers at once, and the card still waits.
+//!   It used to park on the thread lock until turn 1 ended, or fail
+//!   `409 thread_busy` while the card waited.
 //! - Turn 1 is slow but healthy (no card): turn 2 waits for it and answers.
 //!
 //! A real server and a loopback OpenAI-compatible upstream; no network or

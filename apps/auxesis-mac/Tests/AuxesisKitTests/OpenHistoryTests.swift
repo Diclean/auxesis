@@ -1,4 +1,4 @@
-// WO UI-V4-2: an agent conversation opens on its existing history, never on
+// An agent conversation opens on its existing history, never on
 // the empty welcome, and a sidebar row says the real last line of its thread.
 //
 // Root cause of the empty Aux (owner's app): "New chat" (POST /v1/threads/aux/new)

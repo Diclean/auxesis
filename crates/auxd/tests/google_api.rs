@@ -7,7 +7,7 @@
 //! Every test runs with a temp home and `AUXESIS_SANDBOX=1` (set by
 //! the private ops repo), and none of them reaches Google.
 
-// MA4: the Google connect routes exist only with the `google` feature.
+// The Google connect routes exist only with the `google` feature.
 #![cfg(feature = "google")]
 
 mod common;

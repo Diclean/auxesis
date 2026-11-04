@@ -1,13 +1,13 @@
-//! AGENT-DEFAULT acceptance: a fresh install chats with Aux, the chief, which
+//! A fresh install chats with Aux, the chief, which
 //! is offered `delegate`; Mail is offered the mail reads, Calendar the calendar
-//! read, and the chief neither (D33). An existing config keeps the agent it
+//! read, and the chief neither. An existing config keeps the agent it
 //! names: nothing is migrated.
 //!
-//! AGENT-DEFAULT-2: a delegated agent runs at least as private as its caller,
+//! A delegated agent runs at least as private as its caller,
 //! so a Private Aux never lets the owner's contact leave in clear, whatever
 //! Mail's own or the global mode.
 //!
-//! DELEGATE-MODE-PIN: the handoff takes the mode the chief's turn runs under,
+//! The handoff takes the mode the chief's turn runs under,
 //! so a switch to Open while its card waits still sends nothing clear.
 //!
 //! A real server on a loopback port, a provider that records every request and
@@ -38,7 +38,7 @@ id = \"sim\"\nemail = \"owner@mailsim.test\"\n\n[connectors.mail.accounts.imap]\
 host = \"127.0.0.1\"\nport = 9\nsecurity = \"tls\"\n";
 
 /// The owner's fictional contact: never in clear in a Private body or row.
-/// Her address; her name passes as written (NAMES-OFF, owner 2026-10-19).
+/// Her address; her name passes as written.
 const CAMILLE: [&str; 1] = ["camille@exemple.fr"];
 
 /// Records each request's text and offered tools; answers "ok", or what the
@@ -226,7 +226,7 @@ async fn a_fresh_install_chats_with_aux_and_its_team_reads_mail_and_calendar() {
     });
 }
 
-/// MAIL-NO-SHELL: a domain agent is not offered `shell` by default, so Mail
+/// A domain agent is not offered `shell` by default, so Mail
 /// reads mail with its mail tools and never hunts the disk. An agent.md that
 /// lists `shell` asks for it explicitly and gets it; the chief is unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -318,7 +318,7 @@ fn assert_delegation_masked(mode: &str, layers: &[(&str, &str)], open_on_card: b
     assert_eq!(rig.text("What is my newest mail?"), "aux");
     if let Some(owner) = owner {
         owner.join().unwrap();
-        // The switch stops the chief's turn and, with it, Mail's (TOOL-HANG):
+        // The switch stops the chief's turn and, with it, Mail's:
         // the record is closed, and whatever Mail sent first is still masked.
         let store = Store::open(&store_path(&rig.home)).unwrap();
         let states = || -> Vec<String> {
@@ -358,7 +358,7 @@ fn assert_delegation_masked(mode: &str, layers: &[(&str, &str)], open_on_card: b
     let bodies: Vec<String> = calls.into_iter().map(|(body, _)| body).collect();
     assert_masked(&bodies, "a request");
     assert!(bodies[2].contains('⟦'), "Mail reads tokens: {}", bodies[2]);
-    // Mail's tool-output tokens are not in its display table yet (TOKEN-DISPLAY),
+    // Mail's tool-output tokens are not in its display table yet,
     // so the chief reads them escaped; the delegation unit test pins the resolve.
     let chief_read = &bodies[3];
     assert!(
@@ -393,7 +393,7 @@ async fn a_private_delegation_never_sends_the_agents_names_in_clear() {
     tokio::task::block_in_place(|| assert_delegation_masked("private", &[], false));
 }
 
-/// Seal P1b: under global Open, a Private Aux makes an Open Mail agent run
+/// Under global Open, a Private Aux makes an Open Mail agent run
 /// Private: its provider sees tokens, never the contact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_private_chief_makes_an_open_mail_agent_private() {
@@ -401,7 +401,7 @@ async fn a_private_chief_makes_an_open_mail_agent_private() {
     tokio::task::block_in_place(|| assert_delegation_masked("open", &layers, false));
 }
 
-/// Seal P1-a: the chief's turn runs Private and its delegate card waits; the
+/// The chief's turn runs Private and its delegate card waits; the
 /// owner switches to Open, then allows it. Mail still runs Private: its
 /// provider never sees the contact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

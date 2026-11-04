@@ -1,4 +1,4 @@
-//! M2 + M2b: the fakes testing the fakes. Offline only.
+//! The fakes testing the fakes. Offline only.
 
 use std::time::Duration;
 

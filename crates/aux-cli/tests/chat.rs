@@ -236,7 +236,7 @@ fn invalid_rules_config_is_reported() {
     assert!(stderr.contains("parsing [[rules]]"), "stderr:\n{stderr}");
 }
 
-/// AGENT-REAL-1: Private mode, the fake echo provider, a sandboxed home. The
+/// Private mode, the fake echo provider, a sandboxed home. The
 /// echo answers with exactly what the provider received, so the output shows
 /// what left the Mac; the owner's own questions are not touched, and an e-mail
 /// address that was tokenised is restored for display, never shown raw.

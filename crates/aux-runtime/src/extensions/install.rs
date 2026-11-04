@@ -918,7 +918,7 @@ mod tests {
         );
     }
 
-    // ---- P1: the tar unpack refuses every non-Regular/Directory entry -------
+    // ---- The tar unpack refuses every non-Regular/Directory entry -------
 
     #[test]
     fn a_gzip_bomb_is_refused_before_it_is_expanded() {
@@ -1106,7 +1106,7 @@ mod tests {
         );
     }
 
-    // ---- P2: version and secret-name validation ---------------------------
+    // ---- Version and secret-name validation ---------------------------
 
     #[test]
     fn invalid_versions_are_refused_by_installable() {

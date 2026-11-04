@@ -1,4 +1,4 @@
-// DELEGATION-SOURCE-1: a delegated ask carries its source, and the app
+// A delegated ask carries its source, and the app
 // matches on that field instead of on the ask's words. A row stored before
 // the field existed keeps the old text match.
 import XCTest
@@ -84,7 +84,7 @@ import XCTest
         XCTAssertEqual(owned(items), ["40"], "an unknown source is never hidden")
     }
 
-    /// DELEGATION-SOURCE-1 (live path): the `message.new` frame carries the
+    /// The live path: the `message.new` frame carries the
     /// source, and the app keeps it when it rebuilds the row. A delegated ask
     /// whose stored text is not the ask (an ask over 8 KiB is truncated) must
     /// still be the grey delegation line, not an owner bubble, until the

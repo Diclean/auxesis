@@ -1,4 +1,4 @@
-// The v4 messenger frame (WO UI-V4-1): the Steps card starts collapsed with a
+// The v4 messenger frame: the Steps card starts collapsed with a
 // summary computed from its steps, the sidebar keeps Aux first then the four
 // agents, and the "needs you" badge shows only where an approval waits.
 import Foundation

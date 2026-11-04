@@ -1,4 +1,4 @@
-//! BRAINCONFIG-DEBUG: a provider config never prints a raw endpoint URL, a
+//! A provider config never prints a raw endpoint URL, a
 //! provider id or a model id through `Debug`.
 //!
 //! Every provider `Debug` impl renders its values through the public helpers

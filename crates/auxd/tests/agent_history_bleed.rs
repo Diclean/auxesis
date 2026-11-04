@@ -1,4 +1,4 @@
-//! AGENT-HISTORY-BLEED acceptance: a delegated agent's history belongs to the
+//! A delegated agent's history belongs to the
 //! chief thread that asked. Two turns in chief thread A: Mail's second request
 //! still holds the first task. A new chief thread B: Mail's request holds
 //! nothing from A.

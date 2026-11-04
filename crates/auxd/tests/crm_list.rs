@@ -1,4 +1,4 @@
-//! CRM-LIST acceptance: "List my clients" reaches a tool.
+//! "List my clients" reaches a tool.
 //!
 //! The Clients agent runs through the real turn runner over a temp home whose
 //! store holds three fictional parties. The fake provider calls `crm_list` and
@@ -208,7 +208,7 @@ fn client_cards_have_one_meaning_in_tool_results_and_both_agent_prompts() {
     assert_client_card_prompt(aux_prompt);
 }
 
-/// CLIENT-CARD-REFUSE-1: the owner asked for a client card and Aux read
+/// The owner asked for a client card and Aux read
 /// "card" as a payment card, so it withheld the record. Both prompts (Aux and
 /// Clients) must say what a client card is, that it is always shown, that it
 /// is never a payment card, what the kernel did with the protected values,
@@ -250,7 +250,7 @@ fn assert_client_card_prompt(prompt: &str) {
     );
 }
 
-/// NAMES-OFF (owner, 2026-10-19): party names pass as written; the list holds
+/// Party names pass as written; the list holds
 /// no address or number to mask.
 #[test]
 fn a_private_list_reaches_the_provider_with_the_party_names_as_written() {

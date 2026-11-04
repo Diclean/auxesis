@@ -35,7 +35,7 @@ public enum BrainPlace {
     }
 }
 
-/// A brain's name for the owner (LANG-LEAKS-1): "deepseek-flash" → "DeepSeek Flash".
+/// A brain's name for the owner: "deepseek-flash" → "DeepSeek Flash".
 /// Only a lower-case `word-word` model id is reworded; a name already written
 /// for people ("DeepSeek V3.2") or any other shape is shown as it is.
 public enum BrainName {
@@ -159,11 +159,11 @@ public final class ShellModel: ObservableObject {
     public let client: TeamClient?
     /// Private answers to the owner's texts: in memory, never persisted (see PrivateAnswers.swift).
     public let privateAnswers: PrivateAnswersModel
-    /// The Calendar page and its refresh loop (CAL-PAGE-1); set by the app.
+    /// The Calendar page and its refresh loop; set by the app.
     public var calendar: CalendarPageModel?
-    /// The Documents page (M5-4); set by the app, nil in fixture runs.
+    /// The Documents page; set by the app, nil in fixture runs.
     public var documents: DocumentsPageModel?
-    /// "What Aux knows" (MEM-UI-1): the memory page; set by the app.
+    /// "What Aux knows": the memory page; set by the app.
     public var memoryPage: MemoryPageModel?
 
     @Published public private(set) var route: Route = .today
@@ -231,7 +231,7 @@ public final class ShellModel: ObservableObject {
     @Published public private(set) var coverage: Loadable<[CoverageRow]> = .loading
     @Published public private(set) var ledger: Loadable<[LedgerEntry]> = .loading
     @Published public private(set) var planned: Loadable<[PlannedJob]> = .loading
-    /// Today (M2): the brief of the day, and the answer of the last run.
+    /// Today: the brief of the day, and the answer of the last run.
     @Published public private(set) var today: Loadable<TodayPresentation> = .loading
     @Published public private(set) var briefRunning = false
     @Published public private(set) var briefRunNote: UIKey?
@@ -434,7 +434,7 @@ public final class ShellModel: ObservableObject {
         store.selectAgent(agent)
     }
 
-    /// CONV-SIDEBAR-1: open a past Aux chat; the Store makes it the current one.
+    /// Open a past Aux chat; the Store makes it the current one.
     public func openConversation(session id: Int64) {
         present(agent: TeamMember.aux.id)
         store.selectConversation(id)
@@ -1147,7 +1147,18 @@ public final class ShellModel: ObservableObject {
 
     public func loadUsage() {
         guard let client else { return usage = .unavailable }
-        load({ try await client.usageToday() }, into: \.usage)
+        if usage.value == nil { usage = .loading }
+        Task { [weak self] in
+            do {
+                let day = try await client.usageToday()
+                self?.usage = .loaded(day)
+                self?.store.applyUsage(day)
+            } catch let error as AuxdError where error.isUnavailableRoute {
+                self?.usage = .unavailable
+            } catch {
+                self?.usage = .failed
+            }
+        }
     }
 
     public func loadProfile(_ agent: String) {
@@ -1231,7 +1242,7 @@ public final class ShellModel: ObservableObject {
         }
     }
 
-    /// One import sheet for one file (WO-CRMIO-2). The importer is nil when the
+    /// One import sheet for one file. The importer is nil when the
     /// daemon has no contacts route, and the sheet says so.
     public func clientImport(path: String, language: Language) -> ClientImportModel {
         ClientImportModel(path: path, importer: client as? ContactsImportClient, language: language) { [weak self] in
@@ -1406,7 +1417,7 @@ public final class ShellModel: ObservableObject {
     }
 }
 
-/// The Clients import sheet's state (WO-CRMIO-2): a dry run first, then the
+/// The Clients import sheet's state: a dry run first, then the
 /// owner's yes. It holds the file's path only for its two calls and never shows
 /// it, nor any contact value; the answer carries counts and column names.
 @MainActor

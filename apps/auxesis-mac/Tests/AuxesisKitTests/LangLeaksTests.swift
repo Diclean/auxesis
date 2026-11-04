@@ -1,4 +1,4 @@
-// WO LANG-LEAKS-1: a French day showed English and raw ids. The kernel's
+// A French day showed English and raw ids. The kernel's
 // removal marker stays one English text for the model; only the chip the owner
 // reads follows the reply's language. Skill ids and brain ids read as names.
 import Foundation

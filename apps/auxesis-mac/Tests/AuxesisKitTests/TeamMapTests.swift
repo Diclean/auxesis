@@ -1,4 +1,4 @@
-// The team map (WO UI-V4-3): node order, the four node states, and the today
+// The team map: node order, the four node states, and the today
 // line. A step whose data place was not recorded is never counted as stayed.
 import Foundation
 import Testing

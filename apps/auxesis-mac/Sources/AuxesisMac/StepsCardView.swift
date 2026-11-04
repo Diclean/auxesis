@@ -125,7 +125,7 @@ private struct TaskActions: View {
         let copy = Copy(language: language)
         let member = TeamMember.member(delegation.agent) ?? .custom(delegation.agent)
         let halted = delegation.state == .stopped || (shell.stopped && delegation.state.isOpen)
-        // VAGUE-ASK-1: a task that ran nothing kept no partial work: the row
+        // A task that ran nothing kept no partial work: the row
         // says "Stopped", never "couldn't finish" and never "partial work".
         let nothingRan = delegation.attemptedNothing
         VStack(alignment: .leading, spacing: 6) {
@@ -173,9 +173,9 @@ private struct TaskActions: View {
 /// A handoff or system event, centred and grey between two hairlines.
 struct EventLine: View {
     let text: String
-    /// MASCOT-1: each agent named on the line gets its 16-pt mascot, in ink3.
+    /// Each agent named on the line gets its 16-pt mascot, in ink3.
     var agents: [String] = []
-    /// MASCOT-2: the mascot sheet's preview shows one agent in its unsaved look.
+    /// The mascot sheet's preview shows one agent in its unsaved look.
     var preview: (agent: String, look: MascotLook)?
     @Environment(\.palette) private var palette
 

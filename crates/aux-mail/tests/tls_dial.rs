@@ -1,4 +1,4 @@
-//! M1b: dial + TLS against the in-process fake. Offline only.
+//! Dial + TLS against the in-process fake. Offline only.
 
 use std::time::Duration;
 

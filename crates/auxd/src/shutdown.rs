@@ -1,13 +1,11 @@
-//! Best-effort descendant cleanup on daemon shutdown (NEW-A3, NEW-A3R,
-//! NEW-A3L).
+//! Best-effort descendant cleanup on daemon shutdown.
 //!
 //! `auxd` abandons blocking tasks after a short grace: a run stuck in a
 //! provider call or a hung `osascript` notification cannot be cancelled, and
 //! the process exits without waiting for it. Child *processes* spawned by
 //! those tasks (the notifier's `osascript`, a shell tool command) would
-//! otherwise survive as orphans — NEW-A3 measured one leaked child per hung
-//! notification, and NEW-A3R showed that a run which *finishes during the
-//! grace* spawns its notifier after any pre-grace sweep.
+//! otherwise survive as orphans, including one whose run finishes during the
+//! grace and spawns its notifier after any pre-grace sweep.
 //!
 //! Shutdown therefore sweeps twice ([`shutdown_runtime`]): once before the
 //! grace, so an already-hung tree dies instead of holding the grace, and
@@ -21,8 +19,8 @@
 //! now abandoning. The cleanup is best effort by contract — a missing `ps`
 //! or a permission error never blocks shutdown.
 //!
-//! NEW-A3L closed a hole in the ppid walk: a descendant that traps SIGTERM,
-//! forks a child and exits reparents that child to launchd, so no later
+//! The ppid walk alone has a hole: a descendant that traps SIGTERM, forks a
+//! child and exits reparents that child to launchd, so no later
 //! `descendants()` snapshot can see it. The daemon therefore takes a private
 //! process group at startup ([`OwnedGroup::establish`]) that every child it
 //! spawns inherits, and the shutdown sweep terminates the group by pgid as
@@ -49,7 +47,7 @@ const TERM_GRACE: Duration = Duration::from_millis(250);
 /// How often the wait loop re-checks the descendants.
 const POLL: Duration = Duration::from_millis(10);
 
-/// How long the post-grace sweep keeps collecting late spawns (NEW-A3R).
+/// How long the post-grace sweep keeps collecting late spawns.
 const FINAL_SWEEP_BUDGET: Duration = Duration::from_millis(500);
 
 /// How long to pause between post-grace sweep passes.
@@ -60,7 +58,7 @@ const FINAL_SWEEP_POLL: Duration = Duration::from_millis(25);
 /// its notifier a few milliseconds later, and that spawn must still be seen.
 const FINAL_SWEEP_QUIET: Duration = Duration::from_millis(50);
 
-/// A private process group owned by the daemon (NEW-A3L).
+/// A private process group owned by the daemon.
 ///
 /// The daemon calls `setpgid(0, 0)` before it can spawn anything, so every
 /// child that does not deliberately leave the group inherits it. When the
@@ -169,7 +167,7 @@ fn terminate_pids(pids: &[u32]) {
 /// lets finishing work complete), sweep again.
 ///
 /// The first sweep kills a tree that is already hung, so the grace is not
-/// spent waiting on it. The post-grace sweeps are the NEW-A3R fix: a run
+/// spent waiting on it. The post-grace sweeps cover this: a run
 /// that finishes during the grace spawns its notifier child *after* the
 /// first snapshot, and only a sweep after the grace can see it. The loop
 /// keeps sweeping while descendants appear, and stays alive for a short
@@ -185,7 +183,7 @@ pub fn shutdown_runtime(root: u32, grace: impl FnOnce()) {
     shutdown_everything(root, None, grace);
 }
 
-/// [`shutdown_runtime`] with the daemon's private process group (NEW-A3L):
+/// [`shutdown_runtime`] with the daemon's private process group:
 /// the sweep targets ppid-descendants *and* group members, so a forked child
 /// that reparented to launchd is still terminated.
 pub fn shutdown_everything(root: u32, group: Option<OwnedGroup>, grace: impl FnOnce()) {
@@ -264,9 +262,9 @@ fn group_members(pgid: u32, exclude: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Absolute first: the daemon may run with a PATH that a test/attack harness
-/// has shimmed (that is how NEW-A3's hung notifier is injected), and cleanup
-/// must not be redirectable through a fake `ps`.
+/// Absolute first: the daemon may run with a PATH that a test or attack
+/// harness has shimmed, and cleanup must not be redirectable through a fake
+/// `ps`.
 fn process_snapshot() -> Option<Vec<ProcessRow>> {
     for candidate in ["/bin/ps", "/usr/bin/ps", "ps"] {
         if let Some(rows) = snapshot(candidate) {
@@ -363,8 +361,8 @@ mod tests {
     /// Live pids whose full command line contains `marker` (`pgrep -f`).
     ///
     /// Used to prove on its own that a test left no `auxd-*.pid-*` shell
-    /// behind — the same `pgrep -f auxd-a3l-fork` the acceptance check runs on
-    /// the build host. A missing `pgrep` reports nothing (the test relies on
+    /// behind — the same `pgrep -f auxd-a3l-fork` the build host runs. A
+    /// missing `pgrep` reports nothing (the test relies on
     /// the RAII guard, not on this probe).
     fn pids_matching(marker: &str) -> Vec<u32> {
         let Ok(output) = Command::new("pgrep")
@@ -401,10 +399,8 @@ mod tests {
 
     /// A spawned child with a guaranteed cleanup on drop.
     ///
-    /// A regression that makes an assertion fail mid-test (before the
-    /// explicit cleanup) must never leave a sleeper behind, which is how a
-    /// dozen `sh -c '… sleep 60 …'` processes survived for hours after
-    /// `cargo test -p auxd shutdown` (P3 batch 2, point 2). On drop this
+    /// A failed assertion mid-test (before the explicit cleanup) must never
+    /// leave a sleeper behind after `cargo test -p auxd shutdown`. On drop this
     /// SIGKILLs the child's process group when it leads one (a reparented
     /// escapee stays in that group and is collected too), sweeps any
     /// descendants otherwise, then reaps the child.
@@ -504,7 +500,7 @@ mod tests {
     #[test]
     fn shutdown_terminates_a_hung_grandchild_tree() {
         // `sh -c 'sleep 10 & wait'` gives us root = sh, descendant = sleep,
-        // exactly the shape of the hung PATH-shimmed `osascript` from NEW-A3.
+        // exactly the shape of a hung PATH-shimmed `osascript`.
         // Bounded lifetime + `ChildGuard`: the test's own RAII cleanup kills
         // the tree even if an assertion below fails.
         let mut root = ChildGuard::new(
@@ -569,7 +565,7 @@ mod tests {
         let _ = root.wait();
     }
 
-    /// NEW-A3R regression: a child spawned *during* the shutdown grace (after
+    /// A child spawned *during* the shutdown grace (after
     /// the pre-grace sweep) used to survive as an orphan. The shell blocks in
     /// its builtin `read` — no descendant exists at the first sweep — and the
     /// grace releases it, so its child is born inside the window exactly like
@@ -658,7 +654,7 @@ mod tests {
         );
     }
 
-    /// NEW-A3L regression: a descendant that traps SIGTERM, forks a child and
+    /// A descendant that traps SIGTERM, forks a child and
     /// exits reparents that child to launchd, so the ppid walk can no longer
     /// see it. The child keeps the process group, and `terminate_group` finds
     /// it there.
@@ -672,7 +668,7 @@ mod tests {
         let ready = PidFileGuard::new(temp_file("a3l-ready.pid"));
 
         // Root traps TERM: the trap forks `sleep 10`, records its pid and
-        // exits. This is the exact shape the breaker used to escape the ppid
+        // exits. This is the exact shape a process can use to escape the ppid
         // walk (`shim traps SIGTERM; its trap forks sleep and exits`).
         let mut root = ChildGuard::new(
             Command::new("sh")
@@ -732,9 +728,9 @@ mod tests {
         }
         let _ = root.wait();
 
-        // P3 point 2 post-condition: no pidfile-named shell survives the test
-        // (the acceptance check runs `pgrep -f auxd-a3l-fork` on the build
-        // host). The name is unique per run, so only this test's processes
+        // No pidfile-named shell survives the test (the build host runs
+        // `pgrep -f auxd-a3l-fork`). The name is unique per run, so only this
+        // test's processes
         // can match.
         let marker = pidfile
             .0

@@ -87,7 +87,7 @@ import Testing
         XCTAssertEqual(rows.map(\.dayLabel), [nil, nil])
     }
 
-    // MARK: Clock honesty (breaker survivor M8)
+    // MARK: Clock honesty
 
     func testClockNeverFabricatesAnHourForUnknownTimestamps() {
         XCTAssertEqual(Clock.hhmm(0), "", "ts 0 is unknown, not 00:00")

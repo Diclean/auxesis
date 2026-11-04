@@ -1,5 +1,5 @@
-//! RV4-02 regression: the production log filter must keep html5ever's
-//! foster-parenting `warn!` flood out of the log.
+//! The production log filter must keep html5ever's foster-parenting `warn!`
+//! flood out of the log.
 //!
 //! html5ever logs one `WARN` (`foster parenting not implemented`) per
 //! character token that lands directly inside a `<table>`. A 512 KiB hostile
@@ -40,7 +40,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
     }
 }
 
-/// The RV4-02 shape: every character token directly inside `<table>` is
+/// The flood shape: every character token directly inside `<table>` is
 /// foster-parented (and therefore logged) by html5ever. `<i>` keeps the
 /// document in "in table" mode so the flood does not stop.
 fn foster_parenting_flood(bytes: usize) -> Vec<u8> {

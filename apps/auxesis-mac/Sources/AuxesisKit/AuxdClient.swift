@@ -123,7 +123,7 @@ private final class CappedBlobDelegate: NSObject, URLSessionDataDelegate {
     }
 }
 
-/// The first-run setup surface (B-API v4, PR #70). It is a protocol of its
+/// The first-run setup surface. It is a protocol of its
 /// own — not a `AuxdTransport` requirement — so tests can script the four
 /// setup routes without a network while the shell keeps its existing
 /// transport. `Store` adopts the real client when it conforms (see
@@ -150,7 +150,7 @@ public protocol FirstRunClient: AnyObject {
     func completeFirstRun(_ request: FirstRunCompleteRequest) async throws -> FirstRunComplete
 }
 
-/// The contacts import (WO-CRMIO-2). A protocol of its own, like `PackClient`,
+/// The contacts import. A protocol of its own, like `PackClient`,
 /// so the sheet's model is tested without a network. The daemon reads the file
 /// where it is; the path is only ever sent, never shown.
 public protocol ContactsImportClient: AnyObject {
@@ -354,7 +354,7 @@ public final class AuxdClient: AuxdTransport, AuxdAPI, LanguageReporting, AppleE
     ) {
         self.endpoint = endpoint
         self.requestTimeout = requestTimeout
-        // J-02 round 6 (security review P1): with no endpoint, or with a sandbox-refused
+        // With no endpoint, or with a sandbox-refused
         // home, the token file is NEVER read — a Foundation-derived real home
         // must not leak its token into the client.
         if endpoint.baseURL == nil || endpoint.homeRefused {
@@ -1072,25 +1072,25 @@ extension AuxdClient: MemoryClient {
 }
 
 extension AuxdClient: CalendarStatusClient {
-    /// How fresh auxd's calendar copy is (CAL-PAGE-1); capture facts only.
+    /// How fresh auxd's calendar copy is; capture facts only.
     public func calendarStatus() async throws -> CalendarSyncStatus {
         try await perform(request("GET", "/v1/apple-eventkit/status"), as: CalendarSyncStatus.self)
     }
 }
 
 extension AuxdClient: DocumentsClient {
-    /// `GET /v1/docs` (M5-1): fields, client and status only, newest 500.
+    /// `GET /v1/docs`: fields, client and status only, newest 500.
     public func documents(_ filter: DocumentsFilter) async throws -> [DocumentRow] {
         try await perform(request("GET", "/v1/docs?limit=500\(filter.query)"), as: [DocumentRow].self)
     }
 
-    /// `POST /v1/docs/{hash-prefix}/party?party=ID|none` (M5-1b).
+    /// `POST /v1/docs/{hash-prefix}/party?party=ID|none`.
     public func linkDocument(hash: String, client: Int64?) async throws {
         let party = client.map(String.init) ?? "none"
         _ = try await send(request("POST", "/v1/docs/\(Self.encodedPath(hash))/party?party=\(party)"))
     }
 
-    /// `POST /v1/docs/export` (M5-2): the CSV and originals, in a new folder inside `out`.
+    /// `POST /v1/docs/export`: the CSV and originals, in a new folder inside `out`.
     public func exportDocuments(_ export: DocumentsExport) async throws -> DocumentsExportResult {
         struct Answer: Decodable { let status: String; var folder: String?; var rows: Int?; var missing: Int? }
         let query = export.queryItems.map { "\($0.name)=\(Self.encodedQuery($0.value ?? ""))" }.joined(separator: "&")

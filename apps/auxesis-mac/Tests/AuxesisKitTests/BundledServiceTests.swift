@@ -188,7 +188,7 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
             bundleURL: fake.bundle, home: fake.home, userHome: fake.userHome))
     }
 
-    /// F1: the plan resolves the bundle link exactly once and pins the resolved
+    /// The plan resolves the bundle link exactly once and pins the resolved
     /// path. Retargeting that link outside the bundle *after* the check therefore
     /// cannot change what the launcher runs — it still holds the in-bundle file.
     func testRetargetedSymlinkAfterVerificationNeverRunsTheOutsideTarget() throws {
@@ -236,7 +236,7 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
         XCTAssertFalse(BundledService.isStillLaunchable(fake.executable))
     }
 
-    /// F1: if the pinned path itself is swapped for a link to an outside binary
+    /// If the pinned path itself is swapped for a link to an outside binary
     /// between the plan and the launch, the launcher refuses instead of running
     /// the outside target. No real process is started: the guard throws first.
     func testSwappedResolvedExecutableIsRefusedBeforeLaunch() throws {
@@ -366,7 +366,7 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
         XCTAssertEqual(client.tokenProblem, .missing)
     }
 
-    /// F2: the public `token` / `tokenProblem` reads go through `tokenLock` too,
+    /// The public `token` / `tokenProblem` reads go through `tokenLock` too,
     /// so readers running while `refreshToken()` rewrites both never race the
     /// writer. Simple concurrent-read smoke test: many readers plus periodic
     /// refreshes must stay coherent and never crash.
@@ -482,7 +482,7 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
         gate.open()
     }
 
-    /// F3: a refused home is not "the service looks absent". Starting the child
+    /// A refused home is not "the service looks absent". Starting the child
     /// would neither fix the refusal nor give the app anywhere to connect, and
     /// it would run a service the app must not own. The launcher is never called
     /// and the health line stays « Service arrêté ».
@@ -520,7 +520,7 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
         gate.open()
     }
 
-    /// F3: an endpoint that resolved to no address (`AUXESIS_API_PORT=0`, a
+    /// An endpoint that resolved to no address (`AUXESIS_API_PORT=0`, a
     /// sandbox without an explicit port) is refused the same way: there is
     /// nothing to connect to, so no child is spawned.
     func testEndpointWithoutAddressNeverStartsTheBundledService() throws {
@@ -555,7 +555,7 @@ func makeFakeBundle(binary: Bool) throws -> FakeBundle {
         gate.open()
     }
 
-    /// F4: the child we own can exit on its own (crash, held port). The
+    /// The child we own can exit on its own (crash, held port). The
     /// supervisor's termination handler republishes the snapshot, so the health
     /// line stops claiming « Service en marche » without an explicit stop. The
     /// launcher simulates the exit; no real process is started.

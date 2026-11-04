@@ -73,7 +73,7 @@ pub fn run_usage(args: UsageArgs) -> ExitCode {
 }
 
 fn run_usage_inner(args: UsageArgs) -> Result<(), String> {
-    // J-02 round 5: the store opens through the verified handle only.
+    // The store opens through the verified handle only.
     let home = auxesis_home();
     let verified =
         ensure_home(&home).map_err(|err| format!("creating {}: {err}", home.display()))?;
@@ -146,7 +146,7 @@ fn render_usage(
             }
         }
     }
-    // INFER-COST-1: brain calls and the share of their input the provider's cache served.
+    // Brain calls and the share of their input the provider's cache served.
     let calls = store
         .usage_call_totals(agent, day)
         .map_err(|err| err.to_string())?;

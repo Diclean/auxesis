@@ -1,4 +1,4 @@
-// Clients (E3): the `/v1/clients` decoders, the edit body, the card's text
+// Clients: the `/v1/clients` decoders, the edit body, the card's text
 // helpers, and the shell's list / card / editor states against the in-memory
 // fixture daemon. Fictional people only (Camille Exemple, Jonas Weber).
 import Foundation

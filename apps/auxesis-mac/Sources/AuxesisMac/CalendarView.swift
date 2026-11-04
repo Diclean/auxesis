@@ -1,4 +1,4 @@
-// Agenda (CAL-PAGE-1): the next 8 days from this Mac's calendars, read-only,
+// Agenda: the next 8 days from this Mac's calendars, read-only,
 // the same read the app publishes to Aux. On top, how fresh Aux's copy is
 // (amber when it may be out of date), Refresh now and, in red, why a refresh
 // failed; last, the switch that keeps Auxesis running at login so the menu bar

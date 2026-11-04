@@ -408,7 +408,17 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
     }
 
     public func usageToday() async throws -> UsageDay {
-        UsageDay(day: "today", total: UsageTotals(tokensIn: 18_240, tokensOut: 2_115, usdCents: 4))
+        // One agent near its cap (95 %), so previews show the amber bar.
+        UsageDay(
+            day: "today",
+            total: UsageTotals(tokensIn: 18_240, tokensOut: 2_115, usdCents: 4),
+            agents: [
+                UsageAgent(agent: "mail", totals: UsageTotals(tokensIn: 18_000, tokensOut: 2_100, usdCents: 4),
+                           caps: UsageCaps(tokensIn: 2_000_000, tokensOut: 2_200, usdCents: 5)),
+                UsageAgent(agent: "aux", totals: UsageTotals(tokensIn: 240, tokensOut: 15, usdCents: 0),
+                           caps: UsageCaps(tokensIn: 2_000_000, tokensOut: 400_000, usdCents: 500)),
+            ]
+        )
     }
 
     public func providerList() async throws -> [ProviderSummary] {

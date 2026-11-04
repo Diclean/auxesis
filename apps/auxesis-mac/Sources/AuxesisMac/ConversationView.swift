@@ -554,7 +554,7 @@ struct Composer: View {
         let copy = Copy(language: language)
         let offline = !shell.store.connection.isOnline
         let disabled = shell.stopped || offline
-        // A send while a turn runs is queued, never refused (SEND-WHILE-BUSY-1).
+        // A send while a turn runs is queued, never refused.
         let canSend = !disabled
             && !shell.store.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(spacing: 6) {

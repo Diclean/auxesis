@@ -609,7 +609,7 @@ async fn remote_alert_and_brief(alert: &str, brief: &str) -> Vec<String> {
     seen
 }
 
-/// IMSG-SCRUB-1: an alert and a brief bound for a paired phone carry no key,
+/// An alert and a brief bound for a paired phone carry no key,
 /// IBAN, card, national ID or health term in Open mode.
 #[tokio::test]
 async fn gateway_remote_alert_and_brief_never_carry_a_key_an_iban_a_card_an_id_or_health_data() {
@@ -648,7 +648,7 @@ async fn gateway_remote_alert_and_brief_never_carry_a_key_an_iban_a_card_an_id_o
     }
 }
 
-/// IMSG-SCRUB-1: a plain alert and brief reach the phone as written.
+/// A plain alert and brief reach the phone as written.
 #[tokio::test]
 async fn gateway_remote_plain_alert_and_brief_go_out_unchanged() {
     let alert = "Camille replied: the meeting moves to Thursday at 10:00.";

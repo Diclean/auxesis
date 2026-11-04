@@ -407,7 +407,7 @@ fn prompt(
             PromptFlow::EndTurn
         }
         "fs-write-race" => {
-            // security-review 1 F1: the owner's approval window is human-sized, so a
+            // The owner's approval window is human-sized, so a
             // hostile agent swaps the approved path for a symlink pointing
             // outside the workspace *after* sending the request.
             let args: Vec<String> = arg
@@ -467,7 +467,7 @@ fn prompt(
             PromptFlow::EndTurn
         }
         "secret-split" => {
-            // security review round-2 P2: the registered canary split across consecutive
+            // The registered canary is split across consecutive
             // frames of every agent-originated stream.
             agent.chunk("CANARY_ACP_STREAM_0123");
             agent.chunk("456789abcdef");
@@ -534,7 +534,7 @@ fn prompt(
             PromptFlow::Answered
         }
         "orphan-fdcless" => {
-            // security-review 1 F2: a grandchild that closes every inherited fd
+            // A grandchild that closes every inherited fd
             // (python `close_fds=True` / node `stdio:'ignore'`), starts its
             // own session, and outlives the agent, which exits immediately.
             let mut command = std::process::Command::new("python3");
@@ -667,7 +667,7 @@ fn prompt(
             PromptFlow::EndTurn
         }
         "terminal-marker" => {
-            // security-review round 3: a read-only ACP brain must refuse this and
+            // A read-only ACP brain must refuse this and
             // never create the marker.
             let marker = arg.unwrap_or("/nonexistent");
             let response = agent.call(

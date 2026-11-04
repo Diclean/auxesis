@@ -1,4 +1,4 @@
-//! The M2 job scheduler.
+//! The job scheduler.
 //!
 //! Every tick, the scheduler claims the jobs that are due, runs each one
 //! through a [`JobRunner`], records the outcome in the `runs` table and
@@ -207,7 +207,7 @@ pub fn tick(
     for job in claimed {
         // A paused/killed agent's job is claimed but not run: the claim
         // already moved `next_run_at` forward, so it stays scheduled and
-        // runs when the agent resumes (B-API v3).
+        // runs when the agent resumes.
         if crate::agent::state(stop.home(), &job.agent).blocks_work() {
             continue;
         }
@@ -335,7 +335,7 @@ where
         }
         tracing::info!(claimed = claimed.len(), "scheduler tick");
         for job in claimed {
-            // A paused/killed agent's job is not executed (B-API v3). The
+            // A paused/killed agent's job is not executed. The
             // claim lease already pushed `next_run_at`, so it stays
             // scheduled and runs after a resume — no failed-run noise.
             if crate::agent::state(stop.home(), &job.agent).blocks_work() {
@@ -1142,7 +1142,7 @@ mod tests {
 
     #[test]
     fn a_live_run_is_not_reclaimed_when_the_lease_is_backdated() {
-        // NEW-A2: the lease is not the last line of defence. A clock jump
+        // The lease is not the last line of defence. A clock jump
         // that back-dates `next_run_at` while run #1 is still `running` must
         // not produce a second run for the same job.
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
@@ -1357,7 +1357,7 @@ mod tests {
 
     #[test]
     fn paused_agents_jobs_are_claimed_but_not_run() {
-        // B-API v3: a paused agent's due job is leased (so it is not lost)
+        // A paused agent's due job is leased (so it is not lost)
         // but never executed; no run row, no notification.
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");

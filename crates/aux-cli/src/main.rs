@@ -109,7 +109,7 @@ fn main() -> ExitCode {
     // a log: the shared hook writes only the source location, as auxd does.
     kernel_broker::install_payload_free_panic_hook();
     let lang = kernel_core::Lang::from_env();
-    // The one shared sandbox guard (J-02): refuse the real ~/.auxesis before
+    // The one shared sandbox guard: refuse the real ~/.auxesis before
     // any command reads or writes. The connect-time port check lives in
     // `doctor` (`ensure_sandbox_port`).
     let home = match kernel_core::ensure_sandbox_guard(None) {
@@ -119,7 +119,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // WO-07: the one-time `dots/` -> `agents/` move, before any command reads them.
+    // The one-time `dots/` -> `agents/` move, before any command reads them.
     match aux_engine::layout::migrate_legacy_agents_dir(&home) {
         Ok(Some(moved)) => {
             let _ = writeln!(

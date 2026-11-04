@@ -1,11 +1,11 @@
-//! DOC-REEXTRACT-1 live acceptance: the owner's receipt question, from the
+//! Live acceptance: the owner's receipt question, from the
 //! OLD state, in a sandbox.
 //!
-//! The state is the one the owner was in after #275: the demo mailbox still
+//! The state is the one the owner was in with the old receipt: the demo mailbox still
 //! holds the old receipt attachment (a `%PDF` header followed by plain text),
 //! the registry holds that attachment as one `other` document with no fields,
 //! and the Documents agent's `collect-receipts` skill is the version shipped
-//! before DOC-COLLECT-2. The question is the owner's own: "Find the receipt
+//! before the current collector. The question is the owner's own: "Find the receipt
 //! for invoice VF-2210 and tell me the amount". The answer must name 120.00
 //! EUR in one turn, with no approval card: `collect-receipts` is local
 //! (`approval: none`), so the agent runs it itself instead of asking. The
@@ -33,14 +33,14 @@ const QUESTION: &str = "Find the receipt for invoice VF-2210 and tell me the amo
 const AGENT: &str = "documents";
 /// The chief: the agent the owner talks to, which hands the work out.
 const CHIEF: &str = "aux";
-/// The receipt attachment as the demo mailbox held it before DOC-COLLECT-2: a
+/// The receipt attachment as the demo mailbox held it before the current collector: a
 /// `%PDF` header followed by plain text, which PDFKit refuses, so the
 /// document stayed empty ("other, no total").
 const OLD_RECEIPT: &str =
     "%PDF-1.4 fictional receipt VF-2210\r\nInvoice VF-2210\r\nTotal 120.00 EUR\r\n";
 /// The SHA-256 of [`OLD_RECEIPT`]: the document the owner's registry held.
 const OLD_RECEIPT_SHA256: &str = "852c878830bd40c3293bb6753fe3478c174bdd6e5cc4a2a19bf18f2debf88462";
-/// The `collect-receipts` skill as it shipped before DOC-COLLECT-2.
+/// The `collect-receipts` skill as it shipped before the current collector.
 const OLD_SKILL: &str = include_str!("../../crates/auxd/tests/data/collect-receipts-pre-275.md");
 /// The skill as it ships now.
 const CURRENT_SKILL: &str =
@@ -109,7 +109,7 @@ async fn the_owner_asks_for_a_receipt_and_gets_the_amount() {
 
     let sim_dir = dir.path().join("sim");
     // The mailbox in the OLD state: the demo's own messages, with the receipt
-    // attachment as it shipped before DOC-COLLECT-2.
+    // attachment as it shipped before the current collector.
     aux_fakemail::write_demo(&sim_dir, false).expect("the demo mailbox");
     let mailbox = sim_dir.join("mailbox.json");
     let mut mails: Vec<aux_fakemail::StoredMail> =
@@ -193,7 +193,7 @@ async fn the_owner_asks_for_a_receipt_and_gets_the_amount() {
             .expect("the empty fields row");
     }
     // The shipped agent files, with the `collect-receipts` skill as it
-    // shipped before DOC-COLLECT-2: the owner's copy.
+    // shipped before the current collector: the owner's copy.
     auxd::agents::install_shipped_files(&home).unwrap();
     let skill = home.join("agents/documents/skills/collect-receipts.md");
     std::fs::write(&skill, OLD_SKILL).unwrap();

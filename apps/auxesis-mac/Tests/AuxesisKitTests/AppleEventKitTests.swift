@@ -38,7 +38,7 @@ import XCTest
         XCTAssertEqual(result.reminders.count, 1)
     }
 
-    /// CAL-UPDATE-1: the published event keeps its id and an explicit guest list.
+    /// The published event keeps its id and an explicit guest list.
     func testSnapshotKeepsTheEventIdAndItsGuestList() throws {
         let now = ISO8601DateFormatter().date(from: "2026-10-08T12:00:00Z")!
         let event = AppleEventItem(title: "Call", start: "2026-10-08T13:00:00Z", end: "2026-10-08T14:00:00Z",

@@ -1,4 +1,4 @@
-//! MA3 acceptance tests: the mail tools in the daemon turn runner.
+//! The mail tools in the daemon turn runner.
 //!
 //! Every test is offline. The mail API is a fixture, the provider is the shared
 //! `FakeProvider`, and the evidence registry is the real store under a temp
@@ -19,7 +19,7 @@ use kernel_privacy::ContactIndex;
 
 const PDF_BYTES: &[u8] = b"%PDF-1.4 mail fixture\r\n";
 const PDF_SHA256: &str = "16e07db253f23a282d673668bd4b4656bf1f410962612fa4c7b4ddd87d893d77";
-/// A fictional passport scan (DOC-SAFE-1): its number and MRZ must never reach
+/// A fictional passport scan: its number and MRZ must never reach
 /// a model nor sit in plaintext on disk.
 const ID_BYTES: &[u8] = b"%PDF-1.4 fictional passport scan\nPASSPORT UTOPIA No X1234567\n\
 P<UTOFICTIVE<<MIRA<ANNA<<<<<<<<<<<<<<<<<<<<<\nX12345675UTO8501014F3001012<<<<<<<<<<<<<<<04\n";
@@ -291,7 +291,7 @@ fn a_private_turn_tokenises_the_mail_sender_and_body() {
     let sent = bodies(&provider);
     assert_eq!(sent.len(), 2, "one request then the tool result");
     let joined = sent.join("\n");
-    // NAMES-OFF (owner, 2026-10-19): the sender's name passes, the address never.
+    // The sender's name passes, the address never.
     assert!(joined.contains("Camille Exemple"), "{joined}");
     assert!(!joined.contains("camille@exemple.fr"), "{joined}");
     assert!(

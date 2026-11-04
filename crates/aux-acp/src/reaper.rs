@@ -981,7 +981,7 @@ mod tests {
 
     #[test]
     fn pidfdinfo_result_must_fill_the_whole_struct() {
-        // P1 marker scan: only an exact full write may be `assume_init`ed.
+        // Marker scan: only an exact full write may be `assume_init`ed.
         let size = 128usize;
         assert!(pidfdinfo_filled_buffer(size as libc::c_int, size));
         assert!(!pidfdinfo_filled_buffer(0, size), "an error is not a fill");

@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn journal_messages_scrub_secrets_like_the_messages_view() {
         // F-03: the WS journal used to expose exactly the shapes the REST
-        // message scrub hides (audit C P2-1).
+        // message scrub hides.
         let home = Path::new("/Users/secret/.auxesis");
         let row = JournalRow {
             id: 9,

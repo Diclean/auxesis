@@ -201,6 +201,31 @@ async fn the_chief_alone_then_a_template_agent_under_its_ceiling() {
     t.stop();
 }
 
+/// Break-It A: with the chief lowered, a template's id is refused by the
+/// ceiling whether it comes as `template` or as a plain `name`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_id_as_a_plain_name_is_held_to_the_chief_ceiling() {
+    let mut t = TestApi::start().await;
+    let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
+    let send = chief.can_do.iter_mut().find(|g| g.skill == "mail.send");
+    send.unwrap().level = aux_runtime::grants::ActionLevel::Off;
+    auxd::agents::write_grants(&t.home, "main", &chief).unwrap();
+    for body in [json!({"template": "mail"}), json!({"name": "mail"})] {
+        let refused = post_auth(&t, "/v1/agents", &body.to_string()).await;
+        assert_eq!(refused.status, 409, "{body}: {}", refused.body);
+        assert!(
+            refused.body.contains("grant_exceeds_chief"),
+            "{}",
+            refused.body
+        );
+    }
+    assert!(!t.home.join("agents/mail").exists());
+    // Calendar sends invites (mail.send): refused too. Documents still fits.
+    let added = post_auth(&t, "/v1/agents", &json!({"name": "documents"}).to_string()).await;
+    assert_eq!(added.status, 201, "{}", added.body);
+    t.stop();
+}
+
 /// Payloads of every journal row of `kind`, oldest first.
 fn event_payloads(home: &Path, kind: &str) -> Vec<String> {
     let conn = aux_store::open_keyed_readonly(&store_path(home)).unwrap();

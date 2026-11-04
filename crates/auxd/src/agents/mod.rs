@@ -326,6 +326,8 @@ pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
 }
 
 /// The full registry: the seed with each agent's `grants.toml` overlaid.
+/// No agent ever holds more than the chief: one that would (a template agent
+/// whose directory was made by hand, with the chief lowered) is capped.
 pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
     let mut agents = seed(home)?;
     for agent in &mut agents {
@@ -333,7 +335,70 @@ pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
             agent.grants = grants;
         }
     }
+    let chief = chief_grants(&agents);
+    for agent in &mut agents {
+        if agent.id == CHIEF_AGENT || agent.id == LEGACY_CHIEF || subset(&agent.grants, &chief) {
+            continue;
+        }
+        tracing::warn!(agent = %agent.id, "agent grants capped at the chief");
+        agent.grants = clamp(&agent.grants, &chief);
+    }
     Ok(agents)
+}
+
+/// `grants` capped at `chief`: each level at most the chief's, each chief
+/// skill below `auto` that `grants` lacks pinned `off`, every chief `never`
+/// kept. If that still exceeds the chief, only the chief's `never`s remain.
+fn clamp(grants: &AgentGrants, chief: &AgentGrants) -> AgentGrants {
+    let see = |level| match level {
+        AccessLevel::Off => 0,
+        AccessLevel::Ask => 1,
+        AccessLevel::Read => 2,
+    };
+    let act = |level| match level {
+        ActionLevel::Off => 0,
+        ActionLevel::Ask => 1,
+        ActionLevel::Auto => 2,
+    };
+    let mut out = grants.clone();
+    for grant in &mut out.see {
+        let own = chief.see.iter().filter(|own| own.scope == grant.scope);
+        let max = own.map(|own| own.level).min_by_key(|level| see(*level));
+        let max = max.unwrap_or(AccessLevel::Off);
+        if see(grant.level) > see(max) {
+            grant.level = max;
+        }
+    }
+    for grant in &mut out.can_do {
+        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
+        let max = own.map(|own| own.level).min_by_key(|level| act(*level));
+        let max = max.unwrap_or(ActionLevel::Off);
+        if act(grant.level) > act(max) {
+            grant.level = max;
+        }
+    }
+    for own in &chief.can_do {
+        if own.level != ActionLevel::Auto && !out.can_do.iter().any(|g| g.skill == own.skill) {
+            out.can_do.push(aux_runtime::grants::DoGrant {
+                skill: own.skill.clone(),
+                level: ActionLevel::Off,
+            });
+        }
+    }
+    for denied in &chief.never {
+        if !out.never.contains(denied) {
+            out.never.push(denied.clone());
+        }
+    }
+    if subset(&out, chief) {
+        return out;
+    }
+    AgentGrants {
+        see: Vec::new(),
+        can_do: Vec::new(),
+        never: chief.never.clone(),
+        egress_note: grants.egress_note.clone(),
+    }
 }
 
 /// One agent's definition, or `None`.
@@ -1454,6 +1519,32 @@ mod tests {
         assert!(!subset(&child, &chief));
         child.never = vec!["mail".to_string(), "m".to_string()];
         assert!(subset(&child, &chief));
+    }
+
+    /// Break-It A: a template agent whose directory was made by hand (or by
+    /// an older daemon) is capped at a lowered chief on every reload.
+    #[test]
+    fn a_hand_made_template_directory_is_capped_at_the_chief() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let mut chief = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        let send = chief.can_do.iter_mut().find(|g| g.skill == "mail.send");
+        send.unwrap().level = ActionLevel::Off;
+        chief.see.retain(|g| g.scope != "documents");
+        write_grants(home, CHIEF_AGENT, &chief).unwrap();
+        for id in DOMAIN_AGENTS {
+            std::fs::create_dir_all(home.join("agents").join(id)).unwrap();
+        }
+        let agents = registry(home).unwrap();
+        let chief = chief_grants(&agents);
+        for id in DOMAIN_AGENTS {
+            let agent = agents.iter().find(|a| a.id == id).expect("listed");
+            assert!(subset(&agent.grants, &chief), "{id}");
+        }
+        let mail = grants(home, "mail").unwrap();
+        assert!(mail.check_tool("mail", "mail_send").is_err());
+        assert!(mail.check_tool("mail", "mail_read").is_ok());
     }
 
     #[test]

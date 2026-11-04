@@ -444,6 +444,18 @@ pub(crate) fn create_sync(
     }
     let validated = validate_create(home, request)?;
     let name = &validated.name;
+    // A template's id without `template` (any case) still gets the template's
+    // grants from the registry, so it passes the same ceiling check.
+    if template.is_none() {
+        if let Some(def) = crate::agents::template(&name.to_ascii_lowercase()) {
+            crate::agents::validate_grants(home, &def.id, &def.grants).map_err(
+                |err| match err {
+                    crate::agents::RegistryError::ExceedsChief => crate::agents::exceeds_chief(),
+                    _ => internal_error(),
+                },
+            )?;
+        }
+    }
     validate_tool_ceiling(home, name, &validated.config)?;
     let expected_soul = validated
         .instructions

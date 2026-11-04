@@ -89,18 +89,61 @@ fn main() -> ExitCode {
     }
 }
 
+/// What the daemon needs from a home it has opened and locked. The lock is
+/// held for as long as this value lives.
+struct OpenedHome {
+    home: std::path::PathBuf,
+    verified: kernel_core::SandboxHome,
+    _instance_lock: InstanceLock,
+}
+
+/// The MCP and extension sessions, shared by the API, the job runner and the
+/// privacy watches.
+struct Tools {
+    mcp: auxd::mcp::McpSlot,
+    mcp_ordering: auxd::mcp::McpOrdering,
+    extensions: auxd::extensions::ExtSlot,
+}
+
+/// The notification path: the router, its two background tasks and the
+/// Messages gateway when one is configured.
+struct Gateways {
+    notify_router: Arc<NotifyRouter>,
+    notify_worker: tokio::task::JoinHandle<()>,
+    notify_flush: tokio::task::JoinHandle<()>,
+    messages_gateway: Option<Arc<MessagesGateway>>,
+}
+
 async fn run() -> anyhow::Result<()> {
     let _args = Args::parse();
 
-    // The one shared sandbox guard (J-02): before anything is read or
+    let mut api_options = api::ApiOptions::from_env();
+    let opened = open_home(&api_options)?;
+    let (config_file, config) = configure(&opened)?;
+    let tools = start_tools(&opened, &config).await;
+    let gateways = start_gateways(&opened, &mut api_options);
+    let (store, job_runner) = prepare_jobs(
+        &opened,
+        &config,
+        &config_file,
+        &mut api_options,
+        &tools.mcp,
+        &gateways.notify_router,
+    )?;
+    serve(opened, api_options, tools, gateways, store, job_runner).await
+}
+
+/// Resolve the verified home (the sandbox guard runs first, before anything is
+/// read or created), migrate a legacy folder, and take the instance lock.
+fn open_home(api_options: &api::ApiOptions) -> anyhow::Result<OpenedHome> {
+    // The one shared sandbox guard: before anything is read or
     // created, resolve the verified home, refuse the real ~/.auxesis and
     // refuse the real daemon port (a sandbox passes AUXESIS_API_PORT=0).
-    let mut api_options = api::ApiOptions::from_env();
     let home = match kernel_core::ensure_sandbox_guard(Some(api_options.port)) {
         Ok(home) => home,
         Err(err) => anyhow::bail!("{err}"),
     };
-    // WO-07: a pre-rename `dots/` folder moves to `agents/` before anything
+    // A pre-rename `dots/` folder moves to `agents/` before anything
     // creates `agents/`. Both folders present is a refusal, never a merge.
     match aux_engine::layout::migrate_legacy_agents_dir(&home) {
         Ok(Some(moved)) => eprintln!(
@@ -112,25 +155,34 @@ async fn run() -> anyhow::Result<()> {
         Err(err) => anyhow::bail!("auxd: {err}"),
     }
     let verified = ensure_home(&home)?;
-
     // Single instance per home: a second `auxd` (launchd + a manual start,
     // two sessions, a debugging copy) must refuse to run rather than
     // double-claim jobs. The lock is held for the whole process lifetime.
     let _instance_lock = InstanceLock::acquire(&home.join("auxd.lock"))?;
     tracing::debug!(lock = %_instance_lock.path().display(), "auxd: instance lock acquired");
+    Ok(OpenedHome {
+        home,
+        verified,
+        _instance_lock,
+    })
+}
 
+/// Load the config, set up logging and do the one-time preparation of the home.
+fn configure(opened: &OpenedHome) -> anyhow::Result<(std::path::PathBuf, Config)> {
+    let home = opened.home.clone();
+    let verified = opened.verified.clone();
     let config_file = config_path(&home);
     let config = Config::load_or_create_verified(&verified)?;
     // Default-silence the HTML/XML parser crates: html5ever logs one `WARN`
     // per foster-parented token, so a hostile 512 KiB page used to write
-    // ~8.85 MiB into the launchd-redirected log file (RV4-02). P3 batch-2 adds
-    // the WhatsApp transport targets: `whatsapp-rust`/`wacore*` log peer
+    // ~8.85 MiB into the launchd-redirected log file. The WhatsApp transport
+    // targets are silenced too: `whatsapp-rust`/`wacore*` log peer
     // numbers (`Identity change for <number> …`) at INFO. `RUST_LOG` stays the
     // base filter when set, and because the silence directives are prepended,
     // an explicit later directive (`RUST_LOG=html5ever=warn`) re-enables the
     // crate (last directive for a target wins).
     let base = std::env::var("RUST_LOG").unwrap_or_else(|_| config.log_level.clone());
-    // P2-3: `async-imap` logs the encoded `LOGIN` command — the password
+    // `async-imap` logs the encoded `LOGIN` command — the password
     // included — at TRACE, and its proto/TLS helpers log the same connection.
     // Force those targets off *after* the base filter (the last directive for a
     // target wins), so even `RUST_LOG=async_imap=trace` cannot write a
@@ -150,7 +202,7 @@ async fn run() -> anyhow::Result<()> {
             }),
         )
         .with_target(false)
-        // F-17/C P3-5: launchd never rotates auxd.log; cap what this process
+        // launchd never rotates auxd.log; cap what this process
         // writes so a persistent per-request error cannot fill the disk.
         .with_writer(logging::CappedWriter::new(
             std::io::stdout(),
@@ -166,7 +218,7 @@ async fn run() -> anyhow::Result<()> {
         }
     }
 
-    // H-04/L-1: register every secret this home holds (`AUX_KEY_*` in
+    // Register every secret this home holds (`AUX_KEY_*` in
     // `.env` and the process environment, the API token once the API starts)
     // with the exact-value scrubber. Values are never logged; the count is
     // not secret.
@@ -176,7 +228,7 @@ async fn run() -> anyhow::Result<()> {
         "known secrets registered for exact-value redaction"
     );
 
-    // G4: the native Google read tools are offered on every chat turn while
+    // The native Google read tools are offered on every chat turn while
     // this home holds an authorization. The daemon never opens a browser —
     // connecting is `aux connect google` or the app's explicit click, both of
     // which name an opener the daemon does not own. With the `google` feature
@@ -188,7 +240,7 @@ async fn run() -> anyhow::Result<()> {
         tracing::debug!("Google is not connected");
     }
 
-    // CAL-AGENT-INSTALL: a built-in agent gets each shipped file it is missing
+    // A built-in agent gets each shipped file it is missing
     // (the Calendar agent's agent.md and send-invite skill), on a fresh home
     // and on one created before they shipped. Existing files are never touched.
     match auxd::agents::install_shipped_files(&home) {
@@ -205,8 +257,13 @@ async fn run() -> anyhow::Result<()> {
     if config.location.city.is_none() {
         tracing::warn!("location not set: weather needs a city (set [location] city, or default_city, in config)");
     }
+    Ok((config_file, config))
+}
 
-    // P2: the user's MCP servers. A missing file means none; an invalid file
+/// Start the user's MCP servers and the mounted extensions.
+async fn start_tools(opened: &OpenedHome, config: &Config) -> Tools {
+    let home = opened.home.clone();
+    // The user's MCP servers. A missing file means none; an invalid file
     // is logged and the daemon keeps running without MCP. A server that fails
     // discovery is isolated.
     // The slot is shared by the API, the job runner and the privacy watch, which
@@ -225,7 +282,7 @@ async fn run() -> anyhow::Result<()> {
     let _mcp_watch =
         auxd::mcp::spawn_privacy_watch(home.clone(), Arc::clone(&mcp), mcp_ordering.clone());
 
-    // WO-13b: start one sandboxed session per mounted, unfrozen extension and
+    // Start one sandboxed session per mounted, unfrozen extension and
     // verify its pinned tool identities. An empty mount table is a no-op, so a
     // default install starts no child.
     let extensions: auxd::extensions::ExtSlot = auxd::extensions::start(&home).await;
@@ -233,12 +290,22 @@ async fn run() -> anyhow::Result<()> {
         auxd::extensions::spawn_privacy_watch(home.clone(), Arc::clone(&extensions));
     let extension_count = auxd::extensions::current(&extensions).running().len();
     tracing::info!(running = extension_count, "extensions started");
+    Tools {
+        mcp,
+        mcp_ordering,
+        extensions,
+    }
+}
 
-    // The owner's channel is the Gateway (D34). Every daemon-originated
+/// Build the notify router, its worker and flush tasks, and the Messages gateway.
+fn start_gateways(opened: &OpenedHome, api_options: &mut api::ApiOptions) -> Gateways {
+    let home = opened.home.clone();
+    let verified = opened.verified.clone();
+    // The owner's channel is the Gateway. Every daemon-originated
     // message is decided by the notify policy and delivered through it; the
     // state file keeps the daily counter across a restart.
     // The local macOS display is the fallback channel: when no remote gateway
-    // is paired, briefs and alerts still reach the owner here (C10).
+    // is paired, briefs and alerts still reach the owner here.
     let local_notifier: Arc<dyn Notifier> = Arc::new(StopSwitchNotifier::new(
         system_notifier(kernel_core::sandbox_guard_active()),
         killswitch::stop_path(&home),
@@ -251,7 +318,7 @@ async fn run() -> anyhow::Result<()> {
         verified.clone(),
         Arc::new(RouterClock),
     ));
-    // D34/G2: the Messages (iMessage) gateway is one more remote, off unless
+    // The Messages (iMessage) gateway is one more remote, off unless
     // `[imessage]` in gateways.toml is enabled and valid. A chat.db that
     // cannot be opened read-only or a sender that cannot be configured keeps
     // it off rather than failing the daemon.
@@ -267,8 +334,7 @@ async fn run() -> anyhow::Result<()> {
         notify_remotes.push(remote);
     }
     // With no paired remote, a waiting approval goes to the local display now
-    // through the same aux-notify sink, not the phone router
-    // (APPROVAL-NO-GATEWAY).
+    // through the same aux-notify sink, not the phone router.
     if !notify_remotes.iter().any(|gateway| gateway.is_paired()) {
         api_options.approval_local = Some(local_notifier);
     }
@@ -288,27 +354,45 @@ async fn run() -> anyhow::Result<()> {
             }
         })
     };
+    Gateways {
+        notify_router,
+        notify_worker,
+        notify_flush,
+        messages_gateway,
+    }
+}
+
+/// Open the store, schedule the built-in jobs and build the job runner.
+fn prepare_jobs(
+    opened: &OpenedHome,
+    config: &Config,
+    config_file: &std::path::Path,
+    api_options: &mut api::ApiOptions,
+    mcp: &auxd::mcp::McpSlot,
+    notify_router: &Arc<NotifyRouter>,
+) -> anyhow::Result<(Arc<Mutex<Store>>, brief_job::DispatchJobRunner)> {
+    let home = opened.home.clone();
+    let verified = opened.verified.clone();
     // Scheduled jobs run through the engine, with notifications gated by the
     // kill switch and routed through the policy and the gateway; configuration
     // problems degrade to a runner that fails jobs with a clear reason instead
     // of taking the daemon down.
     let notifier: Arc<dyn Notifier> = Arc::new(StopSwitchNotifier::new(
-        Arc::clone(&notify_router),
+        Arc::clone(notify_router),
         killswitch::stop_path(&home),
     ));
     let agent_runner = daemon_runner(
         &home,
-        &config_file,
-        &config,
+        config_file,
+        config,
         Arc::clone(&notifier),
-        Some(Arc::clone(&mcp)),
+        Some(Arc::clone(mcp)),
     );
-
     let store = Store::open_verified(&verified)?;
     // A claim left by a dead process is `uncertain`, never silently sendable.
     store.recover_mail_draft_claims()?;
     let store = Arc::new(Mutex::new(store));
-    // DOC-SAFE-1: seal evidence blobs left in plaintext by an older build. A
+    // Seal evidence blobs left in plaintext by an older build. A
     // failure leaves them to be sealed on their first read.
     // Only counts are logged, never a name or a byte.
     match aux_docs::migrate_blobs(&home) {
@@ -324,15 +408,15 @@ async fn run() -> anyhow::Result<()> {
     }
     {
         let store = lock_store(&store);
-        brief_job::sync_job(&store, &config, chrono::Utc::now())?;
+        brief_job::sync_job(&store, config, chrono::Utc::now())?;
     }
     {
-        // B3: keep the CRM timeline refresh scheduled. It is local reads plus a
+        // Keep the CRM timeline refresh scheduled. It is local reads plus a
         // local write and does nothing when no mailbox or snapshot exists.
         let store = lock_store(&store);
         auxd::crm::sync_job(&store, chrono::Utc::now())?;
     }
-    // M2: with Google parked, the brief reads the local EventKit snapshot and
+    // With Google parked, the brief reads the local EventKit snapshot and
     // the configured mailbox. A Google grant still wins when the frozen
     // integration is compiled in and connected.
     #[cfg(feature = "google")]
@@ -348,14 +432,14 @@ async fn run() -> anyhow::Result<()> {
     #[cfg(not(feature = "google"))]
     let brief_source: Arc<dyn aux_brief::BriefSource> =
         Arc::new(auxd::local_brief::LocalBriefSource::new(home.clone()));
-    // M2: `POST /v1/brief/run` runs the same source and router as the job.
+    // `POST /v1/brief/run` runs the same source and router as the job.
     api_options.brief_source = Some(Arc::clone(&brief_source));
-    api_options.notify_router = Some(Arc::clone(&notify_router));
+    api_options.notify_router = Some(Arc::clone(notify_router));
     let job_runner = brief_job::DispatchJobRunner::new(
         agent_runner,
         config.clone(),
         brief_source,
-        Arc::clone(&notify_router),
+        Arc::clone(notify_router),
         home.clone(),
     );
     {
@@ -369,7 +453,35 @@ async fn run() -> anyhow::Result<()> {
             tracing::warn!(interrupted, "marked runs left by a previous process");
         }
     }
+    Ok((store, job_runner))
+}
 
+/// Bind the local API, run the scheduler and the Messages poll until a stop
+/// signal, then shut everything down in order.
+async fn serve(
+    opened: OpenedHome,
+    mut api_options: api::ApiOptions,
+    tools: Tools,
+    gateways: Gateways,
+    store: Arc<Mutex<Store>>,
+    job_runner: brief_job::DispatchJobRunner,
+) -> anyhow::Result<()> {
+    let OpenedHome {
+        home,
+        verified,
+        _instance_lock,
+    } = opened;
+    let Tools {
+        mcp,
+        mcp_ordering,
+        extensions,
+    } = tools;
+    let Gateways {
+        notify_router,
+        notify_worker,
+        notify_flush,
+        messages_gateway,
+    } = gateways;
     let _ = writeln!(
         std::io::stdout(),
         "auxd ready — version {}, home {}, schema v{}",
@@ -379,7 +491,7 @@ async fn run() -> anyhow::Result<()> {
     );
     tracing::info!("auxd ready");
 
-    // B11: a home that is private at start holds no EventKit item. The sweep runs
+    // A home that is private at start holds no EventKit item. The sweep runs
     // before the API listens, so no request can meet a legacy or encrypted copy.
     if let Err(err) = auxd::apple_eventkit::sweep_stored(&home) {
         tracing::warn!(error = %err, "EventKit at-rest sweep failed at start");
@@ -408,7 +520,7 @@ async fn run() -> anyhow::Result<()> {
         }
     };
 
-    // CLOSURE-4: the daemon reads documents itself. The Mac app's extraction
+    // The daemon reads documents itself. The Mac app's extraction
     // worker and the documents routes used to be the only callers of the
     // sweep, so a receipt that arrived while the app was closed stayed
     // `[unread]`. The registry is local; this reuses the exact chain the API
@@ -428,7 +540,7 @@ async fn run() -> anyhow::Result<()> {
         StopSwitch::new(&home),
     ));
 
-    // D34/G2: the Messages reader polls the pinned chat and runs a tainted turn
+    // The Messages reader polls the pinned chat and runs a tainted turn
     // per owner message. It holds no kernel path of its own, so a private home
     // stops the poll (and the admissions above hold every send).
     let messages = match (&messages_gateway, api.as_ref()) {

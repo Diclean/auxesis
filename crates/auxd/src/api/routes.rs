@@ -2120,7 +2120,7 @@ async fn apply_grants_proposal(
     let (home, proposal) = (home.to_path_buf(), crate::agents::take_proposal(id));
     let write = tokio::task::spawn_blocking(move || {
         let proposal = proposal.ok_or_else(|| RegistryError::Io("the proposal is gone".into()))?;
-        crate::agents::write_grants(&home, &proposal.agent, &proposal.grants)
+        crate::agents::apply_proposal(&home, &proposal)
     })
     .await;
     let (audit, status, code, message) = match write {
@@ -2130,6 +2130,12 @@ async fn apply_grants_proposal(
             StatusCode::CONFLICT,
             "grant_exceeds_chief",
             "the permissions changed while this approval was pending; nothing was applied",
+        ),
+        Ok(Err(RegistryError::GrantsChanged)) => (
+            "allow_once_grants_changed",
+            StatusCode::CONFLICT,
+            "grants_changed",
+            "the grants changed since this change was proposed; nothing was applied",
         ),
         failed => {
             let error = failed.map(|result| result.err().map(|err| err.to_string()));

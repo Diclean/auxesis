@@ -114,6 +114,9 @@ pub enum RegistryError {
     /// The proposed permissions exceed the chief's ceiling.
     #[error("the agent would have access beyond the chief")]
     ExceedsChief,
+    /// The grants changed since the proposal was made.
+    #[error("the grants changed since this change was proposed")]
+    GrantsChanged,
 }
 
 /// `agents.toml`: the whole seed, strict.
@@ -587,6 +590,20 @@ fn redacted(err: &toml::de::Error, file: &str, text: &str) -> RegistryError {
 /// Write one agent's grants atomically (`0600`).
 pub fn write_grants(home: &Path, id: &str, grants: &AgentGrants) -> Result<(), RegistryError> {
     let _guard = kernel_core::lock_recover(grants_lock());
+    write_grants_locked(home, id, grants)
+}
+
+/// Apply an approved proposal, only if the agent's grants are still the set
+/// it was made against: an older card never overwrites a newer set.
+pub fn apply_proposal(home: &Path, proposal: &GrantsProposal) -> Result<(), RegistryError> {
+    let _guard = kernel_core::lock_recover(grants_lock());
+    if grants_hash(&grants(home, &proposal.agent)?) != proposal.base {
+        return Err(RegistryError::GrantsChanged);
+    }
+    write_grants_locked(home, &proposal.agent, &proposal.grants)
+}
+
+fn write_grants_locked(home: &Path, id: &str, grants: &AgentGrants) -> Result<(), RegistryError> {
     definition(home, id)?.ok_or_else(|| RegistryError::UnknownAgent(id.to_string()))?;
     validate_grants(home, id, grants)?;
     let text = toml::to_string(&GrantsFile::from(grants))
@@ -672,6 +689,8 @@ pub struct GrantsProposal {
     pub agent: String,
     /// Hash of the proposed grants.
     pub hash: String,
+    /// Hash of the agent's grants when the change was proposed.
+    pub base: String,
     /// The proposed grants.
     pub grants: AgentGrants,
 }
@@ -690,13 +709,14 @@ pub fn grants_hash(grants: &AgentGrants) -> String {
 }
 
 /// Remember a proposed grants change under `approval_id`.
-pub fn propose_grants(approval_id: &str, agent: &str, grants: AgentGrants) -> String {
+pub fn propose_grants(approval_id: &str, agent: &str, base: String, grants: AgentGrants) -> String {
     let hash = grants_hash(&grants);
     kernel_core::lock_recover(proposals()).insert(
         approval_id.to_string(),
         GrantsProposal {
             agent: agent.to_string(),
             hash: hash.clone(),
+            base,
             grants,
         },
     );
@@ -1073,18 +1093,19 @@ pub async fn grants_update(
     let checked = tokio::task::spawn_blocking(move || {
         definition(&home, &id_for_check)?
             .ok_or_else(|| RegistryError::UnknownAgent(id_for_check.clone()))?;
-        validate_grants(&home, &id_for_check, &proposed)
+        validate_grants(&home, &id_for_check, &proposed)?;
+        self::grants(&home, &id_for_check).map(|current| grants_hash(&current))
     })
     .await;
-    match checked {
-        Ok(Ok(())) => {}
+    let base = match checked {
+        Ok(Ok(base)) => base,
         Ok(Err(RegistryError::UnknownAgent(_))) => return agent_not_found(),
         Ok(Err(RegistryError::ExceedsChief)) => return exceeds_chief(),
         Ok(Err(err)) => return registry_error(&err),
         Err(err) => return internal(&err.to_string()),
-    }
+    };
     let approval_id = state.approvals.next_id();
-    let hash = propose_grants(&approval_id, &id, grants);
+    let hash = propose_grants(&approval_id, &id, base, grants);
     // The card is built by the shared builder, like every other ask: the
     // proposal it carries is one of its fields.
     let arguments = serde_json::json!({

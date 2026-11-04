@@ -460,13 +460,15 @@ pub fn default_grants(agent: &str) -> Option<AgentGrants> {
     let note = |text: &str| text.to_string();
     let grants = match agent {
         CHIEF_AGENT => AgentGrants {
-            see: "mail calendar contacts clients documents mcp connector"
+            // No blanket `mcp`/`connector` access: an MCP or connector tool
+            // whose scope cannot be named is refused, as for every agent,
+            // unless the owner grants it explicitly.
+            see: "mail calendar contacts clients documents"
                 .split_whitespace()
                 .map(|scope| see(scope, "local", AccessLevel::Read))
                 .collect(),
             can_do: "delegate read_file mail.read mail.draft mail.send calendar.read \
-                calendar.write clients.read clients.note documents.read documents.file \
-                mcp.access connector.access"
+                calendar.write clients.read clients.note documents.read documents.file"
                 .split_whitespace()
                 .map(|skill| do_grant(skill, ActionLevel::Auto))
                 .collect(),
@@ -651,16 +653,35 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_connector_or_mcp_tool_is_scoped_for_the_chief() {
+    fn an_unknown_connector_or_mcp_tool_is_scoped_and_refused_by_default() {
         assert_eq!(tool_scope("google_mystery_thing"), Some("connector"));
         assert_eq!(tool_scope("mcp__server__weird_tool"), Some("mcp"));
-        let chief = default_grants(CHIEF_AGENT).unwrap();
+        for chief in [CHIEF_AGENT, LEGACY_CHIEF] {
+            let grants = default_grants(chief).unwrap();
+            assert!(grants.check_tool(chief, "google_mystery_thing").is_err());
+            assert!(grants.check_tool(chief, "mcp__server__weird_tool").is_err());
+        }
+    }
+
+    #[test]
+    fn an_explicitly_granted_mcp_or_connector_tool_works_for_the_chief() {
+        let mut chief = default_grants(CHIEF_AGENT).unwrap();
+        // A mounted MCP tool that names its scope resolves to that skill.
+        assert!(chief
+            .check_tool(CHIEF_AGENT, "mcp__server__mail_read")
+            .is_ok());
+        // The owner's explicit grant opens the unknown bucket, nothing else.
+        chief.can_do.push(DoGrant {
+            skill: "mcp.access".to_string(),
+            level: ActionLevel::Ask,
+        });
+        assert_eq!(
+            chief.action_for_tool(CHIEF_AGENT, "mcp__server__weird_tool"),
+            Ok(GrantLevel::Ask)
+        );
         assert!(chief
             .check_tool(CHIEF_AGENT, "google_mystery_thing")
-            .is_ok());
-        assert!(chief
-            .check_tool(CHIEF_AGENT, "mcp__server__weird_tool")
-            .is_ok());
+            .is_err());
     }
 
     #[test]

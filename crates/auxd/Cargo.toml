@@ -76,10 +76,15 @@ aux-docs = { path = "../aux-docs" }
 aux-imessage = { path = "../aux-imessage" }
 kernel-broker.workspace = true
 axum = { version = "=0.8.9", features = ["ws"] }
-# The local API's connection builder: the header-read timeout that also bounds
-# an idle keep-alive socket, and the websocket-aware serve loop (API-TIMEOUT-1).
-# Same version axum already resolves; no new crate.
-hyper-util = { version = "=0.1.21", features = ["server-auto", "service", "tokio"] }
+# HTTP/1 directly, not hyper-util's auto builder: the auto builder blocks on
+# protocol-sniff bytes before arming any timer, so a silent socket would hold a
+# connection slot forever. The Mac app and aux-cli speak cleartext HTTP/1.1 to
+# loopback only, so no h2 sniffing is needed (API-TIMEOUT-1). Same version axum
+# already resolves; no new crate.
+hyper = { version = "=1.12.0", default-features = false, features = ["http1", "server"] }
+# Tokio IO/timer adapters and the tower -> hyper service bridge for that
+# builder. Same version axum already resolves; no new crate.
+hyper-util = { version = "=0.1.21", default-features = false, features = ["service", "tokio"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap.workspace = true
 libc = "0.2"

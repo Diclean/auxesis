@@ -5247,6 +5247,96 @@ async fn a_partial_request_head_is_disconnected_after_the_header_timeout() {
     t.stop();
 }
 
+/// The regression behind round 2: hyper-util's `auto` builder waited for the
+/// protocol-sniff byte before arming the header timer, so a socket that sent
+/// nothing held its connection slot until the daemon restarted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_silent_socket_is_disconnected_after_the_header_timeout() {
+    let mut t = TestApi::start_with(|_| timeout_options()).await;
+    let mut stream = tokio::net::TcpStream::connect(t.addr).await.unwrap();
+
+    let started = tokio::time::Instant::now();
+    let bytes = drain_until_closed(&mut stream, SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN)
+        .await
+        .expect("a socket that never sends a byte must be closed at the header timeout");
+    assert!(
+        bytes.is_empty(),
+        "a silent socket must not be answered: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    // Allow for the server having armed its timer a few milliseconds before
+    // this test's clock started; an immediate close is still a failure.
+    assert!(
+        started.elapsed() >= SLOW_CLIENT_TIMEOUT.saturating_sub(Duration::from_millis(50)),
+        "the silent socket was closed before the header timeout: {:?}",
+        started.elapsed()
+    );
+    assert!(started.elapsed() <= SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN);
+
+    t.stop();
+}
+
+/// Every connection slot filled by a peer that never sends a byte, then one
+/// real authorized request. The real request is queued behind the silent ones
+/// and is answered once they time out. Before the HTTP/1-only builder, the
+/// silent sockets never timed out and this request hung forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_house_of_silent_sockets_does_not_lock_out_a_real_request() {
+    let header_timeout = SLOW_CLIENT_TIMEOUT * 2;
+    let mut t = TestApi::start_with(move |_| ApiOptions {
+        header_read_timeout: header_timeout,
+        ..fast_options()
+    })
+    .await;
+
+    let mut silent = Vec::with_capacity(api::MAX_CONNECTIONS);
+    for _ in 0..api::MAX_CONNECTIONS {
+        silent.push(tokio::net::TcpStream::connect(t.addr).await.unwrap());
+    }
+    // Give the accept loop time to take the slots. Even if it has not, these
+    // connects were queued before the real request, so it still waits.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let started = tokio::time::Instant::now();
+    let response = tokio::task::spawn_blocking({
+        let addr = t.addr;
+        let token = t.token.clone();
+        move || {
+            common::http_with_read_timeout(
+                addr,
+                "GET",
+                "/v1/health",
+                Some(&token),
+                None,
+                header_timeout + Duration::from_secs(2),
+            )
+        }
+    })
+    .await
+    .expect("the real request must not hang");
+    let elapsed = started.elapsed();
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert!(
+        response.body.contains("\"ok\":true"),
+        "body: {}",
+        response.body
+    );
+    // All 64 slots were taken when it arrived, so it cannot have been
+    // answered before at least one of them timed out.
+    assert!(
+        elapsed >= header_timeout / 2,
+        "the real request was answered before a slot could free: {elapsed:?}"
+    );
+    assert!(
+        elapsed <= header_timeout + Duration::from_secs(2),
+        "the real request waited too long: {elapsed:?}"
+    );
+
+    drop(silent);
+    t.stop();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_idle_keep_alive_connection_is_closed_after_the_header_timeout() {
     let mut t = TestApi::start_with(|_| timeout_options()).await;

@@ -609,11 +609,19 @@ mod tests {
             "brand_new_tool",
             "mcp__crm__log_interaction",
         ] {
-            let mut ask = request();
-            ask.tool = tool.to_string();
-            ask.tainted = true;
-            ask.taint_source = Some("mail_read".to_string());
-            assert!(!auto().approve(&ask).await.unwrap(), "{tool}");
+            for agent in ["main", "mail", "scout"] {
+                for tainted in [false, true] {
+                    let mut ask = request();
+                    ask.agent = agent.to_string();
+                    ask.tool = tool.to_string();
+                    ask.tainted = tainted;
+                    ask.taint_source = tainted.then(|| "mail_read".to_string());
+                    assert!(
+                        !auto().approve(&ask).await.unwrap(),
+                        "{agent} {tool} tainted={tainted}"
+                    );
+                }
+            }
         }
         // A skill run that logs then sends keeps the run's card.
         let mut run = request();

@@ -260,6 +260,7 @@ impl ChatParts<'_> {
             &mut registry,
             &mut rules,
         );
+        auxd::api::constrain_non_api_turn(&self.home, &self.agent, &registry, &mut rules);
         ChatSession::start(ChatSetup {
             mode: Arc::new(move || mode),
             contacts: Arc::clone(&self.contacts),

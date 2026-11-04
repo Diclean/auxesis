@@ -490,6 +490,14 @@ impl AgentJobRunner {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             &mut rules,
         );
+        crate::api::constrain_non_api_turn(
+            &self.home,
+            &job.agent,
+            &registry
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            &mut rules,
+        );
         // WO-09: load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
         crate::agent_skills::load_agent_skills(&self.home, &job.agent, store);

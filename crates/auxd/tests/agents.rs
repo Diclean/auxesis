@@ -1182,6 +1182,85 @@ async fn a_builtin_tool_still_runs() {
     t.stop();
 }
 
+/// CHIEF-BASE-1: what the chief is denied, an agent is denied too, at run
+/// time and when the agent is created, whatever the agent's own rules say.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
+    let provider = Arc::new(FakeProvider::scripted(
+        "fakey",
+        vec![
+            tool_call("read_file", json!({"path":"note.txt"})),
+            ChatResponse::assistant("done"),
+        ],
+    ));
+    let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"")
+        + "\n[[rules]]\nagent = \"main\"\ntool = \"read_file\"\naction = \"deny\"\n";
+    let mut t = TestApi::start_with(options(provider), &config).await;
+    let workspace = aux_engine::workspace_dir(&t.home, "mail");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("note.txt"), "builtin works").unwrap();
+    let sent = t.post("/v1/threads/mail/messages", r#"{"content":"read it"}"#);
+    assert_eq!(sent.status, 200, "body: {}", sent.body);
+    let messages = t.get("/v1/threads/mail/messages").body;
+    assert!(!messages.contains("builtin works"), "{messages}");
+    assert!(messages.contains("denied"), "{messages}");
+
+    let scout = json!({"name": "scout", "tools": ["read_file"]});
+    let created = t.post("/v1/agents", &scout.to_string());
+    assert_eq!(created.status, 409, "body: {}", created.body);
+    assert!(
+        created.body.contains("grant_exceeds_chief"),
+        "{}",
+        created.body
+    );
+    assert!(!t.home.join("agents/scout").exists());
+    t.stop();
+}
+
+/// ACT-FREE still binds the chief: with every access and `approvals = auto`,
+/// a send still waits for a card and runs nothing before it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chief_send_still_creates_a_card_in_auto_mode() {
+    let provider = Arc::new(FakeProvider::scripted(
+        "fakey",
+        vec![
+            tool_call("mail_send", json!({"to": "nobody@example.test"})),
+            ChatResponse::assistant("done"),
+        ],
+    ));
+    let ran = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ran);
+    let tools: ToolRegistryHook = Arc::new(move |registry| {
+        let tool = TestTool::simple("mail_send", "sent", Arc::clone(&flag));
+        registry.register_native(Box::new(tool));
+    });
+    let config = CONFIG
+        .replace("default_agent = \"aux\"", "default_agent = \"main\"")
+        .replace("approvals = \"ask\"", "approvals = \"auto\"");
+    let options = ApiOptions {
+        tools: Some(tools),
+        ..options(provider)
+    };
+    let mut t = TestApi::start_with(options, &config).await;
+    let (addr, token) = (t.addr, t.token.clone());
+    let mut send = tokio::task::spawn_blocking(move || {
+        let body = json!({"content": "send it"}).to_string();
+        post(addr, "/v1/threads/main/messages", Some(&token), &body)
+    });
+    let pending = tokio::select! {
+        pending = wait_for_pending(&t, Duration::from_secs(10)) => pending,
+        sent = &mut send => panic!("the turn ended before a card: {:?}", sent.unwrap().status),
+    };
+    assert_eq!(pending["scope_tool"], "mail_send");
+    assert!(!ran.load(Ordering::SeqCst));
+    let id = pending["id"].as_str().unwrap();
+    let denied = t.post(&format!("/v1/approvals/{id}"), r#"{"decision":"deny"}"#);
+    assert_eq!(denied.status, 200, "body: {}", denied.body);
+    let _ = tokio::time::timeout(Duration::from_secs(10), send).await;
+    assert!(!ran.load(Ordering::SeqCst));
+    t.stop();
+}
+
 /// #P2 (round 3): an `Unknown`-origin tool is refused for Mail even when its
 /// name resolves to the granted `mail` scope.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

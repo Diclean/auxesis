@@ -1761,11 +1761,7 @@ fn table_rows_json(
         return Ok(Vec::new());
     }
     let mut statement = tx.prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))?;
-    let names: Vec<String> = statement
-        .column_names()
-        .iter()
-        .map(|name| name.to_string())
-        .collect();
+    let names: Vec<String> = statement.column_names().map(str::to_owned).collect();
     let rows = statement.query_map([], |row| {
         let mut object = serde_json::Map::new();
         for (index, name) in names.iter().enumerate() {

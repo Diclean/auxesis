@@ -68,6 +68,14 @@ allow = [
 # (only `openssl-probe`, which is MIT OR Apache-2.0), so no crate needs it.
 confidence-threshold = 0.9
 
+# sqlcipher-src carries the SQLCipher/SQLite C sources that libsqlite3-sys
+# bundled before rusqlite 0.41 split them out. Its expression adds SQLite's
+# public-domain "blessing" and WTFPL: both are more permissive than MIT,
+# so they are allowed for this one crate only, never for the whole graph.
+[[licenses.exceptions]]
+crate = "sqlcipher-src"
+allow = ["blessing", "WTFPL"]
+
 # Our own crates. PolyForm Noncommercial 1.0.0 is the licence of this
 # repository (see LICENSE), so the workspace crates are allowed that licence
 # and nothing else. Every entry names one crate of this repository: a

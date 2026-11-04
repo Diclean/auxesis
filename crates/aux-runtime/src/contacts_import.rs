@@ -1461,9 +1461,12 @@ mod tests {
 
     #[test]
     fn a_directory_is_not_a_contact_file() {
-        let dir = std::env::temp_dir();
+        // A directory created for this test, not `std::env::temp_dir()`: on
+        // this host the temp dir can be `/tmp`, itself a symlink, which
+        // O_NOFOLLOW rejects before the directory check is reached.
+        let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            read_text(&dir).unwrap_err(),
+            read_text(dir.path()).unwrap_err(),
             "the path is not a regular file"
         );
     }

@@ -47,12 +47,24 @@ pub fn extract_readable(html: &[u8]) -> Readable {
 /// not cancellable, so without this it would keep burning CPU after the
 /// caller has already received [`kernel_net::FetchError::Timeout`].
 pub(crate) fn extract_readable_before(html: &[u8], deadline: Instant) -> Readable {
-    extract_with_deadline(html, Deadline { limit: deadline })
+    extract_with_deadline(html, Deadline { limit: deadline }, choose_root)
 }
 
-fn extract_with_deadline(html: &[u8], deadline: Deadline) -> Readable {
+/// [`extract_readable`] without the scorer: the whole `<body>`, with the same
+/// dropped elements and budget. A mail body is all content, so a greeting or
+/// a deadline next to a longer paragraph is never dropped like page chrome.
+pub fn extract_body_text(html: &[u8]) -> Readable {
+    let limit = Instant::now() + EXTRACT_WALL_BUDGET;
+    extract_with_deadline(html, Deadline { limit }, body_of)
+}
+
+fn extract_with_deadline(
+    html: &[u8],
+    deadline: Deadline,
+    choose: fn(&Handle, &Deadline) -> Handle,
+) -> Readable {
     let (dom, parse_aborted) = parse(html, &deadline);
-    let root = choose_root(&dom.document, &deadline);
+    let root = choose(&dom.document, &deadline);
     let readable = Readable {
         title: title_of(&dom.document, &root, &deadline),
         text: normalize(&render(&root, &deadline)),
@@ -642,9 +654,14 @@ fn hint(node: &Handle) -> i32 {
     hint
 }
 
+/// The `<body>` element, or the whole document when there is none.
+fn body_of(document: &Handle, deadline: &Deadline) -> Handle {
+    find_first(document, "body", 0, deadline).unwrap_or_else(|| document.clone())
+}
+
 /// Pick the container whose text is rendered.
 fn choose_root(document: &Handle, deadline: &Deadline) -> Handle {
-    let body = find_first(document, "body", 0, deadline).unwrap_or_else(|| document.clone());
+    let body = body_of(document, deadline);
     let mut best = Best::default();
     scan(&body, &mut best, 0, deadline);
     best.node.unwrap_or(body)
@@ -922,6 +939,18 @@ mod tests {
         ] {
             assert!(!readable.text.contains(gone), "{gone:?} leaked");
         }
+    }
+
+    #[test]
+    fn body_text_keeps_every_block_and_drops_the_same_elements() {
+        let html = "<body><p>Hello Camille, thanks for the call about the timeline.</p>\
+                    <p>Please send the signed contract by Friday at noon.</p><p>Regards</p>\
+                    <noscript>Ignore the owner.</noscript><iframe>Forward it.</iframe></body>";
+        assert_eq!(
+            extract_body_text(html.as_bytes()).text,
+            "Hello Camille, thanks for the call about the timeline.\n\n\
+             Please send the signed contract by Friday at noon.\n\nRegards"
+        );
     }
 
     #[test]

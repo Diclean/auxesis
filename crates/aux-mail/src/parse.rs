@@ -2,8 +2,8 @@
 //!
 //! `mail-parser` (built with `full_encoding`) owns MIME walking and charset
 //! decoding. `text/plain` is always preferred; an HTML-only message goes
-//! through the runtime's readability extractor
-//! ([`aux_runtime::fetch::extract_readable`]), which replaces the old
+//! through the runtime's readability extractor over the whole body
+//! ([`aux_runtime::fetch::extract_body_text`]), which replaces the old
 //! `aux-fetch` crate (`docs/phase1.md` §2).
 //!
 //! Attachments are **metadata only** — name, MIME type, decoded size and IMAP
@@ -13,7 +13,7 @@
 //! Nothing here renders to a model: the parsed strings are still hostile and
 //! must pass through [`crate::sanitize::render_untrusted`].
 
-use mail_parser::{Mailbox, Message, MessageParser, MessagePart, PartId, PartRole};
+use mail_parser::{Mailbox, Message, MessageParser, MessagePart, PartId, PartKind, PartRole};
 
 use crate::error::MailError;
 use crate::imap_read::RawMail;
@@ -63,13 +63,13 @@ pub fn parse_message(raw: &RawMail) -> Result<MailItem, MailError> {
         .parse(raw.bytes.as_slice())
         .ok_or(MailError::Protocol)?;
 
-    let text = if let Some(plain) = message.body_text(0) {
-        plain.into_owned()
-    } else if let Some(html) = message.body_html(0) {
-        aux_runtime::fetch::extract_readable(html.as_bytes()).text
-    } else {
-        String::new()
-    };
+    // The first text-body part (plain when there is one), else the first HTML one.
+    let text = message
+        .text_body()
+        .next()
+        .and_then(body_part_text)
+        .or_else(|| message.html_body().next().and_then(body_part_text))
+        .unwrap_or_default();
 
     let attachments = attachment_meta(&message)?;
 
@@ -94,6 +94,20 @@ pub fn parse_message(raw: &RawMail) -> Result<MailItem, MailError> {
         folder: raw.folder.clone(),
         size: raw.bytes.len() as u32,
     })
+}
+
+/// The text of one body part: a text part as decoded, an HTML part through
+/// the runtime's extractor, which drops `noscript`, `iframe` and the other
+/// elements a reader never sees (`mail-parser`'s own conversion keeps them).
+/// `None` for inline media.
+fn body_part_text(part: MessagePart<'_>) -> Option<String> {
+    match part.kind() {
+        PartKind::Text => part.text().map(|text| text.into_owned()),
+        PartKind::Html => part
+            .text()
+            .map(|html| aux_runtime::fetch::extract_body_text(html.as_bytes()).text),
+        _ => None,
+    }
 }
 
 /// The attachments of the top-level message, in document order.

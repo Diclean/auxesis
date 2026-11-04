@@ -285,7 +285,7 @@ if [ -z "$DAEMON_BIN" ]; then
   [ "$NO_BUILD" = "0" ] || die "--no-build needs --daemon-bin"
   echo "building auxd (release, default features, CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-3}, nice -n 15)…"
   ( cd "$REPO_ROOT" && env CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}" \
-      nice -n 15 cargo build -p auxd --release )
+      nice -n 15 cargo build -p auxd --locked --release )
   DAEMON_BIN="$CARGO_TARGET/release/auxd"
 fi
 [ -x "$DAEMON_BIN" ] || die "daemon binary is not executable: $DAEMON_BIN"

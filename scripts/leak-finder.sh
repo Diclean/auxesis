@@ -7,9 +7,9 @@
 #   scripts/leak-finder.sh [--local]
 #   scripts/leak-finder.sh --help
 #
-# Runs the ignored `nightly` test of a clean checkout of <ref> (default
-# v0.1.1, the kernel tag the app pins) in release via remote-build.sh, and
-# writes <date>.json/.md.
+# Runs the ignored `nightly` test of a clean checkout of <ref> (default: the
+# kernel commit the app pins, read from Cargo.lock) in release via
+# remote-build.sh, and writes <date>.json/.md.
 # The build host is configuration, never a literal: LEAK_FINDER_REMOTE_HOST,
 # else the first line of <AUX_OPS_DIR>/leak-finder/remote-host. Without either
 # the script fails closed (exit 2) instead of quietly running the 2M-case
@@ -45,7 +45,7 @@ usage: scripts/leak-finder.sh [--ref <git ref>] [--cases <n>] [--slot <name>] [-
 
 Runs the ignored `nightly` leak-finder test
 (qa/privacy-eval/tests/leak_finder.rs) of a clean checkout of <ref> in the
-privacy kernel repository (default v0.1.1, the tag the app pins) in release,
+privacy kernel repository (default: the commit Cargo.lock pins) in release,
 then writes <date>.json and <date>.md.
 
 The probe runs on the configured build host, through the machine's remote
@@ -57,7 +57,7 @@ unreachable also falls back to this Mac, through the local build wrapper, and
 so does a host the owner switched off (an off-switch file in the tools dir),
 even though ssh still answers it. The checkout is deleted afterwards.
 
-  --ref <git ref>   the ref to probe (default: v0.1.1)
+  --ref <git ref>   the ref to probe (default: the commit Cargo.lock pins)
   --cases <n>       the case count of the run (default: the file's own)
   --slot <name>     the remote build slot (default: leak-finder)
   --local           run the probe on this Mac, without a build host
@@ -74,7 +74,7 @@ Environment:
 USAGE
 }
 
-ref=v0.1.1
+ref=""
 cases=""
 slot=leak-finder
 run_local=0
@@ -90,9 +90,24 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$cases" || "$cases" =~ ^[1-9][0-9]*$ ]] || { echo "--cases must be a positive number" >&2; exit 2; }
 
+# The kernel commit the app pins, read from Cargo.lock: the git source line
+# of the kernel crates ends in #<commit>. Reading it here keeps the probe on
+# the code the app actually builds, whatever the kernel tags afterwards.
+# --ref overrides it.
+kernel_commit_from_lock() {
+  local lock
+  lock="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/Cargo.lock"
+  [[ -f "$lock" ]] || return 0
+  grep -m1 'auxesis-privacy-kernel' "$lock" | sed -n 's/.*#\([0-9a-f]\{40\}\).*/\1/p'
+}
+if [[ -z "$ref" ]]; then
+  ref="$(kernel_commit_from_lock)"
+  [[ -n "$ref" ]] || { echo "leak-finder: no kernel commit in Cargo.lock; pass --ref <commit>" >&2; exit 2; }
+fi
+
 # The probe lives in the kernel repository, not in this app tree. KERNEL_REPO
 # names a checkout to probe; without it the script clones the public repo into
-# its temp dir. The app's root Cargo.toml pins the same tag this defaults to.
+# its temp dir. The app's Cargo.lock pins the same commit this defaults to.
 kernel_repo="${KERNEL_REPO:-}"
 # The machine's own tools dir holds the build wrappers and the host file; the
 # report directory falls back to the user's cache. No path of one machine is

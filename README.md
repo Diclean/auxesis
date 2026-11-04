@@ -80,6 +80,10 @@ The kernel is also a separate Rust project:
 Its crates are a git dependency of this app, pinned to tag `v0.1.1` (commit
 `ad508f3`); the source is not vendored here.
 
+The kernel forbids `unsafe` code in the crates that opt into that ban. Cargo
+does not apply a dependency's lints to a git dependency, so the ban is enforced
+in the kernel repository's own CI, not in this app's build.
+
 ## Measured, not promised
 
 Recall is measured on a private held-out set: 250 invented values in 184 carrier

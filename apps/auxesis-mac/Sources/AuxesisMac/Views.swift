@@ -233,7 +233,12 @@ struct LedgerView: View {
                         TableRow(cells: [
                             AnyView(Text(job.schedule).foregroundStyle(palette.muted.color)),
                             AnyView(Text(TeamMember.displayName(job.agent))),
-                            AnyView(Text(job.name)),
+                            AnyView(VStack(alignment: .leading, spacing: 2) {
+                                Text(job.name)
+                                if let mark = JobHealthMark.make(job, language: language) {
+                                    JobHealthLine(mark: mark)
+                                }
+                            }),
                             AnyView(Text(job.nextRunAt.flatMap(TimeText.parse).map { TimeText.short($0, now: Date(), language: language) } ?? "")
                                 .foregroundStyle(palette.muted.color)),
                         ])

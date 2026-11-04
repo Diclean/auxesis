@@ -81,6 +81,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use hyper::server::conn::http1::Builder as ConnectionBuilder;
+use hyper_util::rt::{TokioIo, TokioTimer};
+use hyper_util::service::TowerToHyperService;
+
 pub use approval::{ApprovalRegistry, PendingApproval, Resolution, DEFAULT_APPROVAL_TIMEOUT};
 pub use auth::{token_path, ApiToken};
 pub use private_answers::{HeldAnswer, PrivateAnswers, MAX_HELD};
@@ -97,7 +101,10 @@ pub use snapshot::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MESSAGE_MAX_BYTES};
 use tokio::sync::broadcast;
 #[cfg(any(test, feature = "test-util"))]
 pub use turn::ToolRegistryHook;
-pub use turn::{EngineTurnRunner, FailingTurnRunner, TurnError, TurnRecord, TurnRunner};
+pub use turn::{
+    apply_chief_ceiling, constrain_non_api_turn, EngineTurnRunner, FailingTurnRunner, TurnError,
+    TurnRecord, TurnRunner,
+};
 use turn_cancels::TurnCancels;
 
 /// Port the local API listens on by default (T9 for `auxd`: 2-8-9-3).
@@ -108,6 +115,18 @@ pub const API_PORT_ENV: &str = "AUXESIS_API_PORT";
 
 /// How often the WS broadcaster polls the store in production.
 pub const DEFAULT_EVENT_POLL: Duration = Duration::from_secs(1);
+
+/// How long the local API waits for a request head before closing the
+/// connection. The same timer also bounds an idle HTTP/1 keep-alive
+/// connection (hyper starts it while waiting for the next head), so a peer
+/// that opens a socket and sends nothing, or a partial header, cannot hold it
+/// forever. It stops once the head is read: a response that is still
+/// streaming is not affected.
+pub const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Largest number of local API connections served at once. A peer past this
+/// waits in the listener's backlog until a slot frees; it is not dropped.
+pub const MAX_CONNECTIONS: usize = 64;
 
 /// Largest accepted request body (POST JSON).
 pub const MAX_REQUEST_BODY_BYTES: usize = 128 * 1024;
@@ -196,6 +215,10 @@ pub struct ApiOptions {
     pub port: u16,
     /// WS poll interval (tests shrink it; production uses 1 s).
     pub event_poll: Duration,
+    /// How long to read one request head, and how long an idle keep-alive
+    /// connection may sit before it is closed. Tests shrink it; production
+    /// uses [`DEFAULT_HEADER_READ_TIMEOUT`].
+    pub header_read_timeout: Duration,
     /// Turn runner override (tests inject a failing runner; `None` uses the
     /// real engine).
     pub runner: Option<Arc<dyn TurnRunner>>,
@@ -253,6 +276,7 @@ impl Default for ApiOptions {
         Self {
             port: DEFAULT_API_PORT,
             event_poll: DEFAULT_EVENT_POLL,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
             runner: None,
             provider: None,
             #[cfg(any(test, feature = "test-util"))]
@@ -428,6 +452,93 @@ pub fn bind_loopback(port: u16) -> std::io::Result<std::net::TcpListener> {
     Ok(listener)
 }
 
+/// Serve the router with hyper's HTTP/1 connection builder.
+///
+/// This is deliberately not hyper-util's `auto` builder: `auto` waits for the
+/// first protocol-sniff bytes before it hands the socket to the HTTP/1 code,
+/// and that wait has no timer, so a socket that sends nothing never reaches
+/// the header-read timeout and holds a connection slot forever. The Mac app
+/// and aux-cli both speak cleartext HTTP/1.1 to loopback, so there is no h2 to
+/// sniff.
+///
+/// `header_read_timeout` bounds every wait for a request head: a socket that
+/// sends no byte, a partial header (slow-loris), and an idle keep-alive
+/// connection. It stops once the head is read, so a long-running turn or a
+/// streaming response is never cut. Connections are upgraded-capable, so the
+/// WebSocket route keeps working.
+///
+/// At most [`MAX_CONNECTIONS`] connections are served at once. The accept loop
+/// waits for a free slot *before* accepting, so extra peers wait in the
+/// listener's backlog instead of each consuming a task. Dropping this future
+/// (the handle aborts the task, as with `axum::serve` today) drops the
+/// [`tokio::task::JoinSet`], which aborts every in-flight connection.
+async fn serve(
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+    header_read_timeout: Duration,
+) {
+    let gate = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let mut connections = tokio::task::JoinSet::new();
+    loop {
+        let permit = match Arc::clone(&gate).acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => return,
+        };
+        let (stream, _peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                // Free the slot before the back-off, then keep accepting:
+                // one bad connection must not stop the local API.
+                drop(permit);
+                handle_accept_error(err).await;
+                continue;
+            }
+        };
+        let router = router.clone();
+        connections.spawn(async move {
+            let _permit = permit;
+            let mut builder = ConnectionBuilder::new();
+            builder
+                .timer(TokioTimer::new())
+                .header_read_timeout(header_read_timeout);
+            let service = TowerToHyperService::new(router.into_service());
+            if let Err(err) = builder
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades()
+                .await
+            {
+                tracing::debug!(error = %err, "local API connection closed");
+            }
+        });
+        // Reap finished connections; the permit is released when its task drops.
+        while connections.try_join_next().is_some() {}
+    }
+}
+
+/// Accept failures that only mean the peer disappeared while its connection
+/// was queued, not that the listener is broken. `axum::serve` skipped exactly
+/// these.
+fn is_connection_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+    )
+}
+
+/// Classify one `accept` failure. A peer that aborted is nothing to report;
+/// anything else (EMFILE/ENFILE, for instance) is logged and the loop backs
+/// off for a second before retrying, so a resource spike does not permanently
+/// stop the local API.
+async fn handle_accept_error(err: std::io::Error) {
+    if is_connection_error(&err) {
+        return;
+    }
+    tracing::error!(error = %err, "local API accept error");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+}
+
 /// Load `config.toml` through the process's verified home when one exists
 /// (production): the handle re-verifies identity and creates through the
 /// fd-relative gateway, so a swapped home cannot plant or redirect the file
@@ -601,10 +712,9 @@ pub fn spawn(home: &Path, options: ApiOptions) -> std::io::Result<ApiHandle> {
 
     let broadcaster = events::start_broadcaster(Arc::clone(&state));
     let router = routes::router(Arc::clone(&state));
+    let header_read_timeout = options.header_read_timeout;
     let server = tokio::spawn(async move {
-        if let Err(err) = axum::serve(listener, router).await {
-            tracing::error!(error = %err, "local API server stopped");
-        }
+        serve(listener, router, header_read_timeout).await;
     });
 
     Ok(ApiHandle {
@@ -646,5 +756,31 @@ mod tests {
         let token = ApiToken::load_or_create(dir.path()).unwrap();
         let text = format!("{token:?}");
         assert_eq!(text, "ApiToken(<redacted>)");
+    }
+
+    #[test]
+    fn accept_error_classification_skips_disconnects_but_not_resource_errors() {
+        for kind in [
+            std::io::ErrorKind::ConnectionRefused,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::ConnectionReset,
+        ] {
+            assert!(
+                is_connection_error(&std::io::Error::new(kind, "peer gone")),
+                "{kind:?} is a peer disconnect and must be skipped"
+            );
+        }
+
+        // EMFILE is the case that used to end the accept loop: it must be
+        // logged and retried after a back-off, never treated as a disconnect.
+        let emfile = std::io::Error::from_raw_os_error(libc::EMFILE);
+        assert!(
+            !is_connection_error(&emfile),
+            "EMFILE must back off and retry, not be skipped"
+        );
+        assert!(!is_connection_error(&std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "not a peer disconnect"
+        )));
     }
 }

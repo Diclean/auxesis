@@ -132,7 +132,10 @@ impl Notifier for MacNotifier {
             .map(|code| code.to_string())
             .unwrap_or_else(|| "signal".to_string());
         let raw = String::from_utf8_lossy(&output.stderr);
-        let stderr = kernel_broker::sanitize_external_text(raw.trim(), MAX_STDERR);
+        // Cleaned of invisibles and ANSI and secret-redacted (IMSG-SCRUB-1):
+        // the error is logged and can be shown, so no key may ride in it.
+        let stderr =
+            kernel_broker::scrub_external_preview(std::path::Path::new(""), raw.trim(), MAX_STDERR);
         let stderr = if stderr.is_empty() {
             "(no stderr)".to_string()
         } else {
@@ -544,6 +547,23 @@ mod tests {
                     !stderr.contains('\u{1b}') && !stderr.contains("[31m"),
                     "ANSI residue in {stderr:?}"
                 );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_key_in_stderr_is_redacted() {
+        let key = format!(
+            "sk-proj-{}",
+            "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh3iJk6l"
+        ); // gitleaks:allow
+        let stderr = format!("execution error: api_key={key} rejected");
+        let notifier = MacNotifier::with_runner(move |_| Ok(output_with(1, stderr.as_bytes())));
+        match notifier.notify(&Notification::new("t", "b")).unwrap_err() {
+            NotifyError::Osascript { stderr, .. } => {
+                assert!(!stderr.contains("Ab3dEf6h"), "key in {stderr:?}");
+                assert!(stderr.starts_with("execution error"), "{stderr:?}");
             }
             other => panic!("unexpected error: {other:?}"),
         }

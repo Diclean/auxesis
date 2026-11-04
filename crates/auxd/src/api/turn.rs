@@ -1611,7 +1611,7 @@ impl EngineTurnRunner {
         // D33: only the chief can hand work out. The tool returns the domain
         // agent's short result; the chief never sees its raw data.
         let before = tool_ids(&registry);
-        if agent == aux_runtime::grants::CHIEF_AGENT {
+        if agent == crate::agents::chief_id(&self.home) {
             // WATCH-1: the chief also sets up "tell me when" watchers.
             registry.register(Box::new(crate::watch::WatchTool::new(
                 self.home.clone(),
@@ -1794,6 +1794,14 @@ impl EngineTurnRunner {
                 }
             }
         }
+        let chief_asks = apply_chief_ceiling(
+            &self.home,
+            agent,
+            &registry,
+            &origins,
+            &owner_rules,
+            &mut rules,
+        );
         // A generated grant `ask` never softens the owner's own deny: what the
         // config rules deny (as the broker selects) is denied again last.
         for name in registry.names() {
@@ -1814,6 +1822,8 @@ impl EngineTurnRunner {
                 .collect();
             owner_rules.extend(asks);
         }
+        // A card the chief would get stays a card for the agent (ACT-FREE).
+        owner_rules.extend(chief_asks);
         // MAIL-NO-SHELL, last so no later rule lifts it.
         aux_engine::config::keep_shell_from_domain_agent(
             &self.home,
@@ -2644,6 +2654,14 @@ fn implicit_grants(
 }
 
 fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &str) {
+    // The exact name is the per-tool grant an MCP or connector tool needs:
+    // its domain word alone opens nothing.
+    if !can_do.iter().any(|grant| grant.skill == tool) {
+        can_do.push(aux_runtime::grants::DoGrant {
+            skill: tool.to_string(),
+            level: aux_runtime::grants::ActionLevel::Auto,
+        });
+    }
     let Some((_, skill)) = aux_runtime::grants::tool_skill(tool) else {
         return;
     };
@@ -2661,6 +2679,107 @@ fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &st
 /// The registry holds wire names (`mail_send`); agent files list logical ones
 /// (`mail.send`). M4-0: the wire name is mapped back through the one table,
 /// so either form matches.
+/// CHIEF-BASE-1: an agent other than the chief can do nothing the chief
+/// could not. A tool the chief is refused (its grants, its tools lists, its
+/// own config deny) is denied for the agent; one the chief must ask about
+/// asks, unless the agent is already denied it. Only ever narrows. Returns
+/// the asks it added, so the auto policy keeps their cards.
+pub fn apply_chief_ceiling(
+    home: &Path,
+    agent: &str,
+    registry: &kernel_broker::ToolRegistry,
+    origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
+    owner_rules: &[Rule],
+    rules: &mut Vec<Rule>,
+) -> Vec<Rule> {
+    use aux_runtime::grants::{GrantLevel, ToolOrigin, CHIEF_AGENT};
+    let mut asks = Vec::new();
+    if agent == CHIEF_AGENT || agent == crate::agents::chief_id(home) {
+        return asks;
+    }
+    let chief = crate::agents::registry(home).map(|agents| crate::agents::chief_grants(&agents));
+    // The chief's tools lists; an unreadable one allows nothing.
+    let mut lists: Vec<Vec<String>> = Vec::new();
+    match agent::config(home, CHIEF_AGENT) {
+        Ok(config) => lists.extend(config.tools),
+        Err(_) => lists.push(Vec::new()),
+    }
+    match aux_runtime::skills::load_agent(&aux_engine::agent_dir(home, CHIEF_AGENT)) {
+        Ok(md)
+            if md.source == aux_runtime::skills::agent::AgentSource::AgentMd
+                && !md.tools.is_empty() =>
+        {
+            lists.push(md.tools)
+        }
+        Ok(_) => {}
+        Err(_) => lists.push(Vec::new()),
+    }
+    let chief_rules: Vec<Rule> = owner_rules
+        .iter()
+        .filter(|rule| rule.agent == CHIEF_AGENT)
+        .cloned()
+        .collect();
+    for name in registry.names() {
+        let explicit = registry
+            .get(name)
+            .is_some_and(|tool| tool.class().requires_explicit_rule);
+        let action = |rules: &[Rule], who| {
+            kernel_broker::matching_rule(rules, who, name, explicit).map(|(_, rule)| rule.action)
+        };
+        let origin = origins.get(name).copied().unwrap_or(ToolOrigin::Unknown);
+        let scope = aux_runtime::grants::tool_scope(name);
+        let level = chief.as_ref().ok().and_then(|grants| {
+            grants
+                .action_for_origin(CHIEF_AGENT, name, origin, scope)
+                .ok()
+        });
+        let owner = action(&chief_rules, CHIEF_AGENT);
+        if level.is_none()
+            || owner == Some(Action::Deny)
+            || !lists.iter().all(|tools| listed(tools, name))
+        {
+            rules.push(Rule::new(agent, name, Action::Deny));
+        } else if (level == Some(GrantLevel::Ask) || owner == Some(Action::Ask))
+            && action(rules, agent) != Some(Action::Deny)
+        {
+            asks.push(Rule::new(agent, name, Action::Ask));
+        }
+    }
+    rules.extend(asks.iter().cloned());
+    asks
+}
+
+/// The chief ceiling for the CLI and scheduled-job turns, whose registries
+/// are the built-ins plus mounted MCP tools.
+pub fn constrain_non_api_turn(
+    home: &Path,
+    agent: &str,
+    registry: &kernel_broker::ToolRegistry,
+    rules: &mut Vec<Rule>,
+) {
+    use aux_runtime::grants::ToolOrigin;
+    // These registries do not record their stages, so a name is never taken
+    // as built-in when it could be a connector or MCP tool: any name with a
+    // scope (a domain word, a connector prefix) is a connector, and the
+    // grants then resolve it exactly as the API path does.
+    let origin = |name: &str| {
+        if name.starts_with("mcp__") {
+            ToolOrigin::Mcp
+        } else if aux_runtime::grants::tool_scope(name).is_some() {
+            ToolOrigin::Connector
+        } else {
+            ToolOrigin::Builtin
+        }
+    };
+    let origins = registry
+        .names()
+        .into_iter()
+        .map(|name| (name.to_string(), origin(name)))
+        .collect();
+    let owner_rules = rules.clone();
+    apply_chief_ceiling(home, agent, registry, &origins, &owner_rules, rules);
+}
+
 fn listed(tools: &[String], name: &str) -> bool {
     let logical = aux_runtime::skills::tool_map::from_wire(name)
         .map(|info| info.logical)
@@ -3860,6 +3979,28 @@ mod tests {
         fn class(&self) -> kernel_broker::ToolClass {
             kernel_broker::ToolClass::default()
         }
+    }
+
+    /// Break-It D: the CLI/job ceiling does not label a connector-shaped
+    /// tool built-in, so the chief's refusal of an unknown connector caps
+    /// every other agent too.
+    #[test]
+    fn the_non_api_ceiling_treats_a_connector_name_as_a_connector() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let mut registry = kernel_broker::ToolRegistry::new();
+        registry.register_native(Box::new(NamedTestTool("google_mail_send_x")));
+        registry.register_native(Box::new(NamedTestTool("mail_read")));
+        let mut rules = Vec::new();
+        constrain_non_api_turn(home, "scout", &registry, &mut rules);
+        let denied = |tool: &str| {
+            rules
+                .iter()
+                .any(|r| r.agent == "scout" && r.tool == tool && r.action == Action::Deny)
+        };
+        assert!(denied("google_mail_send_x"));
+        assert!(!denied("mail_read"));
     }
 
     #[test]

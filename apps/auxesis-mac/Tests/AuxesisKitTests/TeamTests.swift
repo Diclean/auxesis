@@ -56,7 +56,7 @@ import Testing
         )
         XCTAssertEqual(
             L10n.ui(.acpReadsAsk, .fr),
-            "Un cerveau géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
+            "Un modèle géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
         )
         for language in [Language.en, .fr] {
             let text = L10n.ui(.acpReadsAsk, language).lowercased()
@@ -66,13 +66,13 @@ import Testing
         }
     }
 
-    func testFrenchFallsBackToEnglishUntilTranslated() {
-        XCTAssertEqual(L10n.ui(.waitingEmpty, .fr), L10n.ui(.waitingEmpty, .en))
+    func testWaitingEmptyIsTranslated() {
+        XCTAssertEqual(L10n.ui(.waitingEmpty, .fr), "Rien ne vous attend. Les agents demandent ici et dans leur propre fil.")
     }
 
     func testE1EmptyStatesAreVerbatim() {
         XCTAssertEqual(L10n.ui(.waitingEmpty, .en), "Nothing waits for you. Agents ask here and in their own threads.")
-        XCTAssertEqual(L10n.ui(.ledgerEmpty, .en), "Nothing has happened yet. Every action and every send will be listed here.")
+        XCTAssertEqual(L10n.ui(.ledgerEmpty, .en), "No actions or sends since you left.")
         XCTAssertEqual(L10n.ui(.clientsEmpty, .en), "No clients yet. Import contacts, or tell Clients about someone.")
         XCTAssertEqual(L10n.ui(.providersEmpty, .en), "No brain yet. Add a provider to start.")
         XCTAssertEqual(L10n.uf(.memoryEmpty, .en, "Mail"), "Nothing remembered yet. Mail saves rules you give it, with the date.")

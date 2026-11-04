@@ -28,11 +28,14 @@ struct WorkTabView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.title).font(.hk(Theme.Text.ui, Theme.Weight.semibold)).foregroundStyle(palette.ink.color).lineLimit(1)
                         Text(item.line).font(.meta).foregroundStyle(palette.ink3.color).lineLimit(1)
+                        if let mark = item.health { JobHealthLine(mark: mark) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
                     .overlay(alignment: .top) { Hairline() }
-                    .accessibilityElement(children: .combine)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel([item.title, item.line, item.health?.accessibilityLabel].compactMap { $0 }.joined(separator: ". "))
+                    .accessibilityIdentifier("work-next-\(item.id)")
                 }
             }
             .padding(.horizontal, 16)
@@ -121,4 +124,25 @@ private struct WorkRow: View {
     }
 
     private var delegation: Delegation? { shell.delegations.first { $0.id == item.id } }
+}
+
+/// A late or failing job: a tiny dot, then "Late · reason" on one line.
+/// Amber for late (look at it), the error hue for failing; ok draws nothing.
+struct JobHealthLine: View {
+    let mark: JobHealthMark
+    var showsReason = true
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        let hue = mark.tone == .bad ? palette.red.color : palette.amber.color
+        HStack(spacing: 5) {
+            Circle().fill(hue).frame(width: 6, height: 6).accessibilityHidden(true)
+            Text(showsReason ? mark.text : mark.label).font(.meta)
+                .foregroundStyle(mark.tone == .bad ? palette.red.color : palette.ink2.color)
+                .lineLimit(1)
+        }
+        .help(mark.text)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(mark.accessibilityLabel)
+    }
 }

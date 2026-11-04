@@ -17,14 +17,18 @@ use std::time::Duration;
 use async_trait::async_trait;
 use aux_notify::{FakeNotifier, Notifier};
 use aux_providers::ToolCall as ProviderToolCall;
-use aux_providers::{ChatMessage, ChatResponse, FakeProvider, Usage};
+use aux_providers::{
+    ChatMessage, ChatProvider, ChatRequest, ChatResponse, FakeProvider, ProviderError, Usage,
+};
 use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions, FailingTurnRunner, ToolRegistryHook};
+use chrono::{Local, NaiveDateTime};
 use common::{assert_error, http, HttpResponse};
 use futures_util::StreamExt;
 use kernel_broker::{Risk, Tool, ToolCtx, ToolError, ToolOutput};
 use kernel_core::{config_path, killswitch, store_path, UsageKind};
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
@@ -525,15 +529,7 @@ async fn agents_endpoint_reports_live_state_and_threads() {
         .collect();
     assert_eq!(
         names,
-        vec![
-            "aux",
-            "axis",
-            "calendar",
-            "clients",
-            "documents",
-            "mail",
-            "main"
-        ]
+        vec!["axis", "calendar", "clients", "documents", "mail", "main"]
     );
 
     let main_agent = agents
@@ -1156,7 +1152,7 @@ async fn private_egress_e2e(deep: bool) {
     );
     let response = post_auth(
         &t,
-        "/v1/threads/main/messages",
+        "/v1/threads/notes/messages",
         &serde_json::json!({"content": input}).to_string(),
     )
     .await;
@@ -1194,7 +1190,7 @@ async fn private_egress_e2e(deep: bool) {
         assert!(reply.contains(value), "owner reply was not rehydrated");
     }
 
-    let receipts = get_auth(&t, "/v1/receipts?agent=main&limit=10").await;
+    let receipts = get_auth(&t, "/v1/receipts?agent=notes&limit=10").await;
     assert_eq!(receipts.status, 200, "body: {}", receipts.body);
     let receipts = receipts.json();
     let receipt = receipts
@@ -1422,6 +1418,92 @@ async fn send_turn_runs_the_engine_with_the_fake_provider() {
     )
     .await;
     assert_error(&huge, 413, "payload_too_large");
+
+    t.stop();
+}
+
+/// WO-BUD-5: a tiny daily cap refuses the turn at the HTTP boundary. The
+/// provider is never called, the denial is audited once as `budget.denied`,
+/// and the receipt says `stopped_budget`.
+///
+/// The brief names the route `POST /v1/turn`; this daemon names it
+/// `POST /v1/threads/{id}/messages`. Everything else is asserted under the
+/// exact names the code uses (`budget_denied`, `budget.denied`,
+/// `stopped_budget`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tiny_budget_refuses_the_turn_before_the_provider() {
+    let provider = Arc::new(FakeProvider::echo("the provider must not run"));
+    let selected = Arc::clone(&provider);
+    let mut t = TestApi::start_with(move |home| {
+        // One input token a day: the first estimated prompt cannot fit.
+        let config = FAKE_CONFIG.replace(
+            "[[providers]]",
+            "[budgets.agents.main]\ntokens_in = 1\n\n[[providers]]",
+        );
+        std::fs::write(config_path(home), config).unwrap();
+        ApiOptions {
+            provider: Some(selected as Arc<dyn aux_providers::ChatProvider>),
+            ..fast_options()
+        }
+    })
+    .await;
+
+    let refused = post_auth(
+        &t,
+        "/v1/threads/main/messages",
+        r#"{"content":"a prompt larger than one token"}"#,
+    )
+    .await;
+    assert_error(&refused, 429, "budget_denied");
+    let body = refused.json();
+    assert_eq!(
+        body["error"]["message"], "the agent's daily budget denied this turn",
+        "the refusal keeps its stable sentence"
+    );
+    let detail = body["error"]["detail"]
+        .as_str()
+        .expect("budget_denied carries its detail");
+    assert!(detail.contains("tokens_in"), "{detail}");
+    assert!(detail.contains("0/1"), "{detail}");
+    assert!(
+        detail.contains(&t.store().local_day().unwrap()),
+        "the detail names the budget day: {detail}"
+    );
+
+    assert_eq!(
+        provider.request_count(),
+        0,
+        "the provider was called despite the refusal"
+    );
+
+    let denials = event_payloads(&t.home, "budget.denied");
+    assert_eq!(denials.len(), 1, "one audited denial: {denials:?}");
+    let denial: Value = serde_json::from_str(&denials[0]).unwrap();
+    assert_eq!(denial["agent"], "main");
+    assert_eq!(denial["kind"], "tokens_in");
+    assert_eq!(denial["limit"], 1);
+    assert_eq!(denial["spent"], 0);
+    assert_eq!(denial["reserved"], 0);
+
+    let receipts = get_auth(&t, "/v1/receipts?agent=main&limit=10").await;
+    assert_eq!(receipts.status, 200, "body: {}", receipts.body);
+    let receipts = receipts.json();
+    let receipt = receipts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|receipt| receipt["agent"] == "main")
+        .expect("a receipt for the refused turn");
+    assert_eq!(receipt["status"], "stopped_budget", "{receipt}");
+    assert_eq!(receipt["trigger"], "owner_message");
+    assert!(
+        receipt["could_not_verify"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some("budget denied")),
+        "the receipt keeps the refusal reason: {receipt}"
+    );
 
     t.stop();
 }
@@ -3303,7 +3385,7 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
     store
         .log_event("daemon.started", r#"{"version":"0.1.0"}"#)
         .unwrap();
-    store
+    let job = store
         .create_job(
             "main",
             "veille",
@@ -3312,6 +3394,16 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
             Some("2026-10-04 08:30:00"),
         )
         .unwrap();
+    let run = store.start_run(job.id, "2026-11-04 07:00:00").unwrap();
+    store
+        .finish_run(run.id, "2026-11-04 07:02:00", aux_store::RUN_FAILED, None)
+        .unwrap();
+    let reason_at = NaiveDateTime::parse_from_str("2026-11-04 07:02:00", "%Y-%m-%d %H:%M:%S")
+        .unwrap()
+        .and_utc()
+        .with_timezone(&Local)
+        .format("%H:%M")
+        .to_string();
     store
         .record_usage_at(
             "main",
@@ -3384,6 +3476,14 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
     assert_eq!(jobs[0]["schedule"], "daily 08:30");
     assert_eq!(jobs[0]["enabled"], true);
     assert_eq!(jobs[0]["next_run_at"], "2026-10-04 08:30:00");
+    // The structured reason is present beside the unchanged English sentence.
+    assert_eq!(jobs[0]["health"], "failing");
+    assert_eq!(
+        jobs[0]["reason"].as_str(),
+        Some(format!("veille failed at {reason_at}").as_str())
+    );
+    assert_eq!(jobs[0]["reason_kind"].as_str(), Some("failed"));
+    assert_eq!(jobs[0]["reason_at"].as_str(), Some(reason_at.as_str()));
 
     t.stop();
 }
@@ -5125,6 +5225,304 @@ async fn killing_an_agent_reaps_a_real_sandboxed_shell_tree_on_macos() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+
+    t.stop();
+}
+
+// ---------------------------------------------------------------------------
+// connection timeouts (API-TIMEOUT-1)
+// ---------------------------------------------------------------------------
+
+/// How long the timeout tests let the server read a request head. Short
+/// enough that every case finishes well under two seconds.
+const SLOW_CLIENT_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Generous wait for a connection the server should have closed: the timeout
+/// above plus slack for a loaded runner.
+const CLOSE_MARGIN: Duration = Duration::from_millis(500);
+
+fn timeout_options() -> ApiOptions {
+    ApiOptions {
+        header_read_timeout: SLOW_CLIENT_TIMEOUT,
+        ..fast_options()
+    }
+}
+
+/// Read until the peer closes (FIN or reset). A server that keeps the socket
+/// open past `budget` is a failure, not a hang.
+async fn drain_until_closed(
+    stream: &mut tokio::net::TcpStream,
+    budget: Duration,
+) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = [0u8; 512];
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "connection stayed open",
+            ));
+        }
+        match tokio::time::timeout(left, stream.read(&mut buf)).await {
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "connection stayed open",
+                ))
+            }
+            // A reset is a disconnect too.
+            Ok(Err(_)) | Ok(Ok(0)) => return Ok(out),
+            Ok(Ok(n)) => out.extend_from_slice(&buf[..n]),
+        }
+    }
+}
+
+/// Read one complete HTTP/1.1 response (head and `Content-Length` body).
+async fn read_one_response(stream: &mut tokio::net::TcpStream) -> (String, String) {
+    let mut buf = Vec::new();
+    let head_end = loop {
+        let mut chunk = [0u8; 1024];
+        let n = tokio::time::timeout(CLOSE_MARGIN, stream.read(&mut chunk))
+            .await
+            .expect("the response head never arrived")
+            .expect("the connection closed before the response head");
+        assert!(n > 0, "the connection closed before the response head");
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
+            break pos;
+        }
+    };
+    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+    let content_length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())?
+        })
+        .expect("every response carries a Content-Length");
+    let mut body = buf[head_end + 4..].to_vec();
+    while body.len() < content_length {
+        let mut chunk = [0u8; 1024];
+        let n = tokio::time::timeout(CLOSE_MARGIN, stream.read(&mut chunk))
+            .await
+            .expect("the response body never arrived")
+            .expect("the connection closed before the response body");
+        assert!(n > 0, "the connection closed before the response body");
+        body.extend_from_slice(&chunk[..n]);
+    }
+    body.truncate(content_length);
+    (
+        head,
+        String::from_utf8(body).expect("the API answers UTF-8"),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_partial_request_head_is_disconnected_after_the_header_timeout() {
+    let mut t = TestApi::start_with(|_| timeout_options()).await;
+    let mut stream = tokio::net::TcpStream::connect(t.addr).await.unwrap();
+    stream
+        .write_all(b"GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+        .await
+        .unwrap();
+    stream.flush().await.unwrap();
+
+    let started = tokio::time::Instant::now();
+    let bytes = drain_until_closed(&mut stream, CLOSE_MARGIN)
+        .await
+        .expect("a slow-loris connection must be disconnected at the header timeout");
+    assert!(
+        !bytes.starts_with(b"HTTP/1.1 200"),
+        "an incomplete request must never be answered: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(started.elapsed() <= SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN);
+
+    t.stop();
+}
+
+/// The regression behind round 2: hyper-util's `auto` builder waited for the
+/// protocol-sniff byte before arming the header timer, so a socket that sent
+/// nothing held its connection slot until the daemon restarted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_silent_socket_is_disconnected_after_the_header_timeout() {
+    let mut t = TestApi::start_with(|_| timeout_options()).await;
+    let mut stream = tokio::net::TcpStream::connect(t.addr).await.unwrap();
+
+    let started = tokio::time::Instant::now();
+    let bytes = drain_until_closed(&mut stream, SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN)
+        .await
+        .expect("a socket that never sends a byte must be closed at the header timeout");
+    assert!(
+        bytes.is_empty(),
+        "a silent socket must not be answered: {:?}",
+        String::from_utf8_lossy(&bytes)
+    );
+    // Allow for the server having armed its timer a few milliseconds before
+    // this test's clock started; an immediate close is still a failure.
+    assert!(
+        started.elapsed() >= SLOW_CLIENT_TIMEOUT.saturating_sub(Duration::from_millis(50)),
+        "the silent socket was closed before the header timeout: {:?}",
+        started.elapsed()
+    );
+    assert!(started.elapsed() <= SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN);
+
+    t.stop();
+}
+
+/// Every connection slot filled by a peer that never sends a byte, then one
+/// real authorized request. The real request is queued behind the silent ones
+/// and is answered once they time out. Before the HTTP/1-only builder, the
+/// silent sockets never timed out and this request hung forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_full_house_of_silent_sockets_does_not_lock_out_a_real_request() {
+    let header_timeout = SLOW_CLIENT_TIMEOUT * 2;
+    let mut t = TestApi::start_with(move |_| ApiOptions {
+        header_read_timeout: header_timeout,
+        ..fast_options()
+    })
+    .await;
+
+    let mut silent = Vec::with_capacity(api::MAX_CONNECTIONS);
+    for _ in 0..api::MAX_CONNECTIONS {
+        silent.push(tokio::net::TcpStream::connect(t.addr).await.unwrap());
+    }
+    // Give the accept loop time to take the slots. Even if it has not, these
+    // connects were queued before the real request, so it still waits.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let started = tokio::time::Instant::now();
+    let response = tokio::task::spawn_blocking({
+        let addr = t.addr;
+        let token = t.token.clone();
+        move || {
+            common::http_with_read_timeout(
+                addr,
+                "GET",
+                "/v1/health",
+                Some(&token),
+                None,
+                header_timeout + Duration::from_secs(2),
+            )
+        }
+    })
+    .await
+    .expect("the real request must not hang");
+    let elapsed = started.elapsed();
+
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert!(
+        response.body.contains("\"ok\":true"),
+        "body: {}",
+        response.body
+    );
+    // All 64 slots were taken when it arrived, so it cannot have been
+    // answered before at least one of them timed out.
+    assert!(
+        elapsed >= header_timeout / 2,
+        "the real request was answered before a slot could free: {elapsed:?}"
+    );
+    assert!(
+        elapsed <= header_timeout + Duration::from_secs(2),
+        "the real request waited too long: {elapsed:?}"
+    );
+
+    drop(silent);
+    t.stop();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_idle_keep_alive_connection_is_closed_after_the_header_timeout() {
+    let mut t = TestApi::start_with(|_| timeout_options()).await;
+    let mut stream = tokio::net::TcpStream::connect(t.addr).await.unwrap();
+    let request = format!(
+        "GET /v1/health HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nConnection: keep-alive\r\n\r\n",
+        t.token
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+
+    let (head, body) = read_one_response(&mut stream).await;
+    assert!(head.starts_with("HTTP/1.1 200"), "head: {head}");
+    assert!(body.contains("\"ok\":true"), "body: {body}");
+
+    // The socket must survive the response (it is keep-alive), then the idle
+    // timer — not an immediate close — must end it.
+    let mut probe = [0u8; 1];
+    let early = tokio::time::timeout(Duration::from_millis(30), stream.read(&mut probe)).await;
+    assert!(
+        early.is_err(),
+        "the keep-alive socket closed before its idle timeout"
+    );
+
+    let started = tokio::time::Instant::now();
+    drain_until_closed(&mut stream, CLOSE_MARGIN)
+        .await
+        .expect("an idle keep-alive connection must be closed at the header timeout");
+    assert!(started.elapsed() <= SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN);
+
+    t.stop();
+}
+
+/// Answers only after a delay longer than the server's header timeout, so a
+/// response that is still being produced proves the timer stopped with the
+/// request head.
+struct SlowTurnProvider {
+    delay: Duration,
+}
+
+#[async_trait]
+impl ChatProvider for SlowTurnProvider {
+    async fn complete(&self, _request: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+        tokio::time::sleep(self.delay).await;
+        Ok(ChatResponse::assistant("slow but whole"))
+    }
+
+    fn name(&self) -> &str {
+        "slow-turn"
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_turn_and_the_events_socket_outlive_the_header_timeout() {
+    let provider = Arc::new(SlowTurnProvider {
+        delay: SLOW_CLIENT_TIMEOUT * 2,
+    });
+    let mut t = TestApi::start_with(move |_| ApiOptions {
+        provider: Some(Arc::clone(&provider) as Arc<dyn ChatProvider>),
+        ..timeout_options()
+    })
+    .await;
+
+    // A normal authenticated request still works.
+    let health = get_auth(&t, "/v1/health").await;
+    assert_eq!(health.status, 200, "body: {}", health.body);
+
+    // A WebSocket upgraded before the timeout must stay open while idle past
+    // it, then still carry a live turn's frames.
+    let mut ws = ws_connect(t.addr, Some(&t.token)).await.unwrap();
+    tokio::time::sleep(SLOW_CLIENT_TIMEOUT + Duration::from_millis(100)).await;
+    let send = send_async(&t, r#"{"content":"slow"}"#);
+    let frame = wait_ws(&mut ws, Duration::from_secs(5), |value| {
+        value["type"] == "message.done"
+    })
+    .await;
+    assert!(
+        frame.is_some(),
+        "the events socket was cut while idle longer than the header timeout"
+    );
+
+    // A turn that runs longer than the header timeout is answered whole.
+    let response = send.await.unwrap();
+    assert_eq!(response.status, 200, "body: {}", response.body);
+    assert_eq!(
+        response.json()["messages"][1]["content"],
+        "slow but whole",
+        "a long turn must not be cut by the header timeout"
+    );
 
     t.stop();
 }

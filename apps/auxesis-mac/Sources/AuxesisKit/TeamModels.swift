@@ -218,6 +218,29 @@ public struct LedgerEntry: Equatable, Decodable, Identifiable {
     }
 }
 
+/// A scheduled job's health from `GET /v1/jobs`. Anything else, or a
+/// missing field (older daemons), reads as `unknown`.
+public enum JobHealth: String, Equatable {
+    case ok, late, failing, unknown
+
+    public init(raw: String?) {
+        self = raw.flatMap { JobHealth(rawValue: $0.trimmingCharacters(in: .whitespaces).lowercased()) } ?? .unknown
+    }
+}
+
+/// What kind of problem a job's health reason describes. Older daemons send
+/// no kind; an unknown or missing value reads as `nil` so the app falls back
+/// to the daemon's own sentence.
+public enum JobReasonKind: String, Equatable {
+    case missed, failed, hung, interrupted
+
+    public init?(raw: String?) {
+        let kind = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let kind, let parsed = JobReasonKind(rawValue: kind) else { return nil }
+        self = parsed
+    }
+}
+
 /// One `GET /v1/jobs` row: the Ledger's Planned tab.
 public struct PlannedJob: Equatable, Decodable, Identifiable {
     public let id: Int
@@ -226,19 +249,35 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
     public let schedule: String
     public let enabled: Bool
     public let nextRunAt: String?
+    public let health: JobHealth
+    /// The daemon's own words, e.g. "Morning brief failed at 07:02". Kept as
+    /// the fallback for daemons that send no structured reason.
+    public let reason: String?
+    /// The structured kind; nil on older daemons or for an unknown value.
+    public let reasonKind: JobReasonKind?
+    /// Local `HH:MM` the reason refers to; nil when it has no time.
+    public let reasonAt: String?
 
-    public init(id: Int, agent: String, name: String, schedule: String, enabled: Bool = true, nextRunAt: String? = nil) {
+    public init(id: Int, agent: String, name: String, schedule: String, enabled: Bool = true, nextRunAt: String? = nil,
+                health: JobHealth = .unknown, reason: String? = nil,
+                reasonKind: JobReasonKind? = nil, reasonAt: String? = nil) {
         self.id = id
         self.agent = agent
         self.name = name
         self.schedule = schedule
         self.enabled = enabled
         self.nextRunAt = nextRunAt
+        self.health = health
+        self.reason = reason
+        self.reasonKind = reasonKind
+        self.reasonAt = reasonAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, agent, name, schedule, enabled
+        case id, agent, name, schedule, enabled, health, reason
         case nextRunAt = "next_run_at"
+        case reasonKind = "reason_kind"
+        case reasonAt = "reason_at"
     }
 
     public init(from decoder: Decoder) throws {
@@ -249,6 +288,12 @@ public struct PlannedJob: Equatable, Decodable, Identifiable {
         schedule = (try? c.decode(String.self, forKey: .schedule)) ?? ""
         enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? true
         nextRunAt = try? c.decode(String.self, forKey: .nextRunAt)
+        health = JobHealth(raw: try? c.decode(String.self, forKey: .health))
+        let said = (try? c.decode(String.self, forKey: .reason))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        reason = said?.isEmpty == false ? said : nil
+        reasonKind = JobReasonKind(raw: try? c.decode(String.self, forKey: .reasonKind))
+        let at = (try? c.decode(String.self, forKey: .reasonAt))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        reasonAt = at?.isEmpty == false ? at : nil
     }
 }
 

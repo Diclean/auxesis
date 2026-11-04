@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use aux_engine::TurnEvents;
+use aux_engine::{HeldReservation, TurnEvents};
 use aux_store::{Message, Store};
 use kernel_core::budget::{Budgets, ReserveOutcome, UsageActual, UsageKind, UsageTotals};
 
@@ -24,8 +24,9 @@ use crate::protocol::UsageUpdate;
 
 /// One turn's admission reservation (fixed conservative estimate).
 pub struct TurnReservation {
-    /// Store row to settle.
-    pub(crate) inner: kernel_core::budget::Reservation,
+    /// Store row to settle. A turn dropped before its settle (its future
+    /// cancelled while the agent had the prompt) settles the fixed estimate.
+    pub(crate) inner: HeldReservation<'static, Arc<Mutex<Store>>>,
     /// The fixed cents reserved for this turn.
     pub cost_cents: u64,
 }
@@ -176,8 +177,15 @@ impl TurnHost for StoreTurnHost {
         };
         let store = lock_store(&self.store);
         let day = store.local_day()?;
-        match store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)? {
-            ReserveOutcome::Reserved(inner) => Ok(Some(TurnReservation { inner, cost_cents })),
+        let outcome =
+            store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)?;
+        // Unlocked first: a held reservation settles through this same lock.
+        drop(store);
+        match outcome {
+            ReserveOutcome::Reserved(inner) => Ok(Some(TurnReservation {
+                inner: HeldReservation::new(Arc::clone(&self.store), inner),
+                cost_cents,
+            })),
             ReserveOutcome::Denied(denial) => Err(AcpError::BudgetDenied {
                 reason: denial.reason_text(),
             }),
@@ -209,7 +217,7 @@ impl TurnHost for StoreTurnHost {
                     tokens_out_estimated: true,
                     usd_cents: reservation.cost_cents,
                 };
-                lock_store(&self.store).settle_reservation(&reservation.inner, &actual)
+                reservation.inner.settle(&actual)
             }
             None => {
                 // Unlimited budgets take no store reservation, but the fixed

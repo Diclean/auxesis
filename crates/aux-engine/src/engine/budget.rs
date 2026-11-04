@@ -3,11 +3,12 @@
 
 use super::{ChatError, ChatSession, DEFAULT_OUTPUT_RESERVE, ESTIMATED_UNIT};
 use aux_providers::{ChatDelta, ChatMessage, ChatProvider, ChatRequest, ChatResponse, SafeMessage};
-use aux_store::{StoreError, StoreHandle};
+use aux_store::{Store, StoreError, StoreHandle};
 use kernel_core::budget::{
     audit_denial, BudgetCaps, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome,
     UsageActual, UsageKind, UsageTotals,
 };
+use std::sync::{Arc, Mutex};
 
 fn unit_for(estimated: bool) -> &'static str {
     if estimated {
@@ -48,23 +49,129 @@ impl StreamCapture {
     }
 }
 
-pub(super) fn settle_streamed(
-    store: &StoreHandle<'_>,
-    reservation: &Reservation,
+/// What a streaming call is known to have used: the counts the provider
+/// reported, else the estimates of its prompt and of the text that streamed.
+pub(super) fn streamed_actual(
+    request: &ChatRequest,
+    capture: &StreamCapture,
+    provider: &dyn ChatProvider,
+    prices: &PriceTable,
+) -> UsageActual {
+    let mut response = ChatResponse::assistant(capture.text());
+    response.usage = capture.usage();
+    usage_actual(request, &response, request_model(provider, request), prices)
+}
+
+pub(super) fn settle_streamed<S: SettleStore>(
+    held: HeldReservation<'_, S>,
     request: &ChatRequest,
     capture: &StreamCapture,
     provider: &dyn ChatProvider,
     prices: &PriceTable,
 ) {
-    let mut response = ChatResponse::assistant(capture.text());
-    response.usage = capture.usage();
-    let actual = usage_actual(request, &response, request_model(provider, request), prices);
-    if let Err(err) = store.with(|store| store.settle_reservation(reservation, &actual)) {
+    let id = held.reservation().id;
+    if let Err(err) = held.settle(&streamed_actual(request, capture, provider, prices)) {
         tracing::warn!(
-            reservation = reservation.id,
+            reservation = id,
             error = %err,
             "could not settle a failed streaming call's estimated usage"
         );
+    }
+}
+
+/// The store a [`HeldReservation`] settles in: a turn's own handle, or a
+/// shared store (one a future that must be `Send` can hold).
+pub trait SettleStore {
+    /// Settle `reservation` at `actual`. The store settles a reservation once.
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError>;
+}
+
+impl SettleStore for StoreHandle<'_> {
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
+        self.with(|store| store.settle_reservation(reservation, actual))
+    }
+}
+
+impl SettleStore for Arc<Mutex<Store>> {
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
+        kernel_core::lock_recover(self).settle_reservation(reservation, actual)
+    }
+}
+
+/// A reservation whose call the provider may already bill, held from the
+/// reserve until it is settled: every reservation a call takes comes as one.
+///
+/// [`HeldReservation::settle`] records what the call cost. Dropped
+/// unsettled (the future making the call was cancelled after the request
+/// went out), it settles the reserved estimate itself, or what
+/// [`HeldReservation::or_known`] reports where that is more, so the spend is
+/// never handed back as headroom. Either way the reservation settles once,
+/// and a failed settle on drop is logged, never a panic.
+pub struct HeldReservation<'k, S: SettleStore> {
+    store: S,
+    reservation: Reservation,
+    settled: bool,
+    known: Option<Box<dyn Fn() -> UsageActual + Send + 'k>>,
+}
+
+impl<'k, S: SettleStore> HeldReservation<'k, S> {
+    /// Hold `reservation`, taken in `store`, until it is settled.
+    pub fn new(store: S, reservation: Reservation) -> Self {
+        Self {
+            store,
+            reservation,
+            settled: false,
+            known: None,
+        }
+    }
+
+    /// What the call is known to have used so far, read only if this drops
+    /// unsettled: the drop then settles the larger of it and the reserved
+    /// estimate in each direction, never less than the reservation.
+    pub fn or_known(mut self, known: impl Fn() -> UsageActual + Send + 'k) -> Self {
+        self.known = Some(Box::new(known));
+        self
+    }
+
+    /// The reservation held: its estimate (the output clamped to the
+    /// headroom left) and the caps it was admitted under.
+    pub fn reservation(&self) -> &Reservation {
+        &self.reservation
+    }
+
+    /// Settle what the call cost. The guard is spent whatever the outcome.
+    pub fn settle(mut self, actual: &UsageActual) -> Result<(), StoreError> {
+        self.settled = true;
+        self.store.settle(&self.reservation, actual)
+    }
+}
+
+impl<S: SettleStore> Drop for HeldReservation<'_, S> {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let known = self.known.as_ref().map(|known| known()).unwrap_or_default();
+        let actual = at_least(known, &self.reservation.estimate);
+        if let Err(err) = self.store.settle(&self.reservation, &actual) {
+            tracing::warn!(
+                reservation = self.reservation.id,
+                error = %err,
+                "could not settle a dropped call's reserved usage"
+            );
+        }
+    }
+}
+
+/// `known`, raised to `reserved` in each direction it falls short in; a
+/// raised amount is an estimate.
+fn at_least(known: UsageActual, reserved: &UsageTotals) -> UsageActual {
+    UsageActual {
+        tokens_in: known.tokens_in.max(reserved.tokens_in),
+        tokens_in_estimated: known.tokens_in_estimated || known.tokens_in < reserved.tokens_in,
+        tokens_out: known.tokens_out.max(reserved.tokens_out),
+        tokens_out_estimated: known.tokens_out_estimated || known.tokens_out < reserved.tokens_out,
+        usd_cents: known.usd_cents.max(reserved.usd_cents),
     }
 }
 
@@ -380,11 +487,12 @@ impl<'a> ChatSession<'a> {
     /// Returns `None` only for an explicit `unlimited = true` (or an empty
     /// per-agent cap set): usage is still recorded after the call. A fresh
     /// config no longer takes this path; it carries the conservative
-    /// defaults.
-    pub(super) fn reserve_budget(
+    /// defaults. The reservation comes held: a turn dropped before it settles
+    /// it still settles the reserved estimate.
+    pub(super) fn reserve_budget<'k>(
         &self,
         request: &ChatRequest,
-    ) -> Result<Option<Reservation>, ChatError> {
+    ) -> Result<Option<HeldReservation<'k, StoreHandle<'a>>>, ChatError> {
         let caps = self.budgets.caps_for(&self.agent);
         if caps.is_unlimited() {
             if caps.unlimited {
@@ -423,7 +531,7 @@ impl<'a> ChatSession<'a> {
             &caps,
             &estimate,
         )
-        .map(Some)
+        .map(|reservation| Some(HeldReservation::new(self.store.clone(), reservation)))
     }
 
     /// Test seam: replace the budget day source for one session.
@@ -1518,6 +1626,81 @@ mod tests {
             totals.tokens_out, 0,
             "nothing streamed before the cancel: {totals:?}"
         );
+    }
+
+    /// A provider that takes the request, streams `before`, then never answers.
+    struct AcceptsThenHangs {
+        before: Vec<ChatDelta>,
+        sent: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl ChatProvider for AcceptsThenHangs {
+        async fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+            self.sent.notify_one();
+            std::future::pending().await
+        }
+
+        async fn complete_streaming(
+            &self,
+            _req: &ChatRequest,
+            sink: &(dyn Fn(ChatDelta) + Send + Sync),
+        ) -> Result<ChatResponse, ProviderError> {
+            for delta in &self.before {
+                sink(delta.clone());
+            }
+            self.sent.notify_one();
+            std::future::pending().await
+        }
+
+        fn name(&self) -> &str {
+            "hangs"
+        }
+    }
+
+    /// One turn whose future is dropped once its provider has the request
+    /// (and streamed `before`): `main`'s totals today, reservations still held.
+    async fn dropped_after_dispatch(before: Vec<ChatDelta>) -> (UsageTotals, usize) {
+        let harness = Harness::new();
+        let provider = AcceptsThenHangs {
+            before,
+            sent: tokio::sync::Notify::new(),
+        };
+        let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+        tokio::select! {
+            _ = session.send("hello") => panic!("the provider never answers"),
+            () = provider.sent.notified() => {}
+        }
+        let store = harness.store();
+        let day = store.local_day().unwrap();
+        let totals = store.usage_totals("main", &day).unwrap();
+        (totals, store.reservation_count().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_turn_dropped_after_dispatch_still_charges_its_reserve() {
+        let partial = ChatDelta::Text("partial ".to_string());
+        for before in [vec![], vec![partial]] {
+            let (totals, held) = dropped_after_dispatch(before).await;
+            assert_eq!(held, 0, "settled, not left to expire");
+            assert!(totals.tokens_in > 0, "{totals:?}");
+            assert_eq!(
+                totals.tokens_out, DEFAULT_OUTPUT_RESERVE,
+                "never less than the reserve: {totals:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_turn_charges_what_streamed_when_it_tops_the_reserve() {
+        let usage = Usage {
+            prompt_tokens: 90_000,
+            completion_tokens: 5_000,
+            ..Default::default()
+        };
+        let (totals, held) = dropped_after_dispatch(vec![ChatDelta::Usage(usage)]).await;
+        assert_eq!(held, 0, "settled once");
+        assert_eq!((totals.tokens_in, totals.tokens_out), (90_000, 5_000));
     }
 
     #[tokio::test]

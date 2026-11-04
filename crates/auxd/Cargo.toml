@@ -76,6 +76,10 @@ aux-docs = { path = "../aux-docs" }
 aux-imessage = { path = "../aux-imessage" }
 kernel-broker.workspace = true
 axum = { version = "=0.8.9", features = ["ws"] }
+# The local API's connection builder: the header-read timeout that also bounds
+# an idle keep-alive socket, and the websocket-aware serve loop (API-TIMEOUT-1).
+# Same version axum already resolves; no new crate.
+hyper-util = { version = "=0.1.21", features = ["server-auto", "service", "tokio"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap.workspace = true
 libc = "0.2"

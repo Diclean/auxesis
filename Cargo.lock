@@ -625,6 +625,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "futures-util",
+ "hyper-util",
  "libc",
  "proptest",
  "reqwest",

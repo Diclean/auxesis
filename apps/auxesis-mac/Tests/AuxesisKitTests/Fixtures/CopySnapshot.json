@@ -1,0 +1,4895 @@
+{
+  "string" : {
+    "a11yAgentRow" : {
+      "en" : "Agent %@, %@",
+      "fr" : "Agent %@, %@"
+    },
+    "a11yAllowButton" : {
+      "en" : "Allow once",
+      "fr" : "Autoriser une fois"
+    },
+    "a11yAlwaysButton" : {
+      "en" : "Always allow",
+      "fr" : "Toujours autoriser"
+    },
+    "a11yApprovalCard" : {
+      "en" : "Request from %@: %@",
+      "fr" : "Demande de %@ : %@"
+    },
+    "a11yComposer" : {
+      "en" : "Message to %@",
+      "fr" : "Message pour %@"
+    },
+    "a11yDenyButton" : {
+      "en" : "Deny",
+      "fr" : "Refuser"
+    },
+    "a11yEditButton" : {
+      "en" : "Edit the request",
+      "fr" : "Modifier la demande"
+    },
+    "a11yInboxRow" : {
+      "en" : "Inbox, %d waiting",
+      "fr" : "Boîte de réception, %d en attente"
+    },
+    "a11yMessageFrom" : {
+      "en" : "%@, %@",
+      "fr" : "%@, %@"
+    },
+    "a11yWaitingSuffix" : {
+      "en" : " — %d waiting",
+      "fr" : " — %d en attente"
+    },
+    "activityEmptyBody" : {
+      "en" : "Every finished run will leave its receipt here: effects, cost, proof and decisions.",
+      "fr" : "Chaque travail terminé laissera ici son reçu : effets, coût, preuve et décisions."
+    },
+    "activityEmptyTitle" : {
+      "en" : "Nothing yet.",
+      "fr" : "Rien pour l'instant."
+    },
+    "activitySubtitle" : {
+      "en" : "What Auxesis did",
+      "fr" : "Ce qu'Auxesis a fait"
+    },
+    "addrOffLoopback" : {
+      "en" : "non-local address refused",
+      "fr" : "adresse non locale refusée"
+    },
+    "agentSettingsNoAgent" : {
+      "en" : "Pick an agent to set its personality.",
+      "fr" : "Choisis un agent pour régler sa personnalité."
+    },
+    "agentSettingsOpen" : {
+      "en" : "Agent settings",
+      "fr" : "Réglages de l'agent"
+    },
+    "agentSettingsTitle" : {
+      "en" : "Agent settings",
+      "fr" : "Réglages de l'agent"
+    },
+    "answerAllowedOnce" : {
+      "en" : "allowed once",
+      "fr" : "autorisé une fois"
+    },
+    "answerAlwaysAllowed" : {
+      "en" : "always allowed",
+      "fr" : "toujours autorisé"
+    },
+    "answerDenied" : {
+      "en" : "denied",
+      "fr" : "refusé"
+    },
+    "answerEdited" : {
+      "en" : "edited then sent",
+      "fr" : "modifié puis envoyé"
+    },
+    "answerExpired" : {
+      "en" : "expired with no answer",
+      "fr" : "expiré sans réponse"
+    },
+    "answerRecorded" : {
+      "en" : "answer recorded",
+      "fr" : "réponse enregistrée"
+    },
+    "appName" : {
+      "en" : "Auxesis",
+      "fr" : "Auxesis"
+    },
+    "appleEventKitAuthorize" : {
+      "en" : "Allow access",
+      "fr" : "Autoriser"
+    },
+    "appleEventKitError" : {
+      "en" : "Could not read your calendar and reminders. Try again.",
+      "fr" : "Impossible de lire ton calendrier et tes rappels. Réessaie."
+    },
+    "appleEventKitRefresh" : {
+      "en" : "Refresh",
+      "fr" : "Actualiser"
+    },
+    "appleEventKitSaved" : {
+      "en" : "Your upcoming items are ready for your agents.",
+      "fr" : "Tes éléments à venir sont prêts pour tes agents."
+    },
+    "appleEventKitStatusAuthorized" : {
+      "en" : "Access allowed",
+      "fr" : "Accès autorisé"
+    },
+    "appleEventKitStatusDenied" : {
+      "en" : "Access denied. You can change it in macOS Settings.",
+      "fr" : "Accès refusé. Tu peux le modifier dans les réglages de macOS."
+    },
+    "appleEventKitStatusRestricted" : {
+      "en" : "Access is unavailable on this Mac",
+      "fr" : "Accès indisponible sur ce Mac"
+    },
+    "appleEventKitStatusUnknown" : {
+      "en" : "Access not granted",
+      "fr" : "Accès non accordé"
+    },
+    "appleEventKitTitle" : {
+      "en" : "Apple Calendar and Reminders",
+      "fr" : "Calendrier et Rappels Apple"
+    },
+    "appleEventKitUnavailable" : {
+      "en" : "Apple Calendar and Reminders are unavailable.",
+      "fr" : "Le calendrier et les rappels Apple ne sont pas disponibles."
+    },
+    "approvalAllowOnce" : {
+      "en" : "Allow once",
+      "fr" : "Autoriser une fois"
+    },
+    "approvalAllowUnknownToolTooLong" : {
+      "en" : "Tool id too long: it would be truncated, so it can't be told apart from another. You can deny or edit.",
+      "fr" : "Identifiant d'outil trop long : il serait tronqué, donc impossible à distinguer d'un autre. Tu peux refuser ou modifier."
+    },
+    "approvalAllowedAlways" : {
+      "en" : "Always allowed · rule saved",
+      "fr" : "Autorisé pour toujours · règle enregistrée"
+    },
+    "approvalAllowedOnce" : {
+      "en" : "Allowed once",
+      "fr" : "Autorisé une fois"
+    },
+    "approvalAlways" : {
+      "en" : "Always…",
+      "fr" : "Toujours…"
+    },
+    "approvalAlwaysHint" : {
+      "en" : "Save an allow rule for this tool and this agent",
+      "fr" : "Enregistre une règle « autoriser » pour cet outil et cet agent"
+    },
+    "approvalAlwaysShell" : {
+      "en" : "System commands can't be always allowed.",
+      "fr" : "Les commandes système ne peuvent pas être autorisées pour toujours."
+    },
+    "approvalAlwaysTainted" : {
+      "en" : "“Always” is impossible: the content comes from an untrusted source.",
+      "fr" : "« Toujours » est impossible : le contenu vient d'une source non fiable."
+    },
+    "approvalAlwaysUnknownTool" : {
+      "en" : "Unknown tool: “Always” isn't available. You can allow once, deny or edit.",
+      "fr" : "Outil inconnu : « Toujours » n'est pas disponible. Tu peux autoriser une fois, refuser ou modifier."
+    },
+    "approvalAlwaysUnsandboxed" : {
+      "en" : "This call would run without protection: “Always” is impossible.",
+      "fr" : "Cet appel s'exécuterait sans protection : « Toujours » est impossible."
+    },
+    "approvalArming" : {
+      "en" : "Safety arming (1 s)…",
+      "fr" : "Armement de sécurité (1 s)…"
+    },
+    "approvalAudit" : {
+      "en" : "history #%d",
+      "fr" : "historique n° %d"
+    },
+    "approvalChecks" : {
+      "en" : "Checks",
+      "fr" : "Vérifications"
+    },
+    "approvalCleanValue" : {
+      "en" : "no untrusted source",
+      "fr" : "aucune source non fiable"
+    },
+    "approvalDenied" : {
+      "en" : "Denied",
+      "fr" : "Refusé"
+    },
+    "approvalDeny" : {
+      "en" : "Deny",
+      "fr" : "Refuser"
+    },
+    "approvalEdit" : {
+      "en" : "Edit",
+      "fr" : "Modifier"
+    },
+    "approvalEditHint" : {
+      "en" : "Fix the text before sending",
+      "fr" : "Corrige le texte avant de l'envoyer"
+    },
+    "approvalEditSoon" : {
+      "en" : "Editing isn't available in the service yet. You can allow once or deny.",
+      "fr" : "La modification n'est pas encore disponible côté service. Tu peux autoriser une fois ou refuser."
+    },
+    "approvalExpired" : {
+      "en" : "Expired",
+      "fr" : "Expiré"
+    },
+    "approvalJkHint" : {
+      "en" : "J / K next · A allow · D deny · E edit",
+      "fr" : "J / K suivant · A autoriser · D refuser · E modifier"
+    },
+    "approvalNoChecks" : {
+      "en" : "no checks",
+      "fr" : "aucun contrôle"
+    },
+    "approvalNotSent" : {
+      "en" : "not sent — %@",
+      "fr" : "pas envoyé — %@"
+    },
+    "approvalPending" : {
+      "en" : "pending · #%d",
+      "fr" : "en attente · n° %d"
+    },
+    "approvalScope" : {
+      "en" : "What it can touch",
+      "fr" : "Ce qu'il peut toucher"
+    },
+    "approvalSendEdited" : {
+      "en" : "Send edited version",
+      "fr" : "Envoyer la version modifiée"
+    },
+    "approvalSending" : {
+      "en" : "sending…",
+      "fr" : "envoi…"
+    },
+    "approvalSummary" : {
+      "en" : "wants to %@. Nothing happens without your OK.",
+      "fr" : "veut %@. Rien ne se fait sans ton accord."
+    },
+    "approvalTaintValue" : {
+      "en" : "content from an untrusted source — %@",
+      "fr" : "contenu venu d'une source non fiable — %@"
+    },
+    "approvalTrust" : {
+      "en" : "Source",
+      "fr" : "Provenance"
+    },
+    "approvalUnknownState" : {
+      "en" : "unknown state",
+      "fr" : "état inconnu"
+    },
+    "approvalWantsTo" : {
+      "en" : "%@ wants to",
+      "fr" : "%@ veut"
+    },
+    "approvalWhy" : {
+      "en" : "Why",
+      "fr" : "Pourquoi"
+    },
+    "cancel" : {
+      "en" : "Cancel",
+      "fr" : "Annuler"
+    },
+    "checksVerifierAgrees" : {
+      "en" : "second check (%@) agrees",
+      "fr" : "seconde vérification (%@) est d'accord"
+    },
+    "checksVerifierDisagrees" : {
+      "en" : "second check (%@) disagrees — look yourself",
+      "fr" : "seconde vérification (%@) n'est pas d'accord — regarde toi-même"
+    },
+    "composerAttach" : {
+      "en" : "Attach a file",
+      "fr" : "Joindre un fichier"
+    },
+    "composerEmoji" : {
+      "en" : "Emoji & symbols",
+      "fr" : "Emoji et symboles"
+    },
+    "composerMenu" : {
+      "en" : "Message actions",
+      "fr" : "Actions du message"
+    },
+    "composerPlaceholder" : {
+      "en" : "Message",
+      "fr" : "Message"
+    },
+    "composerSend" : {
+      "en" : "Send the message",
+      "fr" : "Envoyer le message"
+    },
+    "composerVoice" : {
+      "en" : "Voice message",
+      "fr" : "Message vocal"
+    },
+    "connConnecting" : {
+      "en" : "connecting…",
+      "fr" : "connexion…"
+    },
+    "connOffline" : {
+      "en" : "offline — %@",
+      "fr" : "hors ligne — %@"
+    },
+    "connOnline" : {
+      "en" : "online · version %@",
+      "fr" : "connecté · version %@"
+    },
+    "connUnauthorized" : {
+      "en" : "local key refused",
+      "fr" : "clé locale refusée"
+    },
+    "connectedAppsTitle" : {
+      "en" : "Connected apps",
+      "fr" : "Applications connectées"
+    },
+    "connectingTitle" : {
+      "en" : "Connecting to the Auxesis service…",
+      "fr" : "Connexion au service Auxesis…"
+    },
+    "dayToday" : {
+      "en" : "Today",
+      "fr" : "Aujourd'hui"
+    },
+    "dayYesterday" : {
+      "en" : "Yesterday",
+      "fr" : "Hier"
+    },
+    "draftEditRefused" : {
+      "en" : "This change can't be sent as shown: %@. Edit the card or cancel.",
+      "fr" : "Cette modification ne peut pas partir telle quelle : %@. Modifie la carte ou annule."
+    },
+    "draftEditStale" : {
+      "en" : "This draft changed since you edited it. Nothing was sent: edit it again.",
+      "fr" : "Ce brouillon a changé depuis ta modification. Rien n'est parti : modifie-le à nouveau."
+    },
+    "errorBadURL" : {
+      "en" : "The service address isn't valid.",
+      "fr" : "L'adresse du service n'est pas valide."
+    },
+    "errorLocalAccessRefused" : {
+      "en" : "The app couldn't check its access on this Mac. Quit and relaunch Auxesis, then press Try again.",
+      "fr" : "L'application n'a pas pu vérifier son accès sur ce Mac. Quitte puis relance Auxesis, puis appuie sur Réessayer."
+    },
+    "errorLocalAccessRelaunch" : {
+      "en" : "The app couldn't check its access on this Mac. Quit and relaunch Auxesis.",
+      "fr" : "L'application n'a pas pu vérifier son accès sur ce Mac. Quitte puis relance Auxesis."
+    },
+    "errorServiceRefused" : {
+      "en" : "The service refused the request. Try again in a moment.",
+      "fr" : "Le service a refusé la demande. Réessaie dans un instant."
+    },
+    "errorThreadBusy" : {
+      "en" : "Your previous message is waiting for your answer to a request. Answer it, then send this again.",
+      "fr" : "Ton message précédent attend ta réponse à une demande. Réponds-y, puis renvoie ce message."
+    },
+    "errorTimeout" : {
+      "en" : "The service took too long to answer. Try again in a moment.",
+      "fr" : "Le service a mis trop de temps à répondre. Réessaie dans un instant."
+    },
+    "errorTokenUnusable" : {
+      "en" : "This Mac's access key can't be used.",
+      "fr" : "La clé d'accès de ce Mac n'est pas utilisable."
+    },
+    "errorUnexpected" : {
+      "en" : "Something unexpected happened. Try again in a moment.",
+      "fr" : "Une erreur inattendue s'est produite. Réessaie dans un instant."
+    },
+    "errorUnreachable" : {
+      "en" : "The service can't be reached. Try again in a moment.",
+      "fr" : "Le service n'est pas joignable. Réessaie dans un instant."
+    },
+    "errorUnreadable" : {
+      "en" : "The service's answer can't be read. Try again in a moment.",
+      "fr" : "La réponse du service est illisible. Réessaie dans un instant."
+    },
+    "firstRunAccessDeniedDetail" : {
+      "en" : "Your account isn't allowed to use this service.",
+      "fr" : "Ton compte n'a pas le droit d'utiliser ce service."
+    },
+    "firstRunAccessDeniedNext" : {
+      "en" : "Check your account permissions with your AI service, then try again.",
+      "fr" : "Vérifie les droits de ton compte chez ton service d'IA, puis réessaie."
+    },
+    "firstRunAccessDeniedTitle" : {
+      "en" : "Access was denied",
+      "fr" : "L'accès a été refusé"
+    },
+    "firstRunAgentBody" : {
+      "en" : "Type “aux chat \"Hello\"”: the first agent is created automatically. You'll be able to add more here later.",
+      "fr" : "Tape « aux chat \"Bonjour\" » : le premier agent est créé automatiquement. Tu pourras en ajouter d'autres ici plus tard."
+    },
+    "firstRunAgentTitle" : {
+      "en" : "2. Create your first agent",
+      "fr" : "2. Fais naître ton premier agent"
+    },
+    "firstRunCreating" : {
+      "en" : "Creating your agent…",
+      "fr" : "Création de ton agent…"
+    },
+    "firstRunDefaultAgentLabel" : {
+      "en" : "My agent",
+      "fr" : "Mon agent"
+    },
+    "firstRunDone" : {
+      "en" : "Everything is ready.",
+      "fr" : "Tout est prêt."
+    },
+    "firstRunDoneBody" : {
+      "en" : "Your agent “%@” is created. You can write to it now.",
+      "fr" : "Ton agent « %@ » est créé. Tu peux lui écrire dès maintenant."
+    },
+    "firstRunDoneButton" : {
+      "en" : "Open the conversation",
+      "fr" : "Ouvrir la conversation"
+    },
+    "firstRunDoneTitle" : {
+      "en" : "Everything is ready",
+      "fr" : "Tout est prêt"
+    },
+    "firstRunHonestyNote" : {
+      "en" : "This check costs nothing: no question is sent to the AI service.",
+      "fr" : "Ce test ne consomme rien : aucune question n'est envoyée au service d'IA."
+    },
+    "firstRunIntro" : {
+      "en" : "Auxesis runs agents on your Mac. They read, search and prepare work; they always ask you before acting.",
+      "fr" : "Auxesis fait tourner des agents sur ton Mac. Ils lisent, cherchent et préparent le travail ; ils te demandent toujours avant d'agir."
+    },
+    "firstRunInvalidConfigDetail" : {
+      "en" : "The service address or the model name isn't valid.",
+      "fr" : "L'adresse du service ou le nom du modèle n'est pas valide."
+    },
+    "firstRunInvalidConfigNext" : {
+      "en" : "Check this information with your AI service, then try again.",
+      "fr" : "Vérifie ces informations chez ton service d'IA, puis réessaie."
+    },
+    "firstRunInvalidConfigTitle" : {
+      "en" : "This service is misconfigured",
+      "fr" : "Ce service est mal configuré"
+    },
+    "firstRunKeyConflictDetail" : {
+      "en" : "Another service with a very similar name already uses this key.",
+      "fr" : "Un autre service au nom très proche utilise déjà cette clé."
+    },
+    "firstRunKeyConflictNext" : {
+      "en" : "Pick another service in the list, then try again.",
+      "fr" : "Choisis un autre service dans la liste, puis réessaie."
+    },
+    "firstRunKeyConflictTitle" : {
+      "en" : "This service is already saved",
+      "fr" : "Ce service est déjà enregistré"
+    },
+    "firstRunKeyFieldTitle" : {
+      "en" : "Paste your key here",
+      "fr" : "Colle ta clé ici"
+    },
+    "firstRunKeyOnDiskNote" : {
+      "en" : "The key stays on this computer, in a private file. It is never shown.",
+      "fr" : "La clé reste sur cet ordinateur, dans un fichier privé. Elle n'est jamais affichée."
+    },
+    "firstRunKeyRefusedDetail" : {
+      "en" : "The AI service didn't accept this key.",
+      "fr" : "Le service d'IA n'a pas accepté cette clé."
+    },
+    "firstRunKeyRefusedNext" : {
+      "en" : "Check the key on your AI service's site, then paste it again.",
+      "fr" : "Vérifie la clé sur le site de ton service d'IA, puis colle-la à nouveau."
+    },
+    "firstRunKeyRefusedTitle" : {
+      "en" : "The key was refused",
+      "fr" : "La clé a été refusée"
+    },
+    "firstRunLoading" : {
+      "en" : "Loading…",
+      "fr" : "Chargement…"
+    },
+    "firstRunLocalServiceDetail" : {
+      "en" : "The app can't reach Auxesis on this computer.",
+      "fr" : "L'application n'arrive pas à joindre Auxesis sur cet ordinateur."
+    },
+    "firstRunLocalServiceNext" : {
+      "en" : "Quit and relaunch Auxesis, then press Try again.",
+      "fr" : "Quitte puis relance Auxesis, puis appuie sur Réessayer."
+    },
+    "firstRunLocalServiceTitle" : {
+      "en" : "Auxesis isn't answering",
+      "fr" : "Auxesis ne répond pas"
+    },
+    "firstRunMissingKeyDetail" : {
+      "en" : "This service needs a key to work.",
+      "fr" : "Ce service a besoin d'une clé pour fonctionner."
+    },
+    "firstRunMissingKeyNext" : {
+      "en" : "Paste the key from the service, then press Test.",
+      "fr" : "Colle la clé fournie par le service, puis appuie sur Tester."
+    },
+    "firstRunMissingKeyTitle" : {
+      "en" : "The key is missing",
+      "fr" : "Il manque la clé"
+    },
+    "firstRunModelNotFoundDetail" : {
+      "en" : "The service didn't recognize the model name.",
+      "fr" : "Le nom du modèle n'a pas été reconnu par le service."
+    },
+    "firstRunModelNotFoundNext" : {
+      "en" : "Check the model name from your AI service, then try again.",
+      "fr" : "Vérifie le nom du modèle indiqué par ton service d'IA, puis réessaie."
+    },
+    "firstRunModelNotFoundTitle" : {
+      "en" : "This model doesn't exist",
+      "fr" : "Ce modèle n'existe pas"
+    },
+    "firstRunPickBody" : {
+      "en" : "The agent needs an AI service to answer. Pick one, then paste the key it gave you.",
+      "fr" : "L'agent a besoin d'un service d'IA pour répondre. Choisis-en un, puis colle la clé qu'il t'a fournie."
+    },
+    "firstRunPickTitle" : {
+      "en" : "Pick your AI service",
+      "fr" : "Choisis ton service d'IA"
+    },
+    "firstRunProviderBody" : {
+      "en" : "Open Terminal and type “aux secret set deepseek”, then paste the key from your AI service. The key stays on your Mac; this app never reads it.",
+      "fr" : "Ouvre le Terminal et tape « aux secret set deepseek », puis colle la clé donnée par ton service d'IA. La clé reste sur ton Mac ; l'app ne la lit jamais."
+    },
+    "firstRunProviderTitle" : {
+      "en" : "1. Add an AI service key",
+      "fr" : "1. Ajoute une clé de service d'IA"
+    },
+    "firstRunReadyNext" : {
+      "en" : "You can continue.",
+      "fr" : "Tu peux continuer."
+    },
+    "firstRunReadyTitle" : {
+      "en" : "The service is ready",
+      "fr" : "Le service est prêt"
+    },
+    "firstRunRecheck" : {
+      "en" : "Check again",
+      "fr" : "Vérifier à nouveau"
+    },
+    "firstRunRefusedDetail" : {
+      "en" : "Try again in a moment.",
+      "fr" : "Réessaie dans un instant."
+    },
+    "firstRunRefusedNext" : {
+      "en" : "Press Try again; if it keeps happening, pick another service.",
+      "fr" : "Appuie sur Réessayer ; si cela persiste, choisis un autre service."
+    },
+    "firstRunRefusedTitle" : {
+      "en" : "The service refused the request",
+      "fr" : "Le service a refusé la demande"
+    },
+    "firstRunSuccess" : {
+      "en" : "The key is ready.",
+      "fr" : "La clé est prête."
+    },
+    "firstRunSuccessReachable" : {
+      "en" : "The key is ready and the service answers.",
+      "fr" : "La clé est prête et le service répond."
+    },
+    "firstRunTestButton" : {
+      "en" : "Test",
+      "fr" : "Tester"
+    },
+    "firstRunTesting" : {
+      "en" : "Checking…",
+      "fr" : "Vérification en cours…"
+    },
+    "firstRunTitle" : {
+      "en" : "Welcome to Auxesis",
+      "fr" : "Bienvenue dans Auxesis"
+    },
+    "firstRunTooManyDetail" : {
+      "en" : "The service received too many requests in a short time.",
+      "fr" : "Le service a reçu trop de demandes en peu de temps."
+    },
+    "firstRunTooManyNext" : {
+      "en" : "Wait a minute, then press Try again.",
+      "fr" : "Attends une minute, puis appuie sur Réessayer."
+    },
+    "firstRunTooManyTitle" : {
+      "en" : "Too many attempts",
+      "fr" : "Trop de tentatives"
+    },
+    "firstRunUnknownDetail" : {
+      "en" : "The service answered in an unexpected way.",
+      "fr" : "Le service a répondu d'une façon inattendue."
+    },
+    "firstRunUnknownNext" : {
+      "en" : "Press Try again; if it keeps happening, pick another service.",
+      "fr" : "Appuie sur Réessayer ; si cela persiste, choisis un autre service."
+    },
+    "firstRunUnknownTitle" : {
+      "en" : "The check didn't complete",
+      "fr" : "La vérification n'a pas abouti"
+    },
+    "firstRunUnreachableDetail" : {
+      "en" : "The service address may be wrong, or the Internet is down.",
+      "fr" : "L'adresse du service est peut-être mauvaise, ou Internet est coupé."
+    },
+    "firstRunUnreachableNext" : {
+      "en" : "Check your Internet connection, then press Try again.",
+      "fr" : "Vérifie ta connexion Internet, puis appuie sur Réessayer."
+    },
+    "firstRunUnreachableTitle" : {
+      "en" : "The AI service didn't answer",
+      "fr" : "Le service d'IA n'a pas répondu"
+    },
+    "firstRunUnreadableDetail" : {
+      "en" : "The app didn't get a complete answer from Auxesis.",
+      "fr" : "L'application n'a pas reçu une réponse complète d'Auxesis."
+    },
+    "firstRunUnreadableNext" : {
+      "en" : "Press Try again.",
+      "fr" : "Appuie sur Réessayer."
+    },
+    "firstRunUnreadableTitle" : {
+      "en" : "Auxesis answered badly",
+      "fr" : "Auxesis a mal répondu"
+    },
+    "firstRunWaiting" : {
+      "en" : "Auxesis hasn't seen a key or an agent yet. The two steps above are still to do.",
+      "fr" : "Auxesis n'a pas encore vu de clé ou d'agent. Les deux étapes ci-dessus restent à faire."
+    },
+    "googleAppName" : {
+      "en" : "Google",
+      "fr" : "Google"
+    },
+    "googleConnect" : {
+      "en" : "Connect Google",
+      "fr" : "Connecter Google"
+    },
+    "googleConnectedValue" : {
+      "en" : "connected",
+      "fr" : "connecté"
+    },
+    "googleDisconnect" : {
+      "en" : "Disconnect",
+      "fr" : "Déconnecter"
+    },
+    "googleDisconnectedValue" : {
+      "en" : "not connected",
+      "fr" : "non connecté"
+    },
+    "googleFailedValue" : {
+      "en" : "the connection didn't complete",
+      "fr" : "la connexion n'a pas abouti"
+    },
+    "googleHint" : {
+      "en" : "Auxesis can read your Google mail and calendar. You can remove this access whenever you want.",
+      "fr" : "Auxesis peut lire tes e-mails et ton agenda Google. Tu peux retirer cet accès quand tu veux."
+    },
+    "googleUnknownValue" : {
+      "en" : "state unknown",
+      "fr" : "état inconnu"
+    },
+    "googleUpdateNeededValue" : {
+      "en" : "permissions need an update",
+      "fr" : "autorisations à mettre à jour"
+    },
+    "googleUpdatePermissions" : {
+      "en" : "Update Google permissions",
+      "fr" : "Mettre à jour les autorisations Google"
+    },
+    "googleWaitingHint" : {
+      "en" : "A Google page opened in your browser: accept the access, then come back here.",
+      "fr" : "Une page Google s'est ouverte dans ton navigateur : accepte l'accès, puis reviens ici."
+    },
+    "googleWaitingValue" : {
+      "en" : "waiting for your OK in the browser",
+      "fr" : "en attente de ton accord dans le navigateur"
+    },
+    "importCancel" : {
+      "en" : "Cancel",
+      "fr" : "Annuler"
+    },
+    "importChoose" : {
+      "en" : "Choose",
+      "fr" : "Choisir"
+    },
+    "importColumnRow" : {
+      "en" : "%1$@ → %2$@",
+      "fr" : "%1$@ → %2$@"
+    },
+    "importColumnsIgnored" : {
+      "en" : "Columns not read: %@",
+      "fr" : "Colonnes non lues : %@"
+    },
+    "importColumnsRead" : {
+      "en" : "Columns read",
+      "fr" : "Colonnes lues"
+    },
+    "importCountryHint" : {
+      "en" : "%d phone numbers have no country code. Enter the country as two letters, like FR, to keep them.",
+      "fr" : "%d numéros n'ont pas d'indicatif. Indiquez le pays en deux lettres, comme FR, pour les garder."
+    },
+    "importCountryLabel" : {
+      "en" : "Country",
+      "fr" : "Pays"
+    },
+    "importDone" : {
+      "en" : "Done",
+      "fr" : "Terminé"
+    },
+    "importDoneLine" : {
+      "en" : "Imported %1$d contacts: %2$d new, %3$d updated.",
+      "fr" : "%1$d contacts importés : %2$d nouveaux, %3$d mis à jour."
+    },
+    "importFailed" : {
+      "en" : "Couldn't import these contacts. Try again.",
+      "fr" : "Impossible d'importer ces contacts. Réessayez."
+    },
+    "importFound" : {
+      "en" : "%d contacts found",
+      "fr" : "%d contacts trouvés"
+    },
+    "importFoundDetail" : {
+      "en" : "%1$d with an email, %2$d with a phone",
+      "fr" : "%1$d avec un e-mail, %2$d avec un téléphone"
+    },
+    "importLede" : {
+      "en" : "Read a vCard or CSV file. Nothing is sent off this Mac.",
+      "fr" : "Lisez un fichier vCard ou CSV. Rien n'est envoyé hors de ce Mac."
+    },
+    "importNothingReadable" : {
+      "en" : "No contact in this file can be read.",
+      "fr" : "Aucun contact de ce fichier ne peut être lu."
+    },
+    "importOpen" : {
+      "en" : "Import…",
+      "fr" : "Importer…"
+    },
+    "importParties" : {
+      "en" : "New %1$d · Already known %2$d · Refused %3$d",
+      "fr" : "Nouveaux %1$d · Déjà connus %2$d · Refusés %3$d"
+    },
+    "importReading" : {
+      "en" : "Reading the file…",
+      "fr" : "Lecture du fichier…"
+    },
+    "importRoleEmail" : {
+      "en" : "Email",
+      "fr" : "E-mail"
+    },
+    "importRoleFamily" : {
+      "en" : "Last name",
+      "fr" : "Nom de famille"
+    },
+    "importRoleGiven" : {
+      "en" : "First name",
+      "fr" : "Prénom"
+    },
+    "importRoleName" : {
+      "en" : "Name",
+      "fr" : "Nom"
+    },
+    "importRoleNickname" : {
+      "en" : "Nickname",
+      "fr" : "Surnom"
+    },
+    "importRolePhone" : {
+      "en" : "Phone",
+      "fr" : "Téléphone"
+    },
+    "importRun" : {
+      "en" : "Import",
+      "fr" : "Importer"
+    },
+    "importRunning" : {
+      "en" : "Importing…",
+      "fr" : "Import en cours…"
+    },
+    "importSkippedCap" : {
+      "en" : "Over the size limit",
+      "fr" : "Au-delà de la limite de taille"
+    },
+    "importSkippedCharset" : {
+      "en" : "Card in a character set Auxesis does not read",
+      "fr" : "Carte dans un jeu de caractères qu'Auxesis ne lit pas"
+    },
+    "importSkippedEncoded" : {
+      "en" : "Field that does not decode",
+      "fr" : "Champ qui ne se décode pas"
+    },
+    "importSkippedInvalidPhone" : {
+      "en" : "Phone number not valid",
+      "fr" : "Numéro de téléphone non valide"
+    },
+    "importSkippedNeedsCountry" : {
+      "en" : "Phone without a country code",
+      "fr" : "Téléphone sans indicatif pays"
+    },
+    "importSkippedNoContact" : {
+      "en" : "No name, email or phone",
+      "fr" : "Ni nom, ni e-mail, ni téléphone"
+    },
+    "importSkippedRepeated" : {
+      "en" : "Repeated in the file, merged",
+      "fr" : "Répétés dans le fichier, fusionnés"
+    },
+    "importSkippedTitle" : {
+      "en" : "Not imported",
+      "fr" : "Non importés"
+    },
+    "importStaysHere" : {
+      "en" : "Stays on this Mac. The file is read where it is, not copied.",
+      "fr" : "Reste sur ce Mac. Le fichier est lu sur place, sans copie."
+    },
+    "importTagClient" : {
+      "en" : "Client",
+      "fr" : "Client"
+    },
+    "importTagNone" : {
+      "en" : "None",
+      "fr" : "Aucun"
+    },
+    "importTagPartner" : {
+      "en" : "Partner",
+      "fr" : "Partenaire"
+    },
+    "importTagTitle" : {
+      "en" : "Import as",
+      "fr" : "Importer comme"
+    },
+    "importTitle" : {
+      "en" : "Import contacts",
+      "fr" : "Importer des contacts"
+    },
+    "importUnavailable" : {
+      "en" : "Auxesis can't be reached right now. Try again in a moment.",
+      "fr" : "Auxesis est injoignable pour l'instant. Réessayez dans un instant."
+    },
+    "inboxDecideSoon" : {
+      "en" : "Decisions to make arrive soon: this list is empty for now.",
+      "fr" : "Les décisions à prendre arrivent bientôt : cette liste est vide pour l'instant."
+    },
+    "inboxEmpty" : {
+      "en" : "Nothing needs you.",
+      "fr" : "Rien n'a besoin de toi."
+    },
+    "inboxSubtitle" : {
+      "en" : "things that need you",
+      "fr" : "ce qui a besoin de toi"
+    },
+    "inboxTitle" : {
+      "en" : "Inbox",
+      "fr" : "Boîte de réception"
+    },
+    "inboxTriageSoon" : {
+      "en" : "Unknown-sender triage arrives soon: this list is empty for now.",
+      "fr" : "Le tri des expéditeurs inconnus arrive bientôt : cette liste est vide pour l'instant."
+    },
+    "navActivity" : {
+      "en" : "Activity",
+      "fr" : "Activité"
+    },
+    "navInbox" : {
+      "en" : "Inbox",
+      "fr" : "Boîte de réception"
+    },
+    "navSettings" : {
+      "en" : "Settings",
+      "fr" : "Réglages"
+    },
+    "newAgentCreate" : {
+      "en" : "Create the agent",
+      "fr" : "Créer l'agent"
+    },
+    "newAgentCreateAnother" : {
+      "en" : "Create another agent",
+      "fr" : "Créer un autre agent"
+    },
+    "newAgentCreating" : {
+      "en" : "Creating the agent…",
+      "fr" : "Création de l'agent…"
+    },
+    "newAgentDoneBody" : {
+      "en" : "The agent “%@” is ready. You can write to it now.",
+      "fr" : "L'agent « %@ » est prêt. Tu peux lui écrire dès maintenant."
+    },
+    "newAgentDoneTitle" : {
+      "en" : "The agent is created",
+      "fr" : "L'agent est créé"
+    },
+    "newAgentDuplicateDetail" : {
+      "en" : "An agent already has this name.",
+      "fr" : "Un agent porte déjà ce nom."
+    },
+    "newAgentDuplicateNext" : {
+      "en" : "Pick another name, then try again.",
+      "fr" : "Choisis un autre nom, puis réessaie."
+    },
+    "newAgentDuplicateTitle" : {
+      "en" : "This name is already taken",
+      "fr" : "Ce nom est déjà pris"
+    },
+    "newAgentIntro" : {
+      "en" : "Name your agent, say in one sentence what it should do, then pick the model that will run it.",
+      "fr" : "Donne un nom à ton agent, dis en une phrase ce qu'il doit faire, puis choisis le modèle qui va l'animer."
+    },
+    "newAgentModelLabel" : {
+      "en" : "Model",
+      "fr" : "Modèle"
+    },
+    "newAgentModelsEmpty" : {
+      "en" : "No model available yet. Add an AI service in settings first.",
+      "fr" : "Aucun modèle disponible pour l'instant. Ajoute d'abord un service d'IA dans les réglages."
+    },
+    "newAgentModelsLoading" : {
+      "en" : "Loading models…",
+      "fr" : "Chargement des modèles…"
+    },
+    "newAgentNameHint" : {
+      "en" : "No spaces or accents: letters, digits, dashes, periods and underscores.",
+      "fr" : "Sans espace ni accent : lettres, chiffres, tirets, points et traits de soulignement."
+    },
+    "newAgentNameLabel" : {
+      "en" : "Agent name",
+      "fr" : "Nom de l'agent"
+    },
+    "newAgentNameProblem" : {
+      "en" : "This name can't be used. Use letters without accents, digits, dashes, periods or underscores.",
+      "fr" : "Ce nom ne peut pas être utilisé. Utilise des lettres sans accent, des chiffres, des tirets, des points ou des traits de soulignement."
+    },
+    "newAgentOpenThread" : {
+      "en" : "Open the conversation",
+      "fr" : "Voir la conversation"
+    },
+    "newAgentRoleHint" : {
+      "en" : "You can change it later.",
+      "fr" : "Tu pourras le modifier plus tard."
+    },
+    "newAgentRoleLabel" : {
+      "en" : "Role in one sentence",
+      "fr" : "Rôle en une phrase"
+    },
+    "newAgentRolePlaceholder" : {
+      "en" : "Example: prepare my meetings",
+      "fr" : "Exemple : préparer mes réunions"
+    },
+    "newAgentTitle" : {
+      "en" : "New agent",
+      "fr" : "Nouvel agent"
+    },
+    "notSentYet" : {
+      "en" : "not sent yet",
+      "fr" : "pas encore envoyé"
+    },
+    "notifApprovalBody" : {
+      "en" : "A request is waiting for your answer in Auxesis.",
+      "fr" : "Une demande attend ta réponse dans Auxesis."
+    },
+    "notifApprovalTitle" : {
+      "en" : "Auxesis needs your OK",
+      "fr" : "Auxesis a besoin de ton accord"
+    },
+    "notifDoneBody" : {
+      "en" : "Work is ready to review.",
+      "fr" : "Un travail est prêt à relire."
+    },
+    "notifDoneTitle" : {
+      "en" : "It's done",
+      "fr" : "C'est terminé"
+    },
+    "notifNeedsYouBody" : {
+      "en" : "Work is blocked. Open Auxesis to see what's next.",
+      "fr" : "Un travail est bloqué. Ouvre Auxesis pour voir la suite."
+    },
+    "notifNeedsYouTitle" : {
+      "en" : "Auxesis needs you",
+      "fr" : "Auxesis a besoin de toi"
+    },
+    "offlineHint" : {
+      "en" : "Start the service with the command below, then try again.",
+      "fr" : "Démarre le service avec la commande ci-dessous, puis réessaie."
+    },
+    "offlineHintKeyRefused" : {
+      "en" : "This Mac's access key no longer matches the service. Delete it, then restart the service: a new key will be written.",
+      "fr" : "La clé d'accès de ce Mac ne correspond plus au service. Supprime-la, puis relance le service : une nouvelle clé sera écrite."
+    },
+    "offlineHintTokenMissing" : {
+      "en" : "Open Terminal and start the service: it creates this Mac's access key at startup. Then click Try again.",
+      "fr" : "Ouvre le Terminal et lance le service : il crée la clé d'accès de ce Mac au démarrage. Puis clique sur Réessayer."
+    },
+    "offlineHintTokenUnsafe" : {
+      "en" : "This Mac's access key file isn't protected. Fix it with the command below, then try again.",
+      "fr" : "Le fichier de la clé d'accès n'est pas protégé. Corrige-le avec la commande ci-dessous, puis réessaie."
+    },
+    "offlineTerminalLabel" : {
+      "en" : "In Terminal:",
+      "fr" : "Dans le Terminal :"
+    },
+    "offlineTitle" : {
+      "en" : "The Auxesis service is not reachable",
+      "fr" : "Le service Auxesis n'est pas joignable"
+    },
+    "offlineTokenMissing" : {
+      "en" : "This Mac's access key can't be found.",
+      "fr" : "La clé d'accès de ce Mac est introuvable."
+    },
+    "offlineTokenUnsafe" : {
+      "en" : "This Mac's access key was refused.",
+      "fr" : "La clé d'accès de ce Mac a été refusée."
+    },
+    "onThisMac" : {
+      "en" : "ON THIS MAC",
+      "fr" : "SUR CE MAC"
+    },
+    "overrideRejectedPlain" : {
+      "en" : "%@ ignored: the address is not local. Using %@.",
+      "fr" : "%@ ignoré : l'adresse n'est pas locale. Adresse utilisée : %@."
+    },
+    "overrideRejectedWithHost" : {
+      "en" : "%@ ignored: host %@ is not local. Using %@.",
+      "fr" : "%@ ignoré : l'hôte %@ n'est pas local. Adresse utilisée : %@."
+    },
+    "packAgendaDescription" : {
+      "en" : "View and organize your calendar.",
+      "fr" : "Consulter et organiser ton agenda."
+    },
+    "packAgendaTitle" : {
+      "en" : "Calendar",
+      "fr" : "Agenda"
+    },
+    "packMailDescription" : {
+      "en" : "Read and prepare your emails.",
+      "fr" : "Lire et préparer tes emails."
+    },
+    "packMailTitle" : {
+      "en" : "Mail",
+      "fr" : "Mail"
+    },
+    "packNoChange" : {
+      "en" : "No change.",
+      "fr" : "Aucun changement."
+    },
+    "packToolCalendarCreate" : {
+      "en" : "change the calendar",
+      "fr" : "modifier l'agenda"
+    },
+    "packToolCalendarList" : {
+      "en" : "view your calendar",
+      "fr" : "consulter ton agenda"
+    },
+    "packToolHttpFetch" : {
+      "en" : "open a web page",
+      "fr" : "ouvrir une page web"
+    },
+    "packToolMailDraft" : {
+      "en" : "draft an email",
+      "fr" : "préparer un email"
+    },
+    "packToolMailList" : {
+      "en" : "check your emails",
+      "fr" : "consulter tes emails"
+    },
+    "packToolMailRead" : {
+      "en" : "read your emails",
+      "fr" : "lire tes emails"
+    },
+    "packToolMailSearch" : {
+      "en" : "search your emails",
+      "fr" : "chercher dans tes emails"
+    },
+    "packToolMailSend" : {
+      "en" : "send an email",
+      "fr" : "envoyer un email"
+    },
+    "packToolUnknown" : {
+      "en" : "a tool",
+      "fr" : "un outil"
+    },
+    "packWebSearchDescription" : {
+      "en" : "Open web pages for your searches.",
+      "fr" : "Ouvrir des pages web pour tes recherches."
+    },
+    "packWebSearchTitle" : {
+      "en" : "Web search",
+      "fr" : "Recherche web"
+    },
+    "packsAssign" : {
+      "en" : "Give to this agent",
+      "fr" : "Donner à cet agent"
+    },
+    "packsAssignFailed" : {
+      "en" : "The tool set couldn't be given to this agent. Try again.",
+      "fr" : "L'ensemble d'outils n'a pas pu être donné à cet agent. Réessaie."
+    },
+    "packsAssignedNotRefreshed" : {
+      "en" : "The tool set was given, but the tool list couldn't be refreshed.",
+      "fr" : "L'ensemble d'outils est donné, mais la liste des outils n'a pas pu être actualisée."
+    },
+    "packsAvailableCountMany" : {
+      "en" : "%d items available",
+      "fr" : "%d éléments disponibles"
+    },
+    "packsAvailableCountOne" : {
+      "en" : "%d item available",
+      "fr" : "%d élément disponible"
+    },
+    "packsCapExceeded" : {
+      "en" : "This tool set would exceed the cap of %d tools for this agent.",
+      "fr" : "Cet ensemble d'outils dépasserait le plafond de %d outils pour cet agent."
+    },
+    "packsForAgent" : {
+      "en" : "For %@",
+      "fr" : "Pour %@"
+    },
+    "packsPickAgent" : {
+      "en" : "Pick an agent to see its tool sets.",
+      "fr" : "Choisis un agent pour voir ses ensembles d'outils."
+    },
+    "packsReadFailed" : {
+      "en" : "Couldn't read the available tools. Try again.",
+      "fr" : "Impossible de lire les outils disponibles. Réessaie."
+    },
+    "packsRemove" : {
+      "en" : "Remove this tool set",
+      "fr" : "Retirer cet ensemble d'outils"
+    },
+    "packsRemoveFailed" : {
+      "en" : "The tool set couldn't be removed. Try again.",
+      "fr" : "L'ensemble d'outils n'a pas pu être retiré. Réessaie."
+    },
+    "packsRequiresApp" : {
+      "en" : "needs the connected app %@",
+      "fr" : "nécessite l'application connectée %@"
+    },
+    "packsSaving" : {
+      "en" : "Saving…",
+      "fr" : "Enregistrement…"
+    },
+    "packsSomeUnavailable" : {
+      "en" : "Some items aren't available on this Mac.",
+      "fr" : "Certains éléments ne sont pas disponibles sur ce Mac."
+    },
+    "packsTitle" : {
+      "en" : "Tool sets",
+      "fr" : "Ensembles d'outils"
+    },
+    "packsUnavailable" : {
+      "en" : "This version of Auxesis doesn't offer tool sets yet.",
+      "fr" : "Cette version d'Auxesis ne propose pas encore les ensembles d'outils."
+    },
+    "personalityCounter" : {
+      "en" : "%d of %d bytes",
+      "fr" : "%d sur %d octets"
+    },
+    "personalityDefault" : {
+      "en" : "This agent has no written personality yet: this is the built-in one. You can replace it.",
+      "fr" : "Cet agent n'a pas encore de personnalité écrite : voici celle d'origine. Tu peux la remplacer."
+    },
+    "personalityHint" : {
+      "en" : "Only you write this text: neither the agent nor its tools can change it.",
+      "fr" : "Ce texte est écrit par toi seul : ni l'agent ni ses outils ne peuvent le modifier."
+    },
+    "personalityIntro" : {
+      "en" : "How this agent should behave",
+      "fr" : "Comment cet agent doit se comporter"
+    },
+    "personalityLoading" : {
+      "en" : "Reading the personality…",
+      "fr" : "Lecture de la personnalité…"
+    },
+    "personalityOverLimit" : {
+      "en" : "That is too long: the limit is %d bytes.",
+      "fr" : "C'est trop long : la limite est de %d octets."
+    },
+    "personalityReadFailed" : {
+      "en" : "Could not read this agent's personality. Try again.",
+      "fr" : "Impossible de lire la personnalité de cet agent. Réessaie."
+    },
+    "personalitySave" : {
+      "en" : "Save",
+      "fr" : "Enregistrer"
+    },
+    "personalitySaveFailed" : {
+      "en" : "Saving failed. Try again.",
+      "fr" : "L'enregistrement a échoué. Réessaie."
+    },
+    "personalitySaved" : {
+      "en" : "Saved.",
+      "fr" : "Enregistré."
+    },
+    "personalitySaving" : {
+      "en" : "Saving…",
+      "fr" : "Enregistrement…"
+    },
+    "personalityTitle" : {
+      "en" : "Personality",
+      "fr" : "Personnalité"
+    },
+    "personalityTooLong" : {
+      "en" : "That is too long to save. Shorten the text and try again.",
+      "fr" : "C'est trop long pour être enregistré. Raccourcis le texte, puis réessaie."
+    },
+    "personalityUnsaved" : {
+      "en" : "Unsaved changes.",
+      "fr" : "Modifications non enregistrées."
+    },
+    "phoneCreateCode" : {
+      "en" : "Create pairing code",
+      "fr" : "Créer un code d’appairage"
+    },
+    "phoneEnable" : {
+      "en" : "Enable Telegram",
+      "fr" : "Activer Telegram"
+    },
+    "phoneKeyPlaceholder" : {
+      "en" : "Telegram key",
+      "fr" : "Clé Telegram"
+    },
+    "phoneNotConfigured" : {
+      "en" : "not configured",
+      "fr" : "non configuré"
+    },
+    "phonePaired" : {
+      "en" : "paired",
+      "fr" : "appairé"
+    },
+    "phonePairingCode" : {
+      "en" : "Code to send to the bot",
+      "fr" : "Code à envoyer au bot"
+    },
+    "phonePairingHelp" : {
+      "en" : "Send this one-time code to your assistant in Telegram.",
+      "fr" : "Envoie ce code au bot dans Telegram. Il ne sert qu’une fois."
+    },
+    "phoneSaveKey" : {
+      "en" : "Save key",
+      "fr" : "Enregistrer la clé"
+    },
+    "phoneSettingsTitle" : {
+      "en" : "Phone",
+      "fr" : "Téléphone"
+    },
+    "phoneSettingsUnavailable" : {
+      "en" : "Telegram settings are unavailable right now.",
+      "fr" : "Les réglages Telegram ne sont pas accessibles pour le moment."
+    },
+    "phoneSetupHint" : {
+      "en" : "Create your Telegram assistant with BotFather, then paste its key here.",
+      "fr" : "Crée ton assistant Telegram avec BotFather puis colle la clé ici."
+    },
+    "phoneWaitingPairing" : {
+      "en" : "waiting to pair",
+      "fr" : "en attente d’appairage"
+    },
+    "pluginsAdd" : {
+      "en" : "Add",
+      "fr" : "Ajouter"
+    },
+    "pluginsCatalog" : {
+      "en" : "Catalog",
+      "fr" : "Catalogue"
+    },
+    "pluginsCommunity" : {
+      "en" : "Community",
+      "fr" : "Communautaire"
+    },
+    "pluginsCommunityWarning" : {
+      "en" : "Community integration: review its code before enabling it.",
+      "fr" : "Intégration communautaire : vérifie le code avant de l'activer."
+    },
+    "pluginsEmpty" : {
+      "en" : "No servers added.",
+      "fr" : "Aucun serveur ajouté."
+    },
+    "pluginsEnable" : {
+      "en" : "Enable server",
+      "fr" : "Activer le serveur"
+    },
+    "pluginsFailed" : {
+      "en" : "Plugins are unavailable.",
+      "fr" : "Les plugins ne sont pas disponibles."
+    },
+    "pluginsInstalled" : {
+      "en" : "Installed",
+      "fr" : "Installés"
+    },
+    "pluginsKeyHint" : {
+      "en" : "This integration needs a key: add it in Settings > Keys.",
+      "fr" : "Cette intégration demande une clé : ajoute-la dans Réglages > Clés."
+    },
+    "pluginsOfficial" : {
+      "en" : "Official",
+      "fr" : "Officiel"
+    },
+    "pluginsRemove" : {
+      "en" : "Remove",
+      "fr" : "Supprimer"
+    },
+    "pluginsTitle" : {
+      "en" : "Plugins",
+      "fr" : "Plugins"
+    },
+    "pluginsWriteWarning" : {
+      "en" : "This integration can change data.",
+      "fr" : "Cette intégration peut modifier des données."
+    },
+    "providerOllamaTitle" : {
+      "en" : "Ollama (on this computer)",
+      "fr" : "Ollama (sur cet ordinateur)"
+    },
+    "quickAskNoAgent" : {
+      "en" : "No agent ready",
+      "fr" : "Aucun agent prêt"
+    },
+    "quickAskPlaceholder" : {
+      "en" : "What do you want to know?",
+      "fr" : "Que veux-tu savoir ?"
+    },
+    "quickAskReasonNoAgent" : {
+      "en" : "No agent is available right now.",
+      "fr" : "Aucun agent n'est disponible pour l'instant."
+    },
+    "quickAskReasonOffline" : {
+      "en" : "Auxesis is offline. Your question is kept.",
+      "fr" : "Auxesis est hors ligne. Ta question est conservée."
+    },
+    "quickAskReasonPaused" : {
+      "en" : "Resume the agents before sending your question.",
+      "fr" : "Reprends les agents avant d'envoyer ta question."
+    },
+    "quickAskReasonUnknown" : {
+      "en" : "Check the service connection before sending your question.",
+      "fr" : "Vérifie la connexion au service avant d'envoyer ta question."
+    },
+    "quickAskTitle" : {
+      "en" : "Quick question",
+      "fr" : "Question rapide"
+    },
+    "quotedReply" : {
+      "en" : "In reply to %@",
+      "fr" : "En réponse à %@"
+    },
+    "railAddAgent" : {
+      "en" : "Add an agent",
+      "fr" : "Ajouter un agent"
+    },
+    "railAddAgentSoon" : {
+      "en" : "Adding an agent arrives soon. For now, create one with “aux chat”.",
+      "fr" : "Ajouter un agent arrive bientôt. En attendant, crée-le avec « aux chat »."
+    },
+    "railNoMatch" : {
+      "en" : "No agent matches.",
+      "fr" : "Aucun agent ne correspond."
+    },
+    "railSearchPlaceholder" : {
+      "en" : "Search agents",
+      "fr" : "Rechercher un agent"
+    },
+    "receiptApprovalAsked" : {
+      "en" : "Asked for your OK: %@",
+      "fr" : "Demande d'accord : %@"
+    },
+    "receiptCost" : {
+      "en" : "Cost",
+      "fr" : "Coût"
+    },
+    "receiptCostIncomplete" : {
+      "en" : "Incomplete receipt",
+      "fr" : "Reçu incomplet"
+    },
+    "receiptCostKnown" : {
+      "en" : "%@ (your AI service)",
+      "fr" : "%@ (ton service d'IA)"
+    },
+    "receiptCostUnknown" : {
+      "en" : "Cost unknown (your AI service)",
+      "fr" : "Coût inconnu (ton service d'IA)"
+    },
+    "receiptCostUnverified" : {
+      "en" : "Cost not verified (your AI service)",
+      "fr" : "Coût non vérifié (ton service d'IA)"
+    },
+    "receiptDecisions" : {
+      "en" : "Decisions",
+      "fr" : "Décisions"
+    },
+    "receiptEffects" : {
+      "en" : "What changed",
+      "fr" : "Ce qui a changé"
+    },
+    "receiptFileReadMany" : {
+      "en" : "files read",
+      "fr" : "fichiers lus"
+    },
+    "receiptFileReadOne" : {
+      "en" : "file read",
+      "fr" : "fichier lu"
+    },
+    "receiptFileReadTitleMany" : {
+      "en" : "Files read",
+      "fr" : "Fichiers lus"
+    },
+    "receiptFileReadTitleOne" : {
+      "en" : "File read",
+      "fr" : "Fichier lu"
+    },
+    "receiptIncompleteNote" : {
+      "en" : "Incomplete receipt: this run's detail could not be saved.",
+      "fr" : "Reçu incomplet : le détail de ce travail n'a pas pu être enregistré."
+    },
+    "receiptMessageSentMany" : {
+      "en" : "messages sent",
+      "fr" : "messages envoyés"
+    },
+    "receiptMessageSentOne" : {
+      "en" : "message sent",
+      "fr" : "message envoyé"
+    },
+    "receiptMessageSentTitleMany" : {
+      "en" : "Messages sent",
+      "fr" : "Messages envoyés"
+    },
+    "receiptMessageSentTitleOne" : {
+      "en" : "Message sent",
+      "fr" : "Message envoyé"
+    },
+    "receiptNoApproval" : {
+      "en" : "No request for your OK this run.",
+      "fr" : "Aucune demande d'accord pour ce travail."
+    },
+    "receiptNoEffect" : {
+      "en" : "No effect recorded.",
+      "fr" : "Aucun effet enregistré."
+    },
+    "receiptNoReservation" : {
+      "en" : "Nothing to flag.",
+      "fr" : "Rien à signaler."
+    },
+    "receiptPayYourService" : {
+      "en" : "You pay your AI service, never us.",
+      "fr" : "Tu paies ton service d'IA, jamais nous."
+    },
+    "receiptProof" : {
+      "en" : "Proof",
+      "fr" : "Preuve"
+    },
+    "receiptSectionTitle" : {
+      "en" : "RECEIPTS",
+      "fr" : "REÇUS"
+    },
+    "receiptSiteVisitedMany" : {
+      "en" : "sites visited",
+      "fr" : "sites consultés"
+    },
+    "receiptSiteVisitedOne" : {
+      "en" : "site visited",
+      "fr" : "site consulté"
+    },
+    "receiptSiteVisitedTitleMany" : {
+      "en" : "Sites visited",
+      "fr" : "Sites consultés"
+    },
+    "receiptSiteVisitedTitleOne" : {
+      "en" : "Site visited",
+      "fr" : "Site consulté"
+    },
+    "receiptStatusDone" : {
+      "en" : "done",
+      "fr" : "terminé"
+    },
+    "receiptStatusFailed" : {
+      "en" : "failed",
+      "fr" : "échoué"
+    },
+    "receiptStatusInterrupted" : {
+      "en" : "interrupted",
+      "fr" : "interrompu"
+    },
+    "receiptStatusPausedNeedsYou" : {
+      "en" : "paused: needs you",
+      "fr" : "en pause : a besoin de toi"
+    },
+    "receiptStatusUnknown" : {
+      "en" : "unknown state",
+      "fr" : "état inconnu"
+    },
+    "receiptTextUnits" : {
+      "en" : "Text read: %@ · text written: %@ (counted by your AI service)",
+      "fr" : "Texte lu : %@ · texte écrit : %@ (compté par ton service d'IA)"
+    },
+    "receiptToVerify" : {
+      "en" : "To verify: %@",
+      "fr" : "À vérifier : %@"
+    },
+    "receiptToolsUsed" : {
+      "en" : "Tools used",
+      "fr" : "Outils utilisés"
+    },
+    "receiptUntrustedSource" : {
+      "en" : "The content came from an untrusted source.",
+      "fr" : "Le contenu venait d'une source non fiable."
+    },
+    "receiptWaitingAnswer" : {
+      "en" : "It is waiting for your answer.",
+      "fr" : "Il attend ta réponse."
+    },
+    "receiptWhen" : {
+      "en" : "When",
+      "fr" : "Quand"
+    },
+    "receiptWhenAt" : {
+      "en" : "%@ at %@",
+      "fr" : "%@ à %@"
+    },
+    "receiptYourAnswer" : {
+      "en" : "Your answer: %@",
+      "fr" : "Ta réponse : %@"
+    },
+    "restoreHidden" : {
+      "en" : "Restore hidden agents",
+      "fr" : "Restaurer les agents masqués"
+    },
+    "restoreHiddenSoon" : {
+      "en" : "Hiding an agent doesn't exist yet — soon.",
+      "fr" : "Masquer un agent n'existe pas encore — bientôt."
+    },
+    "retry" : {
+      "en" : "Try again",
+      "fr" : "Réessayer"
+    },
+    "roadmapDone" : {
+      "en" : "done",
+      "fr" : "terminé"
+    },
+    "roadmapDoneUnverified" : {
+      "en" : "done, to check",
+      "fr" : "terminé, à vérifier"
+    },
+    "roadmapFailed" : {
+      "en" : "failed",
+      "fr" : "échoué"
+    },
+    "roadmapNeedsYou" : {
+      "en" : "waiting for you",
+      "fr" : "en attente de toi"
+    },
+    "roadmapPaused" : {
+      "en" : "paused",
+      "fr" : "en pause"
+    },
+    "roadmapPreparing" : {
+      "en" : "preparing",
+      "fr" : "en préparation"
+    },
+    "roadmapRunning" : {
+      "en" : "running",
+      "fr" : "en cours"
+    },
+    "roadmapUnknown" : {
+      "en" : "unknown state",
+      "fr" : "état inconnu"
+    },
+    "roadmapUnknownToken" : {
+      "en" : "unknown state (%@)",
+      "fr" : "état inconnu (%@)"
+    },
+    "roadmapWaiting" : {
+      "en" : "waiting",
+      "fr" : "en attente"
+    },
+    "sectionAgents" : {
+      "en" : "YOUR AGENTS",
+      "fr" : "TES AGENTS"
+    },
+    "sectionRooms" : {
+      "en" : "ROOMS",
+      "fr" : "SALONS"
+    },
+    "sentTicks" : {
+      "en" : "sent",
+      "fr" : "envoyé"
+    },
+    "serviceError" : {
+      "en" : "The service didn't answer. Try again in a moment.",
+      "fr" : "Le service n'a pas répondu. Réessaie dans un instant."
+    },
+    "serviceRunning" : {
+      "en" : "Service running",
+      "fr" : "Service en marche"
+    },
+    "serviceStopped" : {
+      "en" : "Service stopped",
+      "fr" : "Service arrêté"
+    },
+    "settingsAddress" : {
+      "en" : "Address",
+      "fr" : "Adresse"
+    },
+    "settingsConnection" : {
+      "en" : "Connection",
+      "fr" : "Connexion"
+    },
+    "settingsFirstRun" : {
+      "en" : "First-run setup",
+      "fr" : "Première installation"
+    },
+    "settingsHotkeyFailed" : {
+      "en" : "The keyboard shortcut couldn't be turned on.",
+      "fr" : "Le raccourci clavier n'a pas pu être activé."
+    },
+    "settingsLanguage" : {
+      "en" : "Language",
+      "fr" : "Langue"
+    },
+    "settingsNotifications" : {
+      "en" : "Notifications",
+      "fr" : "Notifications"
+    },
+    "settingsNotificationsHint" : {
+      "en" : "Auxesis also alerts you when a request needs your OK. Up to three notifications in 24 hours, between 7 a.m. and 10 p.m.",
+      "fr" : "Auxesis t'avertit aussi quand une demande attend ton accord. Trois notifications au maximum sur 24 heures, entre 7 h et 22 h."
+    },
+    "settingsNotificationsToggle" : {
+      "en" : "Notify me when it's done or blocked",
+      "fr" : "Me prévenir quand c'est fini ou bloqué"
+    },
+    "settingsRecheck" : {
+      "en" : "Re-check setup",
+      "fr" : "Revérifier l'installation"
+    },
+    "settingsService" : {
+      "en" : "Service",
+      "fr" : "Service"
+    },
+    "settingsSource" : {
+      "en" : "Found via",
+      "fr" : "Trouvée via"
+    },
+    "settingsTitle" : {
+      "en" : "Settings",
+      "fr" : "Réglages"
+    },
+    "settingsToken" : {
+      "en" : "This Mac's access key",
+      "fr" : "Clé d'accès de ce Mac"
+    },
+    "settingsTokenPresent" : {
+      "en" : "This Mac's access key is present and protected.",
+      "fr" : "La clé d'accès de ce Mac est présente et protégée."
+    },
+    "settingsToolsTitle" : {
+      "en" : "Your tool sets",
+      "fr" : "Tes ensembles d'outils"
+    },
+    "skillsEmpty" : {
+      "en" : "No skills are available yet.",
+      "fr" : "Aucune compétence disponible pour le moment."
+    },
+    "skillsExtrasIgnored" : {
+      "en" : "Other files in this folder are ignored.",
+      "fr" : "Les autres fichiers du dossier sont ignorés."
+    },
+    "skillsHelp" : {
+      "en" : "Drop a folder containing a SKILL.md file into ~/.auxesis/skills.",
+      "fr" : "Dépose un dossier avec un fichier SKILL.md dans ~/.auxesis/skills."
+    },
+    "skillsIgnored" : {
+      "en" : "This skill is unavailable.",
+      "fr" : "Cette compétence n'est pas disponible."
+    },
+    "skillsTitle" : {
+      "en" : "Skills",
+      "fr" : "Compétences"
+    },
+    "skillsUnavailable" : {
+      "en" : "Skills aren't available.",
+      "fr" : "Les compétences ne sont pas disponibles."
+    },
+    "soonActivityBody" : {
+      "en" : "Activity will show what each agent did, with replayable history.",
+      "fr" : "L'activité montrera ce que chaque agent a fait, avec l'historique rejouable."
+    },
+    "soonBadge" : {
+      "en" : "soon",
+      "fr" : "bientôt"
+    },
+    "soonBody" : {
+      "en" : "This screen arrives in a later step — nothing is simulated here.",
+      "fr" : "Cet écran arrive dans une prochaine étape — rien n'est simulé ici."
+    },
+    "soonSettingsBody" : {
+      "en" : "Settings will let you add AI services, pick the second check and manage permissions.",
+      "fr" : "Les réglages permettront d'ajouter des services d'IA, de choisir la seconde vérification et de gérer les permissions."
+    },
+    "soonTitle" : {
+      "en" : "Soon",
+      "fr" : "Bientôt"
+    },
+    "soonTrayBody" : {
+      "en" : "The full menu-bar item arrives with the inbox counter.",
+      "fr" : "La barre de menus complète arrivera avec le compteur de la boîte de réception."
+    },
+    "starterDraftMessage" : {
+      "en" : "Draft a message",
+      "fr" : "Rédige un brouillon de message"
+    },
+    "starterExplain" : {
+      "en" : "Explain what you can do",
+      "fr" : "Explique-moi ce que tu peux faire"
+    },
+    "starterHint" : {
+      "en" : "Fills the message; nothing is sent until you send it.",
+      "fr" : "Remplit le message ; rien ne part tant que tu n'envoies pas."
+    },
+    "starterPrepareDay" : {
+      "en" : "Help me plan my day",
+      "fr" : "Aide-moi à préparer ma journée"
+    },
+    "stateIdle" : {
+      "en" : "idle",
+      "fr" : "au repos"
+    },
+    "stateKilled" : {
+      "en" : "stopped by hand",
+      "fr" : "arrêté à la main"
+    },
+    "stateNeedsYou" : {
+      "en" : "waiting for you",
+      "fr" : "attend ta réponse"
+    },
+    "statePaused" : {
+      "en" : "paused",
+      "fr" : "en pause"
+    },
+    "stateThinking" : {
+      "en" : "thinking",
+      "fr" : "réfléchit"
+    },
+    "stateWorking" : {
+      "en" : "working",
+      "fr" : "au travail"
+    },
+    "tabApprove" : {
+      "en" : "Approve",
+      "fr" : "Accords"
+    },
+    "tabDecide" : {
+      "en" : "Decide",
+      "fr" : "Décisions"
+    },
+    "tabTriage" : {
+      "en" : "Unknown senders",
+      "fr" : "Expéditeurs inconnus"
+    },
+    "threadEmpty" : {
+      "en" : "Nothing yet. Write a message to start.",
+      "fr" : "Rien pour l'instant. Écris un message pour commencer."
+    },
+    "threadPlaceholder" : {
+      "en" : "Write to %@…",
+      "fr" : "Écris à %@…"
+    },
+    "threadRehydrationUnavailable" : {
+      "en" : "Vault unavailable: names hidden",
+      "fr" : "Coffre indisponible : noms masqués"
+    },
+    "threadReturnHint" : {
+      "en" : "⏎ send",
+      "fr" : "⏎ envoyer"
+    },
+    "threadSend" : {
+      "en" : "Send",
+      "fr" : "Envoyer"
+    },
+    "threadSendFailed" : {
+      "en" : "The message didn't go through. Check your connection, then press Try again.",
+      "fr" : "Le message n'est pas parti. Vérifie ta connexion, puis appuie sur Réessayer."
+    },
+    "threadSending" : {
+      "en" : "sending…",
+      "fr" : "envoi…"
+    },
+    "threadStreaming" : {
+      "en" : "writing…",
+      "fr" : "écrit…"
+    },
+    "threadSystem" : {
+      "en" : "System note",
+      "fr" : "Note du système"
+    },
+    "threadToolResult" : {
+      "en" : "Tool result",
+      "fr" : "Résultat d'outil"
+    },
+    "threadYou" : {
+      "en" : "You",
+      "fr" : "Toi"
+    },
+    "toolCalendar" : {
+      "en" : "change the calendar",
+      "fr" : "modifier l'agenda"
+    },
+    "toolCharacters" : {
+      "en" : "characters",
+      "fr" : "caractères"
+    },
+    "toolMemory" : {
+      "en" : "write to memory",
+      "fr" : "écrire dans la mémoire"
+    },
+    "toolOpenLink" : {
+      "en" : "open a link",
+      "fr" : "ouvrir un lien"
+    },
+    "toolReadFile" : {
+      "en" : "read a file",
+      "fr" : "lire un fichier"
+    },
+    "toolReadPage" : {
+      "en" : "read a web page",
+      "fr" : "lire une page web"
+    },
+    "toolRunCommand" : {
+      "en" : "run a command",
+      "fr" : "lancer une commande"
+    },
+    "toolSendEmail" : {
+      "en" : "send an email",
+      "fr" : "envoyer un email"
+    },
+    "toolUnknownWord" : {
+      "en" : "a tool",
+      "fr" : "un outil"
+    },
+    "toolWebSearch" : {
+      "en" : "search the web",
+      "fr" : "chercher sur le web"
+    },
+    "toolWriteFile" : {
+      "en" : "write a file",
+      "fr" : "écrire un fichier"
+    },
+    "trayAskPlaceholder" : {
+      "en" : "Ask your question…",
+      "fr" : "Pose ta question…"
+    },
+    "trayOpen" : {
+      "en" : "Open Auxesis",
+      "fr" : "Ouvrir Auxesis"
+    },
+    "trayPauseAll" : {
+      "en" : "Everything is paused",
+      "fr" : "Tout est en pause"
+    },
+    "trayPauseFailed" : {
+      "en" : "The setting wasn't changed. Try again in a moment.",
+      "fr" : "Le réglage n'a pas été modifié. Réessaie dans un instant."
+    },
+    "trayPauseUnavailable" : {
+      "en" : "Auxesis isn't answering.",
+      "fr" : "Auxesis ne répond pas."
+    },
+    "trayQuit" : {
+      "en" : "Quit Auxesis",
+      "fr" : "Quitter Auxesis"
+    },
+    "traySoon" : {
+      "en" : "Inbox counter: soon",
+      "fr" : "Compteur de la boîte de réception : bientôt"
+    },
+    "workspaceAddress" : {
+      "en" : "Address",
+      "fr" : "Adresse"
+    },
+    "workspaceCollapse" : {
+      "en" : "Hide the workspace",
+      "fr" : "Masquer l'espace de travail"
+    },
+    "workspaceGive" : {
+      "en" : "Give to agent",
+      "fr" : "Donner à l'agent"
+    },
+    "workspaceSoonBody" : {
+      "en" : "The live view of your Mac — desktop and browser — arrives in a later step.",
+      "fr" : "Le direct sur ton Mac — bureau et navigateur — arrive à une prochaine étape."
+    },
+    "workspaceSoonHint" : {
+      "en" : "soon, nothing is simulated here",
+      "fr" : "bientôt, rien n'est simulé ici"
+    },
+    "workspaceTabs" : {
+      "en" : "Tabs",
+      "fr" : "Onglets"
+    },
+    "workspaceTake" : {
+      "en" : "Take control",
+      "fr" : "Prendre la main"
+    },
+    "workspaceTitle" : {
+      "en" : "WORKSPACE · ON YOUR MAC",
+      "fr" : "ESPACE DE TRAVAIL · SUR TON MAC"
+    },
+    "workspaceToggle" : {
+      "en" : "Show or hide the workspace",
+      "fr" : "Afficher ou masquer l'espace de travail"
+    }
+  },
+  "ui" : {
+    "aboutAux" : {
+      "en" : "Hands your work to the team and brings back the results. It never reads your mail, files or bank lines, only the short results the team sends back.",
+      "fr" : "Hands your work to the team and brings back the results. It never reads your mail, files or bank lines, only the short results the team sends back."
+    },
+    "aboutCalendar" : {
+      "en" : "Reads your calendar and finds free times. Writes events only after your yes.",
+      "fr" : "Reads your calendar and finds free times. Writes events only after your yes."
+    },
+    "aboutClients" : {
+      "en" : "Keeps a card for each client: notes, history and follow-ups.",
+      "fr" : "Keeps a card for each client: notes, history and follow-ups."
+    },
+    "aboutCustom" : {
+      "en" : "An agent you added. Aux can hand it work.",
+      "fr" : "An agent you added. Aux can hand it work."
+    },
+    "aboutDocuments" : {
+      "en" : "Collects receipts and invoices and matches them to your card lines.",
+      "fr" : "Collects receipts and invoices and matches them to your card lines."
+    },
+    "aboutMail" : {
+      "en" : "Reads and sorts your inbox, drafts replies. Sends only after your yes.",
+      "fr" : "Reads and sorts your inbox, drafts replies. Sends only after your yes."
+    },
+    "acpReadsAsk" : {
+      "en" : "A brain run by another app (ACP) reads only its own workspace through Auxesis; anything it asks permission for opens a card.",
+      "fr" : "Un cerveau géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
+    },
+    "agentIdle" : {
+      "en" : "Idle",
+      "fr" : "Inactif"
+    },
+    "agentNeedsYou" : {
+      "en" : "Needs you",
+      "fr" : "À traiter"
+    },
+    "agentPaused" : {
+      "en" : "Paused",
+      "fr" : "En pause"
+    },
+    "agentStateUnavailable" : {
+      "en" : "State unavailable",
+      "fr" : "État indisponible"
+    },
+    "agentStopped" : {
+      "en" : "Stopped",
+      "fr" : "Arrêté"
+    },
+    "agentThinking" : {
+      "en" : "Thinking",
+      "fr" : "Réfléchit"
+    },
+    "agentWorking" : {
+      "en" : "Working",
+      "fr" : "En cours"
+    },
+    "agents" : {
+      "en" : "Agents",
+      "fr" : "Agents"
+    },
+    "agentsRules" : {
+      "en" : "Agents and rules",
+      "fr" : "Agents et règles"
+    },
+    "allAgents" : {
+      "en" : "All agents",
+      "fr" : "All agents"
+    },
+    "apAskedBy" : {
+      "en" : "asked by %@ at %@",
+      "fr" : "asked by %@ at %@"
+    },
+    "apCancel" : {
+      "en" : "Cancel",
+      "fr" : "Cancel"
+    },
+    "apCancelledByStop" : {
+      "en" : "Cancelled by Stop. Nothing was sent.",
+      "fr" : "Cancelled by Stop. Nothing was sent."
+    },
+    "apDeclined" : {
+      "en" : "Declined. Nothing was sent.",
+      "fr" : "Declined. Nothing was sent."
+    },
+    "apDrafted" : {
+      "en" : "drafted this",
+      "fr" : "drafted this"
+    },
+    "apDraftedReply" : {
+      "en" : "drafted a reply",
+      "fr" : "drafted a reply"
+    },
+    "apEdit" : {
+      "en" : "Edit",
+      "fr" : "Edit"
+    },
+    "apError" : {
+      "en" : "Couldn't answer. Nothing was sent.",
+      "fr" : "Couldn't answer. Nothing was sent."
+    },
+    "apExpired" : {
+      "en" : "This request expired. Nothing was sent.",
+      "fr" : "This request expired. Nothing was sent."
+    },
+    "apHideDraft" : {
+      "en" : "Hide draft",
+      "fr" : "Hide draft"
+    },
+    "apNeedsYou" : {
+      "en" : "Needs you",
+      "fr" : "Needs you"
+    },
+    "apNotNow" : {
+      "en" : "Not now",
+      "fr" : "Not now"
+    },
+    "apNotNowNote" : {
+      "en" : "Not now. It stays in Waiting for you.",
+      "fr" : "Not now. It stays in Waiting for you."
+    },
+    "apOpenIn" : {
+      "en" : "Open in %@",
+      "fr" : "Open in %@"
+    },
+    "apReopen" : {
+      "en" : "Reopen",
+      "fr" : "Reopen"
+    },
+    "apRowSubject" : {
+      "en" : "Subject: ",
+      "fr" : "Objet : "
+    },
+    "apRowTo" : {
+      "en" : "To: ",
+      "fr" : "À : "
+    },
+    "apSend" : {
+      "en" : "Send",
+      "fr" : "Send"
+    },
+    "apSendEdited" : {
+      "en" : "Send edited",
+      "fr" : "Send edited"
+    },
+    "apSendingIn" : {
+      "en" : "Sending in %d s",
+      "fr" : "Sending in %d s"
+    },
+    "apShowDraft" : {
+      "en" : "Show draft",
+      "fr" : "Show draft"
+    },
+    "apSkill" : {
+      "en" : "%@ skill",
+      "fr" : "%@ skill"
+    },
+    "apTo" : {
+      "en" : "To",
+      "fr" : "To"
+    },
+    "apTrailApproved" : {
+      "en" : "Approved",
+      "fr" : "Approved"
+    },
+    "apTrailDelivered" : {
+      "en" : "Delivered",
+      "fr" : "Delivered"
+    },
+    "apTrailDrafted" : {
+      "en" : "Drafted",
+      "fr" : "Drafted"
+    },
+    "apTrailReplied" : {
+      "en" : "Replied",
+      "fr" : "Replied"
+    },
+    "apTrailSent" : {
+      "en" : "Sent",
+      "fr" : "Sent"
+    },
+    "apUndo" : {
+      "en" : "Undo",
+      "fr" : "Undo"
+    },
+    "apWaits" : {
+      "en" : "Waits for your yes",
+      "fr" : "Waits for your yes"
+    },
+    "appName" : {
+      "en" : "Auxesis",
+      "fr" : "Auxesis"
+    },
+    "askAux" : {
+      "en" : "Ask Aux…",
+      "fr" : "Demander à Aux…"
+    },
+    "askAuxPlaceholder" : {
+      "en" : "Ask Aux…",
+      "fr" : "Demander à Aux…"
+    },
+    "attach" : {
+      "en" : "Attach a file",
+      "fr" : "Attach a file"
+    },
+    "back" : {
+      "en" : "Aux",
+      "fr" : "Aux"
+    },
+    "brain" : {
+      "en" : "Brain",
+      "fr" : "Brain"
+    },
+    "brainDefault" : {
+      "en" : "The default provider",
+      "fr" : "The default provider"
+    },
+    "brainError" : {
+      "en" : "%@ didn't answer. Retry or switch brain.",
+      "fr" : "%@ didn't answer. Retry or switch brain."
+    },
+    "brainUnavailable" : {
+      "en" : "Brain unavailable",
+      "fr" : "Modèle indisponible"
+    },
+    "briefRunAlready" : {
+      "en" : "Today's brief already exists. It is in Aux's thread.",
+      "fr" : "Le brief du jour existe déjà. Il est dans le fil d’Aux."
+    },
+    "briefRunFailed" : {
+      "en" : "Couldn't run the brief. Try again in a moment.",
+      "fr" : "Le brief n’a pas pu être lancé. Réessayez dans un instant."
+    },
+    "briefRunNoSource" : {
+      "en" : "No calendar or mail is connected yet, so there is nothing to brief.",
+      "fr" : "Aucun agenda ni mail n’est connecté, il n’y a rien à résumer."
+    },
+    "briefRunQuiet" : {
+      "en" : "Quiet hours: the brief waits until they end.",
+      "fr" : "Heures calmes : le brief attend leur fin."
+    },
+    "briefRunStopped" : {
+      "en" : "Auxesis is stopped. Resume, then run the brief.",
+      "fr" : "Auxesis est arrêté. Reprenez, puis lancez le brief."
+    },
+    "briefRunWritten" : {
+      "en" : "Today's brief is written. It is also in Aux's thread.",
+      "fr" : "Le brief du jour est écrit. Il est aussi dans le fil d’Aux."
+    },
+    "budgetsLede" : {
+      "en" : "What the models cost today, and the one button that halts everything.",
+      "fr" : "What the models cost today, and the one button that halts everything."
+    },
+    "calCardAllDay" : {
+      "en" : "All day",
+      "fr" : "Toute la journée"
+    },
+    "calCardAsOf" : {
+      "en" : "as of %@",
+      "fr" : "état à %@"
+    },
+    "calCardFreeRow" : {
+      "en" : "Free",
+      "fr" : "Libre"
+    },
+    "calCardFreeTitle" : {
+      "en" : "Free time",
+      "fr" : "Créneaux libres"
+    },
+    "calCardIncomplete" : {
+      "en" : "List may be incomplete",
+      "fr" : "Liste peut-être incomplète"
+    },
+    "calCardNotChecked" : {
+      "en" : "Not checked",
+      "fr" : "Non vérifié"
+    },
+    "calCardTitle" : {
+      "en" : "Your calendar",
+      "fr" : "Votre agenda"
+    },
+    "calErrFailed" : {
+      "en" : "Couldn't refresh: Aux didn't get the update. Try again.",
+      "fr" : "Actualisation impossible : Aux n’a pas reçu la mise à jour. Réessayez."
+    },
+    "calErrNoAccess" : {
+      "en" : "Couldn't refresh: Calendar access is off. Turn it on in Settings.",
+      "fr" : "Actualisation impossible : l’accès au Calendrier est désactivé. Activez-le dans les Réglages."
+    },
+    "calErrOffline" : {
+      "en" : "Couldn't refresh: Auxesis isn't running. Start it from the menu bar.",
+      "fr" : "Actualisation impossible : Auxesis n’est pas lancé. Lancez-le depuis la barre des menus."
+    },
+    "calLede" : {
+      "en" : "Read-only, from the calendars on this Mac. Aux answers from this copy.",
+      "fr" : "En lecture seule, depuis les agendas de ce Mac. Aux répond à partir de cette copie."
+    },
+    "calLoginApproval" : {
+      "en" : "Waiting for your approval in System Settings, General, Login Items.",
+      "fr" : "En attente de votre accord dans Réglages Système, Général, Ouverture."
+    },
+    "calLoginFailed" : {
+      "en" : "macOS didn't accept the change. Try again, or use System Settings, General, Login Items.",
+      "fr" : "macOS n’a pas accepté le changement. Réessayez, ou passez par Réglages Système, Général, Ouverture."
+    },
+    "calLoginHint" : {
+      "en" : "The menu bar keeps your calendar fresh with no window open.",
+      "fr" : "La barre des menus garde votre agenda à jour, sans fenêtre ouverte."
+    },
+    "calLoginOff" : {
+      "en" : "Off",
+      "fr" : "Désactivé"
+    },
+    "calLoginOn" : {
+      "en" : "On. Auxesis opens when you log in.",
+      "fr" : "Activé. Auxesis s’ouvre quand vous vous connectez."
+    },
+    "calLoginTitle" : {
+      "en" : "Keep Auxesis running at login",
+      "fr" : "Garder Auxesis ouvert à la connexion"
+    },
+    "calLoginUnavailable" : {
+      "en" : "Not available in this build of Auxesis.",
+      "fr" : "Non disponible dans cette version d’Auxesis."
+    },
+    "calNoEvents" : {
+      "en" : "No events in the next 8 days.",
+      "fr" : "Aucun événement dans les 8 prochains jours."
+    },
+    "calNotShared" : {
+      "en" : "Your calendar isn't shared with Auxesis. Turn on Auxesis in Privacy & Security, Calendars.",
+      "fr" : "Votre agenda n’est pas partagé avec Auxesis. Activez Auxesis dans Confidentialité et sécurité, Calendriers."
+    },
+    "calNotUpdatedSince" : {
+      "en" : "Not updated since %@",
+      "fr" : "Pas mis à jour depuis %@"
+    },
+    "calOpenSettings" : {
+      "en" : "Open Settings",
+      "fr" : "Ouvrir les Réglages"
+    },
+    "calPage" : {
+      "en" : "Agenda",
+      "fr" : "Agenda"
+    },
+    "calRefresh" : {
+      "en" : "Refresh now",
+      "fr" : "Actualiser"
+    },
+    "calRefreshing" : {
+      "en" : "Refreshing",
+      "fr" : "Actualisation"
+    },
+    "calStaleHint" : {
+      "en" : "Aux tells you its copy may be out of date until this updates.",
+      "fr" : "Tant que ce n’est pas à jour, Aux vous dit que sa copie peut être ancienne."
+    },
+    "calSubtitle" : {
+      "en" : "Your next 8 days, as Aux sees them",
+      "fr" : "Vos 8 prochains jours, tels qu’Aux les voit"
+    },
+    "calUpdateUnknown" : {
+      "en" : "Update time unknown",
+      "fr" : "Heure de mise à jour inconnue"
+    },
+    "calUpdatedHours" : {
+      "en" : "Updated %d h ago",
+      "fr" : "Mis à jour il y a %d h"
+    },
+    "calUpdatedMinutes" : {
+      "en" : "Updated %d min ago",
+      "fr" : "Mis à jour il y a %d min"
+    },
+    "calUpdatedNow" : {
+      "en" : "Updated just now",
+      "fr" : "Mis à jour à l’instant"
+    },
+    "calendarAccess" : {
+      "en" : "Calendar on this Mac",
+      "fr" : "Calendar on this Mac"
+    },
+    "calendarAccessHint" : {
+      "en" : "Calendar reads your events through macOS. Nothing is asked until you press the button.",
+      "fr" : "Calendar reads your events through macOS. Nothing is asked until you press the button."
+    },
+    "calendarAllow" : {
+      "en" : "Allow access",
+      "fr" : "Allow access"
+    },
+    "calendarDenied" : {
+      "en" : "macOS refused access. Allow it in System Settings, Privacy & Security, Calendars.",
+      "fr" : "macOS refused access. Allow it in System Settings, Privacy & Security, Calendars."
+    },
+    "calendarError" : {
+      "en" : "Couldn't read the calendar. Try again.",
+      "fr" : "Couldn't read the calendar. Try again."
+    },
+    "calendarRead" : {
+      "en" : "Read again",
+      "fr" : "Read again"
+    },
+    "calendarSaved" : {
+      "en" : "Calendar is up to date on this Mac.",
+      "fr" : "Calendar is up to date on this Mac."
+    },
+    "canDo" : {
+      "en" : "Can do",
+      "fr" : "Can do"
+    },
+    "canSee" : {
+      "en" : "Can see",
+      "fr" : "Can see"
+    },
+    "capsHint" : {
+      "en" : "Caps are set per agent on this Mac. A capped agent stops and tells you.",
+      "fr" : "Caps are set per agent on this Mac. A capped agent stops and tells you."
+    },
+    "capsTitle" : {
+      "en" : "Daily caps",
+      "fr" : "Daily caps"
+    },
+    "change" : {
+      "en" : "Change",
+      "fr" : "Change"
+    },
+    "changeBrain" : {
+      "en" : "Change brain…",
+      "fr" : "Changer de modèle…"
+    },
+    "changeQuietHours" : {
+      "en" : "Change quiet hours…",
+      "fr" : "Modifier les heures calmes…"
+    },
+    "channels" : {
+      "en" : "Channels",
+      "fr" : "Canaux"
+    },
+    "checkForUpdates" : {
+      "en" : "Check for Updates…",
+      "fr" : "Rechercher les mises à jour…"
+    },
+    "checkForUpdatesAutomatically" : {
+      "en" : "Check for Updates Automatically",
+      "fr" : "Rechercher automatiquement les mises à jour"
+    },
+    "chief" : {
+      "en" : "Chief",
+      "fr" : "Chief"
+    },
+    "chiefStopped" : {
+      "en" : "Stopped. All agents paused",
+      "fr" : "Stopped. All agents paused"
+    },
+    "chiefWorkingMany" : {
+      "en" : "%d agents working",
+      "fr" : "%d agents en activité"
+    },
+    "chiefWorkingOne" : {
+      "en" : "1 agent working",
+      "fr" : "1 agent en activité"
+    },
+    "clientAddresses" : {
+      "en" : "Address",
+      "fr" : "Address"
+    },
+    "clientAliasHint" : {
+      "en" : "Nicknames and other spellings. Each one is replaced before the text is sent to a model.",
+      "fr" : "Nicknames and other spellings. Each one is replaced before the text is sent to a model."
+    },
+    "clientAliases" : {
+      "en" : "Also known as",
+      "fr" : "Also known as"
+    },
+    "clientBrief" : {
+      "en" : "Ask Clients",
+      "fr" : "Ask Clients"
+    },
+    "clientBriefHelp" : {
+      "en" : "Opens the Clients thread and asks about this client (/client).",
+      "fr" : "Opens the Clients thread and asks about this client (/client)."
+    },
+    "clientCancel" : {
+      "en" : "Cancel",
+      "fr" : "Cancel"
+    },
+    "clientDue" : {
+      "en" : "Due %@",
+      "fr" : "Due %@"
+    },
+    "clientDueToday" : {
+      "en" : "Due today",
+      "fr" : "Due today"
+    },
+    "clientEdit" : {
+      "en" : "Edit",
+      "fr" : "Edit"
+    },
+    "clientEmails" : {
+      "en" : "Email",
+      "fr" : "Email"
+    },
+    "clientForgetFailed" : {
+      "en" : "Couldn't forget this line. It is still on this Mac.",
+      "fr" : "Couldn't forget this line. It is still on this Mac."
+    },
+    "clientGone" : {
+      "en" : "This client is no longer on this Mac.",
+      "fr" : "This client is no longer on this Mac."
+    },
+    "clientInvalidEmail" : {
+      "en" : "An email address is not valid. Check it, then save.",
+      "fr" : "An email address is not valid. Check it, then save."
+    },
+    "clientInvalidName" : {
+      "en" : "A client needs a name.",
+      "fr" : "A client needs a name."
+    },
+    "clientInvalidPhone" : {
+      "en" : "A phone number has no country code. Write it like +33 6 00 00 00 12, then save.",
+      "fr" : "A phone number has no country code. Write it like +33 6 00 00 00 12, then save."
+    },
+    "clientKept" : {
+      "en" : "Addresses, e-mails, phone and account numbers on this card are replaced before the text is sent to a model. Names are sent as written.",
+      "fr" : "Les adresses, e-mails, numéros de téléphone et de compte de cette fiche sont remplacés avant l’envoi du texte à un modèle. Les noms sont envoyés tels quels."
+    },
+    "clientMemoryEmpty" : {
+      "en" : "Nothing remembered about this client yet.",
+      "fr" : "Nothing remembered about this client yet."
+    },
+    "clientMemoryLede" : {
+      "en" : "What the team remembers about %@, each line with its source. Forget deletes the line from this Mac.",
+      "fr" : "What the team remembers about %@, each line with its source. Forget deletes the line from this Mac."
+    },
+    "clientName" : {
+      "en" : "Name",
+      "fr" : "Name"
+    },
+    "clientNext" : {
+      "en" : "Next",
+      "fr" : "Next"
+    },
+    "clientNoFollowups" : {
+      "en" : "No follow-up planned.",
+      "fr" : "No follow-up planned."
+    },
+    "clientNoNotes" : {
+      "en" : "No notes yet.",
+      "fr" : "No notes yet."
+    },
+    "clientNotes" : {
+      "en" : "Notes",
+      "fr" : "Notes"
+    },
+    "clientOnePerLine" : {
+      "en" : "One per line.",
+      "fr" : "One per line."
+    },
+    "clientOverview" : {
+      "en" : "Overview",
+      "fr" : "Overview"
+    },
+    "clientPhoneHint" : {
+      "en" : "One per line, with the country code, like +33 6 00 00 00 12.",
+      "fr" : "One per line, with the country code, like +33 6 00 00 00 12."
+    },
+    "clientPhones" : {
+      "en" : "Phone",
+      "fr" : "Phone"
+    },
+    "clientSave" : {
+      "en" : "Save",
+      "fr" : "Save"
+    },
+    "clientSaveFailed" : {
+      "en" : "Couldn't save. The card on this Mac was not changed.",
+      "fr" : "Couldn't save. The card on this Mac was not changed."
+    },
+    "clientSaved" : {
+      "en" : "Saved. The next request replaces these names too.",
+      "fr" : "Saved. The next request replaces these names too."
+    },
+    "clientTags" : {
+      "en" : "Tags",
+      "fr" : "Tags"
+    },
+    "clientTimeZone" : {
+      "en" : "Time zone",
+      "fr" : "Fuseau horaire"
+    },
+    "clientTimeline" : {
+      "en" : "Timeline",
+      "fr" : "Timeline"
+    },
+    "clientTimelineEmpty" : {
+      "en" : "Nothing on the timeline yet. Mail and Calendar add emails and meetings with this client here.",
+      "fr" : "Nothing on the timeline yet. Mail and Calendar add emails and meetings with this client here."
+    },
+    "clientUnsaved" : {
+      "en" : "Edit not saved",
+      "fr" : "Edit not saved"
+    },
+    "clientUntrusted" : {
+      "en" : "From an untrusted message",
+      "fr" : "Issu d'un message non fiable"
+    },
+    "clients" : {
+      "en" : "Clients",
+      "fr" : "Clients"
+    },
+    "clientsAsk" : {
+      "en" : "Ask Clients",
+      "fr" : "Ask Clients"
+    },
+    "clientsEmpty" : {
+      "en" : "No clients yet. Import contacts, or tell Clients about someone.",
+      "fr" : "No clients yet. Import contacts, or tell Clients about someone."
+    },
+    "clientsFilter" : {
+      "en" : "Filter clients",
+      "fr" : "Filter clients"
+    },
+    "clientsLoadFailed" : {
+      "en" : "Couldn't read your clients on this Mac. Try again in a moment.",
+      "fr" : "Couldn't read your clients on this Mac. Try again in a moment."
+    },
+    "clientsNoMatch" : {
+      "en" : "No client matches.",
+      "fr" : "No client matches."
+    },
+    "clientsPick" : {
+      "en" : "Select a client to open their card.",
+      "fr" : "Select a client to open their card."
+    },
+    "clientsSubtitle" : {
+      "en" : "The people you work with",
+      "fr" : "The people you work with"
+    },
+    "close" : {
+      "en" : "Close",
+      "fr" : "Close"
+    },
+    "colAgent" : {
+      "en" : "Agent",
+      "fr" : "Agent"
+    },
+    "colSchedule" : {
+      "en" : "Schedule",
+      "fr" : "Schedule"
+    },
+    "colSkill" : {
+      "en" : "Skill",
+      "fr" : "Skill"
+    },
+    "colWhat" : {
+      "en" : "What",
+      "fr" : "What"
+    },
+    "colWhen" : {
+      "en" : "When",
+      "fr" : "When"
+    },
+    "comingNext" : {
+      "en" : "Coming next",
+      "fr" : "Coming next"
+    },
+    "composerHintAgent" : {
+      "en" : "Aux asks before anything is sent, paid or deleted. Your message can go to %@, %@; the Steps card shows when.",
+      "fr" : "Aux demande avant tout envoi, paiement ou suppression. Votre message peut partir vers %@, %@ ; la carte Étapes indique quand."
+    },
+    "composerHintChief" : {
+      "en" : "Aux asks before anything is sent, paid or deleted. Your message can go to the brain, %@; the Steps card shows when.",
+      "fr" : "Aux demande avant tout envoi, paiement ou suppression. Votre message peut partir vers le modèle, %@ ; la carte Étapes indique quand."
+    },
+    "composerOffline" : {
+      "en" : "Auxesis isn't running. Messages wait until it starts.",
+      "fr" : "Auxesis isn't running. Messages wait until it starts."
+    },
+    "composerPlaceholder" : {
+      "en" : "Message %@",
+      "fr" : "Message %@"
+    },
+    "composerStopped" : {
+      "en" : "Stopped. Press Resume to continue.",
+      "fr" : "Stopped. Press Resume to continue."
+    },
+    "configuredChannels" : {
+      "en" : "Configured channels",
+      "fr" : "Canaux configurés"
+    },
+    "conversationBack" : {
+      "en" : "‹ Back",
+      "fr" : "‹ Retour"
+    },
+    "conversationUntitled" : {
+      "en" : "Untitled conversation",
+      "fr" : "Conversation sans titre"
+    },
+    "couldntStart" : {
+      "en" : "Couldn't start · Open",
+      "fr" : "Couldn't start · Open"
+    },
+    "covAsksPrivate" : {
+      "en" : "Asks every time in Private mode",
+      "fr" : "Asks every time in Private mode"
+    },
+    "covCovered" : {
+      "en" : "Covered",
+      "fr" : "Covered"
+    },
+    "covMissed" : {
+      "en" : "Missed",
+      "fr" : "Missed"
+    },
+    "covOffPrivate" : {
+      "en" : "Off in Private mode",
+      "fr" : "Off in Private mode"
+    },
+    "covPartial" : {
+      "en" : "Partial",
+      "fr" : "Partial"
+    },
+    "covRunsPrivate" : {
+      "en" : "Runs in Private mode",
+      "fr" : "Runs in Private mode"
+    },
+    "coverageSummary" : {
+      "en" : "%d of %d paths covered. %d missed.",
+      "fr" : "%d of %d paths covered. %d missed."
+    },
+    "coverageTitle" : {
+      "en" : "Coverage",
+      "fr" : "Coverage"
+    },
+    "delegAskedAt" : {
+      "en" : "Asked at %@",
+      "fr" : "Asked at %@"
+    },
+    "delegAskedByAux" : {
+      "en" : "Asked by Aux at %@",
+      "fr" : "Asked by Aux at %@"
+    },
+    "delegCouldntFinish" : {
+      "en" : "%@ couldn't finish. Retry",
+      "fr" : "%@ couldn't finish. Retry"
+    },
+    "delegDone" : {
+      "en" : "Done · %@",
+      "fr" : "Done · %@"
+    },
+    "delegFailed" : {
+      "en" : "Couldn't finish",
+      "fr" : "Couldn't finish"
+    },
+    "delegKeptPartial" : {
+      "en" : "Stopped. Partial work kept, nothing filed or sent.",
+      "fr" : "Stopped. Partial work kept, nothing filed or sent."
+    },
+    "delegNeedsYou" : {
+      "en" : "Needs you",
+      "fr" : "Needs you"
+    },
+    "delegOpenIn" : {
+      "en" : "Open in %@",
+      "fr" : "Open in %@"
+    },
+    "delegPercent" : {
+      "en" : "%d%%",
+      "fr" : "%d%%"
+    },
+    "delegQueued" : {
+      "en" : "Queued",
+      "fr" : "Queued"
+    },
+    "delegResume" : {
+      "en" : "Resume",
+      "fr" : "Resume"
+    },
+    "delegSentBack" : {
+      "en" : "%@ sent back:",
+      "fr" : "%@ sent back:"
+    },
+    "delegSentBackToAux" : {
+      "en" : "Sent back to Aux:",
+      "fr" : "Sent back to Aux:"
+    },
+    "delegStopTask" : {
+      "en" : "Stop this task",
+      "fr" : "Stop this task"
+    },
+    "delegStopped" : {
+      "en" : "Stopped",
+      "fr" : "Stopped"
+    },
+    "delegWorking" : {
+      "en" : "Working",
+      "fr" : "Working"
+    },
+    "deliveryState" : {
+      "en" : "Delivery state",
+      "fr" : "État de livraison"
+    },
+    "docsArchived" : {
+      "en" : "%@ (archived)",
+      "fr" : "%@ (archivé)"
+    },
+    "docsColAmount" : {
+      "en" : "Amount",
+      "fr" : "Montant"
+    },
+    "docsColClient" : {
+      "en" : "Client",
+      "fr" : "Client"
+    },
+    "docsColDate" : {
+      "en" : "Date",
+      "fr" : "Date"
+    },
+    "docsColDocument" : {
+      "en" : "Document",
+      "fr" : "Document"
+    },
+    "docsEmptyClient" : {
+      "en" : "No receipts for this client yet.",
+      "fr" : "Aucun reçu pour ce client pour l’instant."
+    },
+    "docsEmptyUnlinked" : {
+      "en" : "Every receipt has a client.",
+      "fr" : "Chaque reçu a un client."
+    },
+    "docsErrExists" : {
+      "en" : "That folder already has an export for these dates. Nothing was overwritten. Pick another folder.",
+      "fr" : "Ce dossier contient déjà un export pour ces dates. Rien n’a été écrasé. Choisissez un autre dossier."
+    },
+    "docsErrFailed" : {
+      "en" : "Something went wrong. Nothing was changed. Try again.",
+      "fr" : "Un problème est survenu. Rien n’a été modifié. Réessayez."
+    },
+    "docsErrGone" : {
+      "en" : "That receipt or client is no longer there. The list is up to date now.",
+      "fr" : "Ce reçu ou ce client n’existe plus. La liste est à jour."
+    },
+    "docsErrNotRead" : {
+      "en" : "This receipt is still being read. Try again in a minute.",
+      "fr" : "Ce reçu est encore en lecture. Réessayez dans une minute."
+    },
+    "docsErrOffline" : {
+      "en" : "Auxesis isn't running. Start it from the menu bar, then try again.",
+      "fr" : "Auxesis n’est pas lancé. Lancez-le depuis la barre des menus, puis réessayez."
+    },
+    "docsErrRefused" : {
+      "en" : "Auxesis can't export there. Pick a folder outside the Auxesis folder.",
+      "fr" : "Auxesis ne peut pas exporter ici. Choisissez un dossier hors du dossier Auxesis."
+    },
+    "docsExportAllClients" : {
+      "en" : "All clients",
+      "fr" : "Tous les clients"
+    },
+    "docsExportButton" : {
+      "en" : "Export…",
+      "fr" : "Exporter…"
+    },
+    "docsExportEmpty" : {
+      "en" : "No receipts in that period. Nothing was written.",
+      "fr" : "Aucun reçu sur cette période. Rien n’a été écrit."
+    },
+    "docsExportMissing" : {
+      "en" : "Originals missing on this Mac: %d. The CSV marks them (missing).",
+      "fr" : "Originaux absents de ce Mac : %d. Dans le CSV, leur ligne indique « (missing) »."
+    },
+    "docsExportPrompt" : {
+      "en" : "Export here",
+      "fr" : "Exporter ici"
+    },
+    "docsExportTitle" : {
+      "en" : "Export",
+      "fr" : "Exporter"
+    },
+    "docsExportTo" : {
+      "en" : "to",
+      "fr" : "au"
+    },
+    "docsExportedMany" : {
+      "en" : "%d receipts exported, with their originals and a CSV.",
+      "fr" : "%d reçus exportés, avec leurs originaux et un CSV."
+    },
+    "docsExportedOne" : {
+      "en" : "1 receipt exported, with its original and a CSV.",
+      "fr" : "1 reçu exporté, avec son original et un CSV."
+    },
+    "docsKindInvoice" : {
+      "en" : "Invoice",
+      "fr" : "Facture"
+    },
+    "docsKindOther" : {
+      "en" : "Document",
+      "fr" : "Document"
+    },
+    "docsKindReceipt" : {
+      "en" : "Receipt",
+      "fr" : "Reçu"
+    },
+    "docsLede" : {
+      "en" : "Receipts and invoices collected from your mail and downloads, newest first. Link each one to its client, then export a period for your accountant.",
+      "fr" : "Les reçus et factures récupérés dans vos e-mails et vos téléchargements, du plus récent au plus ancien. Reliez chacun à son client, puis exportez une période pour votre comptable."
+    },
+    "docsLinkAfterRead" : {
+      "en" : "You can pick a client once it is read.",
+      "fr" : "Vous pourrez choisir un client une fois le document lu."
+    },
+    "docsNoClient" : {
+      "en" : "No client",
+      "fr" : "Sans client"
+    },
+    "docsNoDetails" : {
+      "en" : "No details found",
+      "fr" : "Aucun détail trouvé"
+    },
+    "docsReveal" : {
+      "en" : "Show in Finder",
+      "fr" : "Afficher dans le Finder"
+    },
+    "docsShow" : {
+      "en" : "Show",
+      "fr" : "Afficher"
+    },
+    "docsShowAll" : {
+      "en" : "All receipts",
+      "fr" : "Tous les reçus"
+    },
+    "docsShowUnlinked" : {
+      "en" : "No client",
+      "fr" : "Sans client"
+    },
+    "docsUnlink" : {
+      "en" : "Remove the client",
+      "fr" : "Retirer le client"
+    },
+    "docsUnreadable" : {
+      "en" : "Couldn't be read",
+      "fr" : "Illisible"
+    },
+    "docsWaiting" : {
+      "en" : "Not read yet",
+      "fr" : "Pas encore lu"
+    },
+    "documents" : {
+      "en" : "Documents",
+      "fr" : "Documents"
+    },
+    "documentsAsk" : {
+      "en" : "Ask Documents",
+      "fr" : "Ask Documents"
+    },
+    "documentsEmpty" : {
+      "en" : "No receipts or invoices yet. Documents collects them from Mail and from ~/Downloads/Receipts.",
+      "fr" : "Aucun reçu ni facture pour l’instant. Documents les récupère dans Mail et dans ~/Downloads/Receipts."
+    },
+    "documentsSubtitle" : {
+      "en" : "Receipts and invoices",
+      "fr" : "Reçus et factures"
+    },
+    "domainAgent" : {
+      "en" : "Domain agent",
+      "fr" : "Domain agent"
+    },
+    "draftReply" : {
+      "en" : "Reply",
+      "fr" : "Reply"
+    },
+    "draftReplyTo" : {
+      "en" : "Reply to %@",
+      "fr" : "Reply to %@"
+    },
+    "dueTodayQueue" : {
+      "en" : "Due today",
+      "fr" : "Due today"
+    },
+    "emptyAgent" : {
+      "en" : "%@ works here. Ask it something, or it will post here when Aux hands it work.",
+      "fr" : "%@ works here. Ask it something, or it will post here when Aux hands it work."
+    },
+    "emptyChief" : {
+      "en" : "I'm Aux. Tell me what you need; I'll hand it to Mail, Calendar, Clients or Documents and bring back the results.",
+      "fr" : "I'm Aux. Tell me what you need; I'll hand it to Mail, Calendar, Clients or Documents and bring back the results."
+    },
+    "externalHostUnavailable" : {
+      "en" : "External host unavailable",
+      "fr" : "Hôte externe indisponible"
+    },
+    "forget" : {
+      "en" : "Forget",
+      "fr" : "Forget"
+    },
+    "generalLede" : {
+      "en" : "How Auxesis reaches you, and what it may read on this Mac.",
+      "fr" : "How Auxesis reaches you, and what it may read on this Mac."
+    },
+    "go" : {
+      "en" : "Go",
+      "fr" : "Aller"
+    },
+    "grantsUnavailable" : {
+      "en" : "This Auxesis does not report grants yet. Every action that leaves this Mac asks you first.",
+      "fr" : "This Auxesis does not report grants yet. Every action that leaves this Mac asks you first."
+    },
+    "handoffAnd" : {
+      "en" : " and ",
+      "fr" : " et "
+    },
+    "handoffAsked" : {
+      "en" : "asked at %@",
+      "fr" : "asked at %@"
+    },
+    "handoffFrom" : {
+      "en" : "Aux",
+      "fr" : "Aux"
+    },
+    "handoffLineV5" : {
+      "en" : "Aux asked %@",
+      "fr" : "Aux a sollicité %@"
+    },
+    "hideSidebar" : {
+      "en" : "Hide sidebar",
+      "fr" : "Masquer la barre latérale"
+    },
+    "hintAgent" : {
+      "en" : "%@ uses %@. E-mails, phone numbers, postal addresses, bank and card numbers, IDs, health details and secrets are replaced before the text is sent to a model. Names are sent as written.",
+      "fr" : "%@ utilise %@. Les e-mails, numéros de téléphone, adresses postales, numéros bancaires et de carte, pièces d’identité, informations de santé et secrets sont remplacés avant l’envoi du texte à un modèle. Les noms sont envoyés tels quels."
+    },
+    "hintAgentNoBrain" : {
+      "en" : "E-mails, phone numbers, postal addresses, bank and card numbers, IDs, health details and secrets are replaced before the text is sent to a model. Names are sent as written.",
+      "fr" : "Les e-mails, numéros de téléphone, adresses postales, numéros bancaires et de carte, pièces d’identité, informations de santé et secrets sont remplacés avant l’envoi du texte à un modèle. Les noms sont envoyés tels quels."
+    },
+    "hintChief" : {
+      "en" : "Private: e-mails, phone numbers, postal addresses, bank and card numbers, IDs, health details and secrets are replaced before the text is sent to a model. Names are sent as written.",
+      "fr" : "Privé : les e-mails, numéros de téléphone, adresses postales, numéros bancaires et de carte, pièces d’identité, informations de santé et secrets sont remplacés avant l’envoi du texte à un modèle. Les noms sont envoyés tels quels."
+    },
+    "hintOpen" : {
+      "en" : "Open: the text is sent to the model as written. E-mails, phone numbers, postal addresses, bank and card numbers, IDs, health details and secrets are not removed first.",
+      "fr" : "Ouvert : le texte est envoyé au modèle tel quel. Les e-mails, numéros de téléphone, adresses postales, numéros bancaires et de carte, pièces d’identité, informations de santé et secrets ne sont pas retirés avant l’envoi."
+    },
+    "hintUnknown" : {
+      "en" : "The privacy mode could not be read. The text may be sent to the model as written; do not assume personal details are removed.",
+      "fr" : "Le mode de confidentialité n’a pas pu être lu. Le texte peut être envoyé au modèle tel quel ; ne partez pas du principe que les données personnelles sont retirées."
+    },
+    "idleLine" : {
+      "en" : "Nothing running",
+      "fr" : "Rien en cours"
+    },
+    "interruptDecisionWaiting" : {
+      "en" : "Decision waiting",
+      "fr" : "Décision en attente"
+    },
+    "interruptFailure" : {
+      "en" : "Failure that needs you",
+      "fr" : "Échec nécessitant votre attention"
+    },
+    "interruptRules" : {
+      "en" : "Interrupt rules",
+      "fr" : "Règles d’interruption"
+    },
+    "interruptUnknownOutcome" : {
+      "en" : "Unknown send outcome",
+      "fr" : "Résultat de l’envoi inconnu"
+    },
+    "keptChief" : {
+      "en" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them.",
+      "fr" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them."
+    },
+    "kindCall" : {
+      "en" : "Call",
+      "fr" : "Call"
+    },
+    "kindDocument" : {
+      "en" : "Document",
+      "fr" : "Document"
+    },
+    "kindMail" : {
+      "en" : "Email",
+      "fr" : "Email"
+    },
+    "kindMeeting" : {
+      "en" : "Meeting",
+      "fr" : "Meeting"
+    },
+    "kindNote" : {
+      "en" : "Note",
+      "fr" : "Note"
+    },
+    "language" : {
+      "en" : "Language",
+      "fr" : "Language"
+    },
+    "languageValue" : {
+      "en" : "English",
+      "fr" : "English"
+    },
+    "lastUse" : {
+      "en" : "Last use",
+      "fr" : "Dernière utilisation"
+    },
+    "ledger" : {
+      "en" : "Ledger",
+      "fr" : "Ledger"
+    },
+    "ledgerAnswered" : {
+      "en" : "%@ answered · %@ tokens in, %@ out",
+      "fr" : "%@ answered · %@ tokens in, %@ out"
+    },
+    "ledgerDone" : {
+      "en" : "Done",
+      "fr" : "Done"
+    },
+    "ledgerEmpty" : {
+      "en" : "Nothing has happened yet. Every action and every send will be listed here.",
+      "fr" : "Nothing has happened yet. Every action and every send will be listed here."
+    },
+    "ledgerHashHelp" : {
+      "en" : "The skill's pinned hash. A changed skill gets a new hash and asks again.",
+      "fr" : "The skill's pinned hash. A changed skill gets a new hash and asks again."
+    },
+    "ledgerLede" : {
+      "en" : "Every action and every request that left this Mac, in order. Nobody can edit it, you included, so it can be trusted.",
+      "fr" : "Every action and every request that left this Mac, in order. Nobody can edit it, you included, so it can be trusted."
+    },
+    "ledgerPlanned" : {
+      "en" : "Planned",
+      "fr" : "Planned"
+    },
+    "ledgerPlannedEmpty" : {
+      "en" : "Nothing is planned.",
+      "fr" : "Nothing is planned."
+    },
+    "ledgerProviderAdded" : {
+      "en" : "Provider %@ added · %@",
+      "fr" : "Provider %@ added · %@"
+    },
+    "ledgerSkillAsked" : {
+      "en" : "%@ asked for your yes",
+      "fr" : "%@ asked for your yes"
+    },
+    "ledgerSkillRan" : {
+      "en" : "Ran %@",
+      "fr" : "Ran %@"
+    },
+    "ledgerStarted" : {
+      "en" : "Auxesis started · %@",
+      "fr" : "Auxesis started · %@"
+    },
+    "ledgerSubtitle" : {
+      "en" : "Everything done, and what is planned",
+      "fr" : "Everything done, and what is planned"
+    },
+    "leftMac" : {
+      "en" : "Left this Mac",
+      "fr" : "Left this Mac"
+    },
+    "loadFailed" : {
+      "en" : "Couldn't load this.",
+      "fr" : "Couldn't load this."
+    },
+    "loading" : {
+      "en" : "Loading",
+      "fr" : "Chargement"
+    },
+    "lvAsk" : {
+      "en" : "Ask first",
+      "fr" : "Ask first"
+    },
+    "lvAsksEveryTime" : {
+      "en" : "Asks every time",
+      "fr" : "Asks every time"
+    },
+    "lvAuto" : {
+      "en" : "On its own",
+      "fr" : "On its own"
+    },
+    "lvOff" : {
+      "en" : "Off",
+      "fr" : "Off"
+    },
+    "lvRead" : {
+      "en" : "Read",
+      "fr" : "Read"
+    },
+    "mascotCancel" : {
+      "en" : "Cancel",
+      "fr" : "Annuler"
+    },
+    "mascotDefault" : {
+      "en" : "default",
+      "fr" : "par défaut"
+    },
+    "mascotDone" : {
+      "en" : "Done",
+      "fr" : "Terminé"
+    },
+    "mascotHeading" : {
+      "en" : "Mascot",
+      "fr" : "Mascotte"
+    },
+    "mascotLede" : {
+      "en" : "How %1$@ looks in the sidebar, the chat and the team map. Only the look changes; what %1$@ can do stays the same.",
+      "fr" : "L’apparence de %1$@ dans la barre latérale, le chat et la carte de l’équipe. Seule l’apparence change ; ce que %1$@ sait faire reste pareil."
+    },
+    "mascotMenu" : {
+      "en" : "Mascot…",
+      "fr" : "Mascotte…"
+    },
+    "mascotReset" : {
+      "en" : "Reset to default",
+      "fr" : "Revenir au défaut"
+    },
+    "mascotSame" : {
+      "en" : "%@ looks the same. A different mascot or tint tells them apart.",
+      "fr" : "%@ a la même apparence. Une autre mascotte ou teinte les distingue."
+    },
+    "mascotTint" : {
+      "en" : "Tint",
+      "fr" : "Teinte"
+    },
+    "mascotTitle" : {
+      "en" : "%@’s mascot",
+      "fr" : "La mascotte de %@"
+    },
+    "memory" : {
+      "en" : "Memory",
+      "fr" : "Memory"
+    },
+    "memoryAboutYou" : {
+      "en" : "About you",
+      "fr" : "À propos de vous"
+    },
+    "memoryCancel" : {
+      "en" : "Cancel",
+      "fr" : "Annuler"
+    },
+    "memoryEdit" : {
+      "en" : "Edit",
+      "fr" : "Modifier"
+    },
+    "memoryEmpty" : {
+      "en" : "Nothing remembered yet. %@ saves rules you give it, with the date.",
+      "fr" : "Nothing remembered yet. %@ saves rules you give it, with the date."
+    },
+    "memoryErrFailed" : {
+      "en" : "Couldn't save. Nothing was changed. Try again.",
+      "fr" : "Impossible d’enregistrer. Rien n’a été modifié. Réessayez."
+    },
+    "memoryErrGone" : {
+      "en" : "This line is already gone. The list is up to date.",
+      "fr" : "Cette ligne a déjà disparu. La liste est à jour."
+    },
+    "memoryErrInvalidText" : {
+      "en" : "Write between 1 and 2000 characters. Nothing was changed.",
+      "fr" : "Écrivez entre 1 et 2000 caractères. Rien n’a été modifié."
+    },
+    "memoryErrOffline" : {
+      "en" : "Auxesis isn't running on this Mac. Start it, then try again.",
+      "fr" : "Auxesis n’est pas lancé sur ce Mac. Lancez-le, puis réessayez."
+    },
+    "memoryForget" : {
+      "en" : "Forget",
+      "fr" : "Oublier"
+    },
+    "memoryForgetConfirm" : {
+      "en" : "Aux will stop using this.",
+      "fr" : "Aux cessera de l’utiliser."
+    },
+    "memoryLede" : {
+      "en" : "Stored on this Mac only. Change or delete anything; Aux uses it from the next message.",
+      "fr" : "Gardé sur ce Mac seulement. Modifiez ou supprimez ce que vous voulez ; Aux s’en sert dès le prochain message."
+    },
+    "memoryNo" : {
+      "en" : "No",
+      "fr" : "Non"
+    },
+    "memoryOther" : {
+      "en" : "Other",
+      "fr" : "Autre"
+    },
+    "memoryPeople" : {
+      "en" : "People",
+      "fr" : "Personnes"
+    },
+    "memoryRemember" : {
+      "en" : "Remember",
+      "fr" : "Mémoriser"
+    },
+    "memoryRuleAlways" : {
+      "en" : "Always asks before sending, paying or deleting",
+      "fr" : "Toujours demander avant d’envoyer, de payer ou de supprimer"
+    },
+    "memoryRuleFixed" : {
+      "en" : "Fixed · cannot be turned off",
+      "fr" : "Fixe · ne peut pas être désactivé"
+    },
+    "memoryRules" : {
+      "en" : "Rules Aux follows",
+      "fr" : "Les règles que suit Aux"
+    },
+    "memorySave" : {
+      "en" : "Save",
+      "fr" : "Enregistrer"
+    },
+    "memorySectionEmpty" : {
+      "en" : "Nothing yet — tell Aux in chat, e.g. “I prefer meetings after 10”.",
+      "fr" : "Rien pour l’instant — dites-le à Aux dans le chat, p. ex. « Je préfère les rendez-vous après 10 h »."
+    },
+    "memorySourceAccepted" : {
+      "en" : "Accepted suggestion",
+      "fr" : "Suggestion acceptée"
+    },
+    "memorySourceMail" : {
+      "en" : "Learned from a mail",
+      "fr" : "Appris d’un mail"
+    },
+    "memorySourceOlder" : {
+      "en" : "Older note",
+      "fr" : "Note plus ancienne"
+    },
+    "memorySourceTold" : {
+      "en" : "You told Aux",
+      "fr" : "Vous l’avez dit à Aux"
+    },
+    "memorySuggestions" : {
+      "en" : "Suggestions",
+      "fr" : "Suggestions"
+    },
+    "memorySuggestionsLede" : {
+      "en" : "Aux may have learned this. Keep it, or leave it.",
+      "fr" : "Aux a peut-être appris cela. Gardez-le, ou laissez-le."
+    },
+    "memoryUnavailable" : {
+      "en" : "This Auxesis doesn't show what Aux knows yet.",
+      "fr" : "Cette version d’Auxesis ne montre pas encore ce qu’Aux sait."
+    },
+    "menuIdle" : {
+      "en" : "Running · nothing in progress",
+      "fr" : "Running · nothing in progress"
+    },
+    "menuOffline" : {
+      "en" : "Auxesis isn't running · Start",
+      "fr" : "Auxesis isn't running · Start"
+    },
+    "menuOpen" : {
+      "en" : "Open Auxesis",
+      "fr" : "Open Auxesis"
+    },
+    "menuQuit" : {
+      "en" : "Quit Auxesis",
+      "fr" : "Quit Auxesis"
+    },
+    "menuWaiting" : {
+      "en" : "Waiting for you (%d)",
+      "fr" : "Waiting for you (%d)"
+    },
+    "menuWorkingMany" : {
+      "en" : "%d agents working",
+      "fr" : "%d agents en activité"
+    },
+    "menuWorkingOne" : {
+      "en" : "1 agent working",
+      "fr" : "1 agent en activité"
+    },
+    "modePhraseOpen" : {
+      "en" : "sent as written in Open mode: personal details are not removed",
+      "fr" : "envoyé tel quel en mode Ouvert : les données personnelles ne sont pas retirées"
+    },
+    "modePhrasePrivate" : {
+      "en" : "tokenised in Private mode",
+      "fr" : "tokenisé en mode Privé"
+    },
+    "modePhraseUnknown" : {
+      "en" : "sent with an unread privacy mode: personal details may not be removed",
+      "fr" : "envoyé avec un mode de confidentialité illisible : les données personnelles peuvent ne pas être retirées"
+    },
+    "modeUnknownChip" : {
+      "en" : "Mode unknown",
+      "fr" : "Mode inconnu"
+    },
+    "modelSawAux" : {
+      "en" : "Aux never received your emails or files, only the short results the team sent back.",
+      "fr" : "Aux never received your emails or files, only the short results the team sent back."
+    },
+    "modelSawGone" : {
+      "en" : "This record is gone from the Ledger.",
+      "fr" : "This record is gone from the Ledger."
+    },
+    "modelSawHide" : {
+      "en" : "Back to names",
+      "fr" : "Back to names"
+    },
+    "modelSawLink" : {
+      "en" : "What %@ sent to its brain",
+      "fr" : "What %@ sent to its brain"
+    },
+    "modelSawNoTokens" : {
+      "en" : "This Auxesis does not keep the exact text it sent yet. The Ledger lists the request.",
+      "fr" : "This Auxesis does not keep the exact text it sent yet. The Ledger lists the request."
+    },
+    "money" : {
+      "en" : "Money",
+      "fr" : "Finances"
+    },
+    "moneyEmpty" : {
+      "en" : "Payment records are unavailable.",
+      "fr" : "Payment records are unavailable."
+    },
+    "needsYouMany" : {
+      "en" : "%d need you",
+      "fr" : "%d need you"
+    },
+    "needsYouOne" : {
+      "en" : "Needs you",
+      "fr" : "Needs you"
+    },
+    "never" : {
+      "en" : "Never",
+      "fr" : "Never"
+    },
+    "newChat" : {
+      "en" : "New chat",
+      "fr" : "New chat"
+    },
+    "newChatDivider" : {
+      "en" : "New chat. The conversation above stays on this Mac.",
+      "fr" : "New chat. The conversation above stays on this Mac."
+    },
+    "newConversation" : {
+      "en" : "New conversation",
+      "fr" : "Nouvelle conversation"
+    },
+    "newLine" : {
+      "en" : "New",
+      "fr" : "New"
+    },
+    "nextOpenDraft" : {
+      "en" : "Open draft",
+      "fr" : "Open draft"
+    },
+    "nextSeeSteps" : {
+      "en" : "See steps",
+      "fr" : "See steps"
+    },
+    "noBrainBody" : {
+      "en" : "No brain yet. Add a provider to start.",
+      "fr" : "No brain yet. Add a provider to start."
+    },
+    "noBrainTitle" : {
+      "en" : "No brain yet",
+      "fr" : "No brain yet"
+    },
+    "notAvailableYet" : {
+      "en" : "Not available yet",
+      "fr" : "Pas encore disponible"
+    },
+    "notSentRetry" : {
+      "en" : "Not sent · Retry",
+      "fr" : "Not sent · Retry"
+    },
+    "notifications" : {
+      "en" : "When an agent needs your yes",
+      "fr" : "When an agent needs your yes"
+    },
+    "notificationsHint" : {
+      "en" : "One banner per request, with Send and Open. None while stopped.",
+      "fr" : "One banner per request, with Send and Open. None while stopped."
+    },
+    "notificationsQuietHours" : {
+      "en" : "Notifications and quiet hours",
+      "fr" : "Notifications et heures calmes"
+    },
+    "notificationsUnavailable" : {
+      "en" : "Notification settings are unavailable from this Auxesis.",
+      "fr" : "Les réglages de notification ne sont pas disponibles dans cette version d’Auxesis."
+    },
+    "now" : {
+      "en" : "now",
+      "fr" : "now"
+    },
+    "offlineRetry" : {
+      "en" : "Retry",
+      "fr" : "Retry"
+    },
+    "offlineStart" : {
+      "en" : "Start it",
+      "fr" : "Start it"
+    },
+    "offlineTitle" : {
+      "en" : "Auxesis isn't running on this Mac.",
+      "fr" : "Auxesis isn't running on this Mac."
+    },
+    "open" : {
+      "en" : "Open",
+      "fr" : "Ouvert"
+    },
+    "openLedger" : {
+      "en" : "Open in the Ledger",
+      "fr" : "Open in the Ledger"
+    },
+    "openSettings" : {
+      "en" : "Open Settings",
+      "fr" : "Open Settings"
+    },
+    "panelToggle" : {
+      "en" : "Show or hide the side panel",
+      "fr" : "Afficher ou masquer le panneau latéral"
+    },
+    "pauseAgent" : {
+      "en" : "Pause %@",
+      "fr" : "Pause %@"
+    },
+    "pauseChangeFailed" : {
+      "en" : "Couldn't update %@'s pause state. Its state was restored. Try again.",
+      "fr" : "Impossible de modifier la pause de %@. Son état a été rétabli. Réessayez."
+    },
+    "pausedByStop" : {
+      "en" : "Paused by Stop",
+      "fr" : "Mis en pause par l’arrêt"
+    },
+    "pinnedMany" : {
+      "en" : "%d actions wait for your yes",
+      "fr" : "%d actions wait for your yes"
+    },
+    "pinnedOne" : {
+      "en" : "1 action waits for your yes",
+      "fr" : "1 action waits for your yes"
+    },
+    "pluginAccess" : {
+      "en" : "Access",
+      "fr" : "Accès"
+    },
+    "pluginApprove" : {
+      "en" : "Approve and turn on",
+      "fr" : "Approuver et activer"
+    },
+    "pluginAuth" : {
+      "en" : "Sign-in",
+      "fr" : "Connexion"
+    },
+    "pluginAuthKey" : {
+      "en" : "Needs a key",
+      "fr" : "Demande une clé"
+    },
+    "pluginChangedReview" : {
+      "en" : "This plugin changed since you last looked. Review it again, then approve.",
+      "fr" : "Ce plugin a changé depuis votre dernier examen. Vérifiez-le à nouveau, puis approuvez."
+    },
+    "pluginConnects" : {
+      "en" : "Connects to",
+      "fr" : "Se connecte à"
+    },
+    "pluginData" : {
+      "en" : "Data",
+      "fr" : "Données"
+    },
+    "pluginDataPrivate" : {
+      "en" : "Private: passes the privacy filter",
+      "fr" : "Privées : passent par le filtre de confidentialité"
+    },
+    "pluginDataPublic" : {
+      "en" : "Public data",
+      "fr" : "Données publiques"
+    },
+    "pluginEnv" : {
+      "en" : "Keys it receives",
+      "fr" : "Clés reçues"
+    },
+    "pluginError" : {
+      "en" : "Error",
+      "fr" : "Erreur"
+    },
+    "pluginGivesTo" : {
+      "en" : "Gives these tools to %@",
+      "fr" : "Donne ces outils à %@"
+    },
+    "pluginInstall" : {
+      "en" : "Install…",
+      "fr" : "Installer…"
+    },
+    "pluginNeedsYou" : {
+      "en" : "Needs you",
+      "fr" : "Attend votre accord"
+    },
+    "pluginNetwork" : {
+      "en" : "Network",
+      "fr" : "Réseau"
+    },
+    "pluginNetworkAny" : {
+      "en" : "May reach any host",
+      "fr" : "Peut joindre n'importe quel hôte"
+    },
+    "pluginNoNetwork" : {
+      "en" : "No network",
+      "fr" : "Pas de réseau"
+    },
+    "pluginNone" : {
+      "en" : "None",
+      "fr" : "Aucun"
+    },
+    "pluginNotChecked" : {
+      "en" : "Not checked",
+      "fr" : "Non vérifié"
+    },
+    "pluginOff" : {
+      "en" : "Off",
+      "fr" : "Désactivé"
+    },
+    "pluginOn" : {
+      "en" : "On",
+      "fr" : "Activé"
+    },
+    "pluginOnThisMac" : {
+      "en" : "A program on this Mac",
+      "fr" : "Un programme sur ce Mac"
+    },
+    "pluginPreviewLede" : {
+      "en" : "Your one yes approves everything below. If it later asks for more, Auxesis asks you again.",
+      "fr" : "Votre seul oui approuve tout ce qui suit. S'il demande plus ensuite, Auxesis vous redemande."
+    },
+    "pluginPreviewTitle" : {
+      "en" : "Install %@?",
+      "fr" : "Installer %@ ?"
+    },
+    "pluginRead" : {
+      "en" : "Read only",
+      "fr" : "Lecture seule"
+    },
+    "pluginReadWrite" : {
+      "en" : "Reads and writes",
+      "fr" : "Lit et écrit"
+    },
+    "pluginRemove" : {
+      "en" : "Remove",
+      "fr" : "Retirer"
+    },
+    "pluginReview" : {
+      "en" : "Review and turn on…",
+      "fr" : "Vérifier et activer…"
+    },
+    "pluginTools" : {
+      "en" : "Tools",
+      "fr" : "Outils"
+    },
+    "pluginToolsLater" : {
+      "en" : "Shown in the preview, before anything runs",
+      "fr" : "Affichés dans l'aperçu, avant tout lancement"
+    },
+    "pluginTurnOff" : {
+      "en" : "Turn off",
+      "fr" : "Désactiver"
+    },
+    "pluginsAvailable" : {
+      "en" : "Available",
+      "fr" : "Disponibles"
+    },
+    "pluginsEmpty" : {
+      "en" : "No plugin installed yet.",
+      "fr" : "Aucun plugin installé pour l'instant."
+    },
+    "pluginsInstalled" : {
+      "en" : "Installed",
+      "fr" : "Installés"
+    },
+    "pluginsLede" : {
+      "en" : "Plugins give your agents new tools. Looking at this list connects to nothing: a plugin runs only after you approve it.",
+      "fr" : "Les plugins donnent de nouveaux outils à vos agents. Parcourir cette liste ne connecte rien : un plugin ne tourne qu'après votre accord."
+    },
+    "privacyCountMany" : {
+      "en" : "%d requests left the Mac today",
+      "fr" : "%d requêtes ont quitté ce Mac aujourd’hui"
+    },
+    "privacyCountNone" : {
+      "en" : "No request left the Mac today",
+      "fr" : "Aucune requête n’a quitté ce Mac aujourd’hui"
+    },
+    "privacyCountOne" : {
+      "en" : "1 request left the Mac today",
+      "fr" : "1 requête a quitté ce Mac aujourd’hui"
+    },
+    "privacyCountPending" : {
+      "en" : "Requests that left the Mac today",
+      "fr" : "Requêtes ayant quitté ce Mac aujourd’hui"
+    },
+    "privacyDayFilter" : {
+      "en" : "Day · YYYY-MM-DD",
+      "fr" : "Jour · AAAA-MM-JJ"
+    },
+    "privacyLede" : {
+      "en" : "In Private mode, what you see as a name the model sees as a token such as [PERSON_1]. Here is every path data can take, and how it is held.",
+      "fr" : "In Private mode, what you see as a name the model sees as a token such as [PERSON_1]. Here is every path data can take, and how it is held."
+    },
+    "privacyRecord" : {
+      "en" : "Privacy record",
+      "fr" : "Journal de confidentialité"
+    },
+    "privacyRecordEmpty" : {
+      "en" : "Request history is unavailable.",
+      "fr" : "Request history is unavailable."
+    },
+    "privacyRecordLede" : {
+      "en" : "Run receipts list hosts; individual provider requests are unavailable.",
+      "fr" : "Run receipts list hosts; individual provider requests are unavailable."
+    },
+    "privacyTab" : {
+      "en" : "Privacy",
+      "fr" : "Privacy"
+    },
+    "privacyTabEmpty" : {
+      "en" : "No run recorded today for this conversation.",
+      "fr" : "Aucune exécution enregistrée aujourd’hui pour cette conversation."
+    },
+    "privacyTabLeft" : {
+      "en" : "Runs that left this Mac: %d",
+      "fr" : "Exécutions sorties de ce Mac : %d"
+    },
+    "privacyTabLoading" : {
+      "en" : "Reading the privacy record…",
+      "fr" : "Lecture du registre de confidentialité…"
+    },
+    "privacyTabNoOutside" : {
+      "en" : "No outside host recorded",
+      "fr" : "Aucun hôte extérieur enregistré"
+    },
+    "privacyTabOpen" : {
+      "en" : "Open the privacy record",
+      "fr" : "Ouvrir le registre de confidentialité"
+    },
+    "privacyTabReplaced" : {
+      "en" : "Replaced before sending: %@",
+      "fr" : "Remplacés avant l’envoi : %@"
+    },
+    "privacyTabStayed" : {
+      "en" : "Runs with no outside host recorded: %d",
+      "fr" : "Exécutions sans hôte extérieur enregistré : %d"
+    },
+    "privacyTabToday" : {
+      "en" : "Today",
+      "fr" : "Aujourd’hui"
+    },
+    "privacyTabUnavailable" : {
+      "en" : "The privacy record could not be read.",
+      "fr" : "Le registre de confidentialité n’a pas pu être lu."
+    },
+    "privacyTabUnknown" : {
+      "en" : "Runs not known where they ran: %d",
+      "fr" : "Exécutions au lieu inconnu : %d"
+    },
+    "privateAnswersDismiss" : {
+      "en" : "Dismiss",
+      "fr" : "Retirer"
+    },
+    "privateAnswersDismissFailed" : {
+      "en" : "Couldn't dismiss this answer. Try again.",
+      "fr" : "Impossible de retirer cette réponse. Réessayez."
+    },
+    "privateAnswersHint" : {
+      "en" : "Kept in memory only. Gone when you dismiss it or quit Auxesis.",
+      "fr" : "Gardées en mémoire seulement. Effacées quand vous les retirez ou quittez Auxesis."
+    },
+    "privateAnswersShowLess" : {
+      "en" : "Show less",
+      "fr" : "Réduire"
+    },
+    "privateAnswersShowMore" : {
+      "en" : "Show more",
+      "fr" : "Afficher la suite"
+    },
+    "privateAnswersTitle" : {
+      "en" : "Private answers",
+      "fr" : "Réponses privées"
+    },
+    "privateChip" : {
+      "en" : "Private",
+      "fr" : "Privé"
+    },
+    "privateMode" : {
+      "en" : "Private mode",
+      "fr" : "Private mode"
+    },
+    "privateModeHint" : {
+      "en" : "On for every agent and every provider",
+      "fr" : "On for every agent and every provider"
+    },
+    "privateModeOn" : {
+      "en" : "On",
+      "fr" : "On"
+    },
+    "profile" : {
+      "en" : "Agent profile",
+      "fr" : "Agent profile"
+    },
+    "prospectAdd" : {
+      "en" : "Add as prospect",
+      "fr" : "Add as prospect"
+    },
+    "prospectAddLabel" : {
+      "en" : "Add %@ as a prospect",
+      "fr" : "Add %@ as a prospect"
+    },
+    "prospectAvailability" : {
+      "en" : "Asked about availability",
+      "fr" : "Asked about availability"
+    },
+    "prospectFailed" : {
+      "en" : "Could not save that. Check that Aux is running, then try again.",
+      "fr" : "Could not save that. Check that Aux is running, then try again."
+    },
+    "prospectIgnore" : {
+      "en" : "Ignore",
+      "fr" : "Ignore"
+    },
+    "prospectIgnoreLabel" : {
+      "en" : "Ignore %@",
+      "fr" : "Ignore %@"
+    },
+    "prospectQuote" : {
+      "en" : "Asked for a quote",
+      "fr" : "Asked for a quote"
+    },
+    "prospectReferral" : {
+      "en" : "Was referred to you",
+      "fr" : "Was referred to you"
+    },
+    "prospectsMany" : {
+      "en" : "%d senders",
+      "fr" : "%d senders"
+    },
+    "prospectsOne" : {
+      "en" : "1 sender",
+      "fr" : "1 sender"
+    },
+    "prospectsTitle" : {
+      "en" : "Possible new clients",
+      "fr" : "Possible new clients"
+    },
+    "providerAdd" : {
+      "en" : "Add a provider",
+      "fr" : "Add a provider"
+    },
+    "providerAddress" : {
+      "en" : "Address",
+      "fr" : "Address"
+    },
+    "providerConnected" : {
+      "en" : "Connected",
+      "fr" : "Connected"
+    },
+    "providerKey" : {
+      "en" : "Key",
+      "fr" : "Key"
+    },
+    "providerKeyHint" : {
+      "en" : "Keys are never shown after you save them.",
+      "fr" : "Keys are never shown after you save them."
+    },
+    "providerKeyRefused" : {
+      "en" : "The key was refused by %@. Check it and try again.",
+      "fr" : "The key was refused by %@. Check it and try again."
+    },
+    "providerKind" : {
+      "en" : "Kind",
+      "fr" : "Kind"
+    },
+    "providerKindFake" : {
+      "en" : "Test provider (sandbox only)",
+      "fr" : "Test provider (sandbox only)"
+    },
+    "providerKindOpenAI" : {
+      "en" : "OpenAI-compatible",
+      "fr" : "OpenAI-compatible"
+    },
+    "providerModel" : {
+      "en" : "Model",
+      "fr" : "Model"
+    },
+    "providerName" : {
+      "en" : "Name",
+      "fr" : "Name"
+    },
+    "providerNotResponding" : {
+      "en" : "Not responding",
+      "fr" : "Not responding"
+    },
+    "providerNotTested" : {
+      "en" : "Not tested",
+      "fr" : "Not tested"
+    },
+    "providerSave" : {
+      "en" : "Add",
+      "fr" : "Add"
+    },
+    "providerSaveFailed" : {
+      "en" : "Couldn't add the provider. Nothing was saved.",
+      "fr" : "Couldn't add the provider. Nothing was saved."
+    },
+    "providerTest" : {
+      "en" : "Test",
+      "fr" : "Test"
+    },
+    "providersEmpty" : {
+      "en" : "No brain yet. Add a provider to start.",
+      "fr" : "No brain yet. Add a provider to start."
+    },
+    "providersLede" : {
+      "en" : "The services that can think for Auxesis. Keys stay on this Mac. In Private mode every provider gets tokens instead of names.",
+      "fr" : "The services that can think for Auxesis. Keys stay on this Mac. In Private mode every provider gets tokens instead of names."
+    },
+    "quietHours" : {
+      "en" : "Quiet hours",
+      "fr" : "Heures calmes"
+    },
+    "receiptTimeUnavailable" : {
+      "en" : "Time unavailable",
+      "fr" : "Heure indisponible"
+    },
+    "recentNotices" : {
+      "en" : "Recent notices",
+      "fr" : "Notifications récentes"
+    },
+    "records" : {
+      "en" : "Records",
+      "fr" : "Dossiers"
+    },
+    "recordsMenu" : {
+      "en" : "Records",
+      "fr" : "Dossiers"
+    },
+    "requestCountUnavailable" : {
+      "en" : "Request count unavailable",
+      "fr" : "Nombre de requêtes indisponible"
+    },
+    "resume" : {
+      "en" : "Resume",
+      "fr" : "Resume"
+    },
+    "retry" : {
+      "en" : "Retry",
+      "fr" : "Réessayer"
+    },
+    "revokeGrant" : {
+      "en" : "Revoke a grant…",
+      "fr" : "Révoquer une autorisation…"
+    },
+    "roleAux" : {
+      "en" : "Hands work to the team",
+      "fr" : "Hands work to the team"
+    },
+    "roleCalendar" : {
+      "en" : "Your days and free times",
+      "fr" : "Your days and free times"
+    },
+    "roleClients" : {
+      "en" : "The people you work with",
+      "fr" : "The people you work with"
+    },
+    "roleCustom" : {
+      "en" : "An agent you added",
+      "fr" : "An agent you added"
+    },
+    "roleDocuments" : {
+      "en" : "Receipts and invoices",
+      "fr" : "Receipts and invoices"
+    },
+    "roleMail" : {
+      "en" : "Inbox and replies",
+      "fr" : "Inbox and replies"
+    },
+    "running" : {
+      "en" : "Running",
+      "fr" : "Running"
+    },
+    "runningEmpty" : {
+      "en" : "Nothing is running.",
+      "fr" : "Nothing is running."
+    },
+    "runningNow" : {
+      "en" : "Running now",
+      "fr" : "En cours"
+    },
+    "saveFailed" : {
+      "en" : "Couldn't save. Your change was not applied.",
+      "fr" : "Couldn't save. Your change was not applied."
+    },
+    "saving" : {
+      "en" : "Saving",
+      "fr" : "Saving"
+    },
+    "schedule" : {
+      "en" : "Schedule",
+      "fr" : "Horaires"
+    },
+    "searchPlaceholder" : {
+      "en" : "Search or jump to…",
+      "fr" : "Search or jump to…"
+    },
+    "selectItemDetail" : {
+      "en" : "Select an item to see its details.",
+      "fr" : "Select an item to see its details."
+    },
+    "send" : {
+      "en" : "Send",
+      "fr" : "Send"
+    },
+    "sendNotSent" : {
+      "en" : "Not sent",
+      "fr" : "Non envoyé"
+    },
+    "sendQueued" : {
+      "en" : "Queued",
+      "fr" : "En attente"
+    },
+    "sentBy" : {
+      "en" : "Sent by",
+      "fr" : "Sent by"
+    },
+    "sentTo" : {
+      "en" : "Sent to",
+      "fr" : "Sent to"
+    },
+    "sentWhen" : {
+      "en" : "When",
+      "fr" : "When"
+    },
+    "settings" : {
+      "en" : "Settings",
+      "fr" : "Settings"
+    },
+    "setupAllow" : {
+      "en" : "Allow access",
+      "fr" : "Autoriser l’accès"
+    },
+    "setupAllowed" : {
+      "en" : "Allowed",
+      "fr" : "Autorisé"
+    },
+    "setupCalendar" : {
+      "en" : "Calendar and Reminders",
+      "fr" : "Calendrier et Rappels"
+    },
+    "setupCalendarWhy" : {
+      "en" : "Reads your events and reminders for the morning brief and to plan meetings.",
+      "fr" : "Lit vos événements et rappels pour le brief du matin et pour planifier des rendez-vous."
+    },
+    "setupDenied" : {
+      "en" : "Turned off",
+      "fr" : "Désactivé"
+    },
+    "setupDisk" : {
+      "en" : "Full Disk Access",
+      "fr" : "Accès complet au disque"
+    },
+    "setupDiskCheck" : {
+      "en" : "macOS does not show Auxesis whether access was given. The service opens Messages when it starts, so after adding the file, log out and back in, then text Aux from your phone: a reply means it works.",
+      "fr" : "macOS n’indique pas à Auxesis si l’accès a été donné. Le service ouvre Messages au démarrage : après avoir ajouté le fichier, fermez la session puis rouvrez-la, et écrivez à Aux depuis votre téléphone. Une réponse veut dire que cela marche."
+    },
+    "setupDiskFile" : {
+      "en" : "File to add: %@",
+      "fr" : "Fichier à ajouter : %@"
+    },
+    "setupDiskMissing" : {
+      "en" : "The Auxesis service is not installed on this Mac yet, so there is no file to add.",
+      "fr" : "Le service Auxesis n’est pas encore installé sur ce Mac, il n’y a donc pas de fichier à ajouter."
+    },
+    "setupDiskWhy" : {
+      "en" : "Lets Auxesis read your replies in Messages. macOS only lets you add it by hand: open System Settings, press +, and add this one file, not the whole app.",
+      "fr" : "Permet à Auxesis de lire vos réponses dans Messages. macOS ne permet de l’ajouter qu’à la main : ouvrez Réglages Système, appuyez sur +, et ajoutez ce seul fichier, pas toute l’app."
+    },
+    "setupDone" : {
+      "en" : "Done",
+      "fr" : "Terminé"
+    },
+    "setupLede" : {
+      "en" : "Auxesis needs four permissions from macOS. Nothing is asked until you press a button, so you can read why first. You can come back here from Settings → General.",
+      "fr" : "Auxesis a besoin de quatre autorisations de macOS. Rien n’est demandé avant que vous appuyiez sur un bouton, pour que vous lisiez d’abord pourquoi. Vous pouvez revenir ici depuis Réglages → Général."
+    },
+    "setupMessages" : {
+      "en" : "Messages",
+      "fr" : "Messages"
+    },
+    "setupMessagesWhy" : {
+      "en" : "Lets Auxesis text you through Messages, for example to ask for your yes.",
+      "fr" : "Permet à Auxesis de vous écrire via Messages, par exemple pour demander votre oui."
+    },
+    "setupNotificationsWhy" : {
+      "en" : "One banner when something waits for your yes. None while Auxesis is stopped.",
+      "fr" : "Une bannière quand quelque chose attend votre oui. Aucune quand Auxesis est arrêté."
+    },
+    "setupOpenSettings" : {
+      "en" : "Open System Settings",
+      "fr" : "Ouvrir Réglages Système"
+    },
+    "setupRow" : {
+      "en" : "Permissions",
+      "fr" : "Autorisations"
+    },
+    "setupRowHint" : {
+      "en" : "Calendar, Notifications, Messages and Full Disk Access, in one place.",
+      "fr" : "Calendrier, Notifications, Messages et Accès complet au disque, au même endroit."
+    },
+    "setupRowOpen" : {
+      "en" : "Open",
+      "fr" : "Ouvrir"
+    },
+    "setupShowFile" : {
+      "en" : "Show in Finder",
+      "fr" : "Afficher dans le Finder"
+    },
+    "setupSkip" : {
+      "en" : "Skip for now",
+      "fr" : "Plus tard"
+    },
+    "setupTitle" : {
+      "en" : "Set up Auxesis on this Mac",
+      "fr" : "Configurer Auxesis sur ce Mac"
+    },
+    "showAll" : {
+      "en" : "Show all",
+      "fr" : "Show all"
+    },
+    "showSidebar" : {
+      "en" : "Show sidebar",
+      "fr" : "Afficher la barre latérale"
+    },
+    "sidebarConversations" : {
+      "en" : "Conversations",
+      "fr" : "Conversations"
+    },
+    "sidebarIdle" : {
+      "en" : "Idle",
+      "fr" : "Au repos"
+    },
+    "sidebarIdleLast" : {
+      "en" : "Idle · last: ",
+      "fr" : "Au repos · dernier : "
+    },
+    "sidebarNoMatch" : {
+      "en" : "No conversation matches",
+      "fr" : "Aucune conversation ne correspond"
+    },
+    "sidebarRoleAux" : {
+      "en" : "chief",
+      "fr" : "chef"
+    },
+    "sidebarRoleCalendar" : {
+      "en" : "your days",
+      "fr" : "tes journées"
+    },
+    "sidebarRoleClients" : {
+      "en" : "your CRM",
+      "fr" : "ton CRM"
+    },
+    "sidebarRoleDocuments" : {
+      "en" : "receipts, invoices",
+      "fr" : "reçus, factures"
+    },
+    "sidebarRoleMail" : {
+      "en" : "inbox, drafts",
+      "fr" : "boîte, brouillons"
+    },
+    "sidebarSearch" : {
+      "en" : "Search",
+      "fr" : "Rechercher"
+    },
+    "sidebarSearchClear" : {
+      "en" : "Clear search",
+      "fr" : "Effacer la recherche"
+    },
+    "sidebarStayedMany" : {
+      "en" : "%d steps handled by a local brain today",
+      "fr" : "%d étapes traitées par un modèle sur ce Mac aujourd’hui"
+    },
+    "sidebarStayedOne" : {
+      "en" : "1 step handled by a local brain today",
+      "fr" : "1 étape traitée par un modèle sur ce Mac aujourd’hui"
+    },
+    "sidebarTeam" : {
+      "en" : "Team",
+      "fr" : "Équipe"
+    },
+    "sidebarWaitingOn" : {
+      "en" : "Waiting on you: ",
+      "fr" : "Attend ta réponse : "
+    },
+    "sinceYouLeft" : {
+      "en" : "Since you left",
+      "fr" : "Depuis votre départ"
+    },
+    "skillIgnored" : {
+      "en" : "Not loaded: %@",
+      "fr" : "Not loaded: %@"
+    },
+    "skillReady" : {
+      "en" : "Ready",
+      "fr" : "Ready"
+    },
+    "skills" : {
+      "en" : "Skills",
+      "fr" : "Skills"
+    },
+    "skillsEmpty" : {
+      "en" : "No skills on this Mac yet.",
+      "fr" : "No skills on this Mac yet."
+    },
+    "skillsLede" : {
+      "en" : "Every skill asks before it acts. Anything that sends or writes outside this Mac waits 10 seconds so you can Undo.",
+      "fr" : "Every skill asks before it acts. Anything that sends or writes outside this Mac waits 10 seconds so you can Undo."
+    },
+    "spentToday" : {
+      "en" : "Spent today",
+      "fr" : "Spent today"
+    },
+    "spentTodayValue" : {
+      "en" : "%@ · %@ tokens in, %@ out",
+      "fr" : "%@ · %@ tokens in, %@ out"
+    },
+    "stateConnecting" : {
+      "en" : "Connecting…",
+      "fr" : "Connecting…"
+    },
+    "stateOffline" : {
+      "en" : "Not running on this Mac",
+      "fr" : "Not running on this Mac"
+    },
+    "statePrivate" : {
+      "en" : "Private mode",
+      "fr" : "Private mode"
+    },
+    "stateRunning" : {
+      "en" : "Running",
+      "fr" : "Running"
+    },
+    "stateStopped" : {
+      "en" : "Stopped · all agents paused",
+      "fr" : "Stopped · all agents paused"
+    },
+    "stateWorking" : {
+      "en" : "%d working",
+      "fr" : "%d working"
+    },
+    "stayedOnMac" : {
+      "en" : "Handled by a brain on this Mac",
+      "fr" : "Traité par un modèle sur ce Mac"
+    },
+    "stepMarkDone" : {
+      "en" : "Done",
+      "fr" : "Terminé"
+    },
+    "stepMarkHalted" : {
+      "en" : "Stopped",
+      "fr" : "Arrêté"
+    },
+    "stepMarkRunning" : {
+      "en" : "Running",
+      "fr" : "En cours"
+    },
+    "stepSource" : {
+      "en" : "Source %@",
+      "fr" : "Source %@"
+    },
+    "stepsChecksMany" : {
+      "en" : "%d checks",
+      "fr" : "%d checks"
+    },
+    "stepsChecksOne" : {
+      "en" : "1 check",
+      "fr" : "1 check"
+    },
+    "stepsDoneV5" : {
+      "en" : "Steps · %d done",
+      "fr" : "Étapes · %d terminées"
+    },
+    "stepsHaltedV5" : {
+      "en" : "%d stopped",
+      "fr" : "%d arrêtées"
+    },
+    "stepsHereV5" : {
+      "en" : "%d handled on this Mac",
+      "fr" : "%d traitées sur ce Mac"
+    },
+    "stepsHide" : {
+      "en" : "Hide the steps",
+      "fr" : "Hide the steps"
+    },
+    "stepsLeftV5" : {
+      "en" : "%d left",
+      "fr" : "%d sorties du Mac"
+    },
+    "stepsRunningV5" : {
+      "en" : "%d running",
+      "fr" : "%d en cours"
+    },
+    "stepsShow" : {
+      "en" : "Show the steps",
+      "fr" : "Show the steps"
+    },
+    "stepsStayed" : {
+      "en" : "%d handled by a local brain",
+      "fr" : "%d traitées par un modèle sur ce Mac"
+    },
+    "stepsUnknownV5" : {
+      "en" : "%d not known where",
+      "fr" : "%d lieu inconnu"
+    },
+    "stepsUnrecorded" : {
+      "en" : "%d not recorded where they ran",
+      "fr" : "%d sans lieu d’exécution enregistré"
+    },
+    "stopAll" : {
+      "en" : "Stop all",
+      "fr" : "Stop all"
+    },
+    "stopNow" : {
+      "en" : "Stop now",
+      "fr" : "Stop now"
+    },
+    "stopRowHint" : {
+      "en" : "Halts every agent and cancels sends that are waiting. Also in the menu bar.",
+      "fr" : "Halts every agent and cancels sends that are waiting. Also in the menu bar."
+    },
+    "stopRowTitle" : {
+      "en" : "Stop",
+      "fr" : "Stop"
+    },
+    "stoppedBody" : {
+      "en" : "All five agents are paused. Nothing runs or sends until you press Resume.",
+      "fr" : "All five agents are paused. Nothing runs or sends until you press Resume."
+    },
+    "stoppedCancelledMany" : {
+      "en" : "%d pending sends were cancelled.",
+      "fr" : "%d pending sends were cancelled."
+    },
+    "stoppedCancelledOne" : {
+      "en" : "1 pending send was cancelled.",
+      "fr" : "1 pending send was cancelled."
+    },
+    "stoppedTitle" : {
+      "en" : "Stopped.",
+      "fr" : "Stopped."
+    },
+    "tabBudgets" : {
+      "en" : "Budgets & Stop",
+      "fr" : "Budgets & Stop"
+    },
+    "tabGeneral" : {
+      "en" : "General",
+      "fr" : "General"
+    },
+    "tabPlugins" : {
+      "en" : "Plugins",
+      "fr" : "Plugins"
+    },
+    "tabPrivacy" : {
+      "en" : "Privacy & Coverage",
+      "fr" : "Privacy & Coverage"
+    },
+    "tabProviders" : {
+      "en" : "Providers",
+      "fr" : "Providers"
+    },
+    "tabSkills" : {
+      "en" : "Skills",
+      "fr" : "Skills"
+    },
+    "team" : {
+      "en" : "Team",
+      "fr" : "Team"
+    },
+    "teamAsked" : {
+      "en" : "Aux asked: %@",
+      "fr" : "Aux asked: %@"
+    },
+    "teamLeft" : {
+      "en" : "%d left",
+      "fr" : "%d left"
+    },
+    "teamNeedsYou" : {
+      "en" : "Needs you: %d",
+      "fr" : "Needs you: %d"
+    },
+    "teamNoSteps" : {
+      "en" : "No steps yet today",
+      "fr" : "No steps yet today"
+    },
+    "teamOffline" : {
+      "en" : "Offline",
+      "fr" : "Offline"
+    },
+    "teamStepsMany" : {
+      "en" : "%d steps",
+      "fr" : "%d steps"
+    },
+    "teamStepsOne" : {
+      "en" : "1 step",
+      "fr" : "1 step"
+    },
+    "teamTab" : {
+      "en" : "Team",
+      "fr" : "Team"
+    },
+    "teamToday" : {
+      "en" : "Today",
+      "fr" : "Today"
+    },
+    "teamUnknown" : {
+      "en" : "%d unknown",
+      "fr" : "%d unknown"
+    },
+    "teamWorking" : {
+      "en" : "Working: %@",
+      "fr" : "Working: %@"
+    },
+    "today" : {
+      "en" : "Today",
+      "fr" : "Aujourd’hui"
+    },
+    "todayAllDay" : {
+      "en" : "All day",
+      "fr" : "Toute la journée"
+    },
+    "todayAvailable" : {
+      "en" : "Available",
+      "fr" : "Disponible"
+    },
+    "todayCalendar" : {
+      "en" : "Calendar",
+      "fr" : "Agenda"
+    },
+    "todayCheckSources" : {
+      "en" : "Check sources again",
+      "fr" : "Vérifier à nouveau les sources"
+    },
+    "todayDueEmpty" : {
+      "en" : "Due dates are not tracked yet, so nothing here is checked.",
+      "fr" : "Les échéances ne sont pas encore suivies : rien n’est vérifié ici."
+    },
+    "todayEmpty" : {
+      "en" : "No brief yet today. The next one runs at %@.",
+      "fr" : "Pas encore de brief aujourd’hui. Le prochain est prévu à %@."
+    },
+    "todayEventsMany" : {
+      "en" : "%d events",
+      "fr" : "%d événements"
+    },
+    "todayEventsOne" : {
+      "en" : "1 event",
+      "fr" : "1 événement"
+    },
+    "todayFreshnessUnreported" : {
+      "en" : "Freshness not reported",
+      "fr" : "Fraîcheur non indiquée"
+    },
+    "todayLead" : {
+      "en" : "Waiting for you: %@",
+      "fr" : "Vous attend : %@"
+    },
+    "todayMail" : {
+      "en" : "Mail",
+      "fr" : "Mail"
+    },
+    "todayNoEvents" : {
+      "en" : "No events today.",
+      "fr" : "Aucun événement aujourd’hui."
+    },
+    "todayNoMail" : {
+      "en" : "No new mail.",
+      "fr" : "Aucun nouveau mail."
+    },
+    "todayNoProspects" : {
+      "en" : "No possible new clients found.",
+      "fr" : "Aucun nouveau client potentiel trouvé."
+    },
+    "todayNotChecked" : {
+      "en" : "Not checked",
+      "fr" : "Non vérifié"
+    },
+    "todayOpenAux" : {
+      "en" : "Open Aux",
+      "fr" : "Ouvrir Aux"
+    },
+    "todayRun" : {
+      "en" : "Run the brief now",
+      "fr" : "Lancer le brief maintenant"
+    },
+    "todayRunning" : {
+      "en" : "Running the brief",
+      "fr" : "Brief en cours"
+    },
+    "todaySubtitle" : {
+      "en" : "The brief of the day",
+      "fr" : "Le brief du jour"
+    },
+    "todayUnavailable" : {
+      "en" : "Unavailable",
+      "fr" : "Indisponible"
+    },
+    "todayUnreadAtLeast" : {
+      "en" : "At least %d unread",
+      "fr" : "Au moins %d non lus"
+    },
+    "todayUnreadMany" : {
+      "en" : "%d unread",
+      "fr" : "%d non lus"
+    },
+    "todayUnreadOne" : {
+      "en" : "1 unread",
+      "fr" : "1 non lu"
+    },
+    "todayWeather" : {
+      "en" : "Weather",
+      "fr" : "Météo"
+    },
+    "todayWhatRan" : {
+      "en" : "What ran",
+      "fr" : "Activité"
+    },
+    "todayWrittenAt" : {
+      "en" : "%@ · written at %@",
+      "fr" : "%@ · écrit à %@"
+    },
+    "todayYourDay" : {
+      "en" : "Your day",
+      "fr" : "Votre journée"
+    },
+    "typing" : {
+      "en" : "%@ is writing",
+      "fr" : "%@ is writing"
+    },
+    "unavailable" : {
+      "en" : "Not available from this Auxesis yet.",
+      "fr" : "Not available from this Auxesis yet."
+    },
+    "waitingEmpty" : {
+      "en" : "Nothing waits for you. Agents ask here and in their own threads.",
+      "fr" : "Nothing waits for you. Agents ask here and in their own threads."
+    },
+    "waitingForYou" : {
+      "en" : "Waiting for you",
+      "fr" : "Vous attend"
+    },
+    "waitingLede" : {
+      "en" : "%d actions from %d agents. Saying yes here is the same as saying yes in the thread.",
+      "fr" : "%d actions from %d agents. Saying yes here is the same as saying yes in the thread."
+    },
+    "waitingLedeOne" : {
+      "en" : "1 action from 1 agent. Saying yes here is the same as saying yes in the thread.",
+      "fr" : "1 action from 1 agent. Saying yes here is the same as saying yes in the thread."
+    },
+    "waitingLedeOneAgent" : {
+      "en" : "%d actions from 1 agent. Saying yes here is the same as saying yes in the thread.",
+      "fr" : "%d actions from 1 agent. Saying yes here is the same as saying yes in the thread."
+    },
+    "waitingSubtitle" : {
+      "en" : "Every agent's questions in one list",
+      "fr" : "Every agent's questions in one list"
+    },
+    "waitsForYesMany" : {
+      "en" : "%d wait for your yes",
+      "fr" : "%d wait for your yes"
+    },
+    "waitsForYesOne" : {
+      "en" : "1 waits for your yes",
+      "fr" : "1 waits for your yes"
+    },
+    "whatAuxKnows" : {
+      "en" : "What Aux knows",
+      "fr" : "Ce qu’Aux sait"
+    },
+    "whatBriefChecked" : {
+      "en" : "What this brief checked, and what it could not",
+      "fr" : "Ce que ce brief a vérifié et ce qu’il n’a pas pu vérifier"
+    },
+    "whereLeft" : {
+      "en" : "Left this Mac",
+      "fr" : "Sorti de ce Mac"
+    },
+    "whereUnavailable" : {
+      "en" : "Not known where it ran",
+      "fr" : "Lieu inconnu"
+    },
+    "workActive" : {
+      "en" : "Active",
+      "fr" : "En cours"
+    },
+    "workForAux" : {
+      "en" : "Work for Aux",
+      "fr" : "Work for Aux"
+    },
+    "workMore" : {
+      "en" : "%d more",
+      "fr" : "%d de plus"
+    },
+    "workNothingActive" : {
+      "en" : "Nothing is running.",
+      "fr" : "Rien ne tourne."
+    },
+    "workNothingNext" : {
+      "en" : "Nothing is planned.",
+      "fr" : "Rien n’est prévu."
+    },
+    "workSteer" : {
+      "en" : "Steer",
+      "fr" : "Orienter"
+    },
+    "workStepsOf" : {
+      "en" : "%@ · %d of %d steps",
+      "fr" : "%@ · %d sur %d étapes"
+    },
+    "workStop" : {
+      "en" : "Stop",
+      "fr" : "Arrêter"
+    },
+    "workTab" : {
+      "en" : "Work",
+      "fr" : "Work"
+    },
+    "workToday" : {
+      "en" : "today %@",
+      "fr" : "aujourd’hui %@"
+    },
+    "workTomorrow" : {
+      "en" : "tomorrow %@",
+      "fr" : "demain %@"
+    },
+    "workUpNext" : {
+      "en" : "Up next",
+      "fr" : "À venir"
+    },
+    "worksWith" : {
+      "en" : "Works with",
+      "fr" : "Works with"
+    },
+    "worksWithAux" : {
+      "en" : "Aux hands it work and gets back only the result.",
+      "fr" : "Aux hands it work and gets back only the result."
+    },
+    "worksWithTeam" : {
+      "en" : "Mail, Calendar, Clients and Documents.",
+      "fr" : "Mail, Calendar, Clients and Documents."
+    },
+    "workshop" : {
+      "en" : "Workshop",
+      "fr" : "Workshop"
+    },
+    "workshopEmpty" : {
+      "en" : "No tools built yet. A tool is built only after you approve its source.",
+      "fr" : "No tools built yet. A tool is built only after you approve its source."
+    },
+    "yesterday" : {
+      "en" : "Yesterday",
+      "fr" : "Yesterday"
+    },
+    "youPrefix" : {
+      "en" : "You: ",
+      "fr" : "You: "
+    }
+  },
+  "uiMissingFrench" : [
+    "aboutAux",
+    "aboutCalendar",
+    "aboutClients",
+    "aboutCustom",
+    "aboutDocuments",
+    "aboutMail",
+    "allAgents",
+    "apAskedBy",
+    "apCancel",
+    "apCancelledByStop",
+    "apDeclined",
+    "apDrafted",
+    "apDraftedReply",
+    "apEdit",
+    "apError",
+    "apExpired",
+    "apHideDraft",
+    "apNeedsYou",
+    "apNotNow",
+    "apNotNowNote",
+    "apOpenIn",
+    "apReopen",
+    "apSend",
+    "apSendEdited",
+    "apSendingIn",
+    "apShowDraft",
+    "apSkill",
+    "apTo",
+    "apTrailApproved",
+    "apTrailDelivered",
+    "apTrailDrafted",
+    "apTrailReplied",
+    "apTrailSent",
+    "apUndo",
+    "apWaits",
+    "appName",
+    "attach",
+    "back",
+    "brain",
+    "brainDefault",
+    "brainError",
+    "budgetsLede",
+    "calendarAccess",
+    "calendarAccessHint",
+    "calendarAllow",
+    "calendarDenied",
+    "calendarError",
+    "calendarRead",
+    "calendarSaved",
+    "canDo",
+    "canSee",
+    "capsHint",
+    "capsTitle",
+    "change",
+    "chief",
+    "chiefStopped",
+    "clientAddresses",
+    "clientAliasHint",
+    "clientAliases",
+    "clientBrief",
+    "clientBriefHelp",
+    "clientCancel",
+    "clientDue",
+    "clientDueToday",
+    "clientEdit",
+    "clientEmails",
+    "clientForgetFailed",
+    "clientGone",
+    "clientInvalidEmail",
+    "clientInvalidName",
+    "clientInvalidPhone",
+    "clientMemoryEmpty",
+    "clientMemoryLede",
+    "clientName",
+    "clientNext",
+    "clientNoFollowups",
+    "clientNoNotes",
+    "clientNotes",
+    "clientOnePerLine",
+    "clientOverview",
+    "clientPhoneHint",
+    "clientPhones",
+    "clientSave",
+    "clientSaveFailed",
+    "clientSaved",
+    "clientTags",
+    "clientTimeline",
+    "clientTimelineEmpty",
+    "clientUnsaved",
+    "clientsAsk",
+    "clientsEmpty",
+    "clientsFilter",
+    "clientsLoadFailed",
+    "clientsNoMatch",
+    "clientsPick",
+    "clientsSubtitle",
+    "close",
+    "colAgent",
+    "colSchedule",
+    "colSkill",
+    "colWhat",
+    "colWhen",
+    "comingNext",
+    "composerOffline",
+    "composerPlaceholder",
+    "composerStopped",
+    "couldntStart",
+    "covAsksPrivate",
+    "covCovered",
+    "covMissed",
+    "covOffPrivate",
+    "covPartial",
+    "covRunsPrivate",
+    "coverageSummary",
+    "coverageTitle",
+    "delegAskedAt",
+    "delegAskedByAux",
+    "delegCouldntFinish",
+    "delegDone",
+    "delegFailed",
+    "delegKeptPartial",
+    "delegNeedsYou",
+    "delegOpenIn",
+    "delegPercent",
+    "delegQueued",
+    "delegResume",
+    "delegSentBack",
+    "delegSentBackToAux",
+    "delegStopTask",
+    "delegStopped",
+    "delegWorking",
+    "documentsAsk",
+    "domainAgent",
+    "draftReply",
+    "draftReplyTo",
+    "dueTodayQueue",
+    "emptyAgent",
+    "emptyChief",
+    "forget",
+    "generalLede",
+    "grantsUnavailable",
+    "handoffAsked",
+    "handoffFrom",
+    "keptChief",
+    "kindCall",
+    "kindDocument",
+    "kindMail",
+    "kindMeeting",
+    "kindNote",
+    "language",
+    "languageValue",
+    "ledger",
+    "ledgerAnswered",
+    "ledgerDone",
+    "ledgerEmpty",
+    "ledgerHashHelp",
+    "ledgerLede",
+    "ledgerPlanned",
+    "ledgerPlannedEmpty",
+    "ledgerProviderAdded",
+    "ledgerSkillAsked",
+    "ledgerSkillRan",
+    "ledgerStarted",
+    "ledgerSubtitle",
+    "leftMac",
+    "loadFailed",
+    "lvAsk",
+    "lvAsksEveryTime",
+    "lvAuto",
+    "lvOff",
+    "lvRead",
+    "memory",
+    "memoryEmpty",
+    "menuIdle",
+    "menuOffline",
+    "menuOpen",
+    "menuQuit",
+    "menuWaiting",
+    "modelSawAux",
+    "modelSawGone",
+    "modelSawHide",
+    "modelSawLink",
+    "modelSawNoTokens",
+    "moneyEmpty",
+    "needsYouMany",
+    "needsYouOne",
+    "never",
+    "newChat",
+    "newChatDivider",
+    "newLine",
+    "nextOpenDraft",
+    "nextSeeSteps",
+    "noBrainBody",
+    "noBrainTitle",
+    "notSentRetry",
+    "notifications",
+    "notificationsHint",
+    "now",
+    "offlineRetry",
+    "offlineStart",
+    "offlineTitle",
+    "openLedger",
+    "openSettings",
+    "pauseAgent",
+    "pinnedMany",
+    "pinnedOne",
+    "privacyLede",
+    "privacyRecordEmpty",
+    "privacyRecordLede",
+    "privacyTab",
+    "privateMode",
+    "privateModeHint",
+    "privateModeOn",
+    "profile",
+    "prospectAdd",
+    "prospectAddLabel",
+    "prospectAvailability",
+    "prospectFailed",
+    "prospectIgnore",
+    "prospectIgnoreLabel",
+    "prospectQuote",
+    "prospectReferral",
+    "prospectsMany",
+    "prospectsOne",
+    "prospectsTitle",
+    "providerAdd",
+    "providerAddress",
+    "providerConnected",
+    "providerKey",
+    "providerKeyHint",
+    "providerKeyRefused",
+    "providerKind",
+    "providerKindFake",
+    "providerKindOpenAI",
+    "providerModel",
+    "providerName",
+    "providerNotResponding",
+    "providerNotTested",
+    "providerSave",
+    "providerSaveFailed",
+    "providerTest",
+    "providersEmpty",
+    "providersLede",
+    "resume",
+    "roleAux",
+    "roleCalendar",
+    "roleClients",
+    "roleCustom",
+    "roleDocuments",
+    "roleMail",
+    "running",
+    "runningEmpty",
+    "saveFailed",
+    "saving",
+    "searchPlaceholder",
+    "selectItemDetail",
+    "send",
+    "sentBy",
+    "sentTo",
+    "sentWhen",
+    "settings",
+    "setupMessages",
+    "showAll",
+    "skillIgnored",
+    "skillReady",
+    "skills",
+    "skillsEmpty",
+    "skillsLede",
+    "spentToday",
+    "spentTodayValue",
+    "stateConnecting",
+    "stateOffline",
+    "statePrivate",
+    "stateRunning",
+    "stateStopped",
+    "stateWorking",
+    "stepsChecksMany",
+    "stepsChecksOne",
+    "stepsHide",
+    "stepsShow",
+    "stopAll",
+    "stopNow",
+    "stopRowHint",
+    "stopRowTitle",
+    "stoppedBody",
+    "stoppedCancelledMany",
+    "stoppedCancelledOne",
+    "stoppedTitle",
+    "tabBudgets",
+    "tabGeneral",
+    "tabPrivacy",
+    "tabProviders",
+    "tabSkills",
+    "team",
+    "teamAsked",
+    "teamLeft",
+    "teamNeedsYou",
+    "teamNoSteps",
+    "teamOffline",
+    "teamStepsMany",
+    "teamStepsOne",
+    "teamTab",
+    "teamToday",
+    "teamUnknown",
+    "teamWorking",
+    "typing",
+    "unavailable",
+    "waitingEmpty",
+    "waitingLede",
+    "waitingLedeOne",
+    "waitingLedeOneAgent",
+    "waitingSubtitle",
+    "waitsForYesMany",
+    "waitsForYesOne",
+    "workForAux",
+    "workTab",
+    "worksWith",
+    "worksWithAux",
+    "worksWithTeam",
+    "workshop",
+    "workshopEmpty",
+    "yesterday",
+    "youPrefix"
+  ]
+}

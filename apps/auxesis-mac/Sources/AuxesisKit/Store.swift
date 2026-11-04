@@ -12,6 +12,7 @@
 //
 // Approvals never use optimistic UI: a card leaves "pending" only when auxd
 // answers or a frame says so, and exactly one answer can be in flight per id.
+import Combine
 import Foundation
 
 public enum ApprovalDecision: String, Equatable {
@@ -513,15 +514,9 @@ public final class Store: ObservableObject {
     /// First-run setup screen state (service picker + key + test).
     @Published public private(set) var firstRunSetupState: FirstRunSetupState = .loading
     @Published public private(set) var firstRunTestState: FirstRunTestState = .idle
-    /// Google connection (G4): the service's last honest answer, and whether a
-    /// sign-in started from Réglages is still in flight.
-    @Published public private(set) var googleConnected = false
-    @Published public private(set) var googleReconnectNeeded = false
-    @Published public private(set) var googleConnectedKnown = false
-    @Published public private(set) var googleFlow: GoogleFlow = .idle
-    @Published public private(set) var telegramSettings: TelegramSettings?
-    @Published public private(set) var telegramPairingCode: String?
-    @Published public private(set) var telegramSettingsFailed = false
+    /// Google connection (G4): the service's last honest answer and any
+    /// sign-in in flight. Its changes redraw this store's observers too.
+    public let google: GoogleConnectionModel
     /// Snapshot of whether the service the app itself started is up; published
     /// so a start/stop redraws the menu bar and Réglages. `serviceLabel` reads
     /// the supervisor's live state, never a live network probe, so it can never
@@ -636,10 +631,7 @@ public final class Store: ObservableObject {
     /// Non-nil when the transport also speaks the first-run routes (the real
     /// `AuxdClient` does); tests inject a scripted one.
     private let firstRunClient: FirstRunClient?
-    /// Non-nil when the transport also speaks the Google routes (the real
-    /// `AuxdClient` does); tests inject a scripted one.
-    private let googleClient: GoogleConnectionClient?
-    private let telegramClient: TelegramSettingsClient?
+    private var googleChanges: AnyCancellable?
     private let sleeper: (TimeInterval) async -> Void
     /// How often a live session re-reads pending approvals (WAITING-ROW-DELEGATE).
     private let approvalPollInterval: TimeInterval
@@ -691,9 +683,14 @@ public final class Store: ObservableObject {
         self.transport = transport
         self.approvalPollInterval = approvalPollInterval
         self.firstRunClient = firstRunClient ?? (transport as? FirstRunClient)
-        self.googleClient = googleClient ?? (transport as? GoogleConnectionClient)
-        self.telegramClient = transport as? TelegramSettingsClient
         self.sleeper = sleeper
+        // Non-nil client when the transport also speaks the Google routes (the
+        // real `AuxdClient` does); tests inject a scripted one.
+        self.google = GoogleConnectionModel(
+            client: googleClient ?? (transport as? GoogleConnectionClient),
+            health: { try await transport.health() },
+            pause: sleeper
+        )
         self.defaults = defaults
         self.endpoint = endpoint
         self.service = service
@@ -713,6 +710,8 @@ public final class Store: ObservableObject {
                 self?.publishServiceState()
             }
         }
+        googleChanges = google.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     // MARK: Lifecycle
@@ -926,7 +925,7 @@ public final class Store: ObservableObject {
         version = snapshot.health.version
         firstRun = snapshot.health.firstRun
         firstRunKnown = true
-        applyGoogle(
+        google.apply(
             connected: snapshot.health.googleConnected,
             reconnectNeeded: snapshot.health.googleReconnectNeeded
         )
@@ -1996,171 +1995,12 @@ public final class Store: ObservableObject {
                 self.firstRun = health.firstRun
                 self.firstRunKnown = true
                 self.version = health.version
-                self.applyGoogle(
+                self.google.apply(
                     connected: health.googleConnected,
                     reconnectNeeded: health.googleReconnectNeeded
                 )
             } catch {
                 self.connection = self.connectionState(for: error)
-            }
-        }
-    }
-
-    // MARK: Google connection (G4)
-
-    // MARK: Telegram settings
-
-    public func refreshTelegramSettings() {
-        guard let telegramClient else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                self.telegramSettings = try await telegramClient.telegramSettings()
-                self.telegramSettingsFailed = false
-            } catch {
-                self.telegramSettingsFailed = true
-            }
-        }
-    }
-
-    public func saveTelegramSecret(_ secret: String) {
-        guard let telegramClient else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                self.telegramSettings = try await telegramClient.saveTelegramSecret(secret)
-                self.telegramSettingsFailed = false
-            } catch {
-                self.telegramSettingsFailed = true
-            }
-        }
-    }
-
-    public func setTelegramEnabled(_ enabled: Bool) {
-        guard let telegramClient else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                self.telegramSettings = try await telegramClient.setTelegramEnabled(enabled)
-                self.telegramSettingsFailed = false
-            } catch {
-                self.telegramSettingsFailed = true
-            }
-        }
-    }
-
-    public func createTelegramPairing() {
-        guard let telegramClient else { return }
-        telegramPairingCode = nil
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                self.telegramPairingCode = try await telegramClient.createTelegramPairing().code
-                self.telegramSettingsFailed = false
-            } catch {
-                self.telegramSettingsFailed = true
-            }
-        }
-    }
-
-    /// What the Réglages row shows, from the last honest answer plus this
-    /// screen's own in-flight sign-in.
-    public var googleState: GoogleConnectionState {
-        GoogleConnectionState.resolve(
-            known: googleConnectedKnown,
-            connected: googleConnected,
-            reconnectNeeded: googleReconnectNeeded,
-            waiting: googleFlow == .waiting,
-            failed: googleFlow == .failed
-        )
-    }
-
-    /// Record the service's answer. A sign-in this screen started is never
-    /// silently dropped: only a real "connected" (or the explicit end of the
-    /// flow) moves it out of `.waiting`.
-    private func applyGoogle(connected: Bool, reconnectNeeded: Bool = false) {
-        googleConnected = connected
-        googleReconnectNeeded = reconnectNeeded
-        googleConnectedKnown = true
-        if connected && !reconnectNeeded {
-            googleFlow = .idle
-        }
-    }
-
-    /// Ask the service to open the Google sign-in. Only the owner's click calls
-    /// this; the app itself never opens a page and never sends an email.
-    public func connectGoogle() {
-        guard googleState.canConnect, let googleClient else { return }
-        googleFlow = .waiting
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let answer = try await googleClient.startGoogleConnection()
-                if answer.connected {
-                    self.googleConnected = true
-                    self.googleConnectedKnown = true
-                    self.googleFlow = .idle
-                    return
-                }
-                await self.awaitGoogleConsent(requiringUpdatedPermissions: answer.reconnectNeeded)
-            } catch {
-                self.googleFlow = .failed
-            }
-        }
-    }
-
-    /// Wait, bounded, for the sign-in page to be answered. The service's own
-    /// flow deadline is five minutes; two seconds per check is enough to feel
-    /// immediate and costs nothing.
-    public func updateGooglePermissions() {
-        guard googleState == .needsUpdate, let googleClient else { return }
-        googleFlow = .waiting
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let answer = try await googleClient.updateGooglePermissions()
-                if answer.connected && !answer.started {
-                    self.applyGoogle(connected: true, reconnectNeeded: false)
-                    self.googleFlow = .idle
-                    return
-                }
-                await self.awaitGoogleConsent(requiringUpdatedPermissions: true)
-            } catch {
-                self.googleFlow = .failed
-            }
-        }
-    }
-
-    private func awaitGoogleConsent(requiringUpdatedPermissions: Bool) async {
-        let interval: TimeInterval = 2
-        let attempts = 150
-        for _ in 0..<attempts {
-            await pause(interval)
-            if Task.isCancelled { return }
-            guard let health = try? await transport.health() else { continue }
-            if health.googleConnected && (!requiringUpdatedPermissions || !health.googleReconnectNeeded) {
-                applyGoogle(connected: true, reconnectNeeded: false)
-                return
-            }
-        }
-        // The browser tab may still be open; say the sign-in did not complete
-        // rather than claim a connection that is not there.
-        if !googleConnected {
-            googleFlow = .failed
-        }
-    }
-
-    /// Revoke and delete this Mac's Google authorization.
-    public func disconnectGoogle() {
-        guard googleState.canDisconnect, let googleClient else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let answer = try await googleClient.disconnectGoogle()
-                self.applyGoogle(connected: answer.connected)
-                self.googleFlow = .idle
-            } catch {
-                self.googleFlow = .failed
             }
         }
     }

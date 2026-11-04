@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Run the LEAK-FINDER-1 probe (kernel/qa/privacy-eval/tests/leak_finder.rs)
-# on the configured build host, and copy its report to the report directory.
+# Run the LEAK-FINDER-1 probe (qa/privacy-eval/tests/leak_finder.rs in the
+# privacy kernel repository) on the configured build host, and copy its report
+# to the report directory.
 #
 #   scripts/leak-finder.sh [--ref <git ref>] [--cases <n>] [--slot <name>]
 #   scripts/leak-finder.sh [--local]
 #   scripts/leak-finder.sh --help
 #
 # Runs the ignored `nightly` test of a clean checkout of <ref> (default
-# origin/main) in release via remote-build.sh, and writes <date>.json/.md.
+# v0.1.1, the kernel tag the app pins) in release via remote-build.sh, and
+# writes <date>.json/.md.
 # The build host is configuration, never a literal: LEAK_FINDER_REMOTE_HOST,
 # else the first line of <AUX_OPS_DIR>/leak-finder/remote-host. Without either
 # the script fails closed (exit 2) instead of quietly running the 2M-case
@@ -20,6 +22,9 @@
 # here too. Not scheduled here: the maintainer owns the job.
 #
 # Environment (all optional):
+#   KERNEL_REPO             a checkout of auxesis-privacy-kernel to probe;
+#                            when unset, the script clones the public repo
+#                            into its temp dir
 #   AUX_OPS_DIR             the machine's own tools dir: it holds
 #                            scripts/remote-build.sh, scripts/mac-build.sh and
 #                            leak-finder/remote-host; unset by default
@@ -39,8 +44,9 @@ usage: scripts/leak-finder.sh [--ref <git ref>] [--cases <n>] [--slot <name>] [-
        scripts/leak-finder.sh --help
 
 Runs the ignored `nightly` leak-finder test
-(kernel/qa/privacy-eval/tests/leak_finder.rs) of a clean checkout of <ref>
-(default origin/main) in release, then writes <date>.json and <date>.md.
+(qa/privacy-eval/tests/leak_finder.rs) of a clean checkout of <ref> in the
+privacy kernel repository (default v0.1.1, the tag the app pins) in release,
+then writes <date>.json and <date>.md.
 
 The probe runs on the configured build host, through the machine's remote
 build wrapper. The host comes from LEAK_FINDER_REMOTE_HOST, else from the
@@ -51,12 +57,14 @@ unreachable also falls back to this Mac, through the local build wrapper, and
 so does a host the owner switched off (an off-switch file in the tools dir),
 even though ssh still answers it. The checkout is deleted afterwards.
 
-  --ref <git ref>   the ref to probe (default: origin/main)
+  --ref <git ref>   the ref to probe (default: v0.1.1)
   --cases <n>       the case count of the run (default: the file's own)
   --slot <name>     the remote build slot (default: leak-finder)
   --local           run the probe on this Mac, without a build host
 
 Environment:
+  KERNEL_REPO             a checkout of auxesis-privacy-kernel (default: clone
+                           the public repository into the temp dir)
   AUX_OPS_DIR             the machine's own tools dir (default: unset)
   LEAK_FINDER_OUT_DIR     report directory (default: the report dir under
                            AUX_OPS_DIR, else the user's cache)
@@ -66,7 +74,7 @@ Environment:
 USAGE
 }
 
-ref=origin/main
+ref=v0.1.1
 cases=""
 slot=leak-finder
 run_local=0
@@ -82,7 +90,10 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$cases" || "$cases" =~ ^[1-9][0-9]*$ ]] || { echo "--cases must be a positive number" >&2; exit 2; }
 
-repo="$(git rev-parse --show-toplevel)"
+# The probe lives in the kernel repository, not in this app tree. KERNEL_REPO
+# names a checkout to probe; without it the script clones the public repo into
+# its temp dir. The app's root Cargo.toml pins the same tag this defaults to.
+kernel_repo="${KERNEL_REPO:-}"
 # The machine's own tools dir holds the build wrappers and the host file; the
 # report directory falls back to the user's cache. No path of one machine is
 # written down here: AUX_OPS_DIR is configuration, unset by default.
@@ -139,21 +150,26 @@ remote_up() {
   ssh -o ConnectTimeout=8 -o BatchMode=yes "root@$remote_host" true >/dev/null 2>&1
 }
 
-git -C "$repo" fetch -q origin
-rev="$(git -C "$repo" rev-parse --verify "$ref^{commit}")"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/leak-finder.XXXXXX")"
 cleanup() {
-  git -C "$repo" worktree remove --force "$tmp/wt" >/dev/null 2>&1 || true
+  git -C "$kernel_repo" worktree remove --force "$tmp/wt" >/dev/null 2>&1 || true
   rm -rf "$tmp"
 }
 trap cleanup EXIT
 
-git -C "$repo" worktree add -q --detach "$tmp/wt" "$rev"
+if [[ -z "$kernel_repo" ]]; then
+  kernel_repo="$tmp/kernel"
+  git clone -q https://github.com/Diclean/auxesis-privacy-kernel "$kernel_repo"
+fi
+git -C "$kernel_repo" fetch -q origin
+rev="$(git -C "$kernel_repo" rev-parse --verify "$ref^{commit}")"
+
+git -C "$kernel_repo" worktree add -q --detach "$tmp/wt" "$rev"
 {
   echo "date $day"
   echo "rev ${rev:0:12}"
   [[ -z "$cases" ]] || echo "cases $cases"
-} >"$tmp/wt/kernel/qa/privacy-eval/leak-finder.override"
+} >"$tmp/wt/qa/privacy-eval/leak-finder.override"
 
 run_failed() {
   grep -E '^(error|test result|REMOTE_STATUS)|panicked' "$tmp/run.log" | tail -n 20 >&2

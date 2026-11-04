@@ -17,13 +17,6 @@ members = [
     "crates/aux-cli",
     "crates/auxd",
     "crates/aux-invoices",
-    "kernel/crates/kernel-core",
-    "kernel/crates/gliner2",
-    "kernel/crates/kernel-privacy",
-    "kernel/crates/kernel-broker",
-    "kernel/crates/kernel-net",
-    "kernel/crates/kernel-mcp",
-    "kernel/qa/privacy-eval",
 ]
 
 [workspace.package]
@@ -34,13 +27,14 @@ license = "PolyForm-Noncommercial-1.0.0"
 description = "Auxesis — your own always-on agents, in Rust."
 
 [workspace.dependencies]
-# The kernel, vendored in-tree at `kernel/` as a byte-identical export of
-# f3d8915 (K16c: B11/B19/B22 Covered). kernel-0.0.1 = 4608632, kernel-0.0.2 = a53fb23, kernel-0.0.3 = e885340, kernel-0.0.5 = 580640f, kernel-0.0.6 = c811104, kernel-0.0.7 = b81303a. Bump by re-exporting a new rev into `kernel/`. The five crates always move together.
-kernel-core = { path = "kernel/crates/kernel-core" }
-kernel-privacy = { path = "kernel/crates/kernel-privacy" }
-kernel-broker = { path = "kernel/crates/kernel-broker" }
-kernel-net = { path = "kernel/crates/kernel-net" }
-kernel-mcp = { path = "kernel/crates/kernel-mcp" }
+# The kernel, a separate public repository. The five crates are pinned to one
+# tag and always move together: v0.1.1 is commit ad508f3 (main). Bump one
+# kernel release at a time; this repository does not vendor the source.
+kernel-core = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.1", package = "auxesis-kernel-core" }
+kernel-privacy = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.1", package = "auxesis-kernel-privacy" }
+kernel-broker = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.1", package = "auxesis-kernel-broker" }
+kernel-net = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.1", package = "auxesis-kernel-net" }
+kernel-mcp = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.1", package = "auxesis-kernel-mcp" }
 # The e-invoice XML parsers (Factur-X/ZUGFeRD CII and UBL), vendored in-tree at
 # `crates/aux-invoices` as a byte-identical export of f29dc6b (the invoices repo
 # stays separate). It is a **pure** library (no aux-core or aux-store
@@ -87,19 +81,17 @@ rcgen = "0.14"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.lints.rust]
-# The kernel crates opt in with `[lints] workspace = true`: sensitive kernel
-# crates may not use `unsafe`. kernel-core and kernel-broker are the documented
-# exceptions (libc syscalls) and do not opt in.
+# Crates that opt in with `[lints] workspace = true` may not use `unsafe`.
+# The kernel crates bring their own workspace lints through their git checkout.
 unsafe_code = "forbid"
 
-# Tests (CI-FAST-2): dependencies and the kernel's privacy crate are built
-# optimised even in dev/test builds. The kernel recognizer tests ran 5-10x
-# slower unoptimised (prefix_key_glue: 856 s vs 89 s). Debug assertions and
+# Tests (CI-FAST-2): dependencies are built optimised even in dev/test builds.
+# The detector tests ran 5-10x slower unoptimised. Debug assertions and
 # overflow checks stay on: only codegen changes, every test still runs.
 [profile.dev.package."*"]
 opt-level = 2
 
-[profile.dev.package.kernel-privacy]
+[profile.dev.package.auxesis-kernel-privacy]
 opt-level = 2
 
 [profile.release]

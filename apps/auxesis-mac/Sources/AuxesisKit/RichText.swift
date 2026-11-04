@@ -183,7 +183,7 @@ public struct InlineRun: Equatable {
 }
 
 /// The placeholders the daemon puts where it hid a value (crates/auxd/src/api/display.rs,
-/// kernel/crates/kernel-privacy/src/safetext.rs, crates/aux-engine/src/{prompt,trust}.rs and
+/// the kernel's `crates/kernel-privacy/src/safetext.rs`, crates/aux-engine/src/{prompt,trust}.rs and
 /// engine/privacy.rs): `[hidden]`, `[name hidden]`, `[nom masqué]`, `[<class> removed]`
 /// (class: iban, card, health, address, id, secret, MRN … , optionally with digits),
 /// `[auxesis: withheld]`, `[message withheld for privacy]` and its French twin,
@@ -226,7 +226,7 @@ public enum TokenChip {
 }
 
 /// LANG-LEAKS-1: the kernel's removal marker (`removal_text` in
-/// kernel/crates/kernel-privacy/src/safetext.rs) is one stable English text: the
+/// the kernel's `crates/kernel-privacy/src/safetext.rs`) is one stable English text: the
 /// model sees it and the daemon stores it. Only the chip shown to the owner
 /// follows the reply's language; the stored and copied text never changes.
 public enum RemovalMarker {

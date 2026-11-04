@@ -19,11 +19,6 @@ use std::process::Command;
 const EXEMPT_TEST_ONLY_BINS: &[(&str, &str)] = &[
     ("aux-acp", "crates/aux-acp/src/bin/acp_fake_agent.rs"),
     ("aux-mcp", "crates/aux-mcp/tests/support/fake_mcp_server.rs"),
-    // The vendored kernel's own test-only fixture; kernel-core's guard covers it.
-    (
-        "kernel-mcp",
-        "kernel/crates/kernel-mcp/tests/support/fake_mcp_server.rs",
-    ),
 ];
 
 /// The exact set of guarded workspace binaries, as `package: path`. A binary
@@ -33,7 +28,6 @@ const EXPECTED_GUARDED_BINS: &[&str] = &[
     "aux-fakemail: crates/aux-fakemail/src/bin/aux-fakemail.rs",
     "aux-imessage: crates/aux-imessage/src/bin/aux-imessage.rs",
     "auxd: crates/auxd/src/main.rs",
-    "privacy-eval: kernel/qa/privacy-eval/src/main.rs",
 ];
 
 fn workspace_root() -> PathBuf {

@@ -18,11 +18,6 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-if [[ -d kernel && ! -f kernel/scripts/check-egress.sh ]]; then
-    echo "check-egress: FATAL: kernel/ exists but kernel/scripts/check-egress.sh is missing" >&2
-    exit 1
-fi
-
 docs="docs/egress.md"
 
 if [[ ! -f "$docs" ]]; then
@@ -227,10 +222,3 @@ done < <(git grep -n 'test-support' -- '**/Cargo.toml' 'Cargo.toml' || true)
 constructors=$(grep -c . "$allowlist" || true)
 raw_constructors=$(grep -c . "$raw_allowlist" || true)
 echo "check-egress: OK — ${found} reqwest constructor(s) and ${raw_found} raw socket(s); ${constructors} + ${raw_constructors} allowlisted file::function entr(y/ies)."
-
-# The vendored privacy kernel carries its own egress contract (kernel/docs/egress.md).
-# Absent in the throwaway repository of scripts/test-check-egress.sh, which copies
-# this script alone.
-if [[ -f kernel/scripts/check-egress.sh ]]; then
-    bash kernel/scripts/check-egress.sh
-fi

@@ -73,9 +73,3 @@ docs/ui-study/shots/
 # anywhere else (the app bundle, a build tree) stays ignored.
 THIRD-PARTY-LICENSES.txt
 !/THIRD-PARTY-LICENSES.txt
-
-# PUB-2: held-out eval sets live in $AUXESIS_EVAL_DIR, pinned by hash in
-# kernel/qa/privacy-eval/HELDOUT-PINS.txt; a copy in the tree is never tracked.
-# The pins file is re-included: git on macOS matches names case-insensitively.
-kernel/qa/privacy-eval/heldout*
-!kernel/qa/privacy-eval/HELDOUT-PINS.txt

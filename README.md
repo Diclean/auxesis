@@ -77,7 +77,8 @@ appears without a line there.
 
 The kernel is also a separate Rust project:
 [`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel).
-Its crates are vendored in this repository under `kernel/`.
+Its crates are a git dependency of this app, pinned to tag `v0.1.1` (commit
+`ad508f3`); the source is not vendored here.
 
 ## Measured, not promised
 
@@ -101,7 +102,7 @@ with Standard detection only; the optional local model (Deep) was not measured i
 this run. The 99.5 % bar is **not met**: 93.20 % in Private, 92.80 % in Open.
 This is measured recall on our held-out set, not a guarantee. The per-class
 detail and the previous run are in
-[`RECALL.md`](kernel/qa/privacy-eval/RECALL.md).
+[`RECALL.md`](https://github.com/Diclean/auxesis-privacy-kernel/blob/v0.1.1/qa/privacy-eval/RECALL.md).
 
 ## Install
 
@@ -183,13 +184,13 @@ if you set `AUXESIS_ALLOW_KEYCHAIN=1`.
 | `auxd` | The local daemon. Runs the agents and the scheduler, owns the store, and serves a loopback API. It keeps working while the app is closed. |
 | `aux` | The control CLI: chat, doctor, install, secrets, brief, mail, CRM, documents, skills, MCP and extensions. |
 | `apps/auxesis-mac` | The native SwiftUI app: Today, Waiting for you, Since you left, approvals, and settings. |
-| `kernel/` | The privacy kernel crates: `admit` and `Grant`, detectors, tokenisation, the encrypted vault and the egress client. |
+| Kernel | The privacy kernel crates (`admit` and `Grant`, detectors, tokenisation, the encrypted vault and the egress client), a git dependency pinned to tag `v0.1.1` of [`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel). |
 | Connectors | `aux-mail` (IMAP/SMTP), the EventKit bridge in the app, `aux-google` (feature-gated), `aux-imessage`, and MCP. |
 
 Where to read more: [`docs/phase1.md`](docs/phase1.md) for the behaviour
 contract, [`docs/providers.md`](docs/providers.md) for providers and brains,
 [`docs/egress.md`](docs/egress.md) for every outbound HTTP client,
-[`kernel/README.md`](kernel/README.md) for the kernel, and
+[the kernel README](https://github.com/Diclean/auxesis-privacy-kernel/blob/v0.1.1/README.md) for the kernel, and
 [`docs/README.md`](docs/README.md) for the documentation index.
 
 ## Development

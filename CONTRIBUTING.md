@@ -22,8 +22,10 @@ cargo build --workspace --locked   # the daemon, the CLI and the privacy kernel
 cargo test -p <crate>              # one crate at a time, e.g. -p aux-engine
 ```
 
-The workspace lives in `crates/`; the privacy kernel is in `kernel/` and is
-used as an in-tree path dependency, so nothing is fetched from elsewhere.
+The workspace lives in `crates/`; the privacy kernel is a git dependency on
+[`Diclean/auxesis-privacy-kernel`](https://github.com/Diclean/auxesis-privacy-kernel),
+pinned to the tag in the root `Cargo.toml` (one tag for all five crates). Cargo
+fetches that one repository; the app does not vendor the kernel source.
 The macOS app is a separate Swift package under `apps/auxesis-mac`.
 
 Tests that start the daemon must run in a sandbox: a throwaway home

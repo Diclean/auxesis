@@ -126,8 +126,8 @@ private final class CappedBlobDelegate: NSObject, URLSessionDataDelegate {
 /// The first-run setup surface (B-API v4, PR #70). It is a protocol of its
 /// own — not a `AuxdTransport` requirement — so tests can script the four
 /// setup routes without a network while the shell keeps its existing
-/// transport. `Store` adopts the real client when it conforms
-/// (`transport as? FirstRunClient`), which keeps the app entry point unchanged.
+/// transport. `Store` adopts the real client when it conforms (see
+/// `AuxdFeatures`), which keeps the app entry point unchanged.
 ///
 /// The key travels only inside `CreateProviderRequest` / `ProviderTestRequest`
 /// / the update-key path and is never repeated back: every response carries
@@ -264,7 +264,40 @@ private final class WeakBridgeClient: BridgeAnswerPosting, DocumentBytesFetching
     }
 }
 
-public final class AuxdClient: AuxdTransport, FirstRunClient, PackClient, SkillsClient, GoogleConnectionClient, PersonalityClient, TelegramSettingsClient, PluginsClient, TokenRefreshing, LanguageReporting, AppleEventKitSnapshotClient, BridgeAnswerPosting, DocumentBytesFetching, DocsExtractionClient, ContactsImportClient {
+/// Everything the real daemon client offers beyond the base `AuxdTransport`,
+/// as one name. `AuxdClient` adopts it, so the compiler checks that it has every
+/// route. It is deliberately a list of the small per-screen protocols above and
+/// not one big protocol: a test double (or an older transport) implements only
+/// the screens it scripts, and the app then shows that screen's "not available"
+/// state instead of failing.
+public protocol AuxdAPI: FirstRunClient, ContactsImportClient, PackClient, SkillsClient,
+    PersonalityClient, GoogleConnectionClient, TelegramSettingsClient, PluginsClient, TokenRefreshing {}
+
+/// The optional screens of a transport, looked up once. `Store` reads these
+/// instead of casting `transport` at every call site. A screen is `nil` when
+/// the transport does not offer it (a test double, or a transport without
+/// that route); each caller keeps its own "not available" behaviour.
+struct AuxdFeatures {
+    let firstRun: FirstRunClient?
+    let packs: PackClient?
+    let skills: SkillsClient?
+    let personality: PersonalityClient?
+    let google: GoogleConnectionClient?
+    let plugins: PluginsClient?
+    let tokenRefresh: TokenRefreshing?
+
+    init(_ transport: AuxdTransport) {
+        firstRun = transport as? FirstRunClient
+        packs = transport as? PackClient
+        skills = transport as? SkillsClient
+        personality = transport as? PersonalityClient
+        google = transport as? GoogleConnectionClient
+        plugins = transport as? PluginsClient
+        tokenRefresh = transport as? TokenRefreshing
+    }
+}
+
+public final class AuxdClient: AuxdTransport, AuxdAPI, LanguageReporting, AppleEventKitSnapshotClient, BridgeAnswerPosting, DocumentBytesFetching, DocsExtractionClient {
     public let endpoint: AuxdEndpoint
     /// The language every request is tagged with. `Store` keeps this in sync
     /// with the owner's choice.

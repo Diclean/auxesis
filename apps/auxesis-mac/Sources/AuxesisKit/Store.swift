@@ -620,6 +620,8 @@ public final class Store: ObservableObject {
     public static let receiptLimit = 100
 
     private let transport: AuxdTransport
+    /// The optional screens `transport` offers, looked up once.
+    private let features: AuxdFeatures
     private var googleChanges: AnyCancellable?
     private var setupChanges: AnyCancellable?
     private let sleeper: (TimeInterval) async -> Void
@@ -671,13 +673,15 @@ public final class Store: ObservableObject {
         approvalPollInterval: TimeInterval = 2
     ) {
         self.transport = transport
+        let features = AuxdFeatures(transport)
+        self.features = features
         self.approvalPollInterval = approvalPollInterval
-        self.setup = FirstRunModel(client: firstRunClient ?? (transport as? FirstRunClient))
+        self.setup = FirstRunModel(client: firstRunClient ?? features.firstRun)
         self.sleeper = sleeper
         // Non-nil client when the transport also speaks the Google routes (the
         // real `AuxdClient` does); tests inject a scripted one.
         self.google = GoogleConnectionModel(
-            client: googleClient ?? (transport as? GoogleConnectionClient),
+            client: googleClient ?? features.google,
             health: { try await transport.health() },
             pause: sleeper
         )
@@ -765,7 +769,7 @@ public final class Store: ObservableObject {
             // The service the app starts writes `api.token` at startup, so the
             // client re-reads it before each attempt: a fresh install connects
             // on its own instead of asking the owner to relaunch Auxesis.
-            (transport as? TokenRefreshing)?.refreshToken()
+            features.tokenRefresh?.refreshToken()
             do {
                 try await runSession(generation: generation)
                 attempt = 0
@@ -1277,14 +1281,14 @@ public final class Store: ObservableObject {
     }
 
     public func agentTools(name: String) async throws -> AgentToolsDetail {
-        guard let client = transport as? PackClient else {
+        guard let client = features.packs else {
             throw AuxdError.transport(L10n.t(.packsUnavailable, language))
         }
         return try await client.agentTools(name: name)
     }
 
     public func updateAgentTools(name: String, tools: [String]?) async throws {
-        guard let client = transport as? PackClient else {
+        guard let client = features.packs else {
             throw AuxdError.transport(L10n.t(.packsUnavailable, language))
         }
         try await client.updateAgentTools(name: name, tools: tools)
@@ -1293,10 +1297,10 @@ public final class Store: ObservableObject {
     public func refreshPlugins() { Task { await loadPlugins() } }
     /// Browse: three GETs, nothing else. No add, no approve, no server starts.
     public func loadPlugins() async {
-        guard let client = transport as? PluginsClient else { mcpFailed = true; return }
+        guard let client = features.plugins else { mcpFailed = true; return }
         do { async let catalog = client.mcpCatalog(); async let servers = client.mcpServers(); async let packs = client.mcpPacks(); let (c, s, p) = try await (catalog, servers, packs); mcpCatalog = c; mcpServers = s; mcpPacks = p; mcpFailed = false } catch { mcpFailed = true }
     }
-    public func enablePluginPack(_ pack: McpPack, agent: String) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.enableMcpPack(id: pack.id, agent: agent); self.refreshPlugins() } catch { self.mcpFailed = true } } }
+    public func enablePluginPack(_ pack: McpPack, agent: String) { guard let client = features.plugins else { return }; Task { do { try await client.enableMcpPack(id: pack.id, agent: agent); self.refreshPlugins() } catch { self.mcpFailed = true } } }
     /// M6-4: Install stages the entry off for Aux and opens its preview; nothing runs before `approvePluginPreview`.
     public func installPlugin(_ entry: McpCatalogEntry) async {
         pluginAgent = TeamMember.aux.id
@@ -1326,7 +1330,7 @@ public final class Store: ObservableObject {
         }
     }
     private func showPluginPreview(agent: String?, changed: Bool = false, _ fetch: (PluginsClient) async throws -> McpApprovalPreview) async {
-        guard let client = transport as? PluginsClient else { return }
+        guard let client = features.plugins else { return }
         pluginStage += 1
         let stage = pluginStage
         pluginPreviewAgent = nil
@@ -1342,7 +1346,7 @@ public final class Store: ObservableObject {
     }
     /// The owner's one yes: approves exactly the shown preview (its hash) for exactly the shown agent.
     public func approvePluginPreview() async {
-        guard let client = transport as? PluginsClient, let preview = pluginPreview, let agent = pluginPreviewAgent, agent == pluginAgent else { return }
+        guard let client = features.plugins, let preview = pluginPreview, let agent = pluginPreviewAgent, agent == pluginAgent else { return }
         do { try await client.approveMcpServer(id: preview.id, hash: preview.hash, agent: agent); cancelPluginPreview(); mcpFailureCode = nil } catch {
             let code = mcpCode(error)
             if Self.wantsApprove(code) {
@@ -1365,8 +1369,8 @@ public final class Store: ObservableObject {
               let detail = root["error"] as? [String: Any] else { return nil }
         return detail["code"] as? String
     }
-    public func testPluginURL(_ url: String) { guard let client = transport as? PluginsClient else { mcpFailed = true; return }; clearPluginTest(); Task { do { self.mcpTestResult = try await client.testMcpServer(url: url); self.mcpTestedURL = url; self.mcpFailed = false; self.mcpFailureCode = nil } catch { self.mcpTestResult = nil; self.mcpTestedURL = nil; self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
-    public func addPluginURL(_ url: String, id: String) { guard let client = transport as? PluginsClient, let test = mcpTestResult, Self.pluginAddReady(url: url, id: id, testedURL: mcpTestedURL) else { return }; Task { do { try await client.addMcpUrlServer(id: id, url: url, dataClass: mcpCustomDataClass, testDigest: test.digest); clearPluginTest(); self.refreshPlugins(); self.mcpFailureCode = nil } catch { self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
+    public func testPluginURL(_ url: String) { guard let client = features.plugins else { mcpFailed = true; return }; clearPluginTest(); Task { do { self.mcpTestResult = try await client.testMcpServer(url: url); self.mcpTestedURL = url; self.mcpFailed = false; self.mcpFailureCode = nil } catch { self.mcpTestResult = nil; self.mcpTestedURL = nil; self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
+    public func addPluginURL(_ url: String, id: String) { guard let client = features.plugins, let test = mcpTestResult, Self.pluginAddReady(url: url, id: id, testedURL: mcpTestedURL) else { return }; Task { do { try await client.addMcpUrlServer(id: id, url: url, dataClass: mcpCustomDataClass, testDigest: test.digest); clearPluginTest(); self.refreshPlugins(); self.mcpFailureCode = nil } catch { self.mcpFailed = true; self.mcpFailureCode = self.mcpCode(error) } } }
     /// M6-APP-APPROVE-ONLY: turning a server on is never a bare PUT; it goes through the
     /// preview and the one approve (`reviewPlugin`). Only "off" is a direct call.
     public func setPlugin(_ server: McpServerView, enabled: Bool) async {
@@ -1377,24 +1381,24 @@ public final class Store: ObservableObject {
     /// One plugin write, then a refresh. A daemon asking for the approve flow is not an error:
     /// it opens the server's preview sheet.
     private func mcpCall(_ server: McpServerView, _ call: (PluginsClient) async throws -> Void) async {
-        guard let client = transport as? PluginsClient else { return }
+        guard let client = features.plugins else { return }
         do { try await call(client) } catch let error where Self.wantsApprove(mcpCode(error)) { await reviewPlugin(server) } catch { mcpFailed = true }
         await loadPlugins()
     }
     /// 409 `use_approve` (legacy confirm gone), `approval_required` or `stale_confirmation`:
     /// show the current preview instead of an error.
     static func wantsApprove(_ code: String?) -> Bool { ["use_approve", "approval_required", "stale_confirmation"].contains(code) }
-    public func deletePlugin(_ server: McpServerView) { guard let client = transport as? PluginsClient else { return }; Task { do { try await client.deleteMcpServer(id: server.id); self.refreshPlugins() } catch { self.mcpFailed = true } } }
+    public func deletePlugin(_ server: McpServerView) { guard let client = features.plugins else { return }; Task { do { try await client.deleteMcpServer(id: server.id); self.refreshPlugins() } catch { self.mcpFailed = true } } }
 
     public func skills() async throws -> [LocalSkill] {
-        guard let client = transport as? SkillsClient else {
+        guard let client = features.skills else {
             throw AuxdError.transport(L10n.t(.skillsUnavailable, language))
         }
         return try await client.skills()
     }
 
     public func updateAgentSkills(name: String, skills: [String]) async throws {
-        guard let client = transport as? SkillsClient else {
+        guard let client = features.skills else {
             throw AuxdError.transport(L10n.t(.skillsUnavailable, language))
         }
         try await client.updateAgentSkills(name: name, skills: skills)
@@ -1402,7 +1406,7 @@ public final class Store: ObservableObject {
 
     /// The agent's personality, whole (`GET /v1/agents/{id}/soul`).
     public func agentSoul(name: String) async throws -> AgentSoul {
-        guard let client = transport as? PersonalityClient else {
+        guard let client = features.personality else {
             throw AuxdError.transport(
                 "Cette version d'Auxesis ne propose pas encore la personnalité.")
         }
@@ -1411,7 +1415,7 @@ public final class Store: ObservableObject {
 
     /// Save the agent's personality (`PUT /v1/agents/{id}`, `soul_md`).
     public func updateAgentSoul(name: String, soul: String) async throws {
-        guard let client = transport as? PersonalityClient else {
+        guard let client = features.personality else {
             throw AuxdError.transport(
                 "Cette version d'Auxesis ne propose pas encore la personnalité.")
         }
@@ -2059,7 +2063,7 @@ public final class Store: ObservableObject {
         serviceState = service.start()
         // The service writes `api.token` a moment after launch; pick it up now
         // and again before each reconnect attempt.
-        (transport as? TokenRefreshing)?.refreshToken()
+        features.tokenRefresh?.refreshToken()
     }
 
     /// Quit path: stop the child this app started. Safe when none was started,

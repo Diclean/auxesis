@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use aux_providers::provider_name_is_key_shaped;
-use aux_store::{Message, Session};
+use aux_store::{Message, Run, Session};
 use kernel_broker::{sanitize_external_text, sanitize_text};
 use kernel_core::{config_path, killswitch, store_path, Config, UsageKind, UsageTotals};
 use rusqlite::{Connection, OptionalExtension};
@@ -283,6 +283,9 @@ pub struct JobJson {
     pub next_run_at: Option<String>,
     /// Last time a run was scheduled for this job.
     pub last_run_at: Option<String>,
+    /// `ok`, `late`, `failing` or `unknown` (see `job_health`).
+    pub health: String,
+    pub reason: Option<String>,
 }
 
 /// One agent's usage for the requested day.
@@ -399,6 +402,7 @@ struct JobRow {
     name: String,
     schedule: String,
     enabled: bool,
+    created_at: String,
     next_run_at: Option<String>,
     last_run_at: Option<String>,
 }
@@ -729,7 +733,7 @@ fn read_jobs(conn: &Connection) -> anyhow::Result<Vec<JobRow>> {
         return Ok(Vec::new());
     }
     let mut stmt = conn.prepare(
-        "SELECT id, agent, name, schedule, enabled, next_run_at, last_run_at
+        "SELECT id, agent, name, schedule, enabled, created_at, next_run_at, last_run_at
          FROM jobs ORDER BY id ASC",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -739,8 +743,28 @@ fn read_jobs(conn: &Connection) -> anyhow::Result<Vec<JobRow>> {
             name: row.get(2)?,
             schedule: row.get(3)?,
             enabled: row.get::<_, i64>(4)? != 0,
-            next_run_at: row.get(5)?,
-            last_run_at: row.get(6)?,
+            created_at: row.get(5)?,
+            next_run_at: row.get(6)?,
+            last_run_at: row.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn read_recent_runs(conn: &Connection, job_id: i64) -> anyhow::Result<Vec<Run>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, job_id, started_at, finished_at, status, summary FROM (
+             SELECT * FROM runs WHERE job_id = ?1 ORDER BY id DESC LIMIT 3
+         ) ORDER BY id ASC",
+    )?;
+    let rows = stmt.query_map([job_id], |row| {
+        Ok(Run {
+            id: row.get(0)?,
+            job_id: row.get(1)?,
+            started_at: row.get(2)?,
+            finished_at: row.get(3)?,
+            status: row.get(4)?,
+            summary: row.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -1898,22 +1922,42 @@ fn valid_day_offline(day: &str) -> bool {
 
 /// Every scheduled job, sanitized, in store order.
 pub fn jobs_snapshot(home: &Path) -> anyhow::Result<Vec<JobJson>> {
-    let jobs = match open_read_only(home)? {
-        Some(conn) => read_jobs(&conn)?,
+    let connection = open_read_only(home)?;
+    let jobs = match &connection {
+        Some(conn) => read_jobs(conn)?,
         None => Vec::new(),
     };
-    Ok(jobs
-        .into_iter()
-        .map(|job| JobJson {
-            id: job.id,
-            agent: clean_field(&job.agent),
-            name: preview_capped(home, &job.name, ACTIVITY_SUMMARY_MAX_CHARS),
-            schedule: preview_capped(home, &job.schedule, ACTIVITY_SUMMARY_MAX_CHARS),
-            enabled: job.enabled,
-            next_run_at: job.next_run_at.map(|at| clean_field(&at)),
-            last_run_at: job.last_run_at.map(|at| clean_field(&at)),
+    let now = chrono::Utc::now();
+    jobs.into_iter()
+        .map(|job| {
+            let name = preview_capped(home, &job.name, ACTIVITY_SUMMARY_MAX_CHARS);
+            let runs = match &connection {
+                Some(conn) => read_recent_runs(conn, job.id)?,
+                None => Vec::new(),
+            };
+            let paused = !job.enabled || crate::agent::state(home, &job.agent).blocks_work();
+            let health = crate::job_health::assess(
+                now,
+                &job.schedule,
+                &job.created_at,
+                job.next_run_at.as_deref(),
+                paused,
+                &runs,
+            );
+            let reason = health.reason.map(|reason| format!("{name} {reason}"));
+            Ok(JobJson {
+                id: job.id,
+                agent: clean_field(&job.agent),
+                name,
+                schedule: preview_capped(home, &job.schedule, ACTIVITY_SUMMARY_MAX_CHARS),
+                enabled: job.enabled,
+                next_run_at: job.next_run_at.map(|at| clean_field(&at)),
+                last_run_at: job.last_run_at.map(|at| clean_field(&at)),
+                health: health.state.as_str().to_string(),
+                reason,
+            })
         })
-        .collect())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -3332,6 +3376,27 @@ mod tests {
         assert_eq!(jobs[0].schedule, "every 15m");
         assert!(jobs[0].enabled);
         assert_eq!(jobs[0].next_run_at.as_deref(), Some("2026-10-03 12:00:00"));
+        assert_eq!(
+            jobs[0].health, "unknown",
+            "a job whose first slot is after its creation is not late"
+        );
+    }
+
+    #[test]
+    fn jobs_snapshot_reports_a_missed_run_as_late() {
+        let (dir, store) = home_with_store();
+        let at = "2000-01-01 00:00:00";
+        let job = store
+            .create_job("main", "brief", "every 15m", "{}", Some(at))
+            .unwrap();
+        let run = store.start_run(job.id, at).unwrap();
+        store
+            .finish_run(run.id, at, aux_store::RUN_OK, None)
+            .unwrap();
+        let jobs = jobs_snapshot(&dir.path().join("home")).unwrap();
+        assert_eq!(jobs[0].health, "late");
+        let reason = jobs[0].reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("did not run at"), "{reason}");
     }
 
     #[test]

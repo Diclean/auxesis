@@ -29,6 +29,8 @@ pub mod gateway;
 pub mod google;
 #[cfg(feature = "google")]
 pub mod google_brief;
+/// Scheduled-job health: a due run that left no receipt is a problem.
+pub mod job_health;
 /// M2: the local (EventKit snapshot + mailbox) morning-brief source.
 pub mod local_brief;
 /// A single daemon per home: the `flock` held for the process lifetime.

@@ -140,7 +140,7 @@ step ci-build-lock scripts/test-ci-build-lock.sh
 # part of the gate. Both scripts live in the private tree: a public tree skips.
 harness_step sim-use scripts/test-sim-use.sh
 harness_step sim-human scripts/test-sim-human.sh
-# The release signing path (BUILD-NUMBER-P3): the signer is built in a scratch
+# The release signing path: the signer is built in a scratch
 # dir of its own and signs with a throwaway key, so no signing identity and
 # no Keychain is needed. It runs in about 20 s, which fits the fast gate.
 # The packaging self-test (scripts/test-package-mac.sh) builds the app and

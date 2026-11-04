@@ -224,7 +224,7 @@ impl<'a> ChatSession<'a> {
     ///
     /// Returns `None` only for an explicit `unlimited = true` (or an empty
     /// per-agent cap set): usage is still recorded after the call. A fresh
-    /// config no longer takes this path (E-17) — it carries the conservative
+    /// config no longer takes this path; it carries the conservative
     /// defaults.
     pub(super) fn reserve_budget(
         &self,
@@ -407,7 +407,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    // ---- streaming (WS-F1) ----
+    // ---- streaming ----
 
     /// Provider whose stream emits one delta, then hangs: cancellation must
     /// abort it promptly and settle nothing.
@@ -966,9 +966,8 @@ mod tests {
 
     #[tokio::test]
     async fn default_budgets_deny_a_turn_once_the_day_is_spent() {
-        // E-17 regression: `Budgets::default()` carries the conservative
-        // daily caps, so a fresh config enforces them before any provider
-        // call (on the old code the cap was unset and the call went through).
+        // `Budgets::default()` carries the conservative daily caps, so a fresh
+        // config enforces them before any provider call.
         let harness = Harness::new();
         harness
             .store()
@@ -1389,9 +1388,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_upgraded_config_with_an_empty_budgets_table_is_still_capped() {
-        // M12/P1-1: the exact bytes a pre-E-17 install carries must enforce
-        // the conservative defaults before any provider call. H-03 raised the
-        // default value; the empty table is still capped.
+        // The exact bytes an older install carries must enforce the
+        // conservative defaults before any provider call; the empty table is
+        // still capped.
         let harness = Harness::new();
         let day = harness.store().local_day().unwrap();
         harness
@@ -1418,8 +1417,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_daily_usd_cap_binds_from_the_price_table() {
-        // P2-3: token counts priced by `[prices]` become recorded usd_cents,
-        // so the money cap can latch the day and warn at 80 %.
+        // Token counts priced by `[prices]` become recorded usd_cents, so the
+        // money cap can latch the day and warn at 80 %.
         let mut harness = Harness::new();
         let mut prices = PriceTable::default();
         prices.models.insert(

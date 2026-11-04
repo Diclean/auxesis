@@ -10,10 +10,10 @@
 //! - [`AutoApproveApprover`] — `--auto-approve`: approves asks only when the
 //!   conversation is clean and the call is sandboxed.
 //!
-//! [`for_mode`] wraps any of them for `approvals = "auto"` (ACT-FREE): a call
-//! whose [`crate::action`] class is free runs with an audit row instead of a
-//! card; every other ask goes to the wrapped approver. A clean, sandboxed
-//! `shell` ask may go to the [`ShellJudge`] first (SHELL-JUDGE).
+//! [`for_mode`] wraps any of them for `approvals = "auto"`: a call whose
+//! [`crate::action`] class is free runs with an audit row instead of a card;
+//! every other ask goes to the wrapped approver. A clean, sandboxed `shell`
+//! ask may go to the [`ShellJudge`] first.
 
 use crate::judge::{ShellJudge, Verdict};
 use async_trait::async_trait;
@@ -136,9 +136,9 @@ fn preview(arguments: &serde_json::Value) -> String {
     let raw = serde_json::to_string(arguments).unwrap_or_else(|_| "<unserializable>".to_string());
     let cleaned = kernel_broker::sanitize_text(&raw);
 
-    // Show everything up to a generous limit: a middle payload once hid
-    // behind a head+tail cut (M1-AP NF-03), so only genuinely huge arguments
-    // get truncated — and then the warning is explicit.
+    // Show everything up to a generous limit: a middle payload must stay
+    // visible, so only genuinely huge arguments get truncated, with an explicit
+    // warning.
     const FULL: usize = 4000;
     const EDGE: usize = 1500;
     let len = cleaned.chars().count();
@@ -254,7 +254,7 @@ pub struct AutoModeApprover {
     classes: HashMap<String, ToolClass>,
     audit: Option<Arc<dyn AuditSink>>,
     run_id: Option<String>,
-    /// SHELL-JUDGE: asked about a clean, sandboxed `shell` call.
+    /// The judge asked about a clean, sandboxed `shell` call.
     judge: Option<ShellJudge>,
 }
 
@@ -297,8 +297,8 @@ impl AutoModeApprover {
         if request.tool.starts_with("skill__") && held {
             return None;
         }
-        // CAL-UPDATE-1: a tainted turn never moves or edits an
-        // existing event without the owner's card, guest-free or not.
+        // A tainted turn never moves or edits an existing event without the
+        // owner's card, guest-free or not.
         let moves = |tool: Option<&str>| tool == Some("apple_calendar_update_event");
         let inner = calls.into_iter().flatten();
         let moved = moves(Some(&request.tool))
@@ -308,13 +308,12 @@ impl AutoModeApprover {
         if request.tainted && moved {
             return None;
         }
-        // APPROVE-LOCAL-WRITE (owner order 2026-10-16): logging a call or a
-        // follow-up in the local CRM runs free even when tainted, like
-        // `remember`. The row stays on this Mac, shows on the client card,
-        // and the audit row below names the taint source. A CRM delete or
-        // merge is never in the table, so it keeps its card.
-        // READ-AFTER-TAINT: `delegate` is free because the agent inherits the
-        // caller's taint (auxd's `delegate` marks its workspace first).
+        // Logging a call or a follow-up in the local CRM runs free even when
+        // tainted, like `remember`. The row stays on this Mac, shows on the
+        // client card, and the audit row below names the taint source. A CRM
+        // delete or merge is never in the table, so it keeps its card.
+        // `delegate` is free because the agent inherits the caller's taint
+        // (auxd's `delegate` marks its workspace first).
         let action = crate::action::classify(&request.tool, &request.arguments, class);
         let web = action == crate::action::ActionClass::Web && crate::action::web_vetted(request);
         (action.is_free() || web).then_some(action)
@@ -659,8 +658,8 @@ mod tests {
             auto().approve(&run).await.unwrap(),
             "a clean own move runs free"
         );
-        // CAL-PRIMARY-1: a calendar titled `primary` is not the default one.
-        // The copy's proof decides, never the title.
+        // A calendar titled `primary` is not the default one; the copy's proof
+        // decides, never the title.
         let mut shared = own.clone();
         shared["event_calendar"] = serde_json::json!("primary");
         shared["event_default_calendar"] = serde_json::json!(false);
@@ -808,7 +807,7 @@ mod tests {
 
     #[test]
     fn preview_shows_the_middle_of_normal_commands() {
-        // Regression for M1-AP NF-03: a payload in the middle must be visible.
+        // A payload in the middle must be visible.
         let command = format!("{}; touch MIDPWN.txt; {}", "x".repeat(200), "y".repeat(200));
         let value = serde_json::json!({"command": command});
         let text = preview(&value);
@@ -850,7 +849,7 @@ mod tests {
         }
     }
 
-    /// SHELL-JUDGE: records the ask it was shown, then denies (the card).
+    /// Records the ask it was shown, then denies (the card).
     #[derive(Default)]
     struct Card(std::sync::Mutex<Vec<ApprovalRequest>>);
 
@@ -1020,8 +1019,8 @@ mod tests {
         let (allow, asked, _) = judged(slow, &[], ls()).await;
         assert!(!allow);
         assert_eq!(asked[0].arguments["judge"], "no answer (timeout)");
-        // Seal r1 P2-2: no owner message sent this turn, or a mode switch
-        // since the turn started: the judge is not asked.
+        // No owner message sent this turn, or a mode switch since the turn
+        // started, means the judge is not asked.
         let private = kernel_core::privacy::PrivacyMode::Private;
         for (judge, note) in [
             (
@@ -1039,8 +1038,8 @@ mod tests {
         }
     }
 
-    /// Seal r1 P2-3 and P2-4: the newest owner message survives the 4 KB cut,
-    /// and a command that fakes a section stays one escaped JSON string.
+    /// The newest owner message survives the 4 KB cut, and a command that
+    /// fakes a section stays one escaped JSON string.
     #[tokio::test]
     async fn the_judge_keeps_the_latest_owner_word_and_a_command_cannot_fake_a_section() {
         let fake = Arc::new(aux_providers::FakeProvider::scripted(

@@ -1,5 +1,5 @@
-//! SHELL-JUDGE: a second model look at a `shell` call that `auto` cannot
-//! approve on its own.
+//! A second model look at a `shell` call that `auto` cannot approve on its
+//! own.
 //!
 //! The judge sees only the owner's messages this turn sent to the model, the
 //! proposed command and the workspace root, as one JSON object: no tool
@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn the_judge_keeps_the_newest_owner_message_within_four_kilobytes() {
-        // Seal r1 P2-3: nine messages in conversation order, the last one the
-        // newest restriction; it survives the cut, the oldest go.
+        // Nine messages in conversation order: the newest restriction survives
+        // the cut, the oldest go.
         let mut conversation: Vec<String> =
             (0..8).map(|n| format!("{n}{}", "x".repeat(999))).collect();
         conversation.push("never delete anything".to_string());

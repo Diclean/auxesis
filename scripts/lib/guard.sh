@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared sandbox guard for shell scripts (J-02 round 7).
+# Shared sandbox guard for shell scripts.
 #
 # Every script in `scripts/` and `apps/*/scripts/` that touches `$HOME`,
 # `~/Library` or `~/.auxesis` must source this file. It refuses a

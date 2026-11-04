@@ -405,7 +405,7 @@ async fn a_sensitive_extension_is_offered_in_private_mode_too() {
     let host = ExtensionHost::start(home.path()).await;
     let mut registry = ToolRegistry::new();
     assert_eq!(host.register_for_agent("alice", &mut registry), 2);
-    // Private (TOK-7): B14 is covered, so the next turn still offers the tools.
+    // Private: B14 is covered, so the next turn still offers the tools.
     set_mode(home.path(), "private");
     let mut registry = ToolRegistry::new();
     assert_eq!(host.register_for_agent("alice", &mut registry), 2);

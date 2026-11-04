@@ -66,7 +66,7 @@ enclosing_fn() {
 # True when `file` is only compiled for tests: a `tests.rs`, a `tests/` path,
 # or a module declared by a `#[cfg(test)]`/`#[cfg(any(test, …))] mod <stem>;`
 # in the file's *own parent module*. A same-stem `mod` somewhere else in the
-# tree must not exempt this file (P2-4b).
+# tree must not exempt this file.
 is_test_only_file() {
     local file="$1" base="${1##*/}" stem dir declaration decl_lineno prev parent
     [[ "$base" == "tests.rs" ]] && return 0
@@ -101,7 +101,7 @@ is_test_only_file() {
 
 # True when `line` sits inside a `#[cfg(test)] { … }` region of `file`. Only
 # an actual attribute line arms the region: a commented-out `#[cfg(test)]`
-# does not exempt the code after it (P2-4a).
+# does not exempt the code after it.
 is_inline_test() {
     [[ "$(awk -v target="$2" '
         NR > target { exit }
@@ -125,7 +125,7 @@ is_test_code() {
 
 # Check every match of `pattern` in production source against `list`. Skips
 # test code when `skip_tests` is 1, and (when `file_contains` is non-empty)
-# only keeps matches in a file that also names that literal (P2-4c).
+# only keeps matches in a file that also names that literal.
 # Writes the kept-match count to `count`.
 count=0
 check_pattern() {
@@ -158,7 +158,7 @@ check_pattern() {
 # reqwest constructor and is deliberately not matched.
 reqwest_pattern='(reqwest::Client::(builder|new)\(|(^|[^A-Za-z0-9_:])Client::(builder|new)\()'
 
-# Raw sockets, P2-4c: a `TcpStream`/`TcpSocket` connect (a plain `TcpStream::
+# Raw sockets: a `TcpStream`/`TcpSocket` connect (a plain `TcpStream::
 # connect` used to be the only spelling), an aliased type (`use … as T;
 # T::connect(`), a `TcpSocket` value's `.connect(` (its `bind`/`listen` are not
 # egress, so this one is gated on the file naming `TcpSocket`), and a `::`
@@ -209,7 +209,7 @@ if [[ "$failed" -ne 0 ]]; then
     exit 1
 fi
 
-# P2-5: `aux-mail/test-support` (the `Dialer::with_client_config` seam) may be
+# `aux-mail/test-support` (the `Dialer::with_client_config` seam) may be
 # enabled only by aux-mail's own dev-dependency self-reference. Any other
 # Cargo.toml naming the feature would put that seam in a production build.
 while IFS= read -r hit; do

@@ -68,7 +68,7 @@ pub struct SkillContext {
     pub hash: String,
     /// Whether the conversation had read outside content when the run started.
     /// A connector that writes durable memory keeps its rows quarantined under
-    /// this flag, exactly like `remember` (CRM-NOTE-P3).
+    /// this flag, exactly like `remember`.
     pub tainted: bool,
 }
 
@@ -1059,8 +1059,8 @@ impl Executor<'_> {
                     return self.finish_failed(skill, run, &err);
                 }
             };
-            // M4-2: an event's time is resolved in its zone before the card,
-            // so the card shows the exact instant the `.ics` carries.
+            // An event's time is resolved in its zone before the card, so the
+            // card shows the exact instant the `.ics` carries.
             let real = match resolve_times(&call.logical, &real, client_zone.as_deref()) {
                 Ok(real) => real,
                 Err(reason) => return self.finish_refused(skill, run, &reason),
@@ -1069,7 +1069,7 @@ impl Executor<'_> {
                 Ok(real) => real,
                 Err(reason) => return self.finish_refused(skill, run, &reason),
             };
-            // M4-3b: the owner's free times are computed here from the local
+            // The owner's free times are computed here from the local
             // calendar, never by the model, so the card shows the exact times sent.
             let real = match self
                 .with_free_times(skill, fill, &context, &call.logical, real)
@@ -1400,7 +1400,7 @@ impl Executor<'_> {
                     &tool_names(&calls),
                     if edited { "edited" } else { "approved" },
                 );
-                // P2-1: every call is checked and authorized before the first
+                // Every call is checked and authorized before the first
                 // connector call. A refusal on call 2 must not leave call 1
                 // already sent.
                 let mut authorized = Vec::with_capacity(calls.len());
@@ -2191,7 +2191,7 @@ pub fn recipient_values(logical: &str, arguments: &Value) -> Result<Vec<(String,
         "google.gmail.create_draft" => {
             push_recipient_list(&mut fields, "to", arguments.get("to"))?;
         }
-        // MA4: the SMTP send carries arrays of addresses.
+        // The SMTP send carries arrays of addresses.
         "mail.send" => {
             for field in ["to", "cc"] {
                 let Some(values) = arguments.get(field) else {
@@ -2257,9 +2257,9 @@ fn push_recipient_list(
     Ok(())
 }
 
-/// Resolve a calendar create's or update's times in its zone (M4-2); other
-/// calls as is. A create uses the known client's stored zone when one is given
-/// (CLIENT-TZ-FIELD), and an owner's edit keeps the card's resolved zone.
+/// Resolve a calendar create's or update's times in its zone; other calls as
+/// is. A create uses the known client's stored zone when one is given, and an
+/// owner's edit keeps the card's resolved zone.
 fn resolve_times(
     logical: &str,
     arguments: &Value,
@@ -2305,14 +2305,13 @@ fn invite_addresses(arguments: &Value) -> Vec<String> {
         .collect()
 }
 
-/// CAL-UPDATE-1: the connector finds an update's event before the card and
-/// Auxesis sets `guests`, never the model: an update is free only when the
-/// event is known to have none (`aux_engine::action`).
+/// The connector finds an update's event before the card and Auxesis sets
+/// `guests`, never the model: an update is free only when the event is known
+/// to have none (`aux_engine::action`).
 ///
-/// CAL-DEFAULT-ID: Auxesis also sets `event_default_calendar` and
-/// `event_calendar_id`, and only when it found the event by id on the owner's
-/// default calendar. The model cannot name them: the fields are dropped
-/// before the facts are set.
+/// Auxesis also sets `event_default_calendar` and `event_calendar_id`, and
+/// only when it found the event by id on the owner's default calendar. The
+/// model cannot name them: the fields are dropped before the facts are set.
 pub fn with_found_event(
     connector: &dyn SkillConnector,
     logical: &str,
@@ -2558,14 +2557,14 @@ mod tests {
         }
     }
 
-    /// The MA4 agent: the EventKit create and the SMTP send.
+    /// The mail agent: the EventKit create and the SMTP send.
     fn mail_agent() -> LoadedAgent {
         let mut agent = agent();
         agent.tools = vec!["calendar.create_event".to_string(), "mail.send".to_string()];
         agent
     }
 
-    /// The calendar agent: one event move (CAL-UPDATE-1).
+    /// The calendar agent: one event move.
     fn update_agent() -> LoadedAgent {
         let mut agent = agent();
         agent.tools = vec!["calendar.update_event".to_string()];
@@ -3013,9 +3012,8 @@ mod tests {
         assert!(calls[1].get("event_default_calendar").is_none());
     }
 
-    /// MA4 `docs/mail.md` §5: a successful send writes exactly one `mail.call`
-    /// row, and the row carries counts and sizes only — never the address,
-    /// subject or body.
+    /// A successful send writes exactly one `mail.call` row, and the row
+    /// carries counts and sizes only — never the address, subject or body.
     #[tokio::test]
     async fn a_successful_send_writes_one_value_free_mail_call_row() {
         let (tokens, _person, email) = session();
@@ -3058,8 +3056,8 @@ mod tests {
         );
     }
 
-    /// MA4: a refused send writes one `mail.call` row with `error:<kind>` and
-    /// still calls the connector once (no retry).
+    /// A refused send writes one `mail.call` row with `error:<kind>` and still
+    /// calls the connector once (no retry).
     #[tokio::test]
     async fn a_throttled_send_writes_one_error_mail_call_row() {
         let (tokens, _person, email) = session();
@@ -3107,9 +3105,8 @@ mod tests {
         );
     }
 
-    /// MA4 fix 2, DOC-COLLECT-1: a raw `account` value that is not a
-    /// configured slug is never copied into the row; the resolved mailbox is
-    /// logged instead, without any address.
+    /// A raw `account` value that is not a configured slug is never copied into
+    /// the row; the resolved mailbox is logged instead, without any address.
     #[tokio::test]
     async fn a_bad_account_is_replaced_by_the_resolved_mailbox() {
         let (tokens, _person, email) = session();
@@ -3145,7 +3142,7 @@ mod tests {
         );
     }
 
-    /// MA4 fix 2: a validated, configured slug is logged as-is.
+    /// A validated, configured slug is logged as-is.
     #[tokio::test]
     async fn a_configured_account_slug_is_logged_as_is() {
         let (tokens, _person, email) = session();
@@ -3242,7 +3239,7 @@ mod tests {
         );
     }
 
-    /// MA4 fix 2: the refused path also logs a safe account value.
+    /// The refused path also logs a safe account value.
     #[tokio::test]
     async fn a_refused_send_logs_the_resolved_mailbox_for_a_bad_account() {
         let (tokens, _person, email) = session();
@@ -3278,7 +3275,7 @@ mod tests {
         );
     }
 
-    /// MA4 fix 2: the refused path keeps a safe, format-valid slug.
+    /// The refused path keeps a safe, format-valid slug.
     #[tokio::test]
     async fn a_refused_send_logs_a_safe_slug() {
         let (tokens, _person, email) = session();
@@ -3306,9 +3303,8 @@ mod tests {
         assert_eq!(sink.payloads("mail.call")[0]["account"], "personal");
     }
 
-    /// MA4 round 3 P2, DOC-COLLECT-1: a slug-shaped account that is **not**
-    /// configured must not be copied into the row; the refused path logs the
-    /// mailbox the runtime resolved.
+    /// A slug-shaped account that is **not** configured must not be copied
+    /// into the row; the refused path logs the mailbox the runtime resolved.
     #[tokio::test]
     async fn an_unconfigured_slug_is_replaced_on_the_refused_path() {
         let (tokens, _person, email) = session();
@@ -3960,9 +3956,9 @@ mod tests {
         assert!(!surfaces.contains("camille@exemple.fr"), "{surfaces}");
     }
 
-    /// P2-1: a Deny on call 2 happens before call 1 is sent. The owner approved
-    /// the run, but the broker refuses `google_gmail_send`: the calendar insert
-    /// must not go out either.
+    /// A Deny on call 2 happens before call 1 is sent. The owner approved the
+    /// run, but the broker refuses `google_gmail_send`: the calendar insert must
+    /// not go out either.
     #[tokio::test]
     async fn operator_deny_on_a_later_call_sends_nothing() {
         let (tokens, person, email) = session();
@@ -3996,8 +3992,8 @@ mod tests {
         assert_eq!(sink.payloads("skill.run")[0]["outcome"], "refused");
     }
 
-    /// P2-1 with an owner edit: an edit that breaks the recipient policy on
-    /// call 2 refuses the run before call 1 is sent.
+    /// An owner edit that breaks the recipient policy on call 2 refuses the
+    /// run before call 1 is sent.
     #[tokio::test]
     async fn edit_that_breaks_the_recipient_policy_sends_nothing() {
         let (tokens, person, email) = session();
@@ -4030,8 +4026,8 @@ mod tests {
         assert_eq!(sink.payloads("skill.run")[0]["outcome"], "refused");
     }
 
-    /// P3: an owner edit gets the fill's checks: a delimiter, a header break,
-    /// a non-string recipient, or a comma list with one unknown address all
+    /// An owner edit gets the fill's checks: a delimiter, a header break, a
+    /// non-string recipient, or a comma list with one unknown address all
     /// refuse the run with no connector call.
     #[tokio::test]
     async fn owner_edits_get_the_fill_checks() {
@@ -4075,8 +4071,8 @@ mod tests {
         }
     }
 
-    /// P2-3: STOP engaged after call 1 means call 2 is not sent, and the run
-    /// is recorded as refused.
+    /// STOP engaged after call 1 means call 2 is not sent, and the run is
+    /// recorded as refused.
     #[tokio::test]
     async fn stop_after_the_first_call_stops_the_second() {
         struct StopAfterFirst(Arc<std::sync::atomic::AtomicBool>);

@@ -510,8 +510,8 @@ impl Store {
         let ttl = format!("+{} seconds", RESERVATION_TTL.as_secs());
         // Held from the start, with what settling it needs once this process
         // is gone (see `settle_abandoned_reservations`).
-        let unsettled = serde_json::json!({ "caps": caps, "run_id": run_id,
-            "in": tokens_in, "out": tokens_out, "usd": estimate.usd_cents });
+        let unsettled =
+            serde_json::json!({ "caps": caps, "run_id": run_id, "usd": estimate.usd_cents });
         tx.execute(
             "INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out, usd_cents,
                  unsettled)
@@ -662,27 +662,46 @@ impl Store {
         Ok(())
     }
 
-    /// Settle the held reservations a dead process left: rows past their TTL
-    /// (a live call settles well within it), each at the estimate it
-    /// reserved, through [`Store::settle_reservation`], so once. Run at daemon
-    /// start, before a turn runs. Returns how many settled and how many
-    /// failed; a failed one stays held for the next start.
-    pub fn settle_abandoned_reservations(&self) -> Result<(usize, usize), StoreError> {
-        let rows = self
+    /// Raise held reservation `id` to `actual` where that is more, so the cap
+    /// counts, and a later settle of the row records, the most its call is
+    /// known to have spent, even once this process is gone.
+    pub fn raise_held_reservation(&self, id: i64, actual: &UsageActual) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE usage_reservations SET tokens_in = MAX(tokens_in, ?2),
+                 tokens_out = MAX(tokens_out, ?3), unsettled = json_set(unsettled, '$.usd',
+                     MAX(COALESCE(json_extract(unsettled, '$.usd'), 0), ?4))
+             WHERE id = ?1 AND unsettled IS NOT NULL",
+            rusqlite::params![id, actual.tokens_in, actual.tokens_out, actual.usd_cents],
+        )?;
+        Ok(())
+    }
+
+    /// Settle the held reservations a stopped process left: rows past their
+    /// TTL (a live call settles well within it) and not in `skip`, each at the
+    /// most its call is known to have spent (its reserve, or more once
+    /// raised), through [`Store::settle_reservation`], so once. The daemon
+    /// runs it at start and every minute. Returns how many settled and how
+    /// many failed; a failed one stays held for the next pass.
+    pub fn settle_abandoned_reservations(
+        &self,
+        skip: &[i64],
+    ) -> Result<(usize, usize), StoreError> {
+        let mut rows = self
             .conn
             .prepare(
-                "SELECT id, agent, at, unsettled FROM usage_reservations
+                "SELECT id, agent, at, tokens_in, tokens_out, unsettled FROM usage_reservations
                  WHERE unsettled IS NOT NULL AND expires_at <= datetime('now', 'localtime')",
             )?
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                let amounts = (row.get(3)?, row.get(4)?);
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, amounts, row.get(5)?))
             })?
-            .collect::<Result<Vec<(i64, String, String, String)>, _>>()?;
+            .collect::<Result<Vec<(i64, String, String, (u64, u64), String)>, _>>()?;
+        rows.retain(|row| !skip.contains(&row.0));
         let mut failed = 0;
-        for (id, agent, day, held) in rows.iter().cloned() {
+        for (id, agent, day, (tokens_in, tokens_out), held) in rows.iter().cloned() {
             let held: serde_json::Value = serde_json::from_str(&held).unwrap_or_default();
-            let amount = |key: &str| held[key].as_u64().unwrap_or(0);
-            let (tokens_in, tokens_out, usd_cents) = (amount("in"), amount("out"), amount("usd"));
+            let usd_cents = held["usd"].as_u64().unwrap_or(0);
             let reservation = Reservation {
                 id,
                 agent,
@@ -2075,21 +2094,41 @@ mod tests {
     }
 
     #[test]
-    fn a_held_reservation_outlives_its_ttl_until_a_daemon_start_settles_it_once() {
+    fn a_held_reservation_outlives_its_ttl_until_a_start_settles_it_once_at_its_most() {
         let store = Store::open_in_memory().unwrap();
         let (caps, day) = (caps(Some(100), None), store.local_day().unwrap());
         let reserved = store.try_reserve_for(Some("run-1"), "main", &day, &caps, &estimate(60, 0));
-        assert!(matches!(reserved.unwrap(), ReserveOutcome::Reserved(_)));
-        // Its process dies and the TTL passes: still held, so still counted.
+        let ReserveOutcome::Reserved(held) = reserved.unwrap() else {
+            panic!("admitted");
+        };
+        // The call is known to have spent more than it reserved; its process
+        // dies and the TTL passes: still held at that amount, so 20 more no
+        // longer fit (60 + 20 would).
+        let known = UsageActual {
+            tokens_in: 90,
+            tokens_out: 7,
+            usd_cents: 3,
+            ..UsageActual::default()
+        };
+        store.raise_held_reservation(held.id, &known).unwrap();
         let expire = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
         store.conn.execute(expire, []).unwrap();
-        let next = store.try_reserve("main", &day, &caps, &estimate(60, 0));
+        let next = store.try_reserve("main", &day, &caps, &estimate(20, 0));
         assert!(matches!(next.unwrap(), ReserveOutcome::Denied(_)));
-        // A daemon start charges it at its reserve, once.
-        assert_eq!(store.settle_abandoned_reservations().unwrap(), (1, 0));
-        assert_eq!(store.settle_abandoned_reservations().unwrap(), (0, 0));
+        // A row a job here still owes is left; a start charges the rest at
+        // the most known, once.
+        assert_eq!(
+            store.settle_abandoned_reservations(&[held.id]).unwrap(),
+            (0, 0)
+        );
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (1, 0));
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (0, 0));
         assert_eq!(store.reservation_count().unwrap(), 0);
-        assert_eq!(store.usage_totals("main", &day).unwrap().tokens_in, 60);
+        let totals = store.usage_totals("main", &day).unwrap();
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out, totals.usd_cents),
+            (90, 7, 3)
+        );
     }
 
     #[test]

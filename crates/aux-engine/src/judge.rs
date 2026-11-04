@@ -10,10 +10,10 @@
 //! It is not a guarantee: the sandbox and the runtime caps still bound the
 //! command.
 //!
-//! WO-BUD-1: the judge's call is a paid call of the agent it judges. With a
-//! [`JudgeBudget`] it reserves through the same admission as a chat round and
-//! settles after, on the turn's run; a denied budget never calls the provider
-//! and keeps the card.
+//! WO-BUD-1: the judge's call is a paid call of the agent it judges. Every
+//! judge holds a [`JudgeBudget`]: it reserves through the same admission as a
+//! chat round and settles after, on the turn's run; a denied budget never
+//! calls the provider and keeps the card.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -84,7 +84,7 @@ pub struct ShellJudge {
     owner: OwnerMessages,
     workspace: PathBuf,
     timeout: Duration,
-    budget: Option<JudgeBudget>,
+    budget: JudgeBudget,
 }
 
 /// Where the judge's spend is reserved and recorded: the turn's store, the
@@ -176,10 +176,69 @@ struct Answer {
 }
 
 impl ShellJudge {
-    /// A judge on `provider` under the live `mode` (the turn started in
-    /// `started`), gating with the session's key and `names`, reading the
-    /// owner's messages from `owner`.
+    /// A judge on `provider` under the live `mode` (the turn starts in the
+    /// mode it reads now), gating with the session's key and `names`, reading
+    /// the owner's messages from `owner`. Its call is always reserved and
+    /// recorded in `budget`: there is no unmetered judge outside tests.
+    ///
+    /// ```
+    /// use aux_engine::judge::{JudgeBudget, OwnerMessages, ShellJudge};
+    /// use std::{path::PathBuf, sync::Arc};
+    /// let _: fn(
+    ///     Arc<dyn aux_providers::ChatProvider>,
+    ///     kernel_core::privacy::ModeFn,
+    ///     i64,
+    ///     Arc<kernel_privacy::NameDictionary>,
+    ///     OwnerMessages,
+    ///     PathBuf,
+    ///     JudgeBudget,
+    /// ) -> ShellJudge = ShellJudge::new;
+    /// ```
+    ///
+    /// Without a budget, no judge can be built (WO-BUD-1):
+    ///
+    /// ```compile_fail,E0308
+    /// use aux_engine::judge::{OwnerMessages, ShellJudge};
+    /// use std::{path::PathBuf, sync::Arc};
+    /// let _: fn(
+    ///     Arc<dyn aux_providers::ChatProvider>,
+    ///     kernel_core::privacy::ModeFn,
+    ///     i64,
+    ///     Arc<kernel_privacy::NameDictionary>,
+    ///     OwnerMessages,
+    ///     PathBuf,
+    /// ) -> ShellJudge = ShellJudge::new;
+    /// ```
+    ///
+    /// ```compile_fail,E0599
+    /// let _ = aux_engine::judge::ShellJudge::for_tests;
+    /// ```
     pub fn new(
+        provider: Arc<dyn ChatProvider>,
+        mode: ModeFn,
+        session_id: i64,
+        names: Arc<NameDictionary>,
+        owner: OwnerMessages,
+        workspace: PathBuf,
+        budget: JudgeBudget,
+    ) -> Self {
+        Self {
+            provider,
+            started: mode(),
+            mode,
+            session_id,
+            names,
+            owner,
+            workspace,
+            timeout: JUDGE_TIMEOUT,
+            budget,
+        }
+    }
+
+    /// A judge whose turn started in `started`, metered as `main`'s in a
+    /// throwaway in-memory store under the default caps (tests only).
+    #[cfg(test)]
+    pub(crate) fn for_tests(
         provider: Arc<dyn ChatProvider>,
         mode: ModeFn,
         started: PrivacyMode,
@@ -188,22 +247,22 @@ impl ShellJudge {
         owner: OwnerMessages,
         workspace: PathBuf,
     ) -> Self {
-        Self {
-            provider,
-            mode,
-            started,
-            session_id,
-            names,
-            owner,
-            workspace,
-            timeout: JUDGE_TIMEOUT,
-            budget: None,
-        }
+        let store = Store::open_in_memory().expect("an in-memory store");
+        let budget = JudgeBudget {
+            store: Arc::new(Mutex::new(store)),
+            agent: "main".to_string(),
+            run_id: None,
+            budgets: Budgets::default(),
+            prices: PriceTable::default(),
+        };
+        let judge = Self::new(provider, mode, session_id, names, owner, workspace, budget);
+        Self { started, ..judge }
     }
 
-    /// The same judge, its call reserved and recorded in `budget`.
-    pub fn with_budget(mut self, budget: JudgeBudget) -> Self {
-        self.budget = Some(budget);
+    /// The same judge, metered in `budget` instead (tests).
+    #[cfg(test)]
+    pub(crate) fn with_budget(mut self, budget: JudgeBudget) -> Self {
+        self.budget = budget;
         self
     }
 
@@ -229,23 +288,18 @@ impl ShellJudge {
         let provider = self.provider.as_ref();
         // A denied budget (or a ledger that cannot answer) never reaches the
         // provider: the ask keeps its card.
-        let reservation = match self
-            .budget
-            .as_ref()
-            .map(|b| b.reserve(provider, &mut request))
-        {
-            Some(Err(_)) => return Verdict::Failed("budget"),
-            Some(Ok(reservation)) => Some(reservation),
-            None => None,
+        let Ok(reservation) = self.budget.reserve(provider, &mut request) else {
+            return Verdict::Failed("budget");
         };
         let gated = GatedChat::new(provider, Arc::clone(&self.mode));
         let outcome = tokio::time::timeout(self.timeout, gated.complete(&request)).await;
-        if let (Some(budget), Some(reservation)) = (&self.budget, &reservation) {
-            let response = outcome.as_ref().ok().and_then(|done| done.as_ref().ok());
-            if let Err(err) = budget.settle(provider, reservation, &request, response) {
-                tracing::warn!(error = %err, "could not settle the judge call");
-                return Verdict::Failed("budget");
-            }
+        let response = outcome.as_ref().ok().and_then(|done| done.as_ref().ok());
+        if let Err(err) = self
+            .budget
+            .settle(provider, &reservation, &request, response)
+        {
+            tracing::warn!(error = %err, "could not settle the judge call");
+            return Verdict::Failed("budget");
         }
         match outcome {
             Err(_) => Verdict::Failed("timeout"),

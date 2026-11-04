@@ -896,7 +896,7 @@ mod tests {
         let owner = Arc::new(move || owner.clone());
         let workspace = std::path::PathBuf::from("/ws/main");
         let live = Arc::new(move || mode);
-        ShellJudge::new(provider, live, started, 7, names, owner, workspace)
+        ShellJudge::for_tests(provider, live, started, 7, names, owner, workspace)
     }
 
     /// The JSON object of the judge's user message in `provider`'s first request.

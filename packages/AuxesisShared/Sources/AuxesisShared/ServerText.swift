@@ -77,7 +77,7 @@ public enum ServerText {
 
     /// True for the scalars `clean` drops outright: no dependable glyph to show
     /// and nothing to space out.
-    static func isStripped(_ scalar: Unicode.Scalar) -> Bool {
+    public static func isStripped(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar.properties.generalCategory {
         case .format, .privateUse, .unassigned: return true
         default: return false

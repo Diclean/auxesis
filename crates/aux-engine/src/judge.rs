@@ -23,7 +23,7 @@ use aux_providers::{
     ChatMessage, ChatProvider, ChatRequest, ChatResponse, ChatRole, GatedChat, SafeMessage,
 };
 use aux_store::{Store, StoreHandle};
-use kernel_core::budget::{Budgets, PriceTable, Reservation};
+use kernel_core::budget::{Budgets, PriceTable, Reservation, UsageActual};
 use kernel_core::privacy::{admit_call, Destination, ModeFn, PathId, PrivacyMode};
 use kernel_privacy::safetext::Gate;
 use kernel_privacy::NameDictionary;
@@ -168,6 +168,52 @@ impl JudgeBudget {
     }
 }
 
+/// A judge reservation not yet settled. Settled explicitly on every normal
+/// exit; dropped unsettled (the judge future cancelled while the provider
+/// already had the prompt), it settles the reserved estimate, prompt plus the
+/// full answer cap, synchronously, so spend the provider may bill is never
+/// released as headroom.
+struct Pending<'b> {
+    budget: &'b JudgeBudget,
+    reservation: Option<Reservation>,
+}
+
+impl Pending<'_> {
+    fn settle(
+        mut self,
+        provider: &dyn ChatProvider,
+        request: &ChatRequest,
+        response: Option<&ChatResponse>,
+    ) -> Result<(), crate::ChatError> {
+        match self.reservation.take() {
+            Some(reservation) => self
+                .budget
+                .settle(provider, &reservation, request, response),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        let Some(reservation) = self.reservation.take() else {
+            return;
+        };
+        let reserved = reservation.estimate;
+        let actual = UsageActual {
+            tokens_in: reserved.tokens_in,
+            tokens_in_estimated: true,
+            tokens_out: reserved.tokens_out,
+            tokens_out_estimated: true,
+            usd_cents: reserved.usd_cents,
+        };
+        let store = StoreHandle::Shared(Arc::clone(&self.budget.store));
+        if let Err(err) = store.with(|store| store.settle_reservation(&reservation, &actual)) {
+            tracing::warn!(error = %err, "could not settle a cancelled judge call");
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Answer {
@@ -291,13 +337,16 @@ impl ShellJudge {
         let Ok(reservation) = self.budget.reserve(provider, &mut request) else {
             return Verdict::Failed("budget");
         };
+        // Dropped before the explicit settle (the turn cancelled mid-call),
+        // the guard settles the whole reserved estimate.
+        let pending = Pending {
+            budget: &self.budget,
+            reservation: Some(reservation),
+        };
         let gated = GatedChat::new(provider, Arc::clone(&self.mode));
         let outcome = tokio::time::timeout(self.timeout, gated.complete(&request)).await;
         let response = outcome.as_ref().ok().and_then(|done| done.as_ref().ok());
-        if let Err(err) = self
-            .budget
-            .settle(provider, &reservation, &request, response)
-        {
+        if let Err(err) = pending.settle(provider, &request, response) {
             tracing::warn!(error = %err, "could not settle the judge call");
             return Verdict::Failed("budget");
         }

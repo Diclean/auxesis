@@ -1176,6 +1176,54 @@ mod tests {
         }
     }
 
+    /// A provider that takes the request, then never answers.
+    struct Hangs(Arc<tokio::sync::Notify>);
+
+    #[async_trait]
+    impl aux_providers::ChatProvider for Hangs {
+        async fn complete(
+            &self,
+            _: &aux_providers::ChatRequest,
+        ) -> Result<aux_providers::ChatResponse, aux_providers::ProviderError> {
+            self.0.notify_one();
+            std::future::pending().await
+        }
+        fn name(&self) -> &str {
+            "hangs"
+        }
+    }
+
+    #[tokio::test]
+    async fn a_judge_call_cancelled_after_dispatch_still_charges_its_reserve() {
+        // Seal r2 P2: a dropped judge future settles the reserved estimate.
+        let store = Arc::new(std::sync::Mutex::new(
+            aux_store::Store::open_in_memory().unwrap(),
+        ));
+        let sent = Arc::new(tokio::sync::Notify::new());
+        let provider = Arc::new(Hangs(Arc::clone(&sent))) as Arc<dyn aux_providers::ChatProvider>;
+        let judge =
+            judge(provider, open(), "list the files").with_budget(crate::judge::JudgeBudget {
+                store: Arc::clone(&store),
+                agent: "main".to_string(),
+                run_id: Some("run-judge-1".to_string()),
+                budgets: kernel_core::budget::Budgets::default(),
+                prices: kernel_core::budget::PriceTable::default(),
+            });
+        tokio::select! {
+            _ = judge.judge("ls") => panic!("the provider never answers"),
+            _ = sent.notified() => {}
+        }
+        let store = store.lock().unwrap();
+        assert_eq!(
+            store.reservation_count().unwrap(),
+            0,
+            "settled, not left to expire"
+        );
+        let run = store.usage_totals_for_run("run-judge-1").unwrap();
+        assert!(run.tokens_in > 0, "{run:?}");
+        assert_eq!(run.tokens_out, 200, "the whole answer cap is charged");
+    }
+
     #[tokio::test]
     async fn private_mode_sends_a_name_as_written_and_tokenises_an_email_for_the_judge() {
         let fake = Arc::new(aux_providers::FakeProvider::scripted(

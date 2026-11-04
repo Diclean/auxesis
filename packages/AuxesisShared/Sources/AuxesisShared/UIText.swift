@@ -40,6 +40,8 @@ public enum UIKey: String, CaseIterable {
     case stepMarkDone, stepMarkRunning, stepMarkHalted, stepSource
     case workActive, workUpNext, workSteer, workStop, workStepsOf, workToday, workTomorrow, workNothingActive, workNothingNext, workMore
     case jobHealthLate, jobHealthFailing
+    case jobReasonMissed, jobReasonMissedNoTime, jobReasonFailed, jobReasonFailedNoTime
+    case jobReasonHung, jobReasonHungNoTime, jobReasonInterrupted, jobReasonInterruptedNoTime
     case modelSawLink, modelSawHide, modelSawAux, sentBy, sentTo, sentWhen, stayedOnMac, leftMac
     case modelSawGone, modelSawNoTokens, openLedger
 
@@ -342,6 +344,14 @@ public extension L10n {
         .workMore: "%d more",
         .jobHealthLate: "Late",
         .jobHealthFailing: "Failed",
+        .jobReasonMissed: "%@ didn't run at %@",
+        .jobReasonMissedNoTime: "%@ didn't run",
+        .jobReasonFailed: "%@ failed at %@",
+        .jobReasonFailedNoTime: "%@ failed",
+        .jobReasonHung: "%@ started at %@ and hasn't finished",
+        .jobReasonHungNoTime: "%@ started and hasn't finished",
+        .jobReasonInterrupted: "%@ was interrupted twice, the last time at %@",
+        .jobReasonInterruptedNoTime: "%@ was interrupted twice",
         .workForAux: "Work for Aux",
         .typing: "%@ is writing",
         .modelSawLink: "What %@ sent to its brain",
@@ -996,6 +1006,14 @@ public extension L10n {
         .workMore: "%d de plus",
         .jobHealthLate: "En retard",
         .jobHealthFailing: "A échoué",
+        .jobReasonMissed: "%@ n’a pas tourné à %@",
+        .jobReasonMissedNoTime: "%@ n’a pas tourné",
+        .jobReasonFailed: "%@ a échoué à %@",
+        .jobReasonFailedNoTime: "%@ a échoué",
+        .jobReasonHung: "%@ a démarré à %@ et n’a pas fini",
+        .jobReasonHungNoTime: "%@ a démarré et n’a pas fini",
+        .jobReasonInterrupted: "%@ a été interrompue deux fois, la dernière à %@",
+        .jobReasonInterruptedNoTime: "%@ a été interrompue deux fois",
         .stepsStayed: "%d traitées par un modèle sur ce Mac",
         .stepsUnrecorded: "%d sans lieu d’exécution enregistré",
         .sidebarRoleAux: "chef",

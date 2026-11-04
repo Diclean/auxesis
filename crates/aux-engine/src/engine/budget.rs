@@ -142,9 +142,8 @@ fn notice_unpriced_model(model: Option<&str>) {
 }
 
 /// The bundled catalog's list prices, in whole cents per million tokens
-/// rounded up, for every model id that carries both prices; a row marked as
-/// billed by subscription costs 0 cents per call. A row with neither stays
-/// unpriced. When two providers list the same id, the higher price wins.
+/// rounded up, for every model id that carries both prices. When two
+/// providers list the same id, the higher price wins.
 fn catalog_prices() -> &'static PriceTable {
     static PRICES: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
     PRICES.get_or_init(|| {
@@ -153,40 +152,50 @@ fn catalog_prices() -> &'static PriceTable {
         };
         let cents = |usd: f64| (usd * 100.0 - 1e-6).ceil().max(0.0) as u64;
         for row in aux_providers::Catalog::bundled().rows() {
-            let (input, output) = match (row.input_usd_mtok, row.output_usd_mtok, row.billing) {
-                (Some(input), Some(output), _) => (cents(input), cents(output)),
-                (_, _, Some(aux_providers::Billing::Subscription)) => (0, 0),
-                _ => continue,
+            let (Some(input), Some(output)) = (row.input_usd_mtok, row.output_usd_mtok) else {
+                continue;
             };
             let entry = table.models.entry(row.id.clone()).or_default();
-            entry.input_cents_per_million = entry.input_cents_per_million.max(input);
-            entry.output_cents_per_million = entry.output_cents_per_million.max(output);
+            entry.input_cents_per_million = entry.input_cents_per_million.max(cents(input));
+            entry.output_cents_per_million = entry.output_cents_per_million.max(cents(output));
         }
         table
     })
 }
 
-/// The table that prices `model`: `[prices]` first, then the bundled
-/// catalog. `None` means the call is unpriced.
-fn price_source<'p>(prices: &'p PriceTable, model: Option<&str>) -> Option<&'p PriceTable> {
+/// The price of `model`. A price the owner set in `[prices]` wins; otherwise
+/// the higher of the built-in default and the catalog list price, so a stale
+/// built-in can never undercount the money cap. `None` means unpriced.
+fn model_price(
+    prices: &PriceTable,
+    model: Option<&str>,
+) -> Option<kernel_core::budget::ModelPrice> {
+    static BUILT_IN: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
     let model = model?;
-    if prices.price(model).is_some() {
-        Some(prices)
-    } else if catalog_prices().price(model).is_some() {
-        Some(catalog_prices())
-    } else {
-        None
+    let configured = prices.price(model).copied();
+    let built_in = BUILT_IN
+        .get_or_init(PriceTable::default)
+        .price(model)
+        .copied();
+    match (configured, catalog_prices().price(model).copied()) {
+        (Some(owner), _) if configured != built_in => Some(owner),
+        (Some(a), Some(b)) => Some(kernel_core::budget::ModelPrice {
+            input_cents_per_million: a.input_cents_per_million.max(b.input_cents_per_million),
+            output_cents_per_million: a.output_cents_per_million.max(b.output_cents_per_million),
+        }),
+        (configured, catalog) => configured.or(catalog),
     }
 }
 
+/// Cents for one call, rounded up; `0` when the model is unpriced (an
+/// unpriced call is refused before it starts while a money cap applies).
 fn priced_cents(prices: &PriceTable, model: Option<&str>, tokens_in: u64, tokens_out: u64) -> u64 {
-    match price_source(prices, model) {
-        Some(table) => table.usd_cents_for(model, tokens_in, tokens_out),
-        None => {
-            notice_unpriced_model(model);
-            0
-        }
-    }
+    let Some(price) = model_price(prices, model) else {
+        return 0;
+    };
+    let numerator = tokens_in as u128 * price.input_cents_per_million as u128
+        + tokens_out as u128 * price.output_cents_per_million as u128;
+    numerator.div_ceil(1_000_000).min(u64::MAX as u128) as u64
 }
 
 /// The provider-reported cost in cents. A missing, zero, negative or
@@ -200,31 +209,43 @@ fn provider_cost_cents(usage: Option<aux_providers::Usage>) -> Option<u64> {
     Some((cost * 100.0).ceil().min(u64::MAX as f64) as u64)
 }
 
+/// True when the bundled catalog marks `model` as billed by subscription.
+fn catalog_subscription(model: &str) -> bool {
+    aux_providers::Catalog::bundled()
+        .rows()
+        .iter()
+        .any(|row| row.id == model && row.billing == Some(aux_providers::Billing::Subscription))
+}
+
 /// A call whose model has no price cannot be checked against the money cap:
 /// it would reserve 0 cents, so concurrent calls could all pass the cap. While
-/// a money cap applies (every capped agent has one), such a call is refused.
+/// a money cap applies (every capped agent has one), such a call is refused,
+/// on a loopback endpoint too (a local forwarder can reach a paid service).
 ///
-/// Only a provider that cannot spend money is let through unpriced: a brain
-/// positively known to run on this Mac, or an in-process adapter that names
-/// neither a model nor an endpoint host (every cloud adapter names both).
+/// Two calls run unpriced: a model the catalog marks as billed by
+/// subscription, sent to the trusted subscription backend itself (0 cents
+/// per call); and an in-process adapter that names neither a model nor an
+/// endpoint host (every network adapter names both).
 fn unpriced_under_money_cap(
     caps: &kernel_core::budget::BudgetCaps,
     prices: &PriceTable,
     provider: &dyn ChatProvider,
     model: Option<&str>,
 ) -> Option<String> {
-    if caps.limit(UsageKind::UsdCents).is_none() || price_source(prices, model).is_some() {
+    if caps.limit(UsageKind::UsdCents).is_none() || model_price(prices, model).is_some() {
         return None;
     }
     let in_process = model.is_none() && provider.endpoint_hosts().is_empty();
-    if provider.on_this_mac() || in_process {
+    let subscription = provider.subscription_billed() && model.is_some_and(catalog_subscription);
+    if in_process || subscription {
         return None;
     }
     notice_unpriced_model(model);
     let model = model.unwrap_or("<unreported>");
     Some(format!(
         "model {model} has no price; add [prices.models.\"{model}\"] with \
-         input_cents_per_million and output_cents_per_million to config.toml"
+         input_cents_per_million and output_cents_per_million to config.toml \
+         (0 and 0 if this model really runs on this Mac)"
     ))
 }
 
@@ -1642,12 +1663,9 @@ mod tests {
     #[test]
     fn every_bundled_catalog_model_is_priced_or_billed_by_subscription() {
         // A new catalog row without either would be refused under the money cap.
-        let no_config = PriceTable {
-            models: Default::default(),
-        };
         for row in aux_providers::Catalog::bundled().rows() {
             assert!(
-                price_source(&no_config, Some(&row.id)).is_some(),
+                catalog_prices().price(&row.id).is_some() || catalog_subscription(&row.id),
                 "{}/{} has no price and no billing = \"subscription\"",
                 row.provider,
                 row.id
@@ -1655,18 +1673,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_catalog_price_wins_over_a_stale_built_in_but_not_over_the_owner() {
+        let flash = |prices: &PriceTable| model_price(prices, Some("deepseek-flash")).unwrap();
+        let shipped = flash(&PriceTable::default());
+        assert!(shipped.input_cents_per_million >= 30, "{shipped:?}");
+        assert!(shipped.output_cents_per_million >= 120, "{shipped:?}");
+        let mut owner = PriceTable::default();
+        let set = kernel_core::budget::ModelPrice {
+            input_cents_per_million: 10,
+            output_cents_per_million: 10,
+        };
+        owner.models.insert("deepseek-flash".to_string(), set);
+        assert_eq!(flash(&owner), set, "an explicit [prices] entry wins");
+    }
+
     #[tokio::test]
     async fn deepseek_flash_runs_under_the_default_money_cap() {
-        // The owner's brain, with the default caps; also with a config whose
-        // own [prices] table replaced the built-in prices (catalog price).
-        for (prices, cents) in [
-            (PriceTable::default(), 22 + 66),
-            (
-                PriceTable {
-                    models: Default::default(),
-                },
-                30 + 120,
-            ),
+        // The owner's brain with the default caps, with the shipped [prices]
+        // and with an owner table that left it out: the catalog price binds.
+        for prices in [
+            PriceTable::default(),
+            PriceTable {
+                models: Default::default(),
+            },
         ] {
             let mut harness = Harness::new();
             harness.prices = prices;
@@ -1677,23 +1707,68 @@ mod tests {
             session.send("hello").await.unwrap();
 
             assert_eq!(provider.request_count(), 1);
-            assert_eq!(usd_spent(&harness), cents);
+            assert_eq!(usd_spent(&harness), 30 + 120);
+        }
+    }
+
+    /// An OpenAI-compatible brain at `base` sending `model`; never called.
+    fn wire(base: &str, model: &str, local: bool) -> aux_providers::OpenAiCompat {
+        let config = aux_providers::ProviderConfig {
+            disable_thinking: false,
+            id: "brain".to_string(),
+            base_url: base.to_string(),
+            model: model.to_string(),
+            key_user: None,
+            kind: aux_providers::ProviderKind::OpenAiCompat,
+        };
+        let provider = aux_providers::OpenAiCompat::with_key(&config, None).unwrap();
+        if local {
+            provider.local_runtime()
+        } else {
+            provider
         }
     }
 
     #[tokio::test]
-    async fn a_subscription_model_passes_the_money_cap_at_zero_cents() {
-        let harness = Harness::new();
-        let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
-        let provider = FakeProvider::repeating("fake", reported(1_000, 10, None))
-            .with_model("gpt-oss:120b-cloud");
-        let mut session =
-            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+    async fn an_unpriced_call_is_refused_on_a_paid_endpoint_and_on_loopback() {
+        // A paid endpoint sending a subscription model id, and a loopback
+        // forwarder serving an unpriced model: both refused before any call.
+        for provider in [
+            wire("https://paid.example/v1", "gpt-oss:120b-cloud", false),
+            wire("http://127.0.0.1:9/v1", "llama3.2", true),
+        ] {
+            let harness = Harness::new();
+            let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+            let mut session =
+                harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
 
-        session.send("hello").await.unwrap();
+            let err = session.send("hello").await.unwrap_err();
 
-        assert_eq!(provider.request_count(), 1);
-        assert_eq!(usd_spent(&harness), 0, "a subscription call costs 0 cents");
+            assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+            assert!(err.to_string().contains("[prices.models."), "{err}");
+            assert_eq!(harness.store().reservation_count().unwrap(), 0);
+            assert_eq!(harness.store().event_count("budget.denied").unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn a_subscription_model_passes_only_on_the_subscription_backend() {
+        let caps = kernel_core::budget::BudgetCaps::conservative_default();
+        let prices = PriceTable::default();
+        let check = |provider: &dyn ChatProvider| {
+            unpriced_under_money_cap(&caps, &prices, provider, provider.model())
+        };
+        assert_eq!(
+            check(&wire("https://ollama.com/v1", "gpt-oss:120b-cloud", false)),
+            None
+        );
+        assert!(check(&wire("https://ollama.com/v1", "not-in-catalog", false)).is_some());
+        assert!(check(&wire(
+            "https://paid.example/v1",
+            "gpt-oss:120b-cloud",
+            false
+        ))
+        .is_some());
     }
 
     #[tokio::test]

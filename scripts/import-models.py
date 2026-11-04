@@ -23,9 +23,10 @@ import sys
 from pathlib import Path
 
 # Providers billed by a flat subscription: the cost of one call is known to be
-# 0 cents, so these rows carry `billing = "subscription"`. A row without a
+# 0 cents, so these rows carry `billing = "subscription"`. The app honours it
+# only on the provider's own endpoint (https://ollama.com). A row without a
 # price is never assumed to be a subscription.
-SUBSCRIPTION_PROVIDERS = {"ollama-cloud", "opencode-go"}
+SUBSCRIPTION_PROVIDERS = {"ollama-cloud"}
 
 # Official list prices that models.dev lacks, in USD per million tokens, with
 # where and when they were read. The peak-hour, cache-miss rate is used.

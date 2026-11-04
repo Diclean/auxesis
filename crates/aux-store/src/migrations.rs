@@ -1090,6 +1090,12 @@ pub(crate) const MIGRATION_V37_PARTY_TIME_ZONE: &str =
 pub(crate) const MIGRATION_V38_RESERVED_USD: &str =
     "ALTER TABLE usage_reservations ADD COLUMN usd_cents INTEGER NOT NULL DEFAULT 0;";
 
+/// v39: a reservation is held until settled. `unsettled` carries what a
+/// settle needs once its process is gone; a held row never expires (a daemon
+/// start settles those a dead process left). Older rows still expire.
+pub(crate) const MIGRATION_V39_UNSETTLED: &str =
+    "ALTER TABLE usage_reservations ADD COLUMN unsettled TEXT;";
+
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
 ///
 /// A store created by this build has a unique `idx_mcp_tools_wire` and this is
@@ -1479,6 +1485,9 @@ impl Store {
         if version < 38 {
             self.apply_v38()?;
         }
+        if version < 39 {
+            self.apply_v39()?;
+        }
         // v15 is unreleased, but a store written by a pre-release draft may
         // already exist with the old non-unique wire index and duplicate wire
         // names. Repair it in place (idempotent: the fast path is a pragma
@@ -1677,6 +1686,29 @@ impl Store {
             "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [38_i64.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply v39: reservations gain `unsettled`. The `ALTER` is guarded by a
+    /// pragma read under the write lock (the v7/v13 pattern).
+    fn apply_v39(&mut self) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('usage_reservations') WHERE name = 'unsettled'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has == 0 {
+            tx.execute_batch(MIGRATION_V39_UNSETTLED)?;
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [39_i64.to_string()],
         )?;
         tx.commit()?;
         Ok(())

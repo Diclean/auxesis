@@ -8,7 +8,9 @@ use kernel_core::budget::{
     audit_denial, BudgetCaps, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome,
     UsageActual, UsageKind, UsageTotals,
 };
-use std::sync::{Arc, Mutex};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 fn unit_for(estimated: bool) -> &'static str {
     if estimated {
@@ -80,21 +82,99 @@ pub(super) fn settle_streamed<S: SettleStore>(
 }
 
 /// The store a [`HeldReservation`] settles in: a turn's own handle, or a
-/// shared store (one a future that must be `Send` can hold).
-pub trait SettleStore {
+/// shared store (one a future that must be `Send` can hold). Sealed, so a
+/// guard's drop runs no code from outside this crate but its own callback.
+pub trait SettleStore: sealed::Sealed {
     /// Settle `reservation` at `actual`. The store settles a reservation once.
     fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError>;
+    /// Hand that settle to the settlement worker: never blocks, never locks.
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual);
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for aux_store::StoreHandle<'_> {}
+    impl Sealed for std::sync::Arc<std::sync::Mutex<aux_store::Store>> {}
 }
 
 impl SettleStore for StoreHandle<'_> {
     fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
         self.with(|store| store.settle_reservation(reservation, actual))
     }
+
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
+        // A borrowed store cannot reach the worker: its row waits for a start.
+        if let StoreHandle::Shared(store) = self {
+            store.settle_later(reservation, actual);
+        }
+    }
 }
 
 impl SettleStore for Arc<Mutex<Store>> {
     fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
         kernel_core::lock_recover(self).settle_reservation(reservation, actual)
+    }
+
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
+        let job = SettleJob {
+            store: Arc::clone(self),
+            reservation: reservation.clone(),
+            actual,
+        };
+        if settler().try_send(job).is_err() {
+            tracing::warn!("settle not queued: the call stays held for a daemon start");
+        }
+    }
+}
+
+/// A settle the worker owes.
+struct SettleJob {
+    store: Arc<Mutex<Store>>,
+    reservation: Reservation,
+    actual: UsageActual,
+}
+
+/// The settlement worker, started by the first reserve: one thread on a
+/// bounded queue, so no drop waits on the store's lock or on SQLite. A failed
+/// settle is retried with each new job or after 2 s, 150 times at most; its
+/// row stays held until then, or until a daemon start
+/// (`Store::settle_abandoned_reservations`).
+fn settler() -> &'static mpsc::SyncSender<SettleJob> {
+    static SETTLER: OnceLock<mpsc::SyncSender<SettleJob>> = OnceLock::new();
+    SETTLER.get_or_init(|| {
+        let (jobs, queue) = mpsc::sync_channel(1024);
+        let worker = std::thread::Builder::new().name("budget-settle".to_string());
+        if let Err(err) = worker.spawn(move || settle_jobs(&queue)) {
+            tracing::error!(error = %err, "no settlement worker: dropped calls stay held");
+        }
+        jobs
+    })
+}
+
+fn settle_jobs(queue: &mpsc::Receiver<SettleJob>) {
+    let mut owed: Vec<(SettleJob, u32)> = Vec::new();
+    loop {
+        // Nothing owed: wait for the next job, however long that takes.
+        let wait = Duration::from_secs(if owed.is_empty() { u64::MAX } else { 2 });
+        match queue.recv_timeout(wait) {
+            Ok(job) => owed.push((job, 0)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        owed.retain_mut(|(job, tries)| {
+            *tries += 1;
+            let store = kernel_core::lock_recover(&job.store);
+            let settle = || store.settle_reservation(&job.reservation, &job.actual);
+            match catch_unwind(AssertUnwindSafe(settle)) {
+                Ok(Err(err)) => {
+                    let id = job.reservation.id;
+                    tracing::warn!(reservation = id, error = %err, "settle failed; retried");
+                    *tries < 150
+                }
+                // Settled, or a settle that panicked: left held for a start.
+                _ => false,
+            }
+        });
     }
 }
 
@@ -103,10 +183,11 @@ impl SettleStore for Arc<Mutex<Store>> {
 ///
 /// [`HeldReservation::settle`] records what the call cost. Dropped
 /// unsettled (the future making the call was cancelled after the request
-/// went out), it settles the reserved estimate itself, or what
+/// went out), it hands the settlement worker the reserved estimate, or what
 /// [`HeldReservation::or_known`] reports where that is more, so the spend is
-/// never handed back as headroom. Either way the reservation settles once,
-/// and a failed settle on drop is logged, never a panic.
+/// never handed back as headroom. The drop never blocks, takes no lock and
+/// never panics; the store row stays held (counted, never swept) until a
+/// settle deletes it, so the reservation settles once.
 pub struct HeldReservation<'k, S: SettleStore> {
     store: S,
     reservation: Reservation,
@@ -117,6 +198,7 @@ pub struct HeldReservation<'k, S: SettleStore> {
 impl<'k, S: SettleStore> HeldReservation<'k, S> {
     /// Hold `reservation`, taken in `store`, until it is settled.
     pub fn new(store: S, reservation: Reservation) -> Self {
+        settler(); // started now, so no drop waits for it
         Self {
             store,
             reservation,
@@ -139,10 +221,15 @@ impl<'k, S: SettleStore> HeldReservation<'k, S> {
         &self.reservation
     }
 
-    /// Settle what the call cost. The guard is spent whatever the outcome.
+    /// Settle what the call cost. The guard is spent whatever the outcome;
+    /// a settle that fails goes to the settlement worker to retry.
     pub fn settle(mut self, actual: &UsageActual) -> Result<(), StoreError> {
         self.settled = true;
-        self.store.settle(&self.reservation, actual)
+        let settled = self.store.settle(&self.reservation, actual);
+        if settled.is_err() {
+            self.store.settle_later(&self.reservation, *actual);
+        }
+        settled
     }
 }
 
@@ -151,15 +238,12 @@ impl<S: SettleStore> Drop for HeldReservation<'_, S> {
         if self.settled {
             return;
         }
-        let known = self.known.as_ref().map(|known| known()).unwrap_or_default();
-        let actual = at_least(known, &self.reservation.estimate);
-        if let Err(err) = self.store.settle(&self.reservation, &actual) {
-            tracing::warn!(
-                reservation = self.reservation.id,
-                error = %err,
-                "could not settle a dropped call's reserved usage"
-            );
-        }
+        // The callback is the caller's code: if it panics, the reserve
+        // stands in for it, and nothing unwinds out of a drop.
+        let known =
+            (self.known.as_ref()).and_then(|known| catch_unwind(AssertUnwindSafe(known)).ok());
+        let actual = at_least(known.unwrap_or_default(), &self.reservation.estimate);
+        self.store.settle_later(&self.reservation, actual);
     }
 }
 
@@ -1671,6 +1755,7 @@ mod tests {
             _ = session.send("hello") => panic!("the provider never answers"),
             () = provider.sent.notified() => {}
         }
+        settled(&harness.store);
         let store = harness.store();
         let day = store.local_day().unwrap();
         let totals = store.usage_totals("main", &day).unwrap();
@@ -1701,6 +1786,86 @@ mod tests {
         let (totals, held) = dropped_after_dispatch(vec![ChatDelta::Usage(usage)]).await;
         assert_eq!(held, 0, "settled once");
         assert_eq!((totals.tokens_in, totals.tokens_out), (90_000, 5_000));
+    }
+
+    /// Waits (10 s at most) for the settlement worker to settle all of
+    /// `store`, then reads the day's totals for "main".
+    fn settled(store: &Mutex<Store>) -> UsageTotals {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let store = kernel_core::lock_recover(store);
+            if store.reservation_count().unwrap() == 0 {
+                return store
+                    .usage_totals("main", &store.local_day().unwrap())
+                    .unwrap();
+            }
+            drop(store);
+            assert!(std::time::Instant::now() < deadline, "never settled");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// 60 tokens in, 9 out, for "main" under a 100-token input cap.
+    fn reserve_60(store: &Mutex<Store>) -> ReserveOutcome {
+        let store = kernel_core::lock_recover(store);
+        let caps = BudgetCaps {
+            tokens_in: Some(100),
+            ..Default::default()
+        };
+        let estimate = UsageTotals {
+            tokens_in: 60,
+            tokens_out: 9,
+            usd_cents: 0,
+        };
+        let day = store.local_day().unwrap();
+        store
+            .try_reserve_for(None, "main", &day, &caps, &estimate)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_failed_settle_stays_held_past_its_ttl_and_its_retry_records_it_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve_60(&store) else {
+            panic!("admitted");
+        };
+        let actual = at_least(UsageActual::default(), &reservation.estimate);
+        // The store refuses settles, as a busy one would, until the trigger goes.
+        let raw = aux_store::open_keyed(&path).unwrap();
+        let busy = "CREATE TRIGGER busy BEFORE DELETE ON usage_reservations
+                    BEGIN SELECT RAISE(ABORT, 'database is busy'); END;";
+        raw.execute_batch(busy).unwrap();
+        let held = HeldReservation::new(Arc::clone(&store), reservation);
+        assert!(held.settle(&actual).is_err());
+        // Its TTL passes: the row stays held, so the headroom stays taken.
+        let expire = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+        raw.execute_batch(expire).unwrap();
+        assert!(matches!(reserve_60(&store), ReserveOutcome::Denied(_)));
+        raw.execute_batch("DROP TRIGGER busy").unwrap();
+        assert_eq!(settled(&store).tokens_in, 60, "recorded once");
+    }
+
+    #[test]
+    fn a_drop_takes_no_lock_and_outlives_a_callback_that_panics_while_unwinding() {
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve_60(&store) else {
+            panic!("admitted");
+        };
+        let held =
+            HeldReservation::new(Arc::clone(&store), reservation).or_known(|| panic!("boom"));
+        // Dropped while this thread holds the store's lock and is unwinding: a
+        // drop that locked would deadlock, a panic out of it would abort.
+        let locked = kernel_core::lock_recover(&store);
+        let unwound = catch_unwind(AssertUnwindSafe(move || {
+            let _held = held;
+            panic!("the turn fails");
+        }));
+        assert!(unwound.is_err());
+        drop(locked);
+        let totals = settled(&store);
+        assert_eq!((totals.tokens_in, totals.tokens_out), (60, 9));
     }
 
     #[tokio::test]

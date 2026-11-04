@@ -1189,6 +1189,11 @@ async fn a_turn_dropped_after_dispatch_still_charges_its_reserve() {
         pid = wait_for_pid(&pidfile) => pid,
     };
     assert!(process_gone(child_pid), "the dropped turn's tree is reaped");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while store.lock().unwrap().reservation_count().unwrap() > 0 {
+        assert!(std::time::Instant::now() < deadline, "unsettled");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let guard = store.lock().unwrap();
     assert_eq!(guard.reservation_count().unwrap(), 0, "not left to expire");
     let day = guard.local_day().unwrap();

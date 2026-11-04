@@ -659,9 +659,8 @@ impl<'a> ChatSession<'a> {
                         // The call failed after the provider had already been
                         // fed the prompt (and may already have generated some
                         // of the answer): settle the conservative estimate
-                        // instead of releasing at zero (I-01). A settle
-                        // failure is logged; the reservation still expires on
-                        // its TTL.
+                        // instead of releasing at zero (I-01). A failed
+                        // settle is retried; the reservation stays held.
                         settle_streamed(
                             reservation,
                             &request,

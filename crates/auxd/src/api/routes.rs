@@ -2012,6 +2012,25 @@ async fn resolve_approval(
         }
     }
 
+    // A grants change is rechecked and written *before* the card resolves, so
+    // a write the chief ceiling refuses is broadcast as denied, never allowed.
+    let (resolution, state_frame, decision, grants_refusal) =
+        if grants_approval && decision == "allow_once" {
+            match apply_grants_proposal(&state.home, &id).await {
+                None => (resolution, state_frame, decision, None),
+                Some((audit_decision, response)) => (
+                    super::approval::Resolution::deny(),
+                    ApprovalStateFrame::Denied {
+                        by: "error".to_string(),
+                    },
+                    audit_decision,
+                    Some(response),
+                ),
+            }
+        } else {
+            (resolution, state_frame, decision, None)
+        };
+
     // Finish on a blocking thread, under the registry lock: the audit row and
     // the `approval.resolved` frame are out *before* the turn wakes, so
     // `resolved` always precedes `tool.end`/`message.done`. `complete_with`
@@ -2046,41 +2065,11 @@ async fn resolve_approval(
 
     match completion {
         Ok(super::approval::Completion::Delivered) => {
-            if grants_approval {
-                match decision {
-                    "allow_once" => {
-                        if let Some(crate::agents::GrantsProposal { agent, grants, .. }) =
-                            crate::agents::take_proposal(&id)
-                        {
-                            let home = state.home.clone();
-                            let write = tokio::task::spawn_blocking(move || {
-                                crate::agents::write_grants(&home, &agent, &grants)
-                            })
-                            .await;
-                            let failed = match write {
-                                Ok(Ok(())) => false,
-                                Ok(Err(err)) => {
-                                    tracing::warn!(error = %err, "applying an approved grants change failed");
-                                    true
-                                }
-                                Err(err) => {
-                                    tracing::warn!(error = %err, "joining the grants writer");
-                                    true
-                                }
-                            };
-                            if failed {
-                                return error::error_response(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "grants_write_failed",
-                                    "the approved grants change could not be saved; nothing was applied",
-                                    None,
-                                );
-                            }
-                        }
-                    }
-                    "deny" => crate::agents::drop_proposal(&id),
-                    _ => {}
-                }
+            if let Some(response) = grants_refusal {
+                return response;
+            }
+            if grants_approval && decision == "deny" {
+                crate::agents::drop_proposal(&id);
             }
             Json(serde_json::json!({ "state": state_frame })).into_response()
         }
@@ -2118,6 +2107,48 @@ async fn resolve_approval(
             )
         }
     }
+}
+
+/// Apply the grants proposal bound to an approval id; the chief ceiling is
+/// rechecked inside the write. `None` when applied, else nothing was applied
+/// and the audit decision plus the HTTP refusal come back.
+async fn apply_grants_proposal(
+    home: &std::path::Path,
+    id: &str,
+) -> Option<(&'static str, Response)> {
+    use crate::agents::RegistryError;
+    let (home, proposal) = (home.to_path_buf(), crate::agents::take_proposal(id));
+    let write = tokio::task::spawn_blocking(move || {
+        let proposal = proposal.ok_or_else(|| RegistryError::Io("the proposal is gone".into()))?;
+        crate::agents::apply_proposal(&home, &proposal)
+    })
+    .await;
+    let (audit, status, code, message) = match write {
+        Ok(Ok(())) => return None,
+        Ok(Err(RegistryError::ExceedsChief)) => (
+            "allow_once_grants_exceed_chief",
+            StatusCode::CONFLICT,
+            "grant_exceeds_chief",
+            "the permissions changed while this approval was pending; nothing was applied",
+        ),
+        Ok(Err(RegistryError::GrantsChanged)) => (
+            "allow_once_grants_changed",
+            StatusCode::CONFLICT,
+            "grants_changed",
+            "the grants changed since this change was proposed; nothing was applied",
+        ),
+        failed => {
+            let error = failed.map(|result| result.err().map(|err| err.to_string()));
+            tracing::warn!(error = ?error.map_err(|err| err.to_string()), "applying an approved grants change failed");
+            (
+                "allow_once_grants_write_failed",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "grants_write_failed",
+                "the approved grants change could not be saved; nothing was applied",
+            )
+        }
+    };
+    Some((audit, error::error_response(status, code, message, None)))
 }
 
 /// Internal channel entry point for Telegram's two-button approval card.

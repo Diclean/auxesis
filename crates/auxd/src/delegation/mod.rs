@@ -214,7 +214,7 @@ impl DelegationRun {
             // mode may still tighten an Open one.
             caller_mode: crate::privacy_wiring::pinned_mode_fn(
                 delegation.caller_mode,
-                crate::privacy_wiring::agent_mode_fn(home, aux_runtime::grants::CHIEF_AGENT),
+                crate::privacy_wiring::agent_mode_fn(home, crate::agents::chief_id(home)),
             ),
             inherited: aux_engine::handoff::Handoff::default(),
             parent_session: None,

@@ -529,15 +529,7 @@ async fn agents_endpoint_reports_live_state_and_threads() {
         .collect();
     assert_eq!(
         names,
-        vec![
-            "aux",
-            "axis",
-            "calendar",
-            "clients",
-            "documents",
-            "mail",
-            "main"
-        ]
+        vec!["axis", "calendar", "clients", "documents", "mail", "main"]
     );
 
     let main_agent = agents
@@ -1160,7 +1152,7 @@ async fn private_egress_e2e(deep: bool) {
     );
     let response = post_auth(
         &t,
-        "/v1/threads/main/messages",
+        "/v1/threads/notes/messages",
         &serde_json::json!({"content": input}).to_string(),
     )
     .await;
@@ -1198,7 +1190,7 @@ async fn private_egress_e2e(deep: bool) {
         assert!(reply.contains(value), "owner reply was not rehydrated");
     }
 
-    let receipts = get_auth(&t, "/v1/receipts?agent=main&limit=10").await;
+    let receipts = get_auth(&t, "/v1/receipts?agent=notes&limit=10").await;
     assert_eq!(receipts.status, 200, "body: {}", receipts.body);
     let receipts = receipts.json();
     let receipt = receipts

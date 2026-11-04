@@ -83,7 +83,7 @@ import XCTest
         ])
         let store = Store(transport: transport)
         store.start()
-        XCTAssertTrue(waitUntil { store.privacyRecordRead == .loaded && store.receipts.count == 1 }, "the record was read")
+        XCTAssertTrue(waitUntil { store.privacyRecordRead == .loaded && store.receiptLog.receipts.count == 1 }, "the record was read")
         store.stop()
 
         let failing = FakeTransport()
@@ -103,9 +103,9 @@ import XCTest
         ])
         let store = Store(transport: transport)
         store.start()
-        XCTAssertTrue(waitUntil { store.privacyRecordRead == .loaded && store.receipts.count == 1 }, "the record was read")
+        XCTAssertTrue(waitUntil { store.privacyRecordRead == .loaded && store.receiptLog.receipts.count == 1 }, "the record was read")
         transport.receiptsResult = .failure(AuxdError.http(status: 404, body: "{}"))
-        let failuresBefore = store.failedReceiptReads
+        let failuresBefore = store.receiptLog.failedReads
         store.selectAgent("mail")
         XCTAssertTrue(waitUntil { transport.receiptsCalls.contains { $0.agent == "mail" } }, "the agent's receipts were read")
         // The failed read is handled on the main actor: wait for the store to
@@ -114,7 +114,7 @@ import XCTest
         // state *before* the failure landed, which is the same `.loaded` the
         // assertion below wants — the test would pass without proving
         // anything.
-        XCTAssertTrue(waitUntil { store.failedReceiptReads > failuresBefore }, "the failed agent read was handled")
+        XCTAssertTrue(waitUntil { store.receiptLog.failedReads > failuresBefore }, "the failed agent read was handled")
         XCTAssertEqual(store.privacyRecordRead, .loaded, "a failed agent read must not hide the count")
         store.stop()
     }
@@ -127,10 +127,10 @@ import XCTest
         let store = Store(transport: transport)
         store.start()
         XCTAssertTrue(waitUntil { store.privacyRecordRead == .loaded }, "the record was read")
-        XCTAssertEqual(PrivacyRecordCounter.count(store.receipts, day: day), 0)
+        XCTAssertEqual(PrivacyRecordCounter.count(store.receiptLog.receipts, day: day), 0)
         transport.emit(.runFinished(Receipt(runId: "run-live", agent: "scout", started: "\(day) 09:00:00", hostsContacted: ["api.example.test"])))
-        XCTAssertTrue(waitUntil { store.receipts.count == 1 }, "the frame was received")
-        XCTAssertEqual(PrivacyRecordCounter.count(store.receipts, day: day), 1)
+        XCTAssertTrue(waitUntil { store.receiptLog.receipts.count == 1 }, "the frame was received")
+        XCTAssertEqual(PrivacyRecordCounter.count(store.receiptLog.receipts, day: day), 1)
         store.stop()
     }
 

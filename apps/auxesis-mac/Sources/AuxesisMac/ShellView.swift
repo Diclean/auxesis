@@ -123,7 +123,7 @@ struct DetailColumn: View {
 
     var body: some View {
         if shell.route == .privacyRecord {
-            RequestInspectorView(receipt: shell.store.receipts.first { $0.runId == privacySelection })
+            RequestInspectorView(receipt: shell.store.receiptLog.receipts.first { $0.runId == privacySelection })
         } else if shell.route == .today {
             if case .waiting(let id) = todaySelection,
                let approval = shell.waitingApprovals.first(where: { $0.id == id }) {

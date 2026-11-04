@@ -35,7 +35,7 @@ struct PrivacyTabView: View {
     }
 
     @ViewBuilder private func record(_ copy: Copy) -> some View {
-        let model = PrivacyTabModel(receipts: shell.store.receipts, agent: member.id, day: TodayPresentation.day(Date()))
+        let model = PrivacyTabModel(receipts: shell.store.receiptLog.receipts, agent: member.id, day: TodayPresentation.day(Date()))
         let lines = model.summary(language)
         VStack(alignment: .leading, spacing: 4) {
             fact(lines[0], icon: "arrow.up.right")

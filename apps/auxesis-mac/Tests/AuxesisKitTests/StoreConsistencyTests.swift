@@ -114,7 +114,7 @@ final class DelayRecorder {
         XCTAssertTrue(waitUntil { store.agents.first { $0.name == "scout" }?.state == .working })
 
         transport.emit(.runFinished(Receipt(runId: "run-a", agent: "scout", status: .done)))
-        XCTAssertTrue(waitUntil { store.receipts.contains { $0.runId == "run-a" } })
+        XCTAssertTrue(waitUntil { store.receiptLog.receipts.contains { $0.runId == "run-a" } })
         XCTAssertEqual(store.agents.first { $0.name == "scout" }?.state, .working)
 
         transport.emit(.runFinished(Receipt(runId: "run-b", agent: "scout", status: .done)))

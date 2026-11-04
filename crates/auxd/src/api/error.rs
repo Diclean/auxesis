@@ -71,7 +71,7 @@ fn json_error(
     (status, Json(body)).into_response()
 }
 
-/// `501` for features that B-API v1 does not ship yet.
+/// `501` for features that this API version does not ship yet.
 pub fn not_implemented(feature: &'static str) -> Response {
     error_response(
         StatusCode::NOT_IMPLEMENTED,
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn a_registered_known_secret_is_scrubbed_without_a_name_on_the_error_surface() {
-        // H-04/L-1: the daemon registers the secrets it resolves; an API
+        // The daemon registers the secrets it resolves; an API
         // error body quoting one of them must redact it even when no
         // credential name or vendor prefix sits next to it.
         let secret = format!("CANARY_KNOWN_{}", "7f3a9c2e1b5d");

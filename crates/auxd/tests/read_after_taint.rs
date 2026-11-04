@@ -318,7 +318,7 @@ async fn r7_a_tainted_chief_cannot_launder_through_a_clean_agent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r8_a_later_wildcard_allow_never_hides_the_owners_delegate_ask() {
-    // Seal r1: `aux/delegate=ask` then `aux/*=allow`. The broker never lets
+    // `aux/delegate=ask` then `aux/*=allow`. The broker never lets
     // the wildcard cover `delegate`, so a tainted hand-off still gets a card.
     let head = "default_agent = \"aux\"\n\n[[rules]]\nagent = \"aux\"\ntool = \"delegate\"\n\
                 action = \"ask\"\n\n[[rules]]\nagent = \"aux\"\ntool = \"*\"\naction = \"allow\"";

@@ -303,7 +303,7 @@ async fn every_owner_display_shows_the_value_of_a_token_from_a_tool_result() {
     rig.shown_value(held[0]["answer"].as_str().unwrap());
 
     // Nothing that leaves the Mac or stays at rest holds a value. A name is no
-    // hidden value (NAMES-OFF, owner 2026-10-19).
+    // hidden value.
     let store = Store::open(&store_path(&rig.home)).unwrap();
     for value in [address.as_str(), IBAN] {
         rig.assert_masked_outbound(value);

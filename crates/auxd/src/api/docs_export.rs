@@ -1,4 +1,4 @@
-//! `POST /v1/docs/export?from=&to=&client=&out=` (M5-2): the owner's receipts
+//! `POST /v1/docs/export?from=&to=&client=&out=`: the owner's receipts
 //! of a period to a CSV plus the originals, in a folder he names. Behind the
 //! bearer-token router. No model is called; no log line carries a path, a file
 //! name or a value.

@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_timeline_job_records_a_private_skip() {
-        // B3 round 5: a scheduled crm-timeline run in Private mode makes no
+        // A scheduled crm-timeline run in Private mode makes no
         // network call (the integration test proves the zero dial) and the
         // scheduler records the skip reason in the run row.
         let dir = tempdir().unwrap();

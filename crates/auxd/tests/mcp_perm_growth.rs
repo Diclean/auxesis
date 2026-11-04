@@ -1,4 +1,4 @@
-//! M6-3 acceptance: a permission growth needs a new approval.
+//! A permission growth needs a new approval.
 //!
 //! The fixture is a tiny loopback HTTP MCP server (fake tools only). The
 //! daemon runs in a temp home. The first runtime is built here with the

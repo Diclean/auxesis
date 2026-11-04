@@ -1,4 +1,4 @@
-//! GLM-P1-1 regression (J-02 round 4): after `auxd` verified its home, a
+//! After `auxd` verified its home, a
 //! same-uid actor renames the home and plants a symlink to a decoy. Every
 //! state re-open (kill switch, audit, config, store) must re-verify the
 //! identity and fail closed — the decoy must gain **no** `store.db`,

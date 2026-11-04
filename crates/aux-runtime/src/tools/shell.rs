@@ -1951,7 +1951,10 @@ mod tests {
     /// command's session, no marker-holding orphan, and no writer file.
     /// Only functions whose signatures are identical on main and on this
     /// branch are used, so the same test measures both.
-    #[cfg(unix)]
+    ///
+    /// macOS-only: zombie detection reads `proc_pidinfo`, and the reaping
+    /// semantics under test (launchd adopting the orphan) are macOS's.
+    #[cfg(target_os = "macos")]
     #[tokio::test]
     #[ignore = "stress test: run explicitly under CPU load, see the doc comment"]
     async fn shell_cleanup_stress_backgrounded_children_are_all_reaped() {

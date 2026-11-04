@@ -3023,8 +3023,8 @@
       "fr" : "Terminé"
     },
     "ledgerEmpty" : {
-      "en" : "Nothing has happened yet. Every action and every send will be listed here.",
-      "fr" : "Rien ne s’est encore passé. Chaque action et chaque envoi seront listés ici."
+      "en" : "No actions or sends since you left.",
+      "fr" : "Aucune action ni aucun envoi depuis votre départ."
     },
     "ledgerHashHelp" : {
       "en" : "The skill's pinned hash. A changed skill gets a new hash and asks again.",

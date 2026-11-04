@@ -346,6 +346,15 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
         }
     }
 
+    /// Tests: deliver one live frame as the daemon's socket would.
+    public func finishRun(_ receipt: Receipt) {
+        continuation?.yield(.runFinished(receipt))
+    }
+
+    /// Tests: the rows `ledger(limit:)` answers with; `nil` keeps the
+    /// scenario's sample, so a test can start empty and let work arrive.
+    public var ledgerEntries: [LedgerEntry]?
+
     private static func nowStamp() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -371,6 +380,7 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
     }
 
     public func ledger(limit: Int) async throws -> [LedgerEntry] {
+        if let ledgerEntries { return ledgerEntries }
         guard scenario != .empty else { return [] }
         return [
             LedgerEntry(at: stamp(-2900), kind: "skill.run", agent: "mail", summary: "Quote Q-2026-014 to Jonas Weber, sent after your yes", skill: "quote-email", skillHash: "sha256:4be1c07d92aa"),

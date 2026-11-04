@@ -166,7 +166,7 @@ struct DetailColumn: View {
 
     private var ledgerSelectionCopyKey: UIKey {
         switch shell.ledger {
-        case .loaded(let rows): return rows.isEmpty ? .ledgerEmpty : .selectItemDetail
+        case .loaded(let rows): return SinceYouLeftPresentation.entries(rows).isEmpty ? .ledgerEmpty : .selectItemDetail
         case .loading: return .loading
         case .failed: return .loadFailed
         case .unavailable: return .unavailable
@@ -268,7 +268,9 @@ private struct TodayQueueList: View {
                     case .dueToday:
                         Text(copy(.todayDueEmpty)).font(.meta).foregroundStyle(palette.muted.color)
                     case .sinceYouLeft:
-                        if entries.isEmpty { Text(copy(.ledgerEmpty)).font(.meta).foregroundStyle(palette.muted.color) }
+                        if let line = SinceYouLeftPresentation.emptyLine(shell.ledger, language: language) {
+                            Text(line).font(.meta).foregroundStyle(palette.muted.color)
+                        }
                         ForEach(entries.prefix(1)) { entry in
                             Button { selection = .ledger(entry.id) } label: {
                                 queueRow(LedgerText.what(entry, language: language), icon: "clock.arrow.circlepath", tone: palette.ink2.color)

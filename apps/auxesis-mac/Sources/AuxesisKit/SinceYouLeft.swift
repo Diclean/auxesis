@@ -23,13 +23,45 @@ public enum SinceYouLeftFilter: String, CaseIterable, Identifiable {
 }
 
 public enum SinceYouLeftPresentation {
+    /// True for a ledger row the owner can review: an action or a send. The
+    /// conversation itself — every `message.*` row is the thread's transcript —
+    /// is not work that ran while they were away.
+    ///
+    /// A `run.finished` row is one chat turn's receipt. The turn the owner
+    /// started is their own message, and its tools, skills and sends have their
+    /// own rows (`tool.decision`, `skill.action`); only a scheduled or
+    /// delegated run is work in itself. An older row with no `trigger` proves
+    /// nothing, so it stays.
+    public static func isWork(_ entry: LedgerEntry) -> Bool {
+        if entry.kind.hasPrefix("message.") { return false }
+        guard entry.kind == "run.finished", let payload = LedgerText.payload(entry.summary) else {
+            return true
+        }
+        guard let trigger = payload["trigger"] as? String else { return true }
+        return trigger != "owner_message"
+    }
+
     public static func entries(_ entries: [LedgerEntry], filter: SinceYouLeftFilter = .all) -> [LedgerEntry] {
         filter.selecting(from: entries).filter {
+            guard isWork($0) else { return false }
             let summary = $0.summary.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !summary.isEmpty && summary != "(empty)" else { return false }
             let line = LedgerText.what($0, language: .en).trimmingCharacters(in: .whitespacesAndNewlines)
             return !line.isEmpty && line != "No text"
         }.sorted { $0.at > $1.at }
+    }
+
+    /// The one line a "Since you left" section shows when it holds no work, or
+    /// `nil` when it does. Only a loaded ledger may say there were no actions
+    /// or sends: a read that failed, is still loading, or is unavailable says
+    /// so, instead of claiming nothing happened.
+    public static func emptyLine(_ load: Loadable<[LedgerEntry]>, language: Language) -> String? {
+        switch load {
+        case .loading: return L10n.ui(.loading, language)
+        case .failed: return L10n.ui(.loadFailed, language)
+        case .unavailable: return L10n.ui(.unavailable, language)
+        case .loaded(let rows): return entries(rows).isEmpty ? L10n.ui(.ledgerEmpty, language) : nil
+        }
     }
 
     public static func visibleEntries(_ entries: [LedgerEntry]) -> [LedgerEntry] {

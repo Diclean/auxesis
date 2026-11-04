@@ -78,9 +78,10 @@ struct TodayView: View {
         case .dueToday:
             return [copy(.todayDueEmpty)]
         case .sinceYouLeft:
-            guard let entries = shell.ledger.value else { return [copy(.unavailable)] }
-            let items = SinceYouLeftPresentation.previewLines(entries, language: language)
-            return items.isEmpty ? [copy(.ledgerEmpty)] : items
+            if let line = SinceYouLeftPresentation.emptyLine(shell.ledger, language: language) {
+                return [line]
+            }
+            return SinceYouLeftPresentation.previewLines(shell.ledger.value ?? [], language: language)
         case .runningNow:
             let items = TeamMember.all.filter { shell.workingAgents.contains($0.id) }.map(\.name)
             return items.isEmpty ? [copy(.idleLine)] : items
@@ -198,8 +199,9 @@ struct TodayView: View {
                         row(lead: LedgerText.localTime(entry.at, locale: Locale(identifier: language.localeIdentifier)),
                             text: LedgerText.what(entry, language: language))
                     }
-                } else if shell.ledger.value == nil { emptyRow(copy(.unavailable)) }
-                else { emptyRow(copy(.ledgerEmpty)) }
+                } else if let line = SinceYouLeftPresentation.emptyLine(shell.ledger, language: language) {
+                    emptyRow(line)
+                }
             }
         }
         .animation(.easeOut(duration: 0.22), value: brief.prospects.map(\.id))

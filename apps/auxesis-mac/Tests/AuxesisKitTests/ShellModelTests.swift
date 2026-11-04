@@ -247,6 +247,27 @@ import Testing
         XCTAssertTrue(shell.ledger.value?.contains { $0.skillHash?.hasPrefix("sha256:") == true } ?? false)
     }
 
+    /// The Today column was one read on appear, so a day
+    /// that started empty stayed "Nothing has happened yet" while the day's
+    /// runs streamed in as receipts. A finished run refreshes the ledger.
+    func testTheLedgerPicksUpARunThatFinishesAfterItLoaded() {
+        let daemon = FixtureDaemon(scenario: .team)
+        daemon.ledgerEntries = []
+        let store = Store(transport: daemon, language: .en)
+        let shell = ShellModel(store: store, client: daemon)
+        shell.start()
+        XCTAssertTrue(waitUntil { store.phase == .live })
+        shell.loadLedger()
+        XCTAssertTrue(waitUntil { shell.ledger == .loaded([]) })
+
+        daemon.ledgerEntries = [
+            LedgerEntry(at: "2026-11-04 13:45:00", kind: "skill.action", agent: "clients",
+                        summary: "Drafted the invoice reply to Camille")
+        ]
+        daemon.finishRun(Receipt(runId: "turn-1", agent: "clients", trigger: "owner_message"))
+        XCTAssertTrue(waitUntil { shell.ledger.value?.count == 1 }, "the ledger refreshed when the run finished")
+    }
+
     func testNoClientMeansUnavailableNotACrash() {
         let store = Store(transport: FixtureDaemon(), language: .en)
         let shell = ShellModel(store: store, client: nil)

@@ -64,7 +64,7 @@ EventKit (it cannot add them); the invite goes by mail with an `.ics` (`docs/mai
 (`GET /v1/documents/{sha256}/bytes`, local token), runs `VNRecognizeTextRequest` (accurate, language
 correction on, languages `en-US, fr-FR`), and returns `{lines:[{text, confidence, box}], pages}`.
 An empty pass is retried once with the same accurate request, never a faster one; a second empty
-pass stores the reason `the OCR returned nothing`.
+pass marks the document unread with the reason `no text could be read; it can be retried`.
 
 ## 4. Kernel changes
 

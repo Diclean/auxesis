@@ -285,7 +285,12 @@ pub struct JobJson {
     pub last_run_at: Option<String>,
     /// `ok`, `late`, `failing` or `unknown` (see `job_health`).
     pub health: String,
+    /// English reason, kept unchanged for older clients.
     pub reason: Option<String>,
+    /// `missed`, `failed`, `hung` or `interrupted`; `null` for ok/unknown.
+    pub reason_kind: Option<String>,
+    /// Local `HH:MM` the reason refers to; `null` when it has no time.
+    pub reason_at: Option<String>,
 }
 
 /// One agent's usage for the requested day.
@@ -1959,6 +1964,8 @@ pub fn jobs_snapshot(home: &Path) -> anyhow::Result<Vec<JobJson>> {
                 last_run_at: job.last_run_at.map(|at| clean_field(&at)),
                 health: health.state.as_str().to_string(),
                 reason,
+                reason_kind: health.reason_kind.map(|kind| kind.as_str().to_string()),
+                reason_at: health.reason_at,
             })
         })
         .collect()

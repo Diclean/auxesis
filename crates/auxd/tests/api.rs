@@ -22,6 +22,7 @@ use aux_providers::{
 };
 use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions, FailingTurnRunner, ToolRegistryHook};
+use chrono::{Local, NaiveDateTime};
 use common::{assert_error, http, HttpResponse};
 use futures_util::StreamExt;
 use kernel_broker::{Risk, Tool, ToolCtx, ToolError, ToolOutput};
@@ -3306,7 +3307,7 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
     store
         .log_event("daemon.started", r#"{"version":"0.1.0"}"#)
         .unwrap();
-    store
+    let job = store
         .create_job(
             "main",
             "veille",
@@ -3315,6 +3316,16 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
             Some("2026-10-04 08:30:00"),
         )
         .unwrap();
+    let run = store.start_run(job.id, "2026-11-04 07:00:00").unwrap();
+    store
+        .finish_run(run.id, "2026-11-04 07:02:00", aux_store::RUN_FAILED, None)
+        .unwrap();
+    let reason_at = NaiveDateTime::parse_from_str("2026-11-04 07:02:00", "%Y-%m-%d %H:%M:%S")
+        .unwrap()
+        .and_utc()
+        .with_timezone(&Local)
+        .format("%H:%M")
+        .to_string();
     store
         .record_usage_at(
             "main",
@@ -3387,6 +3398,14 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
     assert_eq!(jobs[0]["schedule"], "daily 08:30");
     assert_eq!(jobs[0]["enabled"], true);
     assert_eq!(jobs[0]["next_run_at"], "2026-10-04 08:30:00");
+    // The structured reason is present beside the unchanged English sentence.
+    assert_eq!(jobs[0]["health"], "failing");
+    assert_eq!(
+        jobs[0]["reason"].as_str(),
+        Some(format!("veille failed at {reason_at}").as_str())
+    );
+    assert_eq!(jobs[0]["reason_kind"].as_str(), Some("failed"));
+    assert_eq!(jobs[0]["reason_at"].as_str(), Some(reason_at.as_str()));
 
     t.stop();
 }

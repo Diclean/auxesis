@@ -84,19 +84,9 @@ pub trait BriefSource: Send + Sync + 'static {
     }
 }
 
-/// Local wall clock used by the scheduled runner. Tests inject a fixed clock.
-pub trait BriefClock: Send + Sync + 'static {
-    fn now_local(&self) -> DateTime<Local>;
-}
-
-/// System local clock for production.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemBriefClock;
-
-impl BriefClock for SystemBriefClock {
-    fn now_local(&self) -> DateTime<Local> {
-        Local::now()
-    }
+/// The owner's local time now, for callers that run a brief on demand.
+pub fn now_local() -> DateTime<Local> {
+    Local::now()
 }
 
 /// Fixed offline fixtures used by M0, tests, and `aux brief now`.
@@ -187,7 +177,7 @@ impl BriefError {
     }
 }
 
-/// Run one brief with a source, a notifier and a caller-supplied clock value.
+/// Run one brief with a source, a notifier and the caller's local `now`.
 /// `source_read_budget` is clamped to the M0 maximum of three source calls.
 pub fn run_once<F>(
     store: &Store,
@@ -342,7 +332,7 @@ pub fn next_quiet_end(
     Ok(Some(instant.to_utc()))
 }
 
-/// Compute the next daily run from an injected clock using the existing
+/// Compute the next daily run after the given `now` using the existing
 /// `Schedule::Daily` rules (including local DST handling).
 pub fn next_run(
     config: &BriefConfig,

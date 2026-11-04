@@ -1,0 +1,18 @@
+# Dependabot keeps the app's Rust crates and CI actions current, the same
+# way it does for the privacy kernel. Its pull requests go through the
+# normal CI and review; a bump that needs code changes is fixed on
+# Dependabot's own branch, not closed and redone.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

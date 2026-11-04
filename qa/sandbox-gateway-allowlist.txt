@@ -13,9 +13,11 @@ crates/aux-google/src/tests.rs | fs::write( | test-only OAuth fake .env and gran
 crates/aux-google/src/tests.rs | fs::remove_file( | test-only symlink and FIFO refusal fixtures live in TempDir homes
 crates/aux-google/src/tests.rs | fs::hard_link( | test-only hard-link fixture verifies token refusal across two TempDir paths
 crates/aux-google/src/tests.rs | OpenOptions::new( | test-only malformed grant fixtures are written into TempDir homes with mode 0600
-crates/aux-engine/src/config.rs | OpenOptions::new( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
-crates/aux-engine/src/config.rs | fs::remove_file( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
+crates/aux-engine/src/config.rs | OpenOptions::new( | temp files beside config.toml only: the rules writer's (caller-supplied path), and a new config.toml's, created 0600 with create_new in the same dir (the verified home's real path, or the caller's path-based load) before the no-replace link
+crates/aux-engine/src/config.rs | fs::remove_file( | drops the writer's own temp file beside config.toml: the rules writer's, and a new config.toml's once the no-replace link is made or refused
 crates/aux-engine/src/config.rs | fs::rename( | legacy engine config writer (caller-supplied path); the daemon uses Config::load_or_create_verified
+crates/aux-engine/src/config.rs | fs::create_dir_all( | parent of a missing config.toml before it is published: the verified home's real path (already there) or the caller's home for the path-based load; nothing else is created
+crates/aux-engine/src/config.rs | fs::hard_link( | no-replace publish of a new config.toml: a fully written, synced 0600 temp in the same dir is linked into place, so the file appears complete or not at all; an existing file or symlink makes the link fail, never replaced
 crates/aux-engine/src/engine/session.rs | fs::create_dir_all( | legacy engine dot workspace create (path from the caller); tracked for the gateway follow-up
 crates/aux-store/src/lib.rs | OpenOptions::new( | SQLite internals; production opens through Store::open_verified (re-verify + fd real path + inode check), Store::open stays for tests/legacy
 crates/aux-store/src/encryption.rs | OpenOptions::new( | master.key (0600) and the pre-WO-06c key files, beside the store.db that Store::open_verified checks in production

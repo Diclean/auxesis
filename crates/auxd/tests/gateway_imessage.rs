@@ -1207,7 +1207,7 @@ fn open_mode(rig: &Rig) {
 /// None of a key, an IBAN, a card, a national ID or a health term reaches
 /// the text Messages is handed.
 #[tokio::test]
-async fn an_open_mode_reply_never_carries_a_key_an_iban_a_card_an_id_or_health_data() {
+async fn gateway_open_mode_reply_never_carries_a_key_an_iban_a_card_an_id_or_health_data() {
     let key = format!(
         "sk-proj-{}",
         "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7cDe0fGh3iJk6l"
@@ -1255,7 +1255,7 @@ async fn an_open_mode_reply_never_carries_a_key_an_iban_a_card_an_id_or_health_d
 
 /// IMSG-SCRUB-1: a plain Open-mode answer goes out as written.
 #[tokio::test]
-async fn an_open_mode_plain_reply_goes_out_unchanged() {
+async fn gateway_open_mode_plain_reply_goes_out_unchanged() {
     let answer = "Done. Your meeting with Camille is moved to Thursday at 10:00.";
     let rig = rig(FakeProvider::repeating(
         "fake",

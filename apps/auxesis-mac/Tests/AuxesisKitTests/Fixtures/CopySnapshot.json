@@ -2982,6 +2982,38 @@
       "en" : "Late",
       "fr" : "En retard"
     },
+    "jobReasonFailed" : {
+      "en" : "%@ failed at %@",
+      "fr" : "%@ a échoué à %@"
+    },
+    "jobReasonFailedNoTime" : {
+      "en" : "%@ failed",
+      "fr" : "%@ a échoué"
+    },
+    "jobReasonHung" : {
+      "en" : "%@ started at %@ and hasn't finished",
+      "fr" : "%@ a démarré à %@ et n’a pas fini"
+    },
+    "jobReasonHungNoTime" : {
+      "en" : "%@ started and hasn't finished",
+      "fr" : "%@ a démarré et n’a pas fini"
+    },
+    "jobReasonInterrupted" : {
+      "en" : "%@ was interrupted twice, the last time at %@",
+      "fr" : "%@ : deux interruptions, la dernière à %@"
+    },
+    "jobReasonInterruptedNoTime" : {
+      "en" : "%@ was interrupted twice",
+      "fr" : "%@ : deux interruptions"
+    },
+    "jobReasonMissed" : {
+      "en" : "%@ didn't run at %@",
+      "fr" : "%@ n’a pas tourné à %@"
+    },
+    "jobReasonMissedNoTime" : {
+      "en" : "%@ didn't run",
+      "fr" : "%@ n’a pas tourné"
+    },
     "keptChief" : {
       "en" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them.",
       "fr" : "Aux ne voit que les courts résultats que l’équipe renvoie. Vos mails, fichiers et relevés bancaires restent avec l’agent qui les détient."

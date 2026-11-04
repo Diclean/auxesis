@@ -132,7 +132,7 @@ struct WaitingView: View {
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(shell.store.focusedApprovalId == approval.id ? palette.blueSoft.color : .clear)
-                    .accessibilityLabel(TeamMember.displayName(approval.agent) + " · " + shell.rowHeadline(for: approval)).accessibilityIdentifier("waiting-approval-row-\(approval.id)")
+                    .accessibilityLabel("\(TeamMember.displayName(approval.agent)) · \(shell.rowHeadline(for: approval))").accessibilityIdentifier("waiting-approval-row-\(approval.id)")
                     .accessibilityAddTraits(shell.store.focusedApprovalId == approval.id ? [.isSelected] : [])
                 }
             }

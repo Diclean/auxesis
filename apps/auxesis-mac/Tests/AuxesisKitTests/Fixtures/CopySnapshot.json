@@ -1912,27 +1912,27 @@
   "ui" : {
     "aboutAux" : {
       "en" : "Hands your work to the team and brings back the results. It never reads your mail, files or bank lines, only the short results the team sends back.",
-      "fr" : "Hands your work to the team and brings back the results. It never reads your mail, files or bank lines, only the short results the team sends back."
+      "fr" : "Confie votre travail à l’équipe et en rapporte les résultats. Il ne lit jamais vos mails, fichiers ni relevés bancaires, seulement les courts résultats que l’équipe renvoie."
     },
     "aboutCalendar" : {
       "en" : "Reads your calendar and finds free times. Writes events only after your yes.",
-      "fr" : "Reads your calendar and finds free times. Writes events only after your yes."
+      "fr" : "Lit votre agenda et trouve des créneaux libres. N’écrit des événements qu’après votre oui."
     },
     "aboutClients" : {
       "en" : "Keeps a card for each client: notes, history and follow-ups.",
-      "fr" : "Keeps a card for each client: notes, history and follow-ups."
+      "fr" : "Garde une fiche pour chaque client : notes, historique et suivis."
     },
     "aboutCustom" : {
       "en" : "An agent you added. Aux can hand it work.",
-      "fr" : "An agent you added. Aux can hand it work."
+      "fr" : "Un agent que vous avez ajouté. Aux peut lui confier du travail."
     },
     "aboutDocuments" : {
       "en" : "Collects receipts and invoices and matches them to your card lines.",
-      "fr" : "Collects receipts and invoices and matches them to your card lines."
+      "fr" : "Récupère les reçus et factures et les associe aux lignes de votre carte bancaire."
     },
     "aboutMail" : {
       "en" : "Reads and sorts your inbox, drafts replies. Sends only after your yes.",
-      "fr" : "Reads and sorts your inbox, drafts replies. Sends only after your yes."
+      "fr" : "Lit et trie votre boîte de réception, rédige des brouillons. N’envoie qu’après votre oui."
     },
     "acpReadsAsk" : {
       "en" : "A brain run by another app (ACP) reads only its own workspace through Auxesis; anything it asks permission for opens a card.",
@@ -1976,67 +1976,67 @@
     },
     "allAgents" : {
       "en" : "All agents",
-      "fr" : "All agents"
+      "fr" : "Tous les agents"
     },
     "apAskedBy" : {
       "en" : "asked by %@ at %@",
-      "fr" : "asked by %@ at %@"
+      "fr" : "demandé par %@ à %@"
     },
     "apCancel" : {
       "en" : "Cancel",
-      "fr" : "Cancel"
+      "fr" : "Annuler"
     },
     "apCancelledByStop" : {
       "en" : "Cancelled by Stop. Nothing was sent.",
-      "fr" : "Cancelled by Stop. Nothing was sent."
+      "fr" : "Annulé par l’arrêt. Rien n’a été envoyé."
     },
     "apDeclined" : {
       "en" : "Declined. Nothing was sent.",
-      "fr" : "Declined. Nothing was sent."
+      "fr" : "Refusé. Rien n’a été envoyé."
     },
     "apDrafted" : {
       "en" : "drafted this",
-      "fr" : "drafted this"
+      "fr" : "a rédigé ceci"
     },
     "apDraftedReply" : {
       "en" : "drafted a reply",
-      "fr" : "drafted a reply"
+      "fr" : "a rédigé une réponse"
     },
     "apEdit" : {
       "en" : "Edit",
-      "fr" : "Edit"
+      "fr" : "Modifier"
     },
     "apError" : {
       "en" : "Couldn't answer. Nothing was sent.",
-      "fr" : "Couldn't answer. Nothing was sent."
+      "fr" : "Impossible de répondre. Rien n’a été envoyé."
     },
     "apExpired" : {
       "en" : "This request expired. Nothing was sent.",
-      "fr" : "This request expired. Nothing was sent."
+      "fr" : "Cette demande a expiré. Rien n’a été envoyé."
     },
     "apHideDraft" : {
       "en" : "Hide draft",
-      "fr" : "Hide draft"
+      "fr" : "Masquer le brouillon"
     },
     "apNeedsYou" : {
       "en" : "Needs you",
-      "fr" : "Needs you"
+      "fr" : "À traiter"
     },
     "apNotNow" : {
       "en" : "Not now",
-      "fr" : "Not now"
+      "fr" : "Pas maintenant"
     },
     "apNotNowNote" : {
       "en" : "Not now. It stays in Waiting for you.",
-      "fr" : "Not now. It stays in Waiting for you."
+      "fr" : "Pas maintenant. La demande reste dans « Vous attend »."
     },
     "apOpenIn" : {
       "en" : "Open in %@",
-      "fr" : "Open in %@"
+      "fr" : "Ouvrir dans %@"
     },
     "apReopen" : {
       "en" : "Reopen",
-      "fr" : "Reopen"
+      "fr" : "Rouvrir"
     },
     "apRowSubject" : {
       "en" : "Subject: ",
@@ -2048,55 +2048,55 @@
     },
     "apSend" : {
       "en" : "Send",
-      "fr" : "Send"
+      "fr" : "Envoyer"
     },
     "apSendEdited" : {
       "en" : "Send edited",
-      "fr" : "Send edited"
+      "fr" : "Envoyer la version modifiée"
     },
     "apSendingIn" : {
       "en" : "Sending in %d s",
-      "fr" : "Sending in %d s"
+      "fr" : "Envoi dans %d s"
     },
     "apShowDraft" : {
       "en" : "Show draft",
-      "fr" : "Show draft"
+      "fr" : "Afficher le brouillon"
     },
     "apSkill" : {
       "en" : "%@ skill",
-      "fr" : "%@ skill"
+      "fr" : "Compétence %@"
     },
     "apTo" : {
       "en" : "To",
-      "fr" : "To"
+      "fr" : "À"
     },
     "apTrailApproved" : {
       "en" : "Approved",
-      "fr" : "Approved"
+      "fr" : "Approuvé"
     },
     "apTrailDelivered" : {
       "en" : "Delivered",
-      "fr" : "Delivered"
+      "fr" : "Distribué"
     },
     "apTrailDrafted" : {
       "en" : "Drafted",
-      "fr" : "Drafted"
+      "fr" : "Rédigé"
     },
     "apTrailReplied" : {
       "en" : "Replied",
-      "fr" : "Replied"
+      "fr" : "Répondu"
     },
     "apTrailSent" : {
       "en" : "Sent",
-      "fr" : "Sent"
+      "fr" : "Envoyé"
     },
     "apUndo" : {
       "en" : "Undo",
-      "fr" : "Undo"
+      "fr" : "Annuler"
     },
     "apWaits" : {
       "en" : "Waits for your yes",
-      "fr" : "Waits for your yes"
+      "fr" : "Attend votre oui"
     },
     "appName" : {
       "en" : "Auxesis",
@@ -2112,7 +2112,7 @@
     },
     "attach" : {
       "en" : "Attach a file",
-      "fr" : "Attach a file"
+      "fr" : "Joindre un fichier"
     },
     "back" : {
       "en" : "Aux",
@@ -2120,15 +2120,15 @@
     },
     "brain" : {
       "en" : "Brain",
-      "fr" : "Brain"
+      "fr" : "Modèle"
     },
     "brainDefault" : {
       "en" : "The default provider",
-      "fr" : "The default provider"
+      "fr" : "Le modèle par défaut"
     },
     "brainError" : {
       "en" : "%@ didn't answer. Retry or switch brain.",
-      "fr" : "%@ didn't answer. Retry or switch brain."
+      "fr" : "%@ n’a pas répondu. Réessayez ou changez de modèle."
     },
     "brainUnavailable" : {
       "en" : "Brain unavailable",
@@ -2160,7 +2160,7 @@
     },
     "budgetsLede" : {
       "en" : "What the models cost today, and the one button that halts everything.",
-      "fr" : "What the models cost today, and the one button that halts everything."
+      "fr" : "Ce que les modèles coûtent aujourd’hui, et le seul bouton qui arrête tout."
     },
     "calCardAllDay" : {
       "en" : "All day",
@@ -2288,51 +2288,51 @@
     },
     "calendarAccess" : {
       "en" : "Calendar on this Mac",
-      "fr" : "Calendar on this Mac"
+      "fr" : "Calendrier sur ce Mac"
     },
     "calendarAccessHint" : {
       "en" : "Calendar reads your events through macOS. Nothing is asked until you press the button.",
-      "fr" : "Calendar reads your events through macOS. Nothing is asked until you press the button."
+      "fr" : "Calendrier lit vos événements via macOS. Rien n’est demandé avant que vous appuyiez sur le bouton."
     },
     "calendarAllow" : {
       "en" : "Allow access",
-      "fr" : "Allow access"
+      "fr" : "Autoriser l’accès"
     },
     "calendarDenied" : {
       "en" : "macOS refused access. Allow it in System Settings, Privacy & Security, Calendars.",
-      "fr" : "macOS refused access. Allow it in System Settings, Privacy & Security, Calendars."
+      "fr" : "macOS a refusé l’accès. Autorisez-le dans Réglages Système, Confidentialité et sécurité, Calendriers."
     },
     "calendarError" : {
       "en" : "Couldn't read the calendar. Try again.",
-      "fr" : "Couldn't read the calendar. Try again."
+      "fr" : "Impossible de lire le calendrier. Réessayez."
     },
     "calendarRead" : {
       "en" : "Read again",
-      "fr" : "Read again"
+      "fr" : "Relire"
     },
     "calendarSaved" : {
       "en" : "Calendar is up to date on this Mac.",
-      "fr" : "Calendar is up to date on this Mac."
+      "fr" : "Le calendrier est à jour sur ce Mac."
     },
     "canDo" : {
       "en" : "Can do",
-      "fr" : "Can do"
+      "fr" : "Peut faire"
     },
     "canSee" : {
       "en" : "Can see",
-      "fr" : "Can see"
+      "fr" : "Peut voir"
     },
     "capsHint" : {
       "en" : "Caps are set per agent on this Mac. A capped agent stops and tells you.",
-      "fr" : "Caps are set per agent on this Mac. A capped agent stops and tells you."
+      "fr" : "Les plafonds se règlent par agent sur ce Mac. Un agent plafonné s’arrête et vous prévient."
     },
     "capsTitle" : {
       "en" : "Daily caps",
-      "fr" : "Daily caps"
+      "fr" : "Plafonds quotidiens"
     },
     "change" : {
       "en" : "Change",
-      "fr" : "Change"
+      "fr" : "Modifier"
     },
     "changeBrain" : {
       "en" : "Change brain…",
@@ -2356,11 +2356,11 @@
     },
     "chief" : {
       "en" : "Chief",
-      "fr" : "Chief"
+      "fr" : "Chef"
     },
     "chiefStopped" : {
       "en" : "Stopped. All agents paused",
-      "fr" : "Stopped. All agents paused"
+      "fr" : "Arrêté. Tous les agents en pause"
     },
     "chiefWorkingMany" : {
       "en" : "%d agents working",
@@ -2372,63 +2372,63 @@
     },
     "clientAddresses" : {
       "en" : "Address",
-      "fr" : "Address"
+      "fr" : "Adresse"
     },
     "clientAliasHint" : {
       "en" : "Nicknames and other spellings. Each one is replaced before the text is sent to a model.",
-      "fr" : "Nicknames and other spellings. Each one is replaced before the text is sent to a model."
+      "fr" : "Surnoms et autres graphies. Chacun est remplacé avant l’envoi du texte à un modèle."
     },
     "clientAliases" : {
       "en" : "Also known as",
-      "fr" : "Also known as"
+      "fr" : "Autres noms"
     },
     "clientBrief" : {
       "en" : "Ask Clients",
-      "fr" : "Ask Clients"
+      "fr" : "Demander à Clients"
     },
     "clientBriefHelp" : {
       "en" : "Opens the Clients thread and asks about this client (/client).",
-      "fr" : "Opens the Clients thread and asks about this client (/client)."
+      "fr" : "Ouvre le fil Clients et pose une question sur ce client (/client)."
     },
     "clientCancel" : {
       "en" : "Cancel",
-      "fr" : "Cancel"
+      "fr" : "Annuler"
     },
     "clientDue" : {
       "en" : "Due %@",
-      "fr" : "Due %@"
+      "fr" : "Échéance %@"
     },
     "clientDueToday" : {
       "en" : "Due today",
-      "fr" : "Due today"
+      "fr" : "Échéance aujourd’hui"
     },
     "clientEdit" : {
       "en" : "Edit",
-      "fr" : "Edit"
+      "fr" : "Modifier"
     },
     "clientEmails" : {
       "en" : "Email",
-      "fr" : "Email"
+      "fr" : "E-mail"
     },
     "clientForgetFailed" : {
       "en" : "Couldn't forget this line. It is still on this Mac.",
-      "fr" : "Couldn't forget this line. It is still on this Mac."
+      "fr" : "Impossible d’oublier cette ligne. Elle est toujours sur ce Mac."
     },
     "clientGone" : {
       "en" : "This client is no longer on this Mac.",
-      "fr" : "This client is no longer on this Mac."
+      "fr" : "Ce client n’est plus sur ce Mac."
     },
     "clientInvalidEmail" : {
       "en" : "An email address is not valid. Check it, then save.",
-      "fr" : "An email address is not valid. Check it, then save."
+      "fr" : "Une adresse e-mail n’est pas valide. Vérifiez-la, puis enregistrez."
     },
     "clientInvalidName" : {
       "en" : "A client needs a name.",
-      "fr" : "A client needs a name."
+      "fr" : "Un client doit avoir un nom."
     },
     "clientInvalidPhone" : {
       "en" : "A phone number has no country code. Write it like +33 6 00 00 00 12, then save.",
-      "fr" : "A phone number has no country code. Write it like +33 6 00 00 00 12, then save."
+      "fr" : "Un numéro de téléphone n’a pas d’indicatif pays. Écrivez-le comme +33 6 00 00 00 12, puis enregistrez."
     },
     "clientKept" : {
       "en" : "Addresses, e-mails, phone and account numbers on this card are replaced before the text is sent to a model. Names are sent as written.",
@@ -2436,27 +2436,27 @@
     },
     "clientMemoryEmpty" : {
       "en" : "Nothing remembered about this client yet.",
-      "fr" : "Nothing remembered about this client yet."
+      "fr" : "Rien n’est encore mémorisé sur ce client."
     },
     "clientMemoryLede" : {
       "en" : "What the team remembers about %@, each line with its source. Forget deletes the line from this Mac.",
-      "fr" : "What the team remembers about %@, each line with its source. Forget deletes the line from this Mac."
+      "fr" : "Ce que l’équipe retient au sujet de %@, chaque ligne avec sa source. Oublier supprime la ligne de ce Mac."
     },
     "clientName" : {
       "en" : "Name",
-      "fr" : "Name"
+      "fr" : "Nom"
     },
     "clientNext" : {
       "en" : "Next",
-      "fr" : "Next"
+      "fr" : "Suivant"
     },
     "clientNoFollowups" : {
       "en" : "No follow-up planned.",
-      "fr" : "No follow-up planned."
+      "fr" : "Aucun suivi prévu."
     },
     "clientNoNotes" : {
       "en" : "No notes yet.",
-      "fr" : "No notes yet."
+      "fr" : "Aucune note pour l’instant."
     },
     "clientNotes" : {
       "en" : "Notes",
@@ -2464,35 +2464,35 @@
     },
     "clientOnePerLine" : {
       "en" : "One per line.",
-      "fr" : "One per line."
+      "fr" : "Un par ligne."
     },
     "clientOverview" : {
       "en" : "Overview",
-      "fr" : "Overview"
+      "fr" : "Aperçu"
     },
     "clientPhoneHint" : {
       "en" : "One per line, with the country code, like +33 6 00 00 00 12.",
-      "fr" : "One per line, with the country code, like +33 6 00 00 00 12."
+      "fr" : "Un par ligne, avec l’indicatif pays, comme +33 6 00 00 00 12."
     },
     "clientPhones" : {
       "en" : "Phone",
-      "fr" : "Phone"
+      "fr" : "Téléphone"
     },
     "clientSave" : {
       "en" : "Save",
-      "fr" : "Save"
+      "fr" : "Enregistrer"
     },
     "clientSaveFailed" : {
       "en" : "Couldn't save. The card on this Mac was not changed.",
-      "fr" : "Couldn't save. The card on this Mac was not changed."
+      "fr" : "Impossible d’enregistrer. La fiche sur ce Mac n’a pas été modifiée."
     },
     "clientSaved" : {
       "en" : "Saved. The next request replaces these names too.",
-      "fr" : "Saved. The next request replaces these names too."
+      "fr" : "Enregistré. La prochaine requête remplacera aussi ces noms."
     },
     "clientTags" : {
       "en" : "Tags",
-      "fr" : "Tags"
+      "fr" : "Étiquettes"
     },
     "clientTimeZone" : {
       "en" : "Time zone",
@@ -2500,15 +2500,15 @@
     },
     "clientTimeline" : {
       "en" : "Timeline",
-      "fr" : "Timeline"
+      "fr" : "Historique"
     },
     "clientTimelineEmpty" : {
       "en" : "Nothing on the timeline yet. Mail and Calendar add emails and meetings with this client here.",
-      "fr" : "Nothing on the timeline yet. Mail and Calendar add emails and meetings with this client here."
+      "fr" : "Rien dans l’historique pour l’instant. Mail et Calendrier y ajoutent les e-mails et rendez-vous avec ce client."
     },
     "clientUnsaved" : {
       "en" : "Edit not saved",
-      "fr" : "Edit not saved"
+      "fr" : "Modification non enregistrée"
     },
     "clientUntrusted" : {
       "en" : "From an untrusted message",
@@ -2520,35 +2520,35 @@
     },
     "clientsAsk" : {
       "en" : "Ask Clients",
-      "fr" : "Ask Clients"
+      "fr" : "Demander à Clients"
     },
     "clientsEmpty" : {
       "en" : "No clients yet. Import contacts, or tell Clients about someone.",
-      "fr" : "No clients yet. Import contacts, or tell Clients about someone."
+      "fr" : "Aucun client pour l’instant. Importez des contacts ou parlez de quelqu’un à Clients."
     },
     "clientsFilter" : {
       "en" : "Filter clients",
-      "fr" : "Filter clients"
+      "fr" : "Filtrer les clients"
     },
     "clientsLoadFailed" : {
       "en" : "Couldn't read your clients on this Mac. Try again in a moment.",
-      "fr" : "Couldn't read your clients on this Mac. Try again in a moment."
+      "fr" : "Impossible de lire vos clients sur ce Mac. Réessayez dans un instant."
     },
     "clientsNoMatch" : {
       "en" : "No client matches.",
-      "fr" : "No client matches."
+      "fr" : "Aucun client ne correspond."
     },
     "clientsPick" : {
       "en" : "Select a client to open their card.",
-      "fr" : "Select a client to open their card."
+      "fr" : "Sélectionnez un client pour ouvrir sa fiche."
     },
     "clientsSubtitle" : {
       "en" : "The people you work with",
-      "fr" : "The people you work with"
+      "fr" : "Les personnes avec qui vous travaillez"
     },
     "close" : {
       "en" : "Close",
-      "fr" : "Close"
+      "fr" : "Fermer"
     },
     "colAgent" : {
       "en" : "Agent",
@@ -2556,23 +2556,23 @@
     },
     "colSchedule" : {
       "en" : "Schedule",
-      "fr" : "Schedule"
+      "fr" : "Horaires"
     },
     "colSkill" : {
       "en" : "Skill",
-      "fr" : "Skill"
+      "fr" : "Compétence"
     },
     "colWhat" : {
       "en" : "What",
-      "fr" : "What"
+      "fr" : "Quoi"
     },
     "colWhen" : {
       "en" : "When",
-      "fr" : "When"
+      "fr" : "Quand"
     },
     "comingNext" : {
       "en" : "Coming next",
-      "fr" : "Coming next"
+      "fr" : "À venir"
     },
     "composerHintAgent" : {
       "en" : "Aux asks before anything is sent, paid or deleted. Your message can go to %@, %@; the Steps card shows when.",
@@ -2584,7 +2584,7 @@
     },
     "composerOffline" : {
       "en" : "Auxesis isn't running. Messages wait until it starts.",
-      "fr" : "Auxesis isn't running. Messages wait until it starts."
+      "fr" : "Auxesis n’est pas lancé. Les messages attendent son démarrage."
     },
     "composerPlaceholder" : {
       "en" : "Message %@",
@@ -2592,7 +2592,7 @@
     },
     "composerStopped" : {
       "en" : "Stopped. Press Resume to continue.",
-      "fr" : "Stopped. Press Resume to continue."
+      "fr" : "Arrêté. Appuyez sur Reprendre pour continuer."
     },
     "configuredChannels" : {
       "en" : "Configured channels",
@@ -2608,103 +2608,103 @@
     },
     "couldntStart" : {
       "en" : "Couldn't start · Open",
-      "fr" : "Couldn't start · Open"
+      "fr" : "Démarrage impossible · Ouvrir"
     },
     "covAsksPrivate" : {
       "en" : "Asks every time in Private mode",
-      "fr" : "Asks every time in Private mode"
+      "fr" : "Demande à chaque fois en mode Privé"
     },
     "covCovered" : {
       "en" : "Covered",
-      "fr" : "Covered"
+      "fr" : "Couvert"
     },
     "covMissed" : {
       "en" : "Missed",
-      "fr" : "Missed"
+      "fr" : "Manqué"
     },
     "covOffPrivate" : {
       "en" : "Off in Private mode",
-      "fr" : "Off in Private mode"
+      "fr" : "Désactivé en mode Privé"
     },
     "covPartial" : {
       "en" : "Partial",
-      "fr" : "Partial"
+      "fr" : "Partiel"
     },
     "covRunsPrivate" : {
       "en" : "Runs in Private mode",
-      "fr" : "Runs in Private mode"
+      "fr" : "Fonctionne en mode Privé"
     },
     "coverageSummary" : {
       "en" : "%d of %d paths covered. %d missed.",
-      "fr" : "%d of %d paths covered. %d missed."
+      "fr" : "%d chemins couverts sur %d. %d manqués."
     },
     "coverageTitle" : {
       "en" : "Coverage",
-      "fr" : "Coverage"
+      "fr" : "Couverture"
     },
     "delegAskedAt" : {
       "en" : "Asked at %@",
-      "fr" : "Asked at %@"
+      "fr" : "Demandé à %@"
     },
     "delegAskedByAux" : {
       "en" : "Asked by Aux at %@",
-      "fr" : "Asked by Aux at %@"
+      "fr" : "Demandé par Aux à %@"
     },
     "delegCouldntFinish" : {
       "en" : "%@ couldn't finish. Retry",
-      "fr" : "%@ couldn't finish. Retry"
+      "fr" : "%@ n’a pas pu terminer. Réessayer"
     },
     "delegDone" : {
       "en" : "Done · %@",
-      "fr" : "Done · %@"
+      "fr" : "Terminé · %@"
     },
     "delegFailed" : {
       "en" : "Couldn't finish",
-      "fr" : "Couldn't finish"
+      "fr" : "N’a pas pu terminer"
     },
     "delegKeptPartial" : {
       "en" : "Stopped. Partial work kept, nothing filed or sent.",
-      "fr" : "Stopped. Partial work kept, nothing filed or sent."
+      "fr" : "Arrêté. Travail partiel conservé, rien n’a été classé ni envoyé."
     },
     "delegNeedsYou" : {
       "en" : "Needs you",
-      "fr" : "Needs you"
+      "fr" : "À traiter"
     },
     "delegOpenIn" : {
       "en" : "Open in %@",
-      "fr" : "Open in %@"
+      "fr" : "Ouvrir dans %@"
     },
     "delegPercent" : {
       "en" : "%d%%",
-      "fr" : "%d%%"
+      "fr" : "%d %%"
     },
     "delegQueued" : {
       "en" : "Queued",
-      "fr" : "Queued"
+      "fr" : "En attente"
     },
     "delegResume" : {
       "en" : "Resume",
-      "fr" : "Resume"
+      "fr" : "Reprendre"
     },
     "delegSentBack" : {
       "en" : "%@ sent back:",
-      "fr" : "%@ sent back:"
+      "fr" : "%@ renvoyé :"
     },
     "delegSentBackToAux" : {
       "en" : "Sent back to Aux:",
-      "fr" : "Sent back to Aux:"
+      "fr" : "Renvoyé à Aux :"
     },
     "delegStopTask" : {
       "en" : "Stop this task",
-      "fr" : "Stop this task"
+      "fr" : "Arrêter cette tâche"
     },
     "delegStopped" : {
       "en" : "Stopped",
-      "fr" : "Stopped"
+      "fr" : "Arrêté"
     },
     "delegWorking" : {
       "en" : "Working",
-      "fr" : "Working"
+      "fr" : "En cours"
     },
     "deliveryState" : {
       "en" : "Delivery state",
@@ -2860,7 +2860,7 @@
     },
     "documentsAsk" : {
       "en" : "Ask Documents",
-      "fr" : "Ask Documents"
+      "fr" : "Demander à Documents"
     },
     "documentsEmpty" : {
       "en" : "No receipts or invoices yet. Documents collects them from Mail and from ~/Downloads/Receipts.",
@@ -2872,27 +2872,27 @@
     },
     "domainAgent" : {
       "en" : "Domain agent",
-      "fr" : "Domain agent"
+      "fr" : "Agent de domaine"
     },
     "draftReply" : {
       "en" : "Reply",
-      "fr" : "Reply"
+      "fr" : "Répondre"
     },
     "draftReplyTo" : {
       "en" : "Reply to %@",
-      "fr" : "Reply to %@"
+      "fr" : "Répondre à %@"
     },
     "dueTodayQueue" : {
       "en" : "Due today",
-      "fr" : "Due today"
+      "fr" : "Échéance aujourd’hui"
     },
     "emptyAgent" : {
       "en" : "%@ works here. Ask it something, or it will post here when Aux hands it work.",
-      "fr" : "%@ works here. Ask it something, or it will post here when Aux hands it work."
+      "fr" : "%@ travaille ici. Posez-lui une question, ou il écrira ici quand Aux lui confiera du travail."
     },
     "emptyChief" : {
       "en" : "I'm Aux. Tell me what you need; I'll hand it to Mail, Calendar, Clients or Documents and bring back the results.",
-      "fr" : "I'm Aux. Tell me what you need; I'll hand it to Mail, Calendar, Clients or Documents and bring back the results."
+      "fr" : "Je suis Aux. Dites-moi ce dont vous avez besoin ; je le confie à Mail, Calendrier, Clients ou Documents et je vous rapporte les résultats."
     },
     "externalHostUnavailable" : {
       "en" : "External host unavailable",
@@ -2900,11 +2900,11 @@
     },
     "forget" : {
       "en" : "Forget",
-      "fr" : "Forget"
+      "fr" : "Oublier"
     },
     "generalLede" : {
       "en" : "How Auxesis reaches you, and what it may read on this Mac.",
-      "fr" : "How Auxesis reaches you, and what it may read on this Mac."
+      "fr" : "Comment Auxesis vous joint, et ce qu’il peut lire sur ce Mac."
     },
     "go" : {
       "en" : "Go",
@@ -2912,7 +2912,7 @@
     },
     "grantsUnavailable" : {
       "en" : "This Auxesis does not report grants yet. Every action that leaves this Mac asks you first.",
-      "fr" : "This Auxesis does not report grants yet. Every action that leaves this Mac asks you first."
+      "fr" : "Cette version d’Auxesis ne signale pas encore les autorisations. Chaque action qui quitte ce Mac vous demande d’abord votre accord."
     },
     "handoffAnd" : {
       "en" : " and ",
@@ -2920,7 +2920,7 @@
     },
     "handoffAsked" : {
       "en" : "asked at %@",
-      "fr" : "asked at %@"
+      "fr" : "Demandé à %@"
     },
     "handoffFrom" : {
       "en" : "Aux",
@@ -2976,11 +2976,11 @@
     },
     "keptChief" : {
       "en" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them.",
-      "fr" : "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them."
+      "fr" : "Aux ne voit que les courts résultats que l’équipe renvoie. Vos mails, fichiers et relevés bancaires restent avec l’agent qui les détient."
     },
     "kindCall" : {
       "en" : "Call",
-      "fr" : "Call"
+      "fr" : "Appel"
     },
     "kindDocument" : {
       "en" : "Document",
@@ -2988,11 +2988,11 @@
     },
     "kindMail" : {
       "en" : "Email",
-      "fr" : "Email"
+      "fr" : "E-mail"
     },
     "kindMeeting" : {
       "en" : "Meeting",
-      "fr" : "Meeting"
+      "fr" : "Rendez-vous"
     },
     "kindNote" : {
       "en" : "Note",
@@ -3000,11 +3000,11 @@
     },
     "language" : {
       "en" : "Language",
-      "fr" : "Language"
+      "fr" : "Langue"
     },
     "languageValue" : {
       "en" : "English",
-      "fr" : "English"
+      "fr" : "Français"
     },
     "lastUse" : {
       "en" : "Last use",
@@ -3012,39 +3012,39 @@
     },
     "ledger" : {
       "en" : "Ledger",
-      "fr" : "Ledger"
+      "fr" : "Registre"
     },
     "ledgerAnswered" : {
       "en" : "%@ answered · %@ tokens in, %@ out",
-      "fr" : "%@ answered · %@ tokens in, %@ out"
+      "fr" : "%@ a répondu · %@ jetons en entrée, %@ en sortie"
     },
     "ledgerDone" : {
       "en" : "Done",
-      "fr" : "Done"
+      "fr" : "Terminé"
     },
     "ledgerEmpty" : {
       "en" : "Nothing has happened yet. Every action and every send will be listed here.",
-      "fr" : "Nothing has happened yet. Every action and every send will be listed here."
+      "fr" : "Rien ne s’est encore passé. Chaque action et chaque envoi seront listés ici."
     },
     "ledgerHashHelp" : {
       "en" : "The skill's pinned hash. A changed skill gets a new hash and asks again.",
-      "fr" : "The skill's pinned hash. A changed skill gets a new hash and asks again."
+      "fr" : "L’empreinte épinglée de la compétence. Une compétence modifiée reçoit une nouvelle empreinte et redemande votre accord."
     },
     "ledgerLede" : {
       "en" : "Every action and every request that left this Mac, in order. Nobody can edit it, you included, so it can be trusted.",
-      "fr" : "Every action and every request that left this Mac, in order. Nobody can edit it, you included, so it can be trusted."
+      "fr" : "Chaque action et chaque requête sortie de ce Mac, dans l’ordre. Personne ne peut le modifier, vous compris : on peut donc s’y fier."
     },
     "ledgerPlanned" : {
       "en" : "Planned",
-      "fr" : "Planned"
+      "fr" : "Prévu"
     },
     "ledgerPlannedEmpty" : {
       "en" : "Nothing is planned.",
-      "fr" : "Nothing is planned."
+      "fr" : "Rien n’est prévu."
     },
     "ledgerProviderAdded" : {
       "en" : "Provider %@ added · %@",
-      "fr" : "Provider %@ added · %@"
+      "fr" : "Modèle %@ ajouté · %@"
     },
     "ledgerSkillAsked" : {
       "en" : "%@ asked for your yes",
@@ -4568,166 +4568,6 @@
     }
   },
   "uiMissingFrench" : [
-    "aboutAux",
-    "aboutCalendar",
-    "aboutClients",
-    "aboutCustom",
-    "aboutDocuments",
-    "aboutMail",
-    "allAgents",
-    "apAskedBy",
-    "apCancel",
-    "apCancelledByStop",
-    "apDeclined",
-    "apDrafted",
-    "apDraftedReply",
-    "apEdit",
-    "apError",
-    "apExpired",
-    "apHideDraft",
-    "apNeedsYou",
-    "apNotNow",
-    "apNotNowNote",
-    "apOpenIn",
-    "apReopen",
-    "apSend",
-    "apSendEdited",
-    "apSendingIn",
-    "apShowDraft",
-    "apSkill",
-    "apTo",
-    "apTrailApproved",
-    "apTrailDelivered",
-    "apTrailDrafted",
-    "apTrailReplied",
-    "apTrailSent",
-    "apUndo",
-    "apWaits",
-    "appName",
-    "attach",
-    "back",
-    "brain",
-    "brainDefault",
-    "brainError",
-    "budgetsLede",
-    "calendarAccess",
-    "calendarAccessHint",
-    "calendarAllow",
-    "calendarDenied",
-    "calendarError",
-    "calendarRead",
-    "calendarSaved",
-    "canDo",
-    "canSee",
-    "capsHint",
-    "capsTitle",
-    "change",
-    "chief",
-    "chiefStopped",
-    "clientAddresses",
-    "clientAliasHint",
-    "clientAliases",
-    "clientBrief",
-    "clientBriefHelp",
-    "clientCancel",
-    "clientDue",
-    "clientDueToday",
-    "clientEdit",
-    "clientEmails",
-    "clientForgetFailed",
-    "clientGone",
-    "clientInvalidEmail",
-    "clientInvalidName",
-    "clientInvalidPhone",
-    "clientMemoryEmpty",
-    "clientMemoryLede",
-    "clientName",
-    "clientNext",
-    "clientNoFollowups",
-    "clientNoNotes",
-    "clientNotes",
-    "clientOnePerLine",
-    "clientOverview",
-    "clientPhoneHint",
-    "clientPhones",
-    "clientSave",
-    "clientSaveFailed",
-    "clientSaved",
-    "clientTags",
-    "clientTimeline",
-    "clientTimelineEmpty",
-    "clientUnsaved",
-    "clientsAsk",
-    "clientsEmpty",
-    "clientsFilter",
-    "clientsLoadFailed",
-    "clientsNoMatch",
-    "clientsPick",
-    "clientsSubtitle",
-    "close",
-    "colAgent",
-    "colSchedule",
-    "colSkill",
-    "colWhat",
-    "colWhen",
-    "comingNext",
-    "composerOffline",
-    "composerPlaceholder",
-    "composerStopped",
-    "couldntStart",
-    "covAsksPrivate",
-    "covCovered",
-    "covMissed",
-    "covOffPrivate",
-    "covPartial",
-    "covRunsPrivate",
-    "coverageSummary",
-    "coverageTitle",
-    "delegAskedAt",
-    "delegAskedByAux",
-    "delegCouldntFinish",
-    "delegDone",
-    "delegFailed",
-    "delegKeptPartial",
-    "delegNeedsYou",
-    "delegOpenIn",
-    "delegPercent",
-    "delegQueued",
-    "delegResume",
-    "delegSentBack",
-    "delegSentBackToAux",
-    "delegStopTask",
-    "delegStopped",
-    "delegWorking",
-    "documentsAsk",
-    "domainAgent",
-    "draftReply",
-    "draftReplyTo",
-    "dueTodayQueue",
-    "emptyAgent",
-    "emptyChief",
-    "forget",
-    "generalLede",
-    "grantsUnavailable",
-    "handoffAsked",
-    "handoffFrom",
-    "keptChief",
-    "kindCall",
-    "kindDocument",
-    "kindMail",
-    "kindMeeting",
-    "kindNote",
-    "language",
-    "languageValue",
-    "ledger",
-    "ledgerAnswered",
-    "ledgerDone",
-    "ledgerEmpty",
-    "ledgerHashHelp",
-    "ledgerLede",
-    "ledgerPlanned",
-    "ledgerPlannedEmpty",
-    "ledgerProviderAdded",
     "ledgerSkillAsked",
     "ledgerSkillRan",
     "ledgerStarted",

@@ -101,6 +101,10 @@ une compilation locale, à partir de votre propre source, pas une version publi�
 5. L'app affiche un écran de réglage au premier lancement. Elle ne demande rien avant que vous
    appuyiez sur un bouton. La section 10 liste les permissions.
 
+L'app est en anglais et en français. Elle suit la première langue de Réglages Système, Général,
+Langue et région ; une autre langue donne l'anglais. Réglages, Général indique celle qui est
+utilisée.
+
 ## 7. Premier lancement
 
 1. Essayez d'abord dans un dossier temporaire. Rien de ce qui vous appartient n'est lu, et le

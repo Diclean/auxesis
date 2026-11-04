@@ -1528,7 +1528,12 @@ public struct Agent: Identifiable, Equatable {
 
 public enum Mapper {
     /// `AgentJson` + the latest live state → `Agent` (same rules as live.rs).
-    public static func agent(from agent: AgentSummary, live: AgentState?, language: Language = .default) -> Agent {
+    public static func agent(
+        from agent: AgentSummary,
+        live: AgentState?,
+        language: Language = .default,
+        budget caps: UsageCaps? = nil
+    ) -> Agent {
         let state: AgentState
         if agent.killed {
             state = .killed
@@ -1554,8 +1559,8 @@ public enum Mapper {
             status: status,
             statusShort: agent.runningJob != nil ? "running" : nil,
             waiting: 0,
-            budgetUsed: budgetRatio(agent.usageToday),
-            budgetHit: budgetHit(agent.usageToday),
+            budgetUsed: budgetRatio(agent.usageToday, caps: caps),
+            budgetHit: budgetHit(agent.usageToday, caps: caps),
             threadKey: agent.name,
             lastActive: Timestamps.unixMillis(from: agent.lastActivity?.at).flatMap { $0 > 0 ? $0 : nil },
             runningJob: agent.runningJob,
@@ -1590,16 +1595,25 @@ public enum Mapper {
         return message
     }
 
-    static func budgetRatio(_ usage: UsageTotals) -> Double {
-        // S0 has no caps endpoint in the snapshot; usage exists but no cap.
-        // The ring stays at 0 until /v1/usage is wired (S3+).
-        _ = usage
-        return 0
+    /// The tightest capped direction, as a 0…1 bar; no caps reads as 0 (no bar).
+    static func budgetRatio(_ usage: UsageTotals, caps: UsageCaps?) -> Double {
+        min(1, fractions(usage, caps: caps).max() ?? 0)
     }
 
-    static func budgetHit(_ usage: UsageTotals) -> Bool {
-        _ = usage
-        return false
+    /// True when any capped direction has spent its limit: the daemon would
+    /// refuse the next turn.
+    static func budgetHit(_ usage: UsageTotals, caps: UsageCaps?) -> Bool {
+        fractions(usage, caps: caps).contains { $0 >= 1 }
+    }
+
+    private static func fractions(_ usage: UsageTotals, caps: UsageCaps?) -> [Double] {
+        guard let caps, !caps.isUnset else { return [] }
+        return [(usage.tokensIn, caps.tokensIn), (usage.tokensOut, caps.tokensOut), (usage.usdCents, caps.usdCents)]
+            .compactMap { spent, limit in
+                guard let limit else { return nil }
+                // A zero cap is a cap: no headroom, never a division by zero.
+                return limit > 0 ? Double(spent) / Double(limit) : 1
+            }
     }
 }
 

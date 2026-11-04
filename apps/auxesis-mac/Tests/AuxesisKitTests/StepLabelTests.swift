@@ -287,6 +287,22 @@ import Testing
         }
     }
 
+    /// The base form a decision sentence needs. Every registered tool has
+    /// one, in both languages, and it never falls back to the raw id.
+    func testEveryRegisteredToolHasABaseActionInBothLanguages() throws {
+        for tool in try registeredToolIDs() {
+            let en = StepLabel.action(tool, language: .en)
+            let fr = StepLabel.action(tool, language: .fr)
+            XCTAssertNotNil(en, "\(tool) has no English action")
+            XCTAssertNotNil(fr, "\(tool) has no French action")
+            XCTAssertNotEqual(en?.lowercased(), tool.lowercased(), "\(tool) still shows its id in English")
+            XCTAssertNotEqual(fr?.lowercased(), tool.lowercased(), "\(tool) still shows its id in French")
+        }
+        XCTAssertEqual(StepLabel.action("privacy_record_summary", language: .en), "read the privacy record")
+        XCTAssertEqual(StepLabel.action("mail_send", language: .fr), "envoyer un e-mail")
+        XCTAssertNil(StepLabel.action("future_tool", language: .en))
+    }
+
     private func registeredToolIDs() throws -> [String] {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

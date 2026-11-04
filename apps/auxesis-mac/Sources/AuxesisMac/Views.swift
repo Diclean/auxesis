@@ -235,7 +235,7 @@ struct LedgerView: View {
                             AnyView(Text(TeamMember.displayName(job.agent))),
                             AnyView(VStack(alignment: .leading, spacing: 2) {
                                 Text(job.name)
-                                if let mark = JobHealthMark.make(job.health, reason: job.reason, language: language) {
+                                if let mark = JobHealthMark.make(job, language: language) {
                                     JobHealthLine(mark: mark)
                                 }
                             }),

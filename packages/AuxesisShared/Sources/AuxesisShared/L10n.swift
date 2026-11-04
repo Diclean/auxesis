@@ -438,6 +438,11 @@ public enum StringKey: String, CaseIterable {
     case errorUnreadable
     case errorUnexpected
     case errorTokenUnusable
+    case budgetDeniedCap
+    case budgetDeniedOther
+    case capTokensIn
+    case capTokensOut
+    case capUSD
     case packsUnavailable
     case skillsUnavailable
     case appleEventKitUnavailable
@@ -1377,6 +1382,17 @@ public enum L10n {
             .fr: "La clé d'accès de ce Mac n'est pas utilisable.",
             .en: "This Mac's access key can't be used.",
         ],
+        .budgetDeniedCap: [
+            .fr: "Le tour de %@ a été refusé : son plafond quotidien %@ est atteint (%@ sur %@). Pour en autoriser davantage, augmentez `%@` sous `[budgets.agents.%@]` ou `[budgets.default]` dans config.toml.",
+            .en: "%@'s turn was refused: its daily %@ is used up (%@ of %@). To allow more, raise `%@` under `[budgets.agents.%@]` or `[budgets.default]` in config.toml.",
+        ],
+        .budgetDeniedOther: [
+            .fr: "Le tour de %@ a été refusé par son budget quotidien. Pour en autoriser davantage, augmentez le plafond sous `[budgets.agents.%@]` ou `[budgets.default]` dans config.toml (Réglages n'a pas encore d'éditeur de budget).",
+            .en: "%@'s turn was refused by its daily budget. To allow more, raise the cap under `[budgets.agents.%@]` or `[budgets.default]` in config.toml (Settings has no budget editor yet).",
+        ],
+        .capTokensIn: [.fr: "de tokens en entrée", .en: "input-token cap"],
+        .capTokensOut: [.fr: "de tokens en sortie", .en: "output-token cap"],
+        .capUSD: [.fr: "de dépense en USD", .en: "USD spend cap"],
         .packsUnavailable: [
             .fr: "Cette version d'Auxesis ne propose pas encore les ensembles d'outils.",
             .en: "This version of Auxesis doesn't offer tool sets yet.",

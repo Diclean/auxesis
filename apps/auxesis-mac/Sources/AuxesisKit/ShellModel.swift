@@ -1147,7 +1147,18 @@ public final class ShellModel: ObservableObject {
 
     public func loadUsage() {
         guard let client else { return usage = .unavailable }
-        load({ try await client.usageToday() }, into: \.usage)
+        if usage.value == nil { usage = .loading }
+        Task { [weak self] in
+            do {
+                let day = try await client.usageToday()
+                self?.usage = .loaded(day)
+                self?.store.applyUsage(day)
+            } catch let error as AuxdError where error.isUnavailableRoute {
+                self?.usage = .unavailable
+            } catch {
+                self?.usage = .failed
+            }
+        }
     }
 
     public func loadProfile(_ agent: String) {

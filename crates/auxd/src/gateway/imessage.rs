@@ -69,6 +69,10 @@ pub fn private_failure_notice(mode: PrivacyMode) -> Result<OutboundText, Refused
     OutboundText::admitted(NOTICE_PATH, mode, Level::Normal, PRIVATE_FAILURE_NOTICE)
 }
 
+/// Sent in Open mode instead of a reply whose scrub failed (IMSG-SCRUB-1). A
+/// constant, so nothing of the held text can reach it.
+pub const REPLY_HELD_NOTICE: &str = "Reply held on your Mac, open Auxesis to read it.";
+
 /// The only text sent over Messages for the morning brief in Private mode. A
 /// constant: no mail content, name or count; the full brief stays in the app.
 pub const BRIEF_NOTICE: &str = "Your morning brief is ready in Auxesis.";
@@ -547,8 +551,15 @@ pub async fn answer_inbound<F>(
             tracing::warn!("imessage private turn gave no answer");
             private_failure_notice(mode)
         }
+        // IMSG-SCRUB-1: the stored answer can hold real values (rehydrated
+        // tokens, or what an injected mail made the model echo); mask them,
+        // and send the fixed notice when the scrub itself fails.
         (false, Some(reply)) => {
-            OutboundText::admitted(gateway.egress_path(), mode, Level::Normal, reply)
+            let text = super::scrub_for_owner(home, &reply).unwrap_or_else(|| {
+                tracing::warn!("imessage reply scrub failed; notice sent instead");
+                REPLY_HELD_NOTICE.to_string()
+            });
+            OutboundText::admitted(gateway.egress_path(), mode, Level::Normal, text)
         }
         (false, None) => return,
     };

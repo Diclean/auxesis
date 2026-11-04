@@ -41,8 +41,8 @@ public struct UpNextItem: Equatable, Identifiable {
     }
 }
 
-/// A late or failing job's small mark: a dot, one word, the daemon's reason.
-/// `ok` and `unknown` draw nothing (quiet).
+/// A late or failing job's small mark: a dot, one word, and the reason in the
+/// owner's language. `ok` and `unknown` draw nothing (quiet).
 public struct JobHealthMark: Equatable {
     public enum Tone: Equatable {
         /// Amber: the owner should look.
@@ -54,12 +54,20 @@ public struct JobHealthMark: Equatable {
     public let tone: Tone
     /// "Late" / "En retard", "Failed" / "A échoué".
     public let label: String
-    /// "Late · Morning brief did not run at 07:00", or the label alone.
+    /// "Late · Morning brief didn't run at 07:00", or the label alone.
     public let text: String
     /// Spoken label; always carries the reason when there is one.
     public let accessibilityLabel: String
 
-    public static func make(_ health: JobHealth, reason: String?, language: Language) -> JobHealthMark? {
+    /// A job's mark, wording the reason from `reason_kind` when the daemon
+    /// sends one and falling back to its English sentence otherwise.
+    public static func make(_ job: PlannedJob, language: Language) -> JobHealthMark? {
+        make(job.health, reason: job.reason, kind: job.reasonKind, at: job.reasonAt,
+             name: job.name, language: language)
+    }
+
+    public static func make(_ health: JobHealth, reason: String?, kind: JobReasonKind? = nil,
+                            at: String? = nil, name: String = "", language: Language) -> JobHealthMark? {
         let tone: Tone
         let label: String
         switch health {
@@ -67,8 +75,30 @@ public struct JobHealthMark: Equatable {
         case .late: (tone, label) = (.wait, L10n.ui(.jobHealthLate, language))
         case .failing: (tone, label) = (.bad, L10n.ui(.jobHealthFailing, language))
         }
-        let text = reason.map { label + " · " + $0 } ?? label
-        return JobHealthMark(tone: tone, label: label, text: text, accessibilityLabel: reason.map { label + ". " + $0 } ?? label)
+        let said = localizedReason(kind, at: at, name: name, language: language) ?? reason
+        let text = said.map { label + " · " + $0 } ?? label
+        return JobHealthMark(tone: tone, label: label, text: text, accessibilityLabel: said.map { label + ". " + $0 } ?? label)
+    }
+
+    /// A kind without a job name cannot make a sentence, so the daemon's
+    /// reason wins instead of a nameless fragment.
+    private static func localizedReason(_ kind: JobReasonKind?, at: String?, name: String,
+                                        language: Language) -> String? {
+        guard let kind, !name.isEmpty else { return nil }
+        switch kind {
+        case .missed:
+            return at.map { L10n.uf(.jobReasonMissed, language, name, $0) }
+                ?? L10n.uf(.jobReasonMissedNoTime, language, name)
+        case .failed:
+            return at.map { L10n.uf(.jobReasonFailed, language, name, $0) }
+                ?? L10n.uf(.jobReasonFailedNoTime, language, name)
+        case .hung:
+            return at.map { L10n.uf(.jobReasonHung, language, name, $0) }
+                ?? L10n.uf(.jobReasonHungNoTime, language, name)
+        case .interrupted:
+            return at.map { L10n.uf(.jobReasonInterrupted, language, name, $0) }
+                ?? L10n.uf(.jobReasonInterruptedNoTime, language, name)
+        }
     }
 }
 
@@ -121,7 +151,7 @@ public enum WorkTab {
                     when = job.schedule
                 }
                 return UpNextItem(id: job.id, title: job.name, line: TeamMember.displayName(job.agent) + " · " + when,
-                                  health: JobHealthMark.make(job.health, reason: job.reason, language: language))
+                                  health: JobHealthMark.make(job, language: language))
             }
     }
 }

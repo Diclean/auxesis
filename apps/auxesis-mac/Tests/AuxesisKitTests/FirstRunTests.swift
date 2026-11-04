@@ -148,8 +148,8 @@ func daemonErrorBody(_ code: String) -> String {
 
     private func readyStore(_ fake: FakeFirstRunClient) -> Store {
         let store = makeStore(fake)
-        store.beginFirstRunSetup()
-        XCTAssertTrue(waitUntil { store.firstRunSetupState == .ready }, "setup must reach ready")
+        store.setup.beginFirstRunSetup()
+        XCTAssertTrue(waitUntil { store.setup.setupState == .ready }, "setup must reach ready")
         return store
     }
 
@@ -159,10 +159,10 @@ func daemonErrorBody(_ code: String) -> String {
         let fake = FakeFirstRunClient()
         let store = readyStore(fake)
 
-        XCTAssertFalse(store.providerChoices.isEmpty, "a fresh install still offers choices")
-        XCTAssertEqual(store.selectedProviderID, "deepseek")
-        XCTAssertEqual(store.providerChoices.first?.title, "DeepSeek")
-        XCTAssertTrue(store.providerChoices.allSatisfy { !$0.title.isEmpty })
+        XCTAssertFalse(store.setup.providerChoices.isEmpty, "a fresh install still offers choices")
+        XCTAssertEqual(store.setup.selectedProviderID, "deepseek")
+        XCTAssertEqual(store.setup.providerChoices.first?.title, "DeepSeek")
+        XCTAssertTrue(store.setup.providerChoices.allSatisfy { !$0.title.isEmpty })
         // The daemon's agent id is ASCII-only; the owner reads a French label.
         XCTAssertEqual(FirstRunCopy.displayName(for: "main", .fr), "Mon agent")
         XCTAssertEqual(FirstRunCopy.displayName(for: "scribe", .fr), "scribe")
@@ -173,17 +173,17 @@ func daemonErrorBody(_ code: String) -> String {
         fake.providersResult = .success([providerSummary(id: "mine")])
         let store = readyStore(fake)
 
-        XCTAssertEqual(store.providerChoices.first?.id, "mine")
-        XCTAssertEqual(store.providerChoices.first?.configured, true)
-        XCTAssertEqual(store.selectedProviderID, "mine")
+        XCTAssertEqual(store.setup.providerChoices.first?.id, "mine")
+        XCTAssertEqual(store.setup.providerChoices.first?.configured, true)
+        XCTAssertEqual(store.setup.selectedProviderID, "mine")
 
-        let choice = store.selectedProviderChoice
+        let choice = store.setup.selectedProviderChoice
         XCTAssertNotNil(choice)
-        XCTAssertFalse(store.providerNeedsKey(choice!), "an already-saved service keeps its key on disk")
-        XCTAssertTrue(store.canTestProvider, "no key typed is fine for a saved service")
+        XCTAssertFalse(store.setup.providerNeedsKey(choice!), "an already-saved service keeps its key on disk")
+        XCTAssertTrue(store.setup.canTestProvider, "no key typed is fine for a saved service")
 
-        store.testProviderKey()
-        XCTAssertTrue(waitUntil { store.firstRunSetupState == .done(agent: "main") })
+        store.setup.testProviderKey()
+        XCTAssertTrue(waitUntil { store.setup.setupState == .done(agent: "main") })
         XCTAssertTrue(fake.savedRequests.isEmpty, "a configured service is not saved again")
         XCTAssertEqual(fake.testedRequests.count, 1)
         XCTAssertNil(fake.testedRequests.first?.apiKey, "the typed key is never resent for a saved service")
@@ -196,34 +196,34 @@ func daemonErrorBody(_ code: String) -> String {
     func testSuccessfulTestSavesServiceCreatesAgentAndClearsTheKey() {
         let fake = FakeFirstRunClient()
         let store = readyStore(fake)
-        store.selectedProviderID = "deepseek"
-        store.providerKeyInput = "  sk-not-a-real-key  "
+        store.setup.selectedProviderID = "deepseek"
+        store.setup.providerKeyInput = "  sk-not-a-real-key  "
 
-        store.testProviderKey()
-        XCTAssertTrue(waitUntil { store.firstRunSetupState == .done(agent: "main") })
+        store.setup.testProviderKey()
+        XCTAssertTrue(waitUntil { store.setup.setupState == .done(agent: "main") })
 
         // The key went to the daemon and nowhere else, and the field is empty.
         XCTAssertEqual(fake.testedRequests.first?.apiKey, "sk-not-a-real-key")
         XCTAssertEqual(fake.savedRequests.first?.apiKey, "sk-not-a-real-key")
         XCTAssertEqual(fake.savedRequests.first?.name, "deepseek")
-        XCTAssertEqual(store.providerKeyInput, "")
+        XCTAssertEqual(store.setup.providerKeyInput, "")
 
         // Agent created through POST /v1/agents, then the gate cleared.
         XCTAssertEqual(fake.createdRequests.first?.name, "main")
         XCTAssertEqual(fake.createdRequests.first?.provider, "deepseek")
         XCTAssertEqual(fake.completedRequests.first?.provider, "deepseek")
-        XCTAssertEqual(store.createdAgentName, "main")
-        XCTAssertEqual(store.firstRunTestState, .ok(.firstRunSuccessReachable))
+        XCTAssertEqual(store.setup.createdAgentName, "main")
+        XCTAssertEqual(store.setup.testState, .ok(.firstRunSuccessReachable))
     }
 
     func testSaveConflictIsTreatedAsAlreadySaved() {
         let fake = FakeFirstRunClient()
         fake.saveResult = .failure(AuxdError.http(status: 409, body: daemonErrorBody("provider_exists")))
         let store = readyStore(fake)
-        store.providerKeyInput = "sk-key"
+        store.setup.providerKeyInput = "sk-key"
 
-        store.testProviderKey()
-        XCTAssertTrue(waitUntil { store.firstRunSetupState == .done(agent: "main") }, "409 provider_exists is not fatal")
+        store.setup.testProviderKey()
+        XCTAssertTrue(waitUntil { store.setup.setupState == .done(agent: "main") }, "409 provider_exists is not fatal")
         XCTAssertEqual(fake.createdRequests.count, 1)
     }
 
@@ -235,26 +235,26 @@ func daemonErrorBody(_ code: String) -> String {
         ])
         let store = readyStore(fake)
 
-        guard let choice = store.providerChoices.first(where: { $0.id == "mine" }) else {
+        guard let choice = store.setup.providerChoices.first(where: { $0.id == "mine" }) else {
             return XCTFail("missing mine")
         }
         XCTAssertTrue(choice.knownToDaemon)
         XCTAssertFalse(choice.configured, "a service without a key is not ready")
-        XCTAssertTrue(store.providerNeedsKey(choice), "a keyless saved service asks for the key")
+        XCTAssertTrue(store.setup.providerNeedsKey(choice), "a keyless saved service asks for the key")
 
         // A failed key lookup is treated the same way: the field is shown.
-        guard let lookupFailed = store.providerChoices.first(where: { $0.id == "unknown" }) else {
+        guard let lookupFailed = store.setup.providerChoices.first(where: { $0.id == "unknown" }) else {
             return XCTFail("missing unknown")
         }
-        XCTAssertTrue(store.providerNeedsKey(lookupFailed), "a failed lookup still asks for the key")
+        XCTAssertTrue(store.setup.providerNeedsKey(lookupFailed), "a failed lookup still asks for the key")
 
-        store.selectedProviderID = "mine"
-        XCTAssertFalse(store.canTestProvider, "no key pasted yet")
-        store.providerKeyInput = "  sk-late-key  "
-        XCTAssertTrue(store.canTestProvider)
+        store.setup.selectedProviderID = "mine"
+        XCTAssertFalse(store.setup.canTestProvider, "no key pasted yet")
+        store.setup.providerKeyInput = "  sk-late-key  "
+        XCTAssertTrue(store.setup.canTestProvider)
 
-        store.testProviderKey()
-        XCTAssertTrue(waitUntil { store.firstRunSetupState == .done(agent: "main") })
+        store.setup.testProviderKey()
+        XCTAssertTrue(waitUntil { store.setup.setupState == .done(agent: "main") })
 
         // The key went through the update route, not the save or test bodies.
         XCTAssertEqual(fake.updatedKeys.count, 1)
@@ -263,21 +263,21 @@ func daemonErrorBody(_ code: String) -> String {
         XCTAssertTrue(fake.savedRequests.isEmpty, "an existing service is never saved again")
         XCTAssertNil(fake.testedRequests.first?.apiKey, "the daemon resolves the stored key")
         XCTAssertEqual(fake.createdRequests.first?.provider, "mine")
-        XCTAssertEqual(store.providerKeyInput, "")
+        XCTAssertEqual(store.setup.providerKeyInput, "")
     }
 
     func testSaveKeyConflictSurfacesAndNeverCreatesTheAgent() {
         let fake = FakeFirstRunClient()
         fake.saveResult = .failure(AuxdError.http(status: 409, body: daemonErrorBody("provider_key_conflict")))
         let store = readyStore(fake)
-        store.providerKeyInput = "sk-key"
+        store.setup.providerKeyInput = "sk-key"
 
-        store.testProviderKey()
+        store.setup.testProviderKey()
         XCTAssertTrue(waitUntil {
-            if case .failed = store.firstRunSetupState { return true }
+            if case .failed = store.setup.setupState { return true }
             return false
         })
-        guard case .failed(let failure) = store.firstRunSetupState else {
+        guard case .failed(let failure) = store.setup.setupState else {
             return XCTFail("expected a failure card")
         }
         XCTAssertEqual(failure, .providerKeyConflict)
@@ -291,11 +291,11 @@ func daemonErrorBody(_ code: String) -> String {
         let fake = FakeFirstRunClient()
         fake.saveResult = .failure(AuxdError.http(status: 409, body: daemonErrorBody("something_else")))
         let store = readyStore(fake)
-        store.providerKeyInput = "sk-key"
+        store.setup.providerKeyInput = "sk-key"
 
-        store.testProviderKey()
+        store.setup.testProviderKey()
         XCTAssertTrue(waitUntil {
-            if case .failed = store.firstRunSetupState { return true }
+            if case .failed = store.setup.setupState { return true }
             return false
         })
         XCTAssertTrue(fake.createdRequests.isEmpty, "an unknown 409 must not create the agent")
@@ -308,27 +308,27 @@ func daemonErrorBody(_ code: String) -> String {
         let fake = FakeFirstRunClient()
         fake.testResult = .success(.failing(reason: "bad_key"))
         let store = readyStore(fake)
-        store.providerKeyInput = "sk-wrong"
+        store.setup.providerKeyInput = "sk-wrong"
 
-        store.testProviderKey()
+        store.setup.testProviderKey()
         XCTAssertTrue(waitUntil {
-            if case .failed = store.firstRunTestState { return true }
+            if case .failed = store.setup.testState { return true }
             return false
         })
 
-        guard case .failed(let failure) = store.firstRunTestState else {
+        guard case .failed(let failure) = store.setup.testState else {
             return XCTFail("expected a failure")
         }
         XCTAssertEqual(failure, .keyRefused)
         XCTAssertTrue(failure.title(.fr).contains("refusée"))
         XCTAssertFalse(failure.nextStep(.fr).isEmpty, "every error has one next step")
-        XCTAssertEqual(store.firstRunSetupState, .ready, "the form stays so Retry works")
+        XCTAssertEqual(store.setup.setupState, .ready, "the form stays so Retry works")
         XCTAssertTrue(fake.savedRequests.isEmpty)
         XCTAssertTrue(fake.createdRequests.isEmpty)
-        XCTAssertEqual(store.providerKeyInput, "", "the key is dropped after submit")
+        XCTAssertEqual(store.setup.providerKeyInput, "", "the key is dropped after submit")
 
-        store.clearProviderTestError()
-        XCTAssertEqual(store.firstRunTestState, .idle)
+        store.setup.clearProviderTestError()
+        XCTAssertEqual(store.setup.testState, .idle)
     }
 
     func testHttpStatusesMapToPlainFrenchCausesAndNextSteps() {
@@ -370,13 +370,13 @@ func daemonErrorBody(_ code: String) -> String {
     func testMissingKeyIsRefusedWithoutCallingTheDaemon() {
         let fake = FakeFirstRunClient()
         let store = readyStore(fake)
-        store.selectedProviderID = "deepseek"
-        store.providerKeyInput = "   "
+        store.setup.selectedProviderID = "deepseek"
+        store.setup.providerKeyInput = "   "
 
-        XCTAssertFalse(store.canTestProvider, "the button stays off with an empty key")
-        store.testProviderKey()
+        XCTAssertFalse(store.setup.canTestProvider, "the button stays off with an empty key")
+        store.setup.testProviderKey()
 
-        XCTAssertEqual(store.firstRunTestState, .failed(.missingKey))
+        XCTAssertEqual(store.setup.testState, .failed(.missingKey))
         XCTAssertTrue(fake.testedRequests.isEmpty, "an empty key never leaves the app")
     }
 
@@ -384,21 +384,21 @@ func daemonErrorBody(_ code: String) -> String {
         let fake = FakeFirstRunClient()
         fake.providersResult = .failure(AuxdError.transport("connection refused"))
         let store = makeStore(fake)
-        store.beginFirstRunSetup()
+        store.setup.beginFirstRunSetup()
         XCTAssertTrue(waitUntil {
-            if case .failed = store.firstRunSetupState { return true }
+            if case .failed = store.setup.setupState { return true }
             return false
         })
 
-        guard case .failed(let failure) = store.firstRunSetupState else {
+        guard case .failed(let failure) = store.setup.setupState else {
             return XCTFail("expected the offline card")
         }
         XCTAssertEqual(failure, .localService)
         XCTAssertTrue(failure.isConnection)
 
         fake.providersResult = .success([])
-        store.retryFirstRunSetup()
-        XCTAssertTrue(waitUntil { store.firstRunSetupState == .ready })
+        store.setup.retryFirstRunSetup()
+        XCTAssertTrue(waitUntil { store.setup.setupState == .ready })
         XCTAssertEqual(fake.loadCount, 2)
     }
 

@@ -1386,7 +1386,7 @@ public final class ShellModel: ObservableObject {
     /// True once at least one provider exists (the composer's "no brain" note).
     public var hasBrain: Bool {
         if case .loaded(let list) = providers { return !list.isEmpty }
-        return !store.firstRun
+        return !store.setup.firstRun
     }
 }
 

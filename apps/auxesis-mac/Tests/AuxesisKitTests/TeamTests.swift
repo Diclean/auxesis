@@ -56,7 +56,7 @@ import Testing
         )
         XCTAssertEqual(
             L10n.ui(.acpReadsAsk, .fr),
-            "Un cerveau géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
+            "Un modèle géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
         )
         for language in [Language.en, .fr] {
             let text = L10n.ui(.acpReadsAsk, language).lowercased()

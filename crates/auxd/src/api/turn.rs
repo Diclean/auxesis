@@ -2644,6 +2644,14 @@ fn implicit_grants(
 }
 
 fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &str) {
+    // The exact name is the per-tool grant an MCP or connector tool needs:
+    // its domain word alone opens nothing.
+    if !can_do.iter().any(|grant| grant.skill == tool) {
+        can_do.push(aux_runtime::grants::DoGrant {
+            skill: tool.to_string(),
+            level: aux_runtime::grants::ActionLevel::Auto,
+        });
+    }
     let Some((_, skill)) = aux_runtime::grants::tool_skill(tool) else {
         return;
     };

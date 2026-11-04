@@ -652,12 +652,12 @@ fn subset(child: &AgentGrants, chief: &AgentGrants) -> bool {
     }) && PROBE_TOOLS
         .split_whitespace()
         .all(|name| tool(child, name) <= tool(chief, name))
-        && chief.never.iter().all(|denied| {
-            child
-                .never
-                .iter()
-                .any(|own| denied.starts_with(own.as_str()))
-        })
+        // Exact entries: a shorter prefix (`m` for `mail`) would not refuse
+        // what the chief's entry refuses (its scope), so it never replaces it.
+        && chief
+            .never
+            .iter()
+            .all(|denied| child.never.iter().any(|own| own == denied))
 }
 
 /// The chief ceiling, checked when a change is proposed and again when it is
@@ -1414,6 +1414,19 @@ mod tests {
         let full = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
         let fits = |id| subset(&aux_runtime::grants::default_grants(id).unwrap(), &full);
         assert!(DOMAIN_AGENTS.iter().all(|id| fits(id)));
+    }
+
+    /// Break-It B: a child never replaces a chief `never` with a shorter
+    /// prefix (`m` for `mail`); only the exact entry (or more) keeps it.
+    #[test]
+    fn a_child_never_keeps_each_chief_never_exactly() {
+        let mut chief = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        chief.never.push("mail".to_string());
+        let mut child = aux_runtime::grants::default_grants("documents").unwrap();
+        child.never = vec!["m".to_string()];
+        assert!(!subset(&child, &chief));
+        child.never = vec!["mail".to_string(), "m".to_string()];
+        assert!(subset(&child, &chief));
     }
 
     #[test]

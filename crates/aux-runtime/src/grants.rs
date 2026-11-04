@@ -45,6 +45,31 @@ const SCOPES: [&str; 6] = [
 /// carries into [`AgentGrants::action_for_origin`].
 const CONNECTOR_PREFIXES: [&str; 4] = ["google_", "apple_", "eventkit_", "mcp__"];
 
+/// The daemon's own connector tools whose names carry a connector prefix.
+/// Only these resolve their domain scope from the name; any other prefixed
+/// or MCP tool needs an explicit grant (see [`AgentGrants::action_for_origin`]).
+const NATIVE_CONNECTOR_TOOLS: [&str; 6] = [
+    "google_calendar_create_event",
+    "google_gmail_create_draft",
+    "google_gmail_send",
+    "apple_calendar_list_events",
+    "apple_calendar_create_event",
+    "apple_reminders_list",
+];
+
+/// True for a tool that is not the daemon's own: an MCP or extension tool, or
+/// a connector-prefixed name the daemon does not ship. Its name never grants
+/// a domain scope: a domain word in `mcp__evil__mail_send` opens nothing.
+fn is_external(tool: &str, origin: Option<ToolOrigin>) -> bool {
+    let lower = tool.to_ascii_lowercase();
+    origin == Some(ToolOrigin::Mcp)
+        || lower.starts_with("mcp__")
+        || (CONNECTOR_PREFIXES
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+            && !NATIVE_CONNECTOR_TOOLS.contains(&lower.as_str()))
+}
+
 /// Where a registered tool came from. The turn registry records this at the
 /// registration site, so a connector tool cannot hide behind a name the
 /// scope table does not recognise.
@@ -354,7 +379,64 @@ impl AgentGrants {
     /// `Ask` is reported as [`GrantLevel::Ask`] so the caller can force an
     /// approval even when a broader global rule says allow.
     pub fn action_for_tool(&self, agent: &str, tool: &str) -> Result<GrantLevel, GrantRefusal> {
+        if is_external(tool, None) {
+            return self.action_for_external(agent, tool, None);
+        }
         self.action_for_scope(agent, tool, tool_scope(tool))
+    }
+
+    /// An external tool (MCP, extension, unknown connector): only an explicit
+    /// grant opens it — the exact tool name, `mcp.<server>`, or the
+    /// `mcp.access` / `connector.access` bucket. Every `never` the name could
+    /// match (its name, its domain word, its bucket) still refuses it.
+    fn action_for_external(
+        &self,
+        agent: &str,
+        tool: &str,
+        origin: Option<ToolOrigin>,
+    ) -> Result<GrantLevel, GrantRefusal> {
+        let refused = |kind| {
+            Err(GrantRefusal {
+                agent: agent.to_string(),
+                tool: tool.to_string(),
+                kind,
+            })
+        };
+        let lower = tool.to_ascii_lowercase();
+        let bucket = if origin == Some(ToolOrigin::Mcp) || lower.starts_with("mcp__") {
+            "mcp"
+        } else {
+            "connector"
+        };
+        let named = tool_skill(tool).map(|(scope, _)| scope);
+        if self.never.iter().any(|never| {
+            never == tool
+                || tool.starts_with(never.as_str())
+                || named == Some(never.as_str())
+                || never == bucket
+        }) {
+            return refused(GrantRefusalKind::Never);
+        }
+        let server = lower
+            .strip_prefix("mcp__")
+            .and_then(|rest| rest.split_once("__"))
+            .map(|(server, _)| format!("mcp.{server}"));
+        // A per-tool grant names a wire name (`mcp__…`, `google_…`), never a
+        // plain one: `delegate` as a skill must not open an MCP `delegate`.
+        let wire = lower.starts_with("mcp__")
+            || CONNECTOR_PREFIXES
+                .iter()
+                .any(|prefix| lower.starts_with(prefix));
+        let level = wire
+            .then(|| self.level_for_skill(tool))
+            .flatten()
+            .or_else(|| server.and_then(|skill| self.level_for_skill(&skill)))
+            .or_else(|| self.level_for_skill(&format!("{bucket}.access")));
+        match level {
+            Some(ActionLevel::Auto) => Ok(GrantLevel::Allow),
+            Some(ActionLevel::Ask) => Ok(GrantLevel::Ask),
+            _ => refused(GrantRefusalKind::NotGranted),
+        }
     }
 
     /// The decision for one tool call, given its **registered origin** and the
@@ -388,6 +470,9 @@ impl AgentGrants {
                 tool: tool.to_string(),
                 kind: GrantRefusalKind::NotGranted,
             });
+        }
+        if !origin.is_builtin() && is_external(tool, Some(origin)) {
+            return self.action_for_external(agent, tool, Some(origin));
         }
         self.action_for_scope(agent, tool, resolved_scope)
     }
@@ -666,10 +751,10 @@ mod tests {
     #[test]
     fn an_explicitly_granted_mcp_or_connector_tool_works_for_the_chief() {
         let mut chief = default_grants(CHIEF_AGENT).unwrap();
-        // A mounted MCP tool that names its scope resolves to that skill.
+        // A domain word in an MCP name opens nothing on its own.
         assert!(chief
             .check_tool(CHIEF_AGENT, "mcp__server__mail_read")
-            .is_ok());
+            .is_err());
         // The owner's explicit grant opens the unknown bucket, nothing else.
         chief.can_do.push(DoGrant {
             skill: "mcp.access".to_string(),
@@ -746,17 +831,86 @@ mod tests {
                 .unwrap(),
             GrantLevel::Allow
         );
-        // A wrapped MCP tool still resolves by its underlying name.
-        assert_eq!(
-            mail.action_for_origin(
+        // A wrapped MCP tool never inherits the domain grant of its name.
+        assert!(mail
+            .action_for_origin(
                 "mail",
                 "mcp__server__mail_read",
                 ToolOrigin::Mcp,
                 tool_scope("mcp__server__mail_read")
             )
-            .unwrap(),
-            GrantLevel::Allow
+            .is_err());
+    }
+
+    /// Break-It C: an MCP tool or an unknown connector whose name carries a
+    /// domain word does not inherit the chief's domain grants; only an
+    /// explicit per-tool, per-server or bucket grant opens it.
+    #[test]
+    fn an_external_tool_needs_an_explicit_grant_whatever_its_name() {
+        let mut chief = default_grants(CHIEF_AGENT).unwrap();
+        let cases = [
+            ("mcp__evil__mail_send", ToolOrigin::Mcp),
+            ("mcp__x__calendar_create", ToolOrigin::Mcp),
+            ("google_mail_send_x", ToolOrigin::Connector),
+        ];
+        for (tool, origin) in cases {
+            assert!(chief.check_tool(CHIEF_AGENT, tool).is_err(), "{tool}");
+            assert!(chief
+                .action_for_origin(CHIEF_AGENT, tool, origin, tool_scope(tool))
+                .is_err());
+        }
+        // An extension registered under a plain name is still external.
+        assert!(chief
+            .action_for_origin(
+                CHIEF_AGENT,
+                "mail_send_now",
+                ToolOrigin::Mcp,
+                tool_scope("mail_send_now")
+            )
+            .is_err());
+        // The daemon's own prefixed connectors keep their domain scope.
+        assert!(chief
+            .action_for_origin(
+                CHIEF_AGENT,
+                "google_gmail_send",
+                ToolOrigin::Connector,
+                tool_scope("google_gmail_send")
+            )
+            .is_ok());
+        // An explicit per-tool grant opens exactly that tool.
+        for (tool, _) in cases {
+            chief.can_do.push(DoGrant {
+                skill: tool.to_string(),
+                level: ActionLevel::Ask,
+            });
+        }
+        for (tool, origin) in cases {
+            assert_eq!(
+                chief.action_for_origin(CHIEF_AGENT, tool, origin, tool_scope(tool)),
+                Ok(GrantLevel::Ask),
+                "{tool}"
+            );
+        }
+        assert!(chief
+            .check_tool(CHIEF_AGENT, "mcp__evil__mail_read")
+            .is_err());
+        // A per-server grant opens that server only.
+        chief.can_do.push(DoGrant {
+            skill: "mcp.good".to_string(),
+            level: ActionLevel::Auto,
+        });
+        assert_eq!(
+            chief.action_for_tool(CHIEF_AGENT, "mcp__good__mail_send"),
+            Ok(GrantLevel::Allow)
         );
+        assert!(chief
+            .check_tool(CHIEF_AGENT, "mcp__evil__mail_read")
+            .is_err());
+        // A `never` on the domain word still refuses the explicit grant.
+        chief.never.push("mail".to_string());
+        assert!(chief
+            .check_tool(CHIEF_AGENT, "mcp__evil__mail_send")
+            .is_err());
     }
 
     /// ACT-FREE-GRANTS-1: the grants list the owner sees matches what is

@@ -527,10 +527,7 @@ async fn agents_endpoint_reports_live_state_and_threads() {
         .iter()
         .map(|agent| agent["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        vec!["axis", "calendar", "clients", "documents", "mail", "main"]
-    );
+    assert_eq!(names, vec!["axis", "main"]);
 
     let main_agent = agents
         .as_array()
@@ -1985,6 +1982,7 @@ async fn an_edit_that_adds_a_bcc_to_a_mail_send_is_refused() {
         let workspace = aux_engine::workspace_dir(home, "main");
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(workspace.join("note.txt"), "hello note").unwrap();
+        std::fs::create_dir_all(home.join("agents/mail")).unwrap();
         ApiOptions {
             port: 0,
             event_poll: Duration::from_millis(25),

@@ -4292,6 +4292,7 @@ mod m4_invite_tests {
     fn seeded_agents_gain_only_the_calendar_invite() {
         let dir = tempdir().unwrap();
         let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
         let snapshot: Vec<String> = SEEDED
             .iter()
             .map(|agent| format!("{agent}: {}", effective(home, agent, None)))
@@ -4359,7 +4360,7 @@ mod m4_invite_tests {
             std::fs::create_dir_all(&agent_dir).unwrap();
             std::fs::write(agent_dir.join("soul.md"), "Calendar soul.\n").unwrap();
             let added = crate::agents::install_shipped_files(&home).unwrap();
-            assert_eq!(added.len(), 9, "{added:?}");
+            assert_eq!(added.len(), 3, "only the calendar agent exists: {added:?}");
         } else {
             std::fs::create_dir_all(agent_dir.join("skills")).unwrap();
             std::fs::write(agent_dir.join("agent.md"), INVITE_AGENT_MD).unwrap();

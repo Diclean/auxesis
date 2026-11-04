@@ -79,6 +79,9 @@ fn default_true() -> bool {
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct CreateAgentRequest {
+    /// Template id (`mail`, `calendar`, `clients`, `documents`); the agent
+    /// takes the template's id, grants and shipped files.
+    pub template: Option<String>,
     /// Agent name (also its identity and directory name).
     pub name: Option<String>,
     /// Instructions written to `soul.md`.
@@ -186,6 +189,34 @@ pub struct ControlJson {
 // ---------------------------------------------------------------------------
 
 /// `POST /v1/agents`.
+#[allow(clippy::result_large_err)]
+/// `GET /v1/agent-templates`: the starter agents the owner can create, with
+/// the grants each would get and whether it already exists.
+pub async fn templates(State(state): State<Arc<ApiState>>) -> Response {
+    let home = state.home.clone();
+    let list = tokio::task::spawn_blocking(move || {
+        let ids = aux_runtime::grants::DOMAIN_AGENTS;
+        let json = |def: crate::agents::AgentDef| {
+            serde_json::json!({
+                "id": def.id,
+                "name": def.name,
+                "glyph": def.glyph,
+                "grants": crate::agents::grants_json(&def.grants),
+                "created": agent::exists(&home, &def.id),
+            })
+        };
+        ids.iter()
+            .filter_map(|id| crate::agents::template(id))
+            .map(json)
+            .collect::<Vec<_>>()
+    })
+    .await;
+    match list {
+        Ok(items) => Json(serde_json::json!({ "templates": items })).into_response(),
+        Err(_) => internal_error(),
+    }
+}
+
 #[allow(clippy::result_large_err)]
 pub async fn create(
     State(state): State<Arc<ApiState>>,
@@ -390,9 +421,27 @@ pub async fn stop_all(State(state): State<Arc<ApiState>>) -> Response {
 pub(crate) fn create_sync(
     home: &Path,
     db_path: &Path,
-    request: CreateAgentRequest,
+    mut request: CreateAgentRequest,
 ) -> Result<(StatusCode, serde_json::Value), Response> {
     let _guard = kernel_core::lock_recover(crate::agents::grants_lock());
+    let template = request.template.take();
+    if let Some(id) = &template {
+        let refuse =
+            |code, message| error::error_response(StatusCode::BAD_REQUEST, code, message, None);
+        let def = crate::agents::template(id)
+            .ok_or_else(|| refuse("unknown_template", "there is no such agent template"))?;
+        if request.name.as_deref().is_some_and(|name| name != def.id) {
+            return Err(refuse(
+                "invalid_name",
+                "an agent made from a template keeps its id",
+            ));
+        }
+        crate::agents::validate_grants(home, &def.id, &def.grants).map_err(|err| match err {
+            crate::agents::RegistryError::ExceedsChief => crate::agents::exceeds_chief(),
+            _ => internal_error(),
+        })?;
+        request.name = Some(def.id);
+    }
     let validated = validate_create(home, request)?;
     let name = &validated.name;
     validate_tool_ceiling(home, name, &validated.config)?;
@@ -406,6 +455,16 @@ pub(crate) fn create_sync(
         // leaves nothing behind (the directory is abandoned).
         let write = agent::write_soul(home, name, &expected_soul)
             .and_then(|()| agent::write_config(home, name, &validated.config));
+        // A template agent and the chief get their shipped files (skills).
+        let shipped = template.is_some() || name == aux_runtime::grants::CHIEF_AGENT;
+        let write = write.and_then(|()| {
+            if !shipped {
+                return Ok(());
+            }
+            crate::agents::install_shipped_files_for(home, Some(name))
+                .map(drop)
+                .map_err(|err| agent::AgentError::Io(err.to_string()))
+        });
         if let Err(err) = write {
             agent::abandon_dir(home, name);
             return Err(agent_write_failed(&err.to_string()));

@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | GET | `/v1/health` | `{ok, version, pid, first_run}` |
 //! | GET | `/v1/agents` · `/v1/agents/{id}` | agent list / detail with live state + `thread_id` |
+//! | GET | `/v1/agent-templates` | starter agents (Mail, Calendar, Clients, Documents) to create from |
 //! | GET | `/v1/agents/{id}/soul` | the agent's personality, whole (editor read) |
 //! | POST | `/v1/agents` | create an agent (name, instructions, provider/model, tools) |
 //! | PUT/PATCH | `/v1/agents/{id}` | update an agent (role/provider/model/tools) |
@@ -109,6 +110,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/agents", get(agents_list).post(agents::create))
+        .route("/v1/agent-templates", get(agents::templates))
         .route(
             "/v1/agents/{id}",
             get(agent_show)

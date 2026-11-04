@@ -547,6 +547,7 @@ async fn handle_accept_error(err: std::io::Error) {
 pub fn load_config_verified(home: &Path) -> Result<kernel_core::Config, kernel_core::ConfigError> {
     // Fail closed: always verify (and register) the home, never a raw path.
     let handle = kernel_core::verified_home_or_verify(home)?;
+    aux_engine::config::bootstrap_config(&handle)?;
     kernel_core::Config::load_or_create_verified(&handle)
 }
 

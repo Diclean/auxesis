@@ -911,6 +911,7 @@ async fn a_stale_grants_approval_is_refused_and_never_streams_allowed() {
     let provider = Arc::new(FakeProvider::scripted("fakey", vec![]));
     let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"");
     let mut t = TestApi::start_with(options(provider), &config).await;
+    std::fs::create_dir_all(t.home.join("agents/mail")).unwrap();
     // The chief has no blanket MCP access; the owner grants it explicitly.
     let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
     chief.can_do.push(aux_runtime::grants::DoGrant {
@@ -1196,6 +1197,7 @@ async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
     let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"")
         + "\n[[rules]]\nagent = \"main\"\ntool = \"read_file\"\naction = \"deny\"\n";
     let mut t = TestApi::start_with(options(provider), &config).await;
+    std::fs::create_dir_all(t.home.join("agents/mail")).unwrap();
     let workspace = aux_engine::workspace_dir(&t.home, "mail");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(workspace.join("note.txt"), "builtin works").unwrap();

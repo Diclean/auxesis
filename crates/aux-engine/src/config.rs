@@ -12,6 +12,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
+/// Create an app default only when this home has no config; never rewrite an
+/// existing installation. All remaining values are the kernel's defaults.
+pub fn bootstrap_config(home: &kernel_core::SandboxHome) -> Result<(), kernel_core::ConfigError> {
+    let config = kernel_core::Config {
+        default_agent: aux_runtime::grants::CHIEF_AGENT.to_string(),
+        ..kernel_core::Config::default()
+    };
+    let text = toml::to_string_pretty(&config)?;
+    home.write_new(Path::new("config.toml"), text.as_bytes(), 0o600)?;
+    Ok(())
+}
+
 /// Why no provider could be selected.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ProviderSelectError {

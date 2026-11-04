@@ -113,6 +113,8 @@ fn run_inner(args: ChatArgs) -> Result<(), ChatCliError> {
     let home = auxesis_home();
     let verified = ensure_home(&home)?;
     let config_file = verified.real_path()?.join("config.toml");
+    // `aux chat` is the CLI's first run: a fresh home starts with the chief.
+    aux_engine::config::bootstrap_config(&verified)?;
     let config = Config::load_or_create_verified(&verified)?;
     let agent = args
         .agent

@@ -214,6 +214,11 @@ fn check_secrets(home: &Path) -> Check {
 }
 
 fn check_config(home: &Path) -> (Check, Option<Config>) {
+    // A fresh home starts with the chief, as the daemon would make it; a
+    // failure here is reported by the load below.
+    if let Ok(verified) = kernel_core::verified_home_or_verify(home) {
+        let _ = aux_engine::config::bootstrap_config(&verified);
+    }
     match Config::load_or_create(&config_path(home)) {
         Ok(config) => {
             let agent = if config.default_agent.is_empty() {

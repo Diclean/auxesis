@@ -1,4 +1,4 @@
-// The calendar card (UI-V5-RICH-2a): rows from the Calendar tool row and the
+// The calendar card: rows from the Calendar tool row and the
 // owner's question, no card for anything else, EN and FR copy. Fictional data.
 import Foundation
 import XCTest
@@ -135,7 +135,7 @@ import XCTest
         XCTAssertEqual(notUnderstood.filter { CalendarCard.window($0, now: asked, calendar: paris) != nil }, [])
     }
 
-    /// CAL-PARSE-ALLOWLIST-1 r2: a range of days is not one day. "Monday to Friday" would show Monday
+    /// A range of days is not one day. "Monday to Friday" would show Monday
     /// and Friday and hide Tuesday, Wednesday and Thursday: a wrong day is worse than no card.
     func testARangeOfDaysMakesNoCard() {
         XCTAssertNil(CalendarCard.window("Monday to Friday", now: asked, calendar: paris))
@@ -145,7 +145,7 @@ import XCTest
         XCTAssertEqual(CalendarCard.window("Qu'ai-je lundi ?", now: asked, calendar: paris)?.days.map(clock), ["Mon 00:00"])
     }
 
-    /// CAL-PARSE-ALLOWLIST-1 r2: "mon" is "my" in French and "Mon" is Monday in English. An English
+    /// "mon" is "my" in French and "Mon" is Monday in English. An English
     /// question that says "Mon" is a day the card cannot place: no card, never a wrong day.
     func testAnEnglishWeekdayAbbreviationIsNotAFrenchWord() {
         XCTAssertNil(CalendarCard.window("Am I free Mon or tomorrow?", now: asked, calendar: paris))
@@ -157,7 +157,7 @@ import XCTest
         XCTAssertNil(CalendarCard.window("Qu'est-ce que j'ai dans mon agenda demain ?", now: asked, calendar: paris))
     }
 
-    /// CAL-PARSE-RANGE-2: a range of days is not one day. "Monday-Friday" would show Monday and
+    /// A range of days is not one day. "Monday-Friday" would show Monday and
     /// Friday and hide Tuesday, Wednesday and Thursday, so the card shows nothing: we do not expand
     /// a range, a wrong day is worse than no card.
     func testAWeekdayRangeMakesNoCard() {
@@ -168,7 +168,7 @@ import XCTest
         }
     }
 
-    /// CAL-PARSE-RANGE-3: every dash Unicode writes joins the two ends of a range: the hyphen
+    /// Every dash Unicode writes joins the two ends of a range: the hyphen
     /// (U+002D), the figure dash (U+2012), the non-breaking hyphen (U+2011), the hyphen (U+2010),
     /// the horizontal bar (U+2015), the fullwidth hyphen (U+FF0D), the wave dash (U+301C) and the
     /// tilde operator (U+223C). "Monday‐Friday" would show Monday and Friday and hide Tuesday,
@@ -181,7 +181,7 @@ import XCTest
         }
     }
 
-    /// CAL-PARSE-RANGE-3: the hyphen of a French elision is not a range. "Qu'est-ce que j'ai demain
+    /// The hyphen of a French elision is not a range. "Qu'est-ce que j'ai demain
     /// et lundi ?" asks for two days, not for a range of days: the card shows tomorrow and Monday.
     func testTheHyphenOfAnElisionIsNotARange() {
         XCTAssertEqual(CalendarCard.window("Qu'est-ce que j'ai demain et lundi ?", now: asked, calendar: paris)?.days.map(clock),
@@ -190,7 +190,7 @@ import XCTest
                        ["Fri 00:00"])
     }
 
-    /// CAL-PARSE-RANGE-2: "mon" is "my" in French and "Mon" is Monday in English. A question that
+    /// "mon" is "my" in French and "Mon" is Monday in English. A question that
     /// mixes the two languages must not read "mon" as "my": the card would show tomorrow only and
     /// hide the Monday the owner asked about.
     func testAMixedLanguageMonGivesNoCard() {
@@ -203,7 +203,7 @@ import XCTest
         XCTAssertEqual(CalendarCard.window("j'ai mon agenda demain ?", now: asked, calendar: paris)?.days.map(clock), ["Fri 00:00"])
     }
 
-    /// CAL-PARSE-RANGE-2: the days the card still places after the range and the mixed-language fix.
+    /// The days the card still places after a range or a mixed-language question.
     func testTheDaysTheCardStillPlaces() {
         // Two days named with no word or mark between them: both days, in calendar order.
         XCTAssertEqual(CalendarCard.window("Monday or Friday?", now: asked, calendar: paris)?.days.map(clock),
@@ -215,7 +215,7 @@ import XCTest
         XCTAssertNil(CalendarCard.window("j'ai quoi dans mon agenda demain", now: asked, calendar: paris))
     }
 
-    /// CAL-PARSE-ALLOWLIST-1 r2: a capitalised function word is not a name. "Anything Except Tomorrow?"
+    /// A capitalised function word is not a name. "Anything Except Tomorrow?"
     /// is not about tomorrow, it is about everything else: the card must not show a day.
     func testACapitalisedFunctionWordIsNotAName() {
         XCTAssertNil(CalendarCard.window("Anything Except Tomorrow?", now: asked, calendar: paris))

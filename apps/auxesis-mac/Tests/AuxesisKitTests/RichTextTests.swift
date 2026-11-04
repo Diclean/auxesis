@@ -1,4 +1,4 @@
-// WO UI-V5-RICH-1: the reply parser and the token chips.
+// The reply parser and the token chips.
 import Foundation
 import Testing
 @testable import AuxesisKit

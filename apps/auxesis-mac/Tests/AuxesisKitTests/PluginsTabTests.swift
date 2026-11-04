@@ -1,7 +1,7 @@
 import XCTest
 @testable import AuxesisKit
 
-/// M6-4: the Plugins tab's data path. Browse reads only; install stages and
+/// The Plugins tab's data path. Browse reads only; install stages and
 /// previews; one approve sends the previewed hash back.
 @objcMembers @MainActor final class PluginsTabTests: XCTestCase {
     private enum Unused: Error { case call }
@@ -16,10 +16,10 @@ import XCTest
         /// The preview a refetch answers with after a stale approve.
         nonisolated(unsafe) var refetchPreview: McpApprovalPreview?
         nonisolated(unsafe) var approved: (id: String, hash: String, agent: String)?
-        /// r1: the daemon's hash binds the staged agent; the fake mirrors that per agent.
+        /// The daemon's hash binds the staged agent; the fake mirrors that per agent.
         nonisolated(unsafe) var hashPerAgent = false
         nonisolated(unsafe) var addFails = false
-        /// M6-APP-APPROVE-ONLY: what the daemon answers to the next write (PUT, approve).
+        /// What the daemon answers to the next write (PUT, approve).
         nonisolated(unsafe) var writeError: Error?
         private func write() throws { if let error = writeError { writeError = nil; throw error } }
         private func log(_ call: String) { lock.lock(); calls.append(call); lock.unlock() }
@@ -125,7 +125,7 @@ import XCTest
         XCTAssertNil(fake.approved)
     }
 
-    /// #532 P2: the approve carries the chosen agent with the hash of the preview on screen.
+    /// The approve carries the chosen agent with the hash of the preview on screen.
     func testApproveSendsChosenAgentWithItsOwnPreviewHash() async throws {
         let fake = try fake()
         fake.hashPerAgent = true
@@ -145,7 +145,7 @@ import XCTest
         XCTAssertEqual(fake.approved?.hash, "hash-mail")
     }
 
-    /// #532 P2: after a change of agent, the old hash never goes out with the new agent.
+    /// After a change of agent, the old hash never goes out with the new agent.
     func testChangedAgentNeverSendsTheOldHash() async throws {
         let fake = try fake()
         fake.hashPerAgent = true
@@ -180,7 +180,7 @@ import XCTest
         XCTAssertEqual(try keys(McpApproveBody(hash: "h", agent: "aux")), ["hash", "agent"])
     }
 
-    // MARK: M6-APP-APPROVE-ONLY: every turn-on goes through the preview and one approve.
+    // MARK: Every turn-on goes through the preview and one approve.
 
     private static func conflict(_ code: String) -> AuxdError {
         .http(status: 409, body: #"{"error":{"code":"\#(code)","message":"x"}}"#)

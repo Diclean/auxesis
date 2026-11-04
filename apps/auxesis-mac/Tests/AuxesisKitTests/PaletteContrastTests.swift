@@ -65,7 +65,7 @@ import Testing
         }
     }
 
-    // UI-V4-3: the accent is neutral ink; the four meaning hues did not move.
+    // The accent is neutral ink; the four meaning hues did not move.
     func testAccentIsNeutralInkAndMeaningHuesAreUntouched() {
         XCTAssertEqual(
             [Palette.light.blue, Palette.light.blueSoft, Palette.light.onBlue].map(\.hexString),
@@ -88,7 +88,7 @@ import Testing
         }
     }
 
-    // SOBER-1 (owner 2026-10-30, "trop vert"): every surface, line and ink
+    // Every surface, line and ink
     // is neutral; only the four meaning hues carry a colour. Dark is a pure
     // grey; light is warm paper (theme B), kept to a small warm tint.
     func testSurfacesLinesAndInksCarryNoHue() {

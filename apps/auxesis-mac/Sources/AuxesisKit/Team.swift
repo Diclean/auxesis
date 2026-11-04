@@ -1,4 +1,4 @@
-// The team (D33): Aux, the chief, and four domain agents. Pure presentation
+// The team: Aux, the chief, and four domain agents. Pure presentation
 // rules live here so the sidebar, the headers, the menu bar and Waiting for
 // you all compute the same line and the same count (contract: "the same
 // number everywhere"). No view decides a state on its own.

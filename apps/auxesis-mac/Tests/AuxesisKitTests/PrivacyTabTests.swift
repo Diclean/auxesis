@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AuxesisKit
 
-/// UI-V5-FINISH-4: the right panel's Privacy tab.
+/// The right panel's Privacy tab.
 @objcMembers @MainActor final class PrivacyTabTests: XCTestCase {
     private let receipts = [
         Receipt(runId: "r1", agent: "mail", replacedValues: ["EMAIL": 2, "PHONE": 0], started: "2026-10-30 08:01:00",
@@ -34,7 +34,7 @@ import Testing
         XCTAssertEqual(model.count(.unknown), 1)
     }
 
-    // No host evidence is ever drawn as on this Mac (#403).
+    // No host evidence is ever drawn as on this Mac.
     func testACloudRunThatListsNoHostIsNotCountedAsStayed() {
         let cloud = Receipt(runId: "c1", agent: "mail", started: "2026-10-30 09:00:00", hostsContacted: [])
         let model = PrivacyTabModel(receipts: [cloud], agent: "mail", day: "2026-10-30")

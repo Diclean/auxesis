@@ -1,7 +1,7 @@
 //! Grep-style guard: every display surface must route text through the one
 //! shared scrubber.
 //!
-//! F-03 made `error::scrub_preview` / `snapshot::scrub_field` the single choke
+//! `error::scrub_preview` / `snapshot::scrub_field` are the single choke
 //! point for activity, WS frames, messages, instructions, notifications and
 //! error bodies; `logging` scrubs with the same `redact_secrets` core. This
 //! test reads the surface modules' own source and asserts each known

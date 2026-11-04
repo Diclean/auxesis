@@ -88,7 +88,7 @@ private enum PackagedPlistFixtureError: Error {
         }
         // The pipe is read before the wait, never after it: a child that
         // writes more than the pipe holds blocks on its own write, and the
-        // wait for it would never come back (P3-SWEEP-3).
+        // wait for it would never come back.
         let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {

@@ -1,4 +1,4 @@
-// The mascot sheet (MASCOT-2): Done saves the pick, Cancel leaves the saved
+// The mascot sheet: Done saves the pick, Cancel leaves the saved
 // look alone, Reset gives the default, the same-look line shows only when
 // another agent wears the same mascot and tint, the arrows walk the 5 × 2
 // grid, and no agent, mascot or tint name is a brand name.
@@ -125,7 +125,7 @@ import Testing
         }
     }
 
-    // The guard AGENT-MARKS-1 had: the names of the old brand sheet are the
+    // The brand guard: the names of the old brand sheet are the
     // brand's, not the app's. No agent, mascot, tint or copy string says one.
     func testNoBrandNameReachesAUserVisibleString() {
         var lines: [(String, String)] = []

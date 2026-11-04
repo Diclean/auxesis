@@ -4,7 +4,7 @@ import Testing
 @testable import AuxesisKit
 @testable import AuxesisMac
 
-/// SINCE-LEFT-CRASH-1: opening "Since you left" from the Records menu killed
+/// Opening "Since you left" from the Records menu killed
 /// the app with AppKit's "more Update Constraints in Window passes than there
 /// are views in the window". The detail column's height followed its width,
 /// and in the v5 frame that width is what the window leaves beside the list,

@@ -1,4 +1,4 @@
-// The summary rows show the version a yes carries (EDIT-FIDELITY-ROWS-1).
+// The summary rows show the version a yes carries.
 // While a countdown runs with an edit, the Today and Waiting rows name the
 // edited recipient and the edited subject — the version the card will send —
 // never the daemon's old headline. Cancel and Undo put the daemon's headline
@@ -109,7 +109,7 @@ import Testing
     }
 
     /// A skill's run is read only through its calls: a top-level `to` beside `calls` is ignored by
-    /// the daemon's card, so the row must not name it either (#346).
+    /// the daemon's card, so the row must not name it either.
     func testTheRowIgnoresTopLevelFieldsBesideASkillsCalls() {
         let (shell, _, ask) = makeShell()
         shell.beginEdit(ask)

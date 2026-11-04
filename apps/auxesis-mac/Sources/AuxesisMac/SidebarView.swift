@@ -9,7 +9,7 @@ struct SidebarView: View {
     @Environment(\.palette) private var palette
     @State private var query = ""
     @FocusState private var searchFocused: Bool
-    /// MASCOT-2: the agent whose mascot sheet is open.
+    /// The agent whose mascot sheet is open.
     @State private var mascotFor: TeamMember?
 
     var body: some View {
@@ -91,7 +91,7 @@ struct SidebarView: View {
         }
     }
 
-    /// One footer line: icon and words in neutral ink (SOBER-1); the meaning
+    /// One footer line: icon and words in neutral ink; the meaning
     /// never rests on colour.
     private func footerRow(_ text: String, icon: String, id: String) -> some View {
         Button { shell.go(.privacyRecord) } label: {

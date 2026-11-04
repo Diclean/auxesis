@@ -130,7 +130,7 @@ struct IconView: View {
     }
 }
 
-/// The agent's mascot at one of the tile sizes (MASCOT-1). Every agent wears
+/// The agent's mascot at one of the tile sizes. Every agent wears
 /// one: an agent the owner added starts as Sprout.
 struct AgentTile: View {
     enum Size {
@@ -159,7 +159,7 @@ struct AgentTile: View {
 
 // MARK: - Controls
 
-/// A label whose words and glyph take two inks. SOBER-1: where data went is
+/// A label whose words and glyph take two inks. Where data went is
 /// said in `ink2` words with a small `ink3` glyph, never in a hue.
 struct TwoToneLabelStyle: LabelStyle {
     let titleColor: Color

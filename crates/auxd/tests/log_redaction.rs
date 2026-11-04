@@ -1,4 +1,4 @@
-//! P3 batch-2, point 1: a tracing event that carries a WhatsApp number and a
+//! A tracing event that carries a WhatsApp number and a
 //! JID is written masked, whatever the target.
 //!
 //! `whatsapp-rust` logs peer identities at `INFO` (`Identity change for

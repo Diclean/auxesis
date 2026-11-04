@@ -1,4 +1,4 @@
-//! A4 acceptance: the daemon resolves its provider through `providers.toml`.
+//! The daemon resolves its provider through `providers.toml`.
 //!
 //! Every upstream is a loopback `TcpListener` fake: no real key, no real HOME,
 //! no network. The tests drive `EngineTurnRunner::run_turn`, the same path the

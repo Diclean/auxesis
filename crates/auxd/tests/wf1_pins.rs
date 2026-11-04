@@ -1,4 +1,4 @@
-//! WF-1 round 8 P3: pin metadata must not grow with the number of live
+//! Pin metadata must not grow with the number of live
 //! drafts. Process-isolated so the RSS measurement is not polluted by other
 //! tests' allocations.
 
@@ -46,7 +46,7 @@ fn rss_bytes() -> u64 {
     }
 }
 
-/// R8 P3: 2,000 empty live streams pinned to 128 values must not add
+/// 2,000 empty live streams pinned to 128 values must not add
 /// per-value pin metadata per stream. The pin table is two `u64`s per live
 /// stream, shared in the registry.
 #[test]

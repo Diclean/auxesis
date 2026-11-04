@@ -1,4 +1,4 @@
-//! THREAD-RESTORE-1: `POST /v1/threads/{agent}/select` makes an existing chat session the
+//! `POST /v1/threads/{agent}/select` makes an existing chat session the
 //! agent's current one; the choice survives a daemon restart; a bad target changes nothing.
 
 mod common;

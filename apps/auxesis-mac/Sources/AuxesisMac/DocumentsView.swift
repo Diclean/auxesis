@@ -1,4 +1,4 @@
-// Documents (M5-4): the receipts Documents collected, newest first, one plain
+// Documents: the receipts Documents collected, newest first, one plain
 // table (date · document · amount · client). The client cell is a menu: pick a
 // client or remove it. Above, Export a period: dates, an optional client, then
 // a folder on this Mac; the result says how many receipts and offers Show in

@@ -8,6 +8,6 @@ mod readability;
 #[cfg(feature = "l1-fetch")]
 mod simple;
 
-pub use readability::{extract_readable, Readable};
+pub use readability::{extract_body_text, extract_readable, Readable};
 #[cfg(feature = "l1-fetch")]
 pub use simple::Fetcher;

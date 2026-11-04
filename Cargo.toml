@@ -75,7 +75,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "smtp-transport",
     "builder",
 ] }
-mail-parser = { version = "0.11", default-features = false, features = ["full_encoding"] }
+mail-parser = { version = "1.0", default-features = false, features = ["full_encoding"] }
 # Self-signed certificates for the offline TLS fake only (dev-dependency).
 rcgen = "0.14"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,4 +1,4 @@
-//! Delegations (D33, WO E0): the chief hands one task to one domain agent.
+//! Delegations: the chief hands one task to one domain agent.
 //!
 //! This module is the runtime behind `delegate`: it creates the durable record,
 //! streams `delegation.*` events, runs the agent through a
@@ -175,16 +175,16 @@ pub struct DelegationRun {
     /// The caller's mode at handoff, only ever tightened: the agent's turn runs
     /// at least this private.
     caller_mode: ModeFn,
-    /// TOK-DELEGATE: this run's handoff; a resumed run has none.
+    /// This run's handoff; a resumed run has none.
     inherited: aux_engine::handoff::Handoff,
-    /// The chief's session, stamped on the agent's cards (TURN2-HANG).
+    /// The chief's session, stamped on the agent's cards.
     parent_session: Option<i64>,
     /// Live owner words for local checks; absent after resuming a delegation.
     owner_words: Option<String>,
 }
 
 impl DelegationRun {
-    /// Record the session the agent's turn ran in (AGENT-DEFAULT).
+    /// Record the session the agent's turn ran in.
     pub fn set_child_thread(&self, session_id: i64) {
         let _ = self.child_thread.set(session_id);
     }
@@ -342,7 +342,7 @@ pub trait DelegationExecutor: Send + Sync {
     async fn execute(&self, run: DelegationRun) -> Result<String, String>;
 }
 
-/// VAGUE-ASK-1: a delegation that holds no result and recorded no step
+/// A delegation that holds no result and recorded no step
 /// attempted nothing: the task never started (the chief's turn was dropped,
 /// or the daemon restarted before the agent ran). "Couldn't finish" would be
 /// a lie the owner reads as a red chip, so such a row is stopped, not failed.
@@ -384,7 +384,7 @@ pub struct EngineDelegationExecutor {
     home: PathBuf,
     provider: Option<Arc<dyn aux_providers::ChatProvider>>,
     approvals: Option<Arc<crate::api::ApprovalRegistry>>,
-    /// The Mac bridge, so a delegated Calendar turn can write (CAL-UPDATE-1).
+    /// The Mac bridge, so a delegated Calendar turn can write.
     bridge: Option<Arc<crate::bridge::Bridge>>,
     /// How long one delegated turn may run.
     deadline: Duration,
@@ -455,7 +455,7 @@ impl DelegationExecutor for EngineDelegationExecutor {
         // forwarded to the chief's channel whole.
         let parent_events = run.events.clone();
         let drain = tokio::spawn(async move {
-            // DELEG-WHERE-1: one `brain.where` per provider round. Round 1
+            // One `brain.where` per provider round. Round 1
             // fills "asking its brain", later rounds are their own steps, the
             // answer ran where its round did; tool steps stay unknown.
             // A lagged channel lost frames, so rounds no longer line up: every
@@ -530,7 +530,7 @@ impl DelegationExecutor for EngineDelegationExecutor {
         let inherited = run.inherited.clone();
         let parent_session = run.parent_session;
         let owner_words = run.owner_words.clone();
-        // AGENT-HISTORY-BLEED: the agent's thread is the chief thread's own,
+        // The agent's thread is the chief thread's own,
         // never the agent's latest one.
         let thread = run.with_store(|store| {
             store
@@ -565,15 +565,15 @@ impl DelegationExecutor for EngineDelegationExecutor {
                 .with_brain_where()
                 .with_mode_floor(caller_mode)
                 .with_owner_words(owner_words)
-                // DELEGATION-SOURCE-1: the ask's row says it is a delegation,
+                // The ask's row says it is a delegation,
                 // so the app never shows it as the owner's words.
                 .with_source("delegation")
                 .run_turn(&agent, Some(thread), &task, Some(cancel))
         });
-        // CROSS-AGENT-RESOLVE: a turn that never finishes must not hold the
+        // A turn that never finishes must not hold the
         // chief, but time parked on one of its cards is the owner's, not the
         // delegate's: the clock pauses while a card waits and no card is
-        // retired by the deadline (#467).
+        // retired by the deadline.
         let mut remaining = self.deadline;
         let mut last = Instant::now();
         let record = loop {
@@ -706,7 +706,7 @@ impl NativeTool for DelegateTool {
 impl Tool for DelegateTool {
     fn path_id(&self) -> kernel_core::privacy::PathId {
         // Local orchestration: the tool writes the local store and starts the
-        // agent's own turn; that turn is admitted separately (A1).
+        // agent's own turn; that turn is admitted separately.
         kernel_core::privacy::PathId::B1
     }
 
@@ -722,7 +722,7 @@ impl Tool for DelegateTool {
         let args: DelegateArgs = serde_json::from_value(args.clone())
             .map_err(|err| ToolError::invalid_args(self.name(), err))?;
         let caller = aux_engine::handoff::Caller::current();
-        // TOK-DELEGATE: one handoff per run, dropped when it ends.
+        // One handoff per run, dropped when it ends.
         let handoff = caller
             .as_ref()
             .map(|caller| caller.handoff_for(&args.task))
@@ -740,7 +740,7 @@ impl Tool for DelegateTool {
         let db_path = kernel_core::store_path(&self.home);
         let store = Store::open(&db_path)
             .map_err(|err| ToolError::Io(std::io::Error::other(err.to_string())))?;
-        // READ-AFTER-TAINT: a tainted caller's hand-off runs without a card,
+        // A tainted caller's hand-off runs without a card,
         // so the agent inherits the taint before its turn starts: its
         // workspace is marked, and its own effectful calls still ask. A clean
         // agent can never launder the caller's taint. Fails closed.
@@ -817,7 +817,7 @@ impl Tool for DelegateTool {
             }
         };
         let child_thread = Arc::clone(&run.child_thread);
-        // TOOL-HANG: the chief's turn can end first (client gone, turn
+        // The chief's turn can end first (client gone, turn
         // timeout, Stop). Its cancel reaches the agent's own turn, which then
         // stops at once and retires its pending card; a call dropped before
         // the agent answered closes the record instead of leaving it working.
@@ -845,7 +845,7 @@ impl Tool for DelegateTool {
         match outcome {
             Ok(result) => {
                 // The result holds the agent's references. A private chief
-                // adopts this run's pairs (TOK-DELEGATE), never re-detecting a
+                // adopts this run's pairs, never re-detecting a
                 // clear value; an open chief reads the values, in memory only.
                 let shown = match (child_thread.get(), &caller) {
                     (Some(id), Some(caller)) if caller.private => {
@@ -894,7 +894,7 @@ impl Tool for DelegateTool {
                 {
                     let guard = kernel_core::lock_recover(&store);
                     if !stopped {
-                        // VAGUE-ASK-1: a run that attempted nothing never ran.
+                        // A run that attempted nothing never ran.
                         let _ = guard.set_delegation_state(&id, unfinished_state(row.as_ref()));
                     }
                 }
@@ -962,7 +962,7 @@ impl Drop for OrphanGuard {
                     DelegationState::Queued | DelegationState::Working | DelegationState::Waiting
                 )
             });
-            // VAGUE-ASK-1: a row the cancelled turn never touched attempted
+            // A row the cancelled turn never touched attempted
             // nothing: it is stopped, so the owner reads no "couldn't finish".
             open && guard
                 .set_delegation_state(&self.id, unfinished_state(row.as_ref()))
@@ -1317,7 +1317,7 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
                     .is_some_and(|delegation| delegation.state == DelegationState::Stopped);
                 if !stopped {
                     if let Ok(store) = Store::open(&db_path) {
-                        // VAGUE-ASK-1: nothing attempted is stopped, not failed.
+                        // Nothing attempted is stopped, not failed.
                         let _ = store.set_delegation_state(&id, unfinished_state(row.as_ref()));
                     }
                 }
@@ -1526,7 +1526,7 @@ mod tests {
     fn fake_home() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        // SANDBOX-GATEWAY-EXEMPT: cfg(test)-only fake-home fixture.
+        // cfg(test)-only fake-home fixture.
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(
             kernel_core::config_path(&home),
@@ -1537,7 +1537,7 @@ mod tests {
         (dir, home)
     }
 
-    /// VAGUE-ASK-1: the "couldn't finish" chip must not fire on a delegation
+    /// The "couldn't finish" chip must not fire on a delegation
     /// that attempted nothing: no result and no step, because the task never
     /// started. The owner sees a stopped task, not a red failure.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1572,7 +1572,7 @@ mod tests {
         assert!(rows[0].result.is_none(), "{rows:?}");
     }
 
-    /// VAGUE-ASK-1: the chip still fires when the task ran and failed: the
+    /// The chip still fires when the task ran and failed: the
     /// agent asked its brain and the brain had no answer.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_delegation_that_attempted_something_still_fails() {
@@ -1607,7 +1607,7 @@ mod tests {
         assert!(rows[0].result.is_none(), "{rows:?}");
     }
 
-    /// VAGUE-ASK-1: a daemon restart that catches a task before it started
+    /// A daemon restart that catches a task before it started
     /// leaves a stopped row, not a failure: nothing was attempted.
     #[test]
     fn a_restart_before_the_task_started_stops_it_rather_than_failing_it() {
@@ -1762,7 +1762,7 @@ mod tests {
         (run.caller_mode)()
     }
 
-    /// Seal P1-a: a turn Private only through its own mode handle (a Private
+    /// A turn Private only through its own mode handle (a Private
     /// caller or channel) hands a Private floor over, under an Open config.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_private_caller_turn_hands_over_private_under_an_open_config() {
@@ -1794,7 +1794,7 @@ mod tests {
         assert_eq!(floor(), PrivacyMode::Private);
     }
 
-    /// Seal P1-b: a delegation made under Private resumes Private after the
+    /// A delegation made under Private resumes Private after the
     /// chief turned Open.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_private_delegation_resumes_private_after_a_switch_to_open() {

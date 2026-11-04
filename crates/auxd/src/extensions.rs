@@ -1,4 +1,4 @@
-//! Extensions at daemon startup (WO-13b).
+//! Extensions at daemon startup.
 //!
 //! The daemon starts one sandboxed session per mounted, unfrozen extension and
 //! registers its tools on each agent's turn registry. Discovery and identity
@@ -26,8 +26,8 @@ pub fn current(slot: &ExtSlot) -> Arc<ExtensionHost> {
         .clone()
 }
 
-/// On a switch open → private (TOK-7), stop every extension child and start the
-/// host again, so no open-mode state survives; extensions run on B14 like any
+/// On a switch open → private, stop every extension child and start the
+/// host again, so no open-mode state survives; extensions run like any
 /// MCP server. A plain private → private tick does nothing.
 pub fn spawn_privacy_watch(home: PathBuf, slot: ExtSlot) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {

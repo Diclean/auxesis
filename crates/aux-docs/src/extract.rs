@@ -1,10 +1,10 @@
-//! The extractor chain and the checks (Wave C / C2b).
+//! The extractor chain and the checks.
 //!
 //! The chain is deterministic and local: **XML in Rust** through
 //! `aux-invoices` (Factur-X/ZUGFeRD CII and UBL e-invoices), then the **Mac
 //! bridge** (`pdf_text` first, `ocr` second) over the authenticated local API,
 //! then **none**. There is deliberately no in-process PDF parser: hostile mail
-//! PDFs are parsed by PDFKit on the Mac, never by a Rust crate (D25/D26).
+//! PDFs are parsed by PDFKit on the Mac, never by a Rust crate.
 //!
 //! Everything here is pure: bytes or text in, typed fields and checks out. No
 //! model is ever asked to read a document. Amounts are integer minor units,
@@ -63,11 +63,11 @@ pub enum DocKind {
     /// Not classified.
     #[default]
     Other,
-    /// An ID card, passport (MRZ) or driving licence (DOC-SAFE-1).
+    /// An ID card, passport (MRZ) or driving licence.
     IdDocument,
-    /// A bank or account statement (DOC-SAFE-1).
+    /// A bank or account statement.
     BankStatement,
-    /// A medical document: report, prescription, sick note (DOC-SAFE-1).
+    /// A medical document: report, prescription, sick note.
     Health,
 }
 
@@ -245,7 +245,7 @@ pub struct Fields {
 }
 
 impl Fields {
-    /// The field set to persist in Private mode (privacy row G5): metadata
+    /// The field set to persist in Private mode: metadata
     /// only. Amounts, dates, number and the matched party id survive; every
     /// free-text field — issuer, recipient and VAT identifiers — is dropped.
     pub fn metadata_only(&self) -> Fields {
@@ -456,7 +456,7 @@ pub struct PartyMatch {
 }
 
 /// Match the issuer or recipient against the CRM parties' names and e-mails
-/// (the B1 `party` rows). Exact, case-insensitive and whitespace-normalised:
+/// (the CRM's own `party` rows). Exact, case-insensitive and whitespace-normalised:
 /// a fuzzy match would file a document against the wrong party. Several
 /// matching parties link none (`unknown`, ambiguous).
 pub fn party_match(fields: &Fields, parties: &[PartyRef]) -> PartyMatch {
@@ -536,7 +536,7 @@ pub fn extract_text(text: &str, pages: Option<u32>, extractor: Extractor) -> Ext
         .filter(|line| !line.is_empty())
         .collect();
     if let Some(kind) = sensitive_kind(text) {
-        // DOC-SAFE-1: no value of an ID, health or bank document is parsed
+        // No value of an ID, health or bank document is parsed
         // into the invoice fields, not even the amounts of a bill for one: a
         // "Total" or "VAT" line can carry an ID or secret as digits. Only the
         // class and the page count stay.

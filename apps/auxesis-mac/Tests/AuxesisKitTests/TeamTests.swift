@@ -66,8 +66,8 @@ import Testing
         }
     }
 
-    func testFrenchFallsBackToEnglishUntilTranslated() {
-        XCTAssertEqual(L10n.ui(.waitingEmpty, .fr), L10n.ui(.waitingEmpty, .en))
+    func testWaitingEmptyIsTranslated() {
+        XCTAssertEqual(L10n.ui(.waitingEmpty, .fr), "Rien ne vous attend. Les agents demandent ici et dans leur propre fil.")
     }
 
     func testE1EmptyStatesAreVerbatim() {

@@ -137,6 +137,25 @@ fn runner(home: &Path, provider: Arc<dyn ChatProvider>, deadline: Duration) -> E
     )
 }
 
+/// Waits for the first approval card to reach the registry, polling the actual
+/// condition instead of a fixed tick count. The old 300 x 10 ms loop gave up
+/// after ~3 s: under a parallel test run the delegated turn can take longer
+/// than that to publish its card, and the answerer then exited without ever
+/// resolving it. The deadline only bounds a turn that is truly stuck.
+fn wait_for_card(approvals: &ApprovalRegistry, deadline: Duration) -> auxd::api::PendingApproval {
+    let started = Instant::now();
+    loop {
+        if let Some(card) = approvals.list_pending().first().cloned() {
+            return card;
+        }
+        assert!(
+            started.elapsed() < deadline,
+            "no approval card appeared within {deadline:?}: the delegated turn never asked"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Runs one step on its own thread and fails the test when it overruns its
 /// budget: a regressed chief loop must not hold the CI job until the job
 /// limit, and the panic names the step that stalled.
@@ -223,14 +242,9 @@ fn a_card_waiting_for_the_owner_pauses_the_deadline_and_executes_once() {
     let answerer = {
         let approvals = Arc::clone(&approvals);
         std::thread::spawn(move || {
-            for _ in 0..300 {
-                if let Some(card) = approvals.list_pending().first().cloned() {
-                    std::thread::sleep(Duration::from_secs(2));
-                    let _ = approvals.resolve(&card.id, auxd::api::Resolution::allow_once());
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            let card = wait_for_card(&approvals, Duration::from_secs(30));
+            std::thread::sleep(Duration::from_secs(2));
+            let _ = approvals.resolve(&card.id, auxd::api::Resolution::allow_once());
         })
     };
     let started = Instant::now();

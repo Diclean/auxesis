@@ -22,8 +22,12 @@ kinds of things you can ask:
 - **Documents** — "Find the receipts from March and export them." Collect mailed
   receipts, read them with the personal data hidden, link them to a client, and
   export a spreadsheet with the original files.
-- **The day** — "What did I miss?" A morning brief and a short record of what
-  happened while you were away, in the app.
+- **The day** — "What did I miss?" A morning brief, a live list of the actions
+  and sends since you left, and the jobs that are due next. A late or failed job
+  says so, with a short reason, in the Work tab and the Ledger.
+
+The Mac app is in English and French. It follows the language of your Mac, and
+Settings shows which one is in use.
 
 ### What it does not do
 

@@ -1,5 +1,5 @@
 //! `aux brief now` — today's brief from the running daemon, or the offline
-//! M0 fixture with `--offline`.
+//! offline fixture with `--offline`.
 
 use aux_brief::{now_local, run_once, BriefResult, FakeBriefSource, MAX_SOURCE_READS};
 use aux_notify::{system_notifier, Notification, Notifier, StopSwitchNotifier};
@@ -486,7 +486,7 @@ impl Notifier for PrivacyGate<'_> {
     }
 }
 
-/// The offline fixture path, unchanged from M0: it never reaches the daemon.
+/// The offline fixture path, always available: it never reaches the daemon.
 fn run_offline_inner() -> Result<String, Box<dyn std::error::Error>> {
     let home = auxesis_home();
     let verified = ensure_home(&home)?;

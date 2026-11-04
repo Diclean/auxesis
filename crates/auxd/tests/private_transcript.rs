@@ -1,4 +1,4 @@
-//! PRIVATE-TRANSCRIPT: a Private conversation is kept in the local store, so the
+//! A Private conversation is kept in the local store, so the
 //! owner's page shows it after a refresh and an API restart in one process (the
 //! fresh-process restart is `private_restart.rs`).
 //! What reaches the model is unchanged: tokens, never the value.
@@ -118,7 +118,7 @@ async fn a_private_conversation_is_shown_after_a_refresh_and_a_restart() {
     assert_eq!(status, 200, "{json}");
     let thread = json["thread"]["id"].as_i64().unwrap();
     // The agent list's last activity and the activity feed leave the marked
-    // chat out (CONV-PRIVATE-MIX): they carry neither the token nor the
+    // chat out: they carry neither the token nor the
     // value. The transcript read below is the current session's, and it does
     // show the values to their owner.
     for path in ["/v1/agents", "/v1/activity"] {
@@ -143,7 +143,7 @@ async fn a_private_conversation_is_shown_after_a_refresh_and_a_restart() {
         by_agent[1].1.contains(EMAIL),
         "the answer is not rehydrated: {by_agent:?}"
     );
-    // The numeric read of a marked session stays refused (CONV-PRIVATE-MIX):
+    // The numeric read of a marked session stays refused:
     // only the current session is exempt, and only for the agent-name read.
     let by_id = tokio::task::block_in_place(|| {
         get(

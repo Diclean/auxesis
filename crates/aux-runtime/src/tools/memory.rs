@@ -170,7 +170,7 @@ impl Tool for MemoryTools {
                 "text is empty after sanitization",
             ));
         }
-        // TAINTED-REMEMBER: a conversation that read outside content (mail,
+        // A conversation that read outside content (mail,
         // a document, a web page, MCP or shell output) never writes a lasting
         // memory on its own, not even a quarantined one: the text goes to the
         // owner's review queue instead, and the model is told so. A note the

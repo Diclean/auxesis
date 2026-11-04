@@ -1,4 +1,4 @@
-//! AGENT-REAL-1 live acceptance: the owner's questions against the REAL model.
+//! Live acceptance: the owner's questions against the REAL model.
 //!
 //! Skips cleanly unless `AUX_HERO_CLOUD_URL`, `AUX_HERO_CLOUD_KEY` and
 //! `AUX_HERO_CLOUD_MODEL` are set (optionally `AUX_HERO_CLOUD_DISABLE_THINKING`),
@@ -421,7 +421,7 @@ async fn owner_questions_against_the_real_model() {
                 turn.system_text
             );
             if names_contact && mode == PrivacyMode::Private {
-                // NAMES-OFF (owner, 2026-10-19): a name passes as written;
+                // A name passes as written;
                 // the contact's address is still a token.
                 assert!(
                     turn.user_text.contains("Jonas Sample") && !turn.user_text.contains('⟦'),
@@ -455,7 +455,7 @@ async fn owner_questions_against_the_real_model() {
                     turn.tool_text
                 );
                 if mode == PrivacyMode::Private {
-                    // NAMES-OFF (owner, 2026-10-19): the name passes as
+                    // A name passes as
                     // written; the address stays hidden.
                     assert!(
                         !turn.tool_text.contains("⟦PERSON"),
@@ -588,7 +588,7 @@ async fn owner_calendar_questions_against_the_real_model() {
                 );
             }
             if mode == PrivacyMode::Private {
-                // NAMES-OFF (owner, 2026-10-19): the name in the event title
+                // The name in the event title
                 // passes as written and is never a token.
                 assert!(
                     !turn.tool_text.contains("⟦PERSON"),

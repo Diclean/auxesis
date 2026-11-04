@@ -122,7 +122,7 @@ impl Pending {
     }
 
     /// The notice a dropped pending message reports in the next brief.
-    // TODO(NOTIFY-2 P3): an approval headline folds into a later brief if `NotifyRouter::approval` ever gets a caller.
+    // TODO: an approval headline folds into a later brief if `NotifyRouter::approval` ever gets a caller.
     fn into_notice(self) -> Notice {
         match self {
             Pending::Alert { level, text } => Notice { level, text },
@@ -569,7 +569,7 @@ async fn deliver(
 }
 
 /// Free text bound for a remote gateway with every secret and prohibited value
-/// masked (IMSG-SCRUB-1); [`MESSAGE_HELD_NOTICE`] when the scrub fails. The
+/// masked; [`MESSAGE_HELD_NOTICE`] when the scrub fails. The
 /// local display stays on the Mac and keeps the text as written.
 fn owner_text(remote: bool, text: String) -> String {
     if !remote {

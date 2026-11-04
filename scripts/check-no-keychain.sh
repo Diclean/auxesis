@@ -6,10 +6,10 @@
 # real HOME (on the Mac CI runner that is the owner's account):
 #
 #   1. sandboxed (`AUXESIS_SANDBOX=1`, `AUXESIS_HOME`, `AUXESIS_API_PORT=0`,
-#      `env -i`): the whole workspace suite, the round-9 contract. This is the
+#      `env -i`): the whole workspace suite, the current contract. This is the
 #      CI test step on the Mac. Test processes use a scratch HOME, never the
 #      owner's real Keychain.
-#   2. unflagged (no `AUXESIS_*` variable at all, `env -i`): the KC-01 repro.
+#   2. unflagged (no `AUXESIS_*` variable at all, `env -i`): the default-deny repro.
 #      With no opt-in, the default-deny path must not spawn `security`. Targeted
 #      to the crates that own a Keychain backend (aux-providers, aux-cli, auxd),
 #      so CI does not start the daemon tests on the default port.
@@ -18,7 +18,7 @@
 #      and under the real HOME it would touch the owner's Keychain. A NOTE says so.
 #
 # Usage: scripts/check-no-keychain.sh [--nextest] [extra cargo-test args]
-# --nextest (CI-FAST-2) runs phase 1 with `cargo nextest run --profile ci`
+# --nextest runs phase 1 with `cargo nextest run --profile ci`
 # (a config this script writes), so test binaries and tests run in parallel, then
 # `cargo test --doc` for the doctests nextest skips; same sandbox, same tests.
 # Without cargo-nextest installed it falls back to `cargo test` with a NOTE.
@@ -41,7 +41,7 @@ if [[ "${1:-}" == "--nextest" ]]; then
     shift
 fi
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 root="$(git rev-parse --show-toplevel)"
 original_home="$HOME"

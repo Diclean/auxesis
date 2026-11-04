@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the LEAK-FINDER-1 probe (qa/privacy-eval/tests/leak_finder.rs in the
+# Run the leak-finder probe (qa/privacy-eval/tests/leak_finder.rs in the
 # privacy kernel repository) on the configured build host, and copy its report
 # to the report directory.
 #
@@ -36,7 +36,7 @@
 #                            first line of <AUX_OPS_DIR>/leak-finder/remote-host
 #                            is read; without either the script fails closed
 set -euo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # J-02: refuse a contradictory sandbox HOME
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 usage() {
   cat <<'USAGE'

@@ -6,8 +6,7 @@ license.workspace = true
 authors.workspace = true
 description = "Documents: local receipt collection into the evidence registry (Phase 1, Wave C)"
 # Never published until the owner gives the go. The licence is
-# PolyForm-Noncommercial-1.0.0; `deny.toml` allows it for this crate by name
-# (see audit I-05).
+# PolyForm-Noncommercial-1.0.0; `deny.toml` allows it for this crate by name.
 publish = false
 
 [dependencies]

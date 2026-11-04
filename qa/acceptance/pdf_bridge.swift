@@ -1,4 +1,4 @@
-// The PDFKit half of the DOC-COLLECT-2 acceptance: it does what the Mac
+// The PDFKit half of the receipt-collection acceptance: it does what the Mac
 // app's `ExtractionWorker` does — claim one pending document, read its bytes,
 // extract the text with PDFKit (the app's own extractor) and post it back —
 // so the demo receipt is read by the real Mac extractor, not by a stand-in.

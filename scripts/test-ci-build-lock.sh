@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Self-test for the release half of the CI build lock (CI-LOCK-RMDIR).
+# Self-test for the release half of the CI build lock.
 #
 # scripts/ci-build-lock.sh release must remove the lock this job took, treat an
 # absent lock as done (a cancelled run, a re-run), and leave another builder's

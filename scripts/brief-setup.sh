@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One command turns on the 08:00 morning brief from a simulated mailbox (M2).
+# One command turns on the 08:00 morning brief from a simulated mailbox.
 #   scripts/brief-setup.sh --sandbox   # needs AUXESIS_SANDBOX=1 and AUXESIS_HOME
 #   scripts/brief-setup.sh --owner [--imap-port N]
 # For one AUXESIS_HOME (default ~/.auxesis with --owner): keeps aux-fakemail (fictional

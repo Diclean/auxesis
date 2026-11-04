@@ -46,7 +46,7 @@ public struct StepsCardRow: Equatable {
 public extension StepsCardModel {
     /// The rows of one card: each delegation's steps, or one row for the ask
     /// itself when the daemon sent no steps. A row's place is never invented.
-    /// A daemon step is shown in plain words (STEP-TOOL-LABELS): the tool is
+    /// A daemon step is shown in plain words: the tool is
     /// named, never its id. The owner's own question is shown as it is.
     static func rows(_ delegations: [Delegation], stopped: Bool, language: Language = .en) -> [StepsCardRow] {
         delegations.flatMap { delegation -> [StepsCardRow] in

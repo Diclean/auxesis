@@ -1,4 +1,4 @@
-// First-launch setup (SETUP-SCREEN): one row per macOS permission, a plain
+// First-launch setup: one row per macOS permission, a plain
 // reason, a button and a live status. Nothing is asked until the owner clicks;
 // Settings → General opens it again.
 import AppKit

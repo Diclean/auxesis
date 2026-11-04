@@ -381,7 +381,7 @@ struct ClientCardView: View {
     }
 
     @ViewBuilder private func overview(_ card: ClientCard, _ copy: Copy) -> some View {
-        // CLIENT-TZ-FIELD: the client's own zone, when the card carries one.
+        // The client's own zone, when the card carries one.
         if let zone = card.party.timeZone, !zone.isEmpty {
             FactRow(label: copy(.clientTimeZone), values: [zone])
                 .padding(.top, 14)

@@ -1,5 +1,5 @@
 #!/bin/sh
-# M6 hero-smoke fixture: a fictional stdio MCP server, plain sh, no network.
+# Hero-smoke fixture: a fictional stdio MCP server, plain sh, no network.
 # One read tool and one write tool; the write tool only exists to prove that a
 # widened allowlist waits for a second approval. Every tools/call line is
 # appended to $TMPDIR/m6-calls.log, the private temp dir the kernel's Seatbelt

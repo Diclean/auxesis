@@ -64,7 +64,7 @@ struct ServeArgs {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // J-02: the one shared sandbox guard, before anything is read or created.
+    // The one shared sandbox guard, before anything is read or created.
     if let Err(error) = kernel_core::ensure_sandbox_guard(None) {
         eprintln!("aux-fakemail: {error}");
         return ExitCode::FAILURE;

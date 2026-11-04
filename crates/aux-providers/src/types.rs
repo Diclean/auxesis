@@ -677,7 +677,7 @@ impl ModelId {
 /// nothing may build a request from wire text without the gate.
 ///
 /// `messages` is an [`Arc`] so a multi-round turn can share one conversation
-/// buffer instead of deep-copying it for every provider call (E-13).
+/// buffer instead of deep-copying it for every provider call.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ChatRequest {
     /// Conversation so far, oldest first.

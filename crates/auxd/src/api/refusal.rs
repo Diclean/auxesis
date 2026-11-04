@@ -1,8 +1,8 @@
-//! A typed refusal while an approval card waits (CANCEL-AT-CARD).
+//! A typed refusal while an approval card waits.
 //!
 //! Only a bare refusal counts: every word is a refusal, a filler ("that",
 //! "it") or the action it forbids ("send"). A named object, a bare "wait"
-//! and "yes" never touch the card; "wait no" does (CARD-NEVER-BLOCKS). The
+//! and "yes" never touch the card; "wait no" does. The
 //! check fails closed: a false positive can only withdraw a card, never
 //! approve one.
 

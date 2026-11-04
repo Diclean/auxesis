@@ -1,4 +1,4 @@
-//! WF-1 round 8 P3: pin metadata must not grow with the number of live
+//! Pin metadata must not grow with the number of live
 //! drafts. Process-isolated so the RSS measurement is not polluted by other
 //! tests' allocations.
 
@@ -46,7 +46,7 @@ fn rss_bytes() -> u64 {
     }
 }
 
-/// R8 P3: 2,000 empty live streams pinned to 128 values must not add
+/// 2,000 empty live streams pinned to 128 values must not add
 /// per-value pin metadata per stream. The pin table is two `u64`s per live
 /// stream, shared in the registry.
 #[test]
@@ -72,7 +72,7 @@ fn pin_metadata_does_not_grow_with_stream_count() {
     let after = rss_bytes();
     let growth = after.saturating_sub(before);
     // The shared pin table adds two `u64`s per live stream; the per-value
-    // BTreeSet model this replaced grew ~7 MiB for this loop (R8 bite proof).
+    // BTreeSet model this replaced grew ~7 MiB for this loop.
     assert!(
         growth < 4 * 1024 * 1024,
         "pin metadata grew {growth} bytes for 2000 live streams"

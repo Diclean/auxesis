@@ -47,7 +47,7 @@ if [ -z "$SCRIPT_SOURCE" ] || [ -z "$SCRIPT_DIRNAME" ] || [ -z "$SCRIPT_DIR" ]; 
 fi
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/guard.sh
-source "$SCRIPT_DIR/lib/guard.sh"  # J-02 round 7: refuse a contradictory sandbox HOME
+source "$SCRIPT_DIR/lib/guard.sh"  # Refuse a contradictory sandbox HOME
 
 die() { echo "package-mac: $*" >&2; exit 1; }
 

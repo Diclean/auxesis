@@ -1916,7 +1916,7 @@
     },
     "aboutCalendar" : {
       "en" : "Reads your calendar and finds free times. Writes events only after your yes.",
-      "fr" : "Lit votre agenda et trouve des créneaux libres. N’écrit des événements qu’après votre oui."
+      "fr" : "Lit votre agenda et trouve des créneaux libres. N’écrit des événements qu’après votre accord."
     },
     "aboutClients" : {
       "en" : "Keeps a card for each client: notes, history and follow-ups.",
@@ -1932,11 +1932,11 @@
     },
     "aboutMail" : {
       "en" : "Reads and sorts your inbox, drafts replies. Sends only after your yes.",
-      "fr" : "Lit et trie votre boîte de réception, rédige des brouillons. N’envoie qu’après votre oui."
+      "fr" : "Lit et trie votre boîte de réception, rédige des brouillons. N’envoie qu’après votre accord."
     },
     "acpReadsAsk" : {
       "en" : "A brain run by another app (ACP) reads only its own workspace through Auxesis; anything it asks permission for opens a card.",
-      "fr" : "Un cerveau géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
+      "fr" : "Un modèle géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
     },
     "agentIdle" : {
       "en" : "Idle",
@@ -2076,7 +2076,7 @@
     },
     "apTrailDelivered" : {
       "en" : "Delivered",
-      "fr" : "Distribué"
+      "fr" : "Livré"
     },
     "apTrailDrafted" : {
       "en" : "Drafted",
@@ -2096,7 +2096,7 @@
     },
     "apWaits" : {
       "en" : "Waits for your yes",
-      "fr" : "Attend votre oui"
+      "fr" : "Attend votre accord"
     },
     "appName" : {
       "en" : "Auxesis",
@@ -3048,7 +3048,7 @@
     },
     "ledgerSkillAsked" : {
       "en" : "%@ asked for your yes",
-      "fr" : "%@ a demandé votre oui"
+      "fr" : "%@ a demandé votre accord"
     },
     "ledgerSkillRan" : {
       "en" : "Ran %@",
@@ -3372,7 +3372,7 @@
     },
     "notifications" : {
       "en" : "When an agent needs your yes",
-      "fr" : "Quand un agent attend votre oui"
+      "fr" : "Quand un agent attend votre accord"
     },
     "notificationsHint" : {
       "en" : "One banner per request, with Send and Open. None while stopped.",
@@ -3432,11 +3432,11 @@
     },
     "pinnedMany" : {
       "en" : "%d actions wait for your yes",
-      "fr" : "%d actions attendent votre oui"
+      "fr" : "%d actions attendent votre accord"
     },
     "pinnedOne" : {
       "en" : "1 action waits for your yes",
-      "fr" : "1 action attend votre oui"
+      "fr" : "1 action attend votre accord"
     },
     "pluginAccess" : {
       "en" : "Access",
@@ -3492,7 +3492,7 @@
     },
     "pluginNeedsYou" : {
       "en" : "Needs you",
-      "fr" : "Attend votre accord"
+      "fr" : "À traiter"
     },
     "pluginNetwork" : {
       "en" : "Network",
@@ -3732,7 +3732,7 @@
     },
     "prospectReferral" : {
       "en" : "Was referred to you",
-      "fr" : "Vous a été recommandé"
+      "fr" : "Recommandé par un contact"
     },
     "prospectsMany" : {
       "en" : "%d senders",
@@ -3992,11 +3992,11 @@
     },
     "setupMessagesWhy" : {
       "en" : "Lets Auxesis text you through Messages, for example to ask for your yes.",
-      "fr" : "Permet à Auxesis de vous écrire via Messages, par exemple pour demander votre oui."
+      "fr" : "Permet à Auxesis de vous écrire via Messages, par exemple pour demander votre accord."
     },
     "setupNotificationsWhy" : {
       "en" : "One banner when something waits for your yes. None while Auxesis is stopped.",
-      "fr" : "Une bannière quand quelque chose attend votre oui. Aucune quand Auxesis est arrêté."
+      "fr" : "Une bannière quand quelque chose attend votre accord. Aucune quand Auxesis est arrêté."
     },
     "setupOpenSettings" : {
       "en" : "Open System Settings",
@@ -4284,7 +4284,7 @@
     },
     "teamLeft" : {
       "en" : "%d left",
-      "fr" : "%d sorties du Mac"
+      "fr" : "%d hors du Mac"
     },
     "teamNeedsYou" : {
       "en" : "Needs you: %d",
@@ -4316,7 +4316,7 @@
     },
     "teamUnknown" : {
       "en" : "%d unknown",
-      "fr" : "%d au lieu inconnu"
+      "fr" : "%d sans lieu connu"
     },
     "teamWorking" : {
       "en" : "Working: %@",
@@ -4468,11 +4468,11 @@
     },
     "waitsForYesMany" : {
       "en" : "%d wait for your yes",
-      "fr" : "%d en attente de votre oui"
+      "fr" : "%d en attente de votre accord"
     },
     "waitsForYesOne" : {
       "en" : "1 waits for your yes",
-      "fr" : "1 en attente de votre oui"
+      "fr" : "1 en attente de votre accord"
     },
     "whatAuxKnows" : {
       "en" : "What Aux knows",

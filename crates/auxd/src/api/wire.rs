@@ -11,7 +11,7 @@
 //! [`error::scrub_preview`]). Every message role gets the same scrub as a
 //! `tool.end` preview, so the live frame and the REST history can never
 //! disagree about a secret: both go through
-//! [`snapshot::message_json_scrubbed`] (RV2-02, P2-5).
+//! [`snapshot::message_json_scrubbed`].
 //!
 //! User and assistant content stay verbatim by design (RV2-04, tracked): the
 //! user may ask about a credential on purpose, and redacting the model's own
@@ -44,7 +44,7 @@
 //! `session=` ids, presigned-URL signatures, separator-free all-lowercase
 //! compounds (`postgrespassword`) and values whose shape-clean prefix is under
 //! 16 bytes (`PASSWORD=Sup3rS3cret!`) may render. Scrubbing daemon-verbatim
-//! user/assistant text remains the tracked residual (RV2-04).
+//! user/assistant text remains the tracked residual.
 //!
 //! **The daemon side is the contract** (B2-10): the API response body —
 //! `curl`, a script, `aux activity --json`, the app's own HTTP client — is

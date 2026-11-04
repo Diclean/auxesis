@@ -160,7 +160,7 @@ impl<'a> ChatSession<'a> {
         Ok(issued)
     }
 
-    /// Issue `message` keeping the handed task tokens whole (TOK-DELEGATE).
+    /// Issue `message` keeping the handed task tokens whole.
     /// TOK-CONSISTENT-1: the detectors read it as written (seal r2 P1); then a
     /// value the conversation has a token for is put back as that token and the
     /// text issued again, keeping it: one value, one token across turns,

@@ -88,7 +88,7 @@ pub fn set_in_env_file(
     // Serialize the read-modify-write against the daemon (which writes the
     // same `.env` while saving a provider key) with the shared
     // `<home>/.config.lock` file lock: a CLI write based on a stale read must
-    // not erase a key the daemon just saved (security review P2).
+    // not erase a key the daemon just saved.
     kernel_core::with_config_lock(home, || {
         let mut lines: Vec<String> = read_env_file(home)?
             .map(|text| text.lines().map(str::to_string).collect())
@@ -103,7 +103,7 @@ pub fn set_in_env_file(
         // verified home directory fd, never through the home path string;
         // `O_NOFOLLOW` refuses a symlink at the file name. The write is an
         // atomic replace (temp file + rename): a crash mid-write never leaves
-        // a truncated `.env` that loses the other keys (security review P2, #136).
+        // a truncated `.env` that loses the other keys.
         let handle = kernel_core::SandboxHome::open(home)
             .map_err(|err| format!("opening {}: {err}", home.display()))?;
         handle

@@ -179,7 +179,7 @@ pub fn classify(tool: &str, arguments: &Value, class: Option<&ToolClass>) -> Act
 /// CAL-PRIMARY-1: `primary` is Google's id for the default. An
 /// Apple calendar is found by its title, so `primary` is never taken for the
 /// default; and a blank name is only the default on a create — on an update it
-/// names a calendar and keeps the card (#397).
+/// names a calendar and keeps the card.
 ///
 /// The calendar an *updated* event already sits on (`event_calendar`) is not a
 /// target: it is a title, and a title never proves the default one

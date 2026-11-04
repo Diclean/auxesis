@@ -513,7 +513,7 @@ const IGNORED_SENDER_PREFIX: &str = "prospect-ignored:";
 /// Most ignored senders kept.
 const IGNORED_SENDERS_MAX: i64 = 10_000;
 
-/// v8: the legacy-session watermark (RV2-05).
+/// v8: the legacy-session watermark.
 ///
 /// The `job <name>` title heuristic exists only for sessions that predate the
 /// durable `kind` column; a session created after that column became the
@@ -1030,13 +1030,13 @@ impl Store {
         Ok(store)
     }
 
-    /// Open the store through the process's verified home (J-02 round 4).
+    /// Open the store through the process's verified home.
     ///
     /// Re-verifies the home identity, builds the database path from the held
     /// fd's real path (`F_GETPATH`/`/proc/self/fd`), and proves after the
     /// open that the file at that path is the same inode reachable through
     /// the verified directory fd. A home renamed or swapped after the guard
-    /// therefore cannot redirect SQLite onto a decoy (GLM-P1-1).
+    /// therefore cannot redirect SQLite onto a decoy.
     pub fn open_verified(home: &kernel_core::SandboxHome) -> Result<Self, StoreError> {
         let real_home = home.real_path()?;
         let db = real_home.join("store.db");
@@ -1445,7 +1445,7 @@ fn set_private_permissions(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Create the store file with `0600`, before SQLite ever opens it (P3-4).
+/// Create the store file with `0600`, before SQLite ever opens it.
 ///
 /// Kept separate from [`prepare_store_file`] so the create mode is
 /// observable and tested: the `0600` has to be set *here*, at creation —

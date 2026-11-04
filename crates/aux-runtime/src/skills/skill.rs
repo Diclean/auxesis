@@ -606,7 +606,7 @@ pub fn parse_skill(
 
     if approval == Approval::None {
         // `none` is only safe because the run can write nothing but the local
-        // ingest: every other tool it may call is a read (M5-5).
+        // ingest: every other tool it may call is a read.
         for tool in &effective_tools {
             let read_only = tool_map::lookup(tool)
                 .map(|info| info.runs_without_card())

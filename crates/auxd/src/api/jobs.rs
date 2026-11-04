@@ -1,4 +1,4 @@
-//! Routines: recurring agent jobs the owner creates and manages (WO-ROUTINES-1).
+//! Routines: recurring agent jobs the owner creates and manages.
 //!
 //! A routine is a normal `agent` job (`{"kind":"agent","prompt":…}`) in the
 //! `jobs` table, so a run is exactly one scheduled agent turn: it goes through

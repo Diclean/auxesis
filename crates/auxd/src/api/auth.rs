@@ -218,7 +218,7 @@ fn read_token(path: &Path) -> std::io::Result<Option<String>> {
 ///
 /// Split out so the TOCTOU defence itself is testable: `read_token`'s
 /// `symlink_metadata` pre-check can be raced, and this open is what refuses
-/// the swapped-in symlink (M04).
+/// the swapped-in symlink.
 fn open_token_file(path: &Path) -> std::io::Result<std::fs::File> {
     // SANDBOX-GATEWAY-EXEMPT: cfg(test)-only path-based token helper, kept to test the symlink refusal.
     let mut options = std::fs::OpenOptions::new();

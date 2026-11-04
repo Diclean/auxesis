@@ -1,4 +1,4 @@
-//! Per-conversation taint tracking (WS-C).
+//! Per-conversation taint tracking.
 //!
 //! Once a tool whose output is untrusted (`shell`, `http_fetch`, connector
 //! and mail tools, or anything unclassified) is dispatched, its content may

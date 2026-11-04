@@ -448,7 +448,7 @@ struct Inner {
     /// Ids whose claim outlived the turn: the timeout grace expiry marked
     /// them, so a late [`ClaimedApproval::complete_with`] must not wake the
     /// turn or publish an `allowed` frame (RV2-01). A turn that ends also
-    /// marks its own claimed ids (P2-1).
+    /// marks its own claimed ids.
     abandoned: HashSet<String>,
     /// Ids currently claimed by an in-flight answer, mapped to their session
     /// (thread). A turn ends -> every claimed approval of that session is
@@ -735,7 +735,7 @@ impl ApprovalRegistry {
             .contains(id)
     }
 
-    /// Retire every approval of one session (P2-1).
+    /// Retire every approval of one session.
     ///
     /// Called by the turn runner when a turn ends — in particular when a
     /// cancelled or timed-out turn stopped waiting on an answer. Still-pending
@@ -796,7 +796,7 @@ impl ApprovalRegistry {
     /// timeout grace expired) and was denied. A later
     /// [`ClaimedApproval::complete_with`] then returns
     /// [`Completion::Abandoned`] instead of waking a turn that no longer
-    /// waits, so the answer can be reported truthfully (RV2-01).
+    /// waits, so the answer can be reported truthfully.
     ///
     /// No-op when the id was never claimed (the timeout path only calls this
     /// after `expire` returned `None`).
@@ -849,7 +849,7 @@ impl ClaimedApproval {
         let _ = self.complete_with(resolution, || {});
     }
 
-    /// Complete the claim atomically with its side effects (RV2-01/RV2-06):
+    /// Complete the claim atomically with its side effects:
     /// under the registry lock, `before_wake` runs (the audit row and the
     /// `approval.resolved` broadcast) and only then is the waiter woken — so
     /// the frame always precedes the turn it authorized.
@@ -2032,7 +2032,7 @@ mod tests {
         );
         assert_eq!(value["id"], pending.id);
         // The app's `Approval` requires a `u64`: the degraded frame must
-        // still deserialize (RV2-03).
+        // still deserialize.
         let approval: AppApproval = serde_json::from_value(value).unwrap();
         assert_eq!(approval.audit_id, 0);
         assert!(
@@ -2050,7 +2050,7 @@ mod tests {
         let claimed = registry.claim(&entry.id).unwrap();
         registry.abandon(&entry.id);
         // …and a completion that lands afterwards must not run its
-        // side effects nor hand the (stale) answer to the turn (RV2-01).
+        // side effects nor hand the (stale) answer to the turn.
         let mut effects_ran = false;
         let outcome = claimed.complete_with(Resolution::allow_once(), || effects_ran = true);
         assert_eq!(outcome, Completion::Abandoned);

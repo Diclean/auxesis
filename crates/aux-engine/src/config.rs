@@ -186,7 +186,7 @@ pub fn load_rules(path: &Path) -> Result<Vec<Rule>, RulesError> {
 /// two read-modify-write cycles interleave and silently lose rules (and, with
 /// a truncating `fs::write`, can tear the file). The daemon call site also
 /// holds `kernel_core::with_config_lock`, the shared `<home>/.config.lock` file
-/// lock, so writers in other processes are serialized too (security review P2).
+/// lock, so writers in other processes are serialized too.
 static APPEND_RULE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Append one `[[rules]]` entry to `path`, creating the file when missing.

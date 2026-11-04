@@ -1781,6 +1781,40 @@ level = "auto"
         }
     }
 
+    /// The daemon paths racing on a fresh home, as a start that overlaps a job
+    /// or an always-allow click: every reader sees `main` as the chief, and
+    /// the roster is the chief alone.
+    #[test]
+    fn racing_daemon_paths_on_a_fresh_home_all_see_main_the_chief() {
+        let paths = [
+            "daemon and API load",
+            "job load by path",
+            "job load by handle",
+            "always-allow rule",
+        ];
+        for round in 0..20 {
+            let dir = tempdir().unwrap();
+            let home = dir.path();
+            let start = std::sync::Barrier::new(paths.len() * 2);
+            std::thread::scope(|scope| {
+                for name in paths.iter().chain(&paths) {
+                    let start = &start;
+                    scope.spawn(move || {
+                        start.wait();
+                        create_config_through(name, home);
+                        assert_eq!(chief_id(home), CHIEF_AGENT, "round {round}: {name}");
+                    });
+                }
+            });
+            let ids: Vec<String> = registry(home)
+                .unwrap()
+                .into_iter()
+                .map(|agent| agent.id)
+                .collect();
+            assert_eq!(ids, [CHIEF_AGENT], "round {round}");
+        }
+    }
+
     fn calendar_file(home: &Path, file: &str) -> Option<Vec<u8>> {
         std::fs::read(home.join("agents").join("calendar").join(file)).ok()
     }

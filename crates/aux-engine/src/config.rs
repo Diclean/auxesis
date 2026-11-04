@@ -25,11 +25,10 @@ pub fn new_config_text() -> Result<String, toml::ser::Error> {
 
 /// Create an app default only when this home has no config; never rewrite an
 /// existing installation. An explicit `default_agent`, or an older install's
-/// file without one, stays exactly as it is.
+/// file without one, stays exactly as it is. The file is the one under the
+/// verified home's real path, and it must be a regular file this user owns.
 pub fn bootstrap_config(home: &kernel_core::SandboxHome) -> Result<(), kernel_core::ConfigError> {
-    let text = new_config_text()?;
-    home.write_new(Path::new("config.toml"), text.as_bytes(), 0o600)?;
-    Ok(())
+    ensure_config_file(&home.real_path()?.join("config.toml"))
 }
 
 /// Load the config of `home`, creating it first with [`bootstrap_config`].
@@ -46,20 +45,44 @@ pub fn load_or_create_verified(
 }
 
 /// [`load_or_create_verified`] for a config file given by path, as the
-/// kernel's path-based load takes it: a missing file is created from
-/// [`new_config_text`] (0600, never through a symlink), then loaded.
+/// kernel's path-based load takes it: a missing file is published from
+/// [`new_config_text`], and only a regular file this user owns is loaded.
 #[allow(clippy::disallowed_methods)]
 pub fn load_or_create(path: &Path) -> Result<Config, kernel_core::ConfigError> {
-    create_config_file(path)?;
+    ensure_config_file(path)?;
     Config::load_or_create(path)
 }
 
-/// Create `path` from [`new_config_text`] unless something is already there.
-fn create_config_file(path: &Path) -> Result<(), kernel_core::ConfigError> {
-    let text = new_config_text()?;
-    if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
+/// Publish `path` from [`new_config_text`] when nothing is there, then accept
+/// what is there only as a regular file this user owns.
+fn ensure_config_file(path: &Path) -> Result<(), kernel_core::ConfigError> {
+    match std::fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            publish_new(path, new_config_text()?.as_bytes())?;
+        }
+        Err(err) => return Err(err.into()),
+        Ok(_) => {}
     }
+    Ok(check_config_file(path)?)
+}
+
+/// Write `data` to a unique temp file beside `path` (0600, synced), then
+/// hard-link it to `path` and drop the temp name. The link fails when `path`
+/// exists, so the file appears complete or not at all, and an existing file
+/// or symlink is never replaced: a process that loses the race keeps the
+/// winner's file.
+fn publish_new(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let next = NEXT.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_file_name(format!(".{name}.new.{}.{stamp}.{next}", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -67,12 +90,51 @@ fn create_config_file(path: &Path) -> Result<(), kernel_core::ConfigError> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    // `create_new` never follows a (dangling) symlink.
-    match options.open(path) {
-        Ok(mut file) => Ok(file.write_all(text.as_bytes())?),
+    let mut file = options.open(&temp)?;
+    let linked = file
+        .write_all(data)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::hard_link(&temp, path));
+    drop(file);
+    // The temp name goes either way: once linked, `path` holds the bytes.
+    let _ = std::fs::remove_file(&temp);
+    match linked {
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(err) => Err(err.into()),
+        other => other,
     }
+}
+
+/// Refuse a `config.toml` that must not be loaded, without following it: a
+/// symlink (it can name an older install's file elsewhere), anything but a
+/// regular file, or a file another user owns.
+fn check_config_file(path: &Path) -> std::io::Result<()> {
+    if !check_config_owner(path)?.is_file() {
+        return Err(refusal(path, "it is not a regular file"));
+    }
+    Ok(())
+}
+
+/// Refuse a symlink at `path` (it can name another install's file) or a file
+/// another user owns, without following it; return what is there.
+fn check_config_owner(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(refusal(path, "it is a symlink, not a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: `geteuid` has no preconditions and cannot fail.
+        if meta.uid() != unsafe { libc::geteuid() } {
+            return Err(refusal(path, "another user owns it"));
+        }
+    }
+    Ok(meta)
+}
+
+fn refusal(path: &Path, why: &str) -> std::io::Error {
+    let message = format!("refusing {}: {why}", path.display());
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
 }
 
 /// Why no provider could be selected.
@@ -278,6 +340,12 @@ pub fn append_rule(path: &Path, rule: &Rule) -> Result<(), RulesError> {
         .map_err(|source| RulesError::Serialize { source })?;
     let _guard = kernel_core::lock_recover(&APPEND_RULE_LOCK);
 
+    // Never follow a symlink or edit another user's file. A special file
+    // keeps the read below, as before: a stalled read only holds this lock.
+    match check_config_owner(path) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(RulesError::Io(err)),
+        _ => {}
+    }
     let mut text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -669,16 +737,77 @@ mod tests {
         }
     }
 
-    /// The path-based load never writes through a symlink at `config.toml`.
+    /// Racing first creates on an empty home, by path and through the verified
+    /// handle: the file appears complete or not at all, so every loser loads
+    /// the winner's file and every load names `main`. No temp file is left.
+    #[test]
+    fn racing_first_creates_all_load_a_complete_config_naming_main() {
+        const LOADERS: usize = 8;
+        for round in 0..50 {
+            let dir = tempdir().unwrap();
+            let verified = kernel_core::verified_home_or_verify(dir.path()).unwrap();
+            let path = dir.path().join("config.toml");
+            let start = std::sync::Barrier::new(LOADERS);
+            std::thread::scope(|scope| {
+                for loader in 0..LOADERS {
+                    let (start, verified, path) = (&start, &verified, &path);
+                    scope.spawn(move || {
+                        start.wait();
+                        let config = if loader % 2 == 0 {
+                            load_or_create(path)
+                        } else {
+                            load_or_create_verified(verified)
+                        };
+                        let config = config.unwrap_or_else(|err| panic!("round {round}: {err}"));
+                        assert_eq!(config.default_agent, "main", "round {round}, {loader}");
+                    });
+                }
+            });
+            let names: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            let temp = names
+                .iter()
+                .any(|name| name.starts_with(".config.toml.new"));
+            assert!(!temp, "round {round}: {names:?}");
+        }
+    }
+
+    /// A `config.toml` that is a symlink is refused by every entry point and
+    /// never followed: not to create a dangling link's target, and not to load
+    /// an older install's file (no `default_agent`), which would read as `aux`.
     #[cfg(unix)]
     #[test]
-    fn a_new_config_is_never_written_through_a_symlink() {
-        let dir = tempdir().unwrap();
-        let target = dir.path().join("elsewhere.toml");
-        let path = dir.path().join("config.toml");
-        std::os::unix::fs::symlink(&target, &path).unwrap();
-        assert!(load_or_create(&path).is_err());
-        assert!(!target.exists(), "the symlink target was created");
+    fn a_symlinked_config_is_refused_never_followed() {
+        let legacy = "version = 1\n\n[privacy]\nmode = \"open\"\n";
+        for dangling in [true, false] {
+            let dir = tempdir().unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let verified = kernel_core::verified_home_or_verify(&home).unwrap();
+            let target = dir.path().join("legacy.toml");
+            if !dangling {
+                std::fs::write(&target, legacy).unwrap();
+            }
+            let path = home.join("config.toml");
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+
+            let err = load_or_create(&path).unwrap_err();
+            assert!(err.to_string().contains("symlink"), "{err}");
+            assert!(load_or_create_verified(&verified).is_err());
+            assert!(bootstrap_config(&verified).is_err());
+            let rule = Rule::new("main", "shell", Action::Allow);
+            assert!(append_rule(&path, &rule).is_err());
+
+            let link = std::fs::symlink_metadata(&path).unwrap();
+            assert!(link.file_type().is_symlink(), "the link was replaced");
+            if dangling {
+                assert!(!target.exists(), "the symlink target was created");
+            } else {
+                assert_eq!(std::fs::read_to_string(&target).unwrap(), legacy);
+            }
+        }
     }
 
     #[test]

@@ -550,6 +550,8 @@ fn view(job: &Job) -> JobJson {
         // Write responses do not re-read the run history; GET /v1/jobs does.
         health: crate::job_health::HealthState::Unknown.as_str().to_string(),
         reason: None,
+        reason_kind: None,
+        reason_at: None,
     }
 }
 

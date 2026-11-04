@@ -32,6 +32,31 @@ impl HealthState {
     }
 }
 
+/// What kind of problem a [`JobHealth::reason`] describes, so a client can
+/// word it in its own language instead of showing the English sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasonKind {
+    /// A due run left no done receipt (never ran, or late).
+    Missed,
+    /// The last run failed.
+    Failed,
+    /// A run started and did not finish within its lease and grace window.
+    Hung,
+    /// The last two runs were interrupted.
+    Interrupted,
+}
+
+impl ReasonKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Missed => "missed",
+            Self::Failed => "failed",
+            Self::Hung => "hung",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
 /// A state plus the short plain reason shown for Late and Failing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobHealth {
@@ -39,17 +64,36 @@ pub struct JobHealth {
     pub state: HealthState,
     /// `None` unless the state is Late or Failing.
     pub reason: Option<String>,
+    /// `None` unless the state is Late or Failing.
+    pub reason_kind: Option<ReasonKind>,
+    /// Local `HH:MM` the reason refers to; `None` when it has no time.
+    pub reason_at: Option<String>,
 }
 
 impl JobHealth {
     fn new(state: HealthState, reason: Option<String>) -> Self {
-        Self { state, reason }
+        Self {
+            state,
+            reason,
+            reason_kind: None,
+            reason_at: None,
+        }
     }
-    fn late(reason: String) -> Self {
-        Self::new(HealthState::Late, Some(reason))
+    fn late(kind: ReasonKind, at: String, reason: String) -> Self {
+        Self {
+            state: HealthState::Late,
+            reason: Some(reason),
+            reason_kind: Some(kind),
+            reason_at: Some(at),
+        }
     }
-    fn failing(reason: String) -> Self {
-        Self::new(HealthState::Failing, Some(reason))
+    fn failing(kind: ReasonKind, at: Option<String>, reason: String) -> Self {
+        Self {
+            state: HealthState::Failing,
+            reason: Some(reason),
+            reason_kind: Some(kind),
+            reason_at: at,
+        }
     }
 }
 
@@ -100,18 +144,24 @@ where
             return JobHealth::new(HealthState::Unknown, None);
         }
         return if now > due + grace_window(&schedule, due, tz) {
-            JobHealth::late(format!("did not run at {}", clock(due, tz)))
+            let at = clock(due, tz);
+            JobHealth::late(
+                ReasonKind::Missed,
+                at.clone(),
+                format!("did not run at {at}"),
+            )
         } else {
             JobHealth::new(HealthState::Unknown, None)
         };
     };
     if last.status == RUN_FAILED {
         // No finish time: say "failed" rather than a time that moves on each poll.
-        let reason = match last.finished_at.as_deref().and_then(parse_at) {
+        let finished = last.finished_at.as_deref().and_then(parse_at);
+        let reason = match finished {
             Some(at) => format!("failed at {}", clock(at, tz)),
             None => "failed".to_string(),
         };
-        return JobHealth::failing(reason);
+        return JobHealth::failing(ReasonKind::Failed, finished.map(|at| clock(at, tz)), reason);
     }
     if runs.len() >= 2
         && runs
@@ -120,7 +170,11 @@ where
             .take(2)
             .all(|run| run.status == RUN_INTERRUPTED)
     {
-        return JobHealth::failing("the last two runs were interrupted".to_string());
+        return JobHealth::failing(
+            ReasonKind::Interrupted,
+            None,
+            "the last two runs were interrupted".to_string(),
+        );
     }
     if paused {
         return JobHealth::new(HealthState::Ok, None);
@@ -135,22 +189,34 @@ where
         // past the grace window is a hang.
         let alive = next.is_some_and(|lease| lease >= now);
         return if !alive && now > started + grace_window(&schedule, started, tz) {
-            JobHealth::late(format!(
-                "started at {} and has not finished",
-                clock(started, tz)
-            ))
+            let at = clock(started, tz);
+            JobHealth::late(
+                ReasonKind::Hung,
+                at.clone(),
+                format!("started at {at} and has not finished"),
+            )
         } else {
             JobHealth::new(HealthState::Ok, None)
         };
     }
     if last.status != RUN_OK && last.status != RUN_INTERRUPTED {
-        return JobHealth::failing(format!("failed at {}", clock(now, tz)));
+        let at = clock(now, tz);
+        return JobHealth::failing(
+            ReasonKind::Failed,
+            Some(at.clone()),
+            format!("failed at {at}"),
+        );
     }
     // Pause/resume moves the next occurrence forward on purpose, so a resumed
     // job is not late for the slots it skipped while paused.
     let due = next.unwrap_or(started).max(started);
     if now > due + grace_window(&schedule, started, tz) {
-        return JobHealth::late(format!("did not run at {}", clock(due, tz)));
+        let at = clock(due, tz);
+        return JobHealth::late(
+            ReasonKind::Missed,
+            at.clone(),
+            format!("did not run at {at}"),
+        );
     }
     JobHealth::new(HealthState::Ok, None)
 }
@@ -224,9 +290,16 @@ mod tests {
         let late = h("2026-10-03T08:30:01Z", next, false, &runs);
         assert_eq!(late.state, HealthState::Late);
         assert_eq!(late.reason.as_deref(), Some("did not run at 08:15"));
+        assert_eq!(late.reason_kind, Some(ReasonKind::Missed));
+        assert_eq!(late.reason_at.as_deref(), Some("08:15"));
         let never = |now| h(now, next, false, &[]).state;
         assert_eq!(never("2026-10-03T08:10:00Z"), HealthState::Unknown);
         assert_eq!(never("2026-10-03T08:30:01Z"), HealthState::Late);
+        let never_late = h("2026-10-03T08:30:01Z", next, false, &[]);
+        assert_eq!(never_late.reason_kind, Some(ReasonKind::Missed));
+        assert_eq!(never_late.reason_at.as_deref(), Some("08:15"));
+        let ok = h("2026-10-03T08:10:00Z", next, false, &runs);
+        assert_eq!((ok.reason_kind, ok.reason_at), (None, None));
     }
 
     #[test]
@@ -244,6 +317,8 @@ mod tests {
         );
         assert_eq!(state.state, HealthState::Failing);
         assert_eq!(state.reason.as_deref(), Some("failed at 08:01"));
+        assert_eq!(state.reason_kind, Some(ReasonKind::Failed));
+        assert_eq!(state.reason_at.as_deref(), Some("08:01"));
         let retried = [
             run(
                 "2026-10-03 07:45:00",
@@ -263,6 +338,8 @@ mod tests {
             &retried,
         );
         assert_eq!(state.state, HealthState::Failing);
+        assert_eq!(state.reason_kind, Some(ReasonKind::Interrupted));
+        assert_eq!(state.reason_at, None);
         let running = [run("2026-10-03 08:00:00", None, RUN_RUNNING)];
         let hung = h(
             "2026-10-03T08:16:00Z",
@@ -275,6 +352,8 @@ mod tests {
             hung.reason.as_deref(),
             Some("started at 08:00 and has not finished")
         );
+        assert_eq!(hung.reason_kind, Some(ReasonKind::Hung));
+        assert_eq!(hung.reason_at.as_deref(), Some("08:00"));
         let paused = h(
             "2026-10-03T10:00:00Z",
             Some("2026-10-03 08:15:00"),
@@ -282,6 +361,22 @@ mod tests {
             &[done("2026-10-03 08:00:00")],
         );
         assert_eq!(paused.state, HealthState::Ok);
+        assert_eq!((paused.reason_kind, paused.reason_at), (None, None));
+    }
+
+    #[test]
+    fn a_failure_without_a_finish_time_has_no_reason_time() {
+        let failed = [run("2026-10-03 08:00:00", None, RUN_FAILED)];
+        let health = h(
+            "2026-10-03T08:10:00Z",
+            Some("2026-10-03 08:15:00"),
+            false,
+            &failed,
+        );
+        assert_eq!(health.state, HealthState::Failing);
+        assert_eq!(health.reason.as_deref(), Some("failed"));
+        assert_eq!(health.reason_kind, Some(ReasonKind::Failed));
+        assert_eq!(health.reason_at, None);
     }
 
     #[test]

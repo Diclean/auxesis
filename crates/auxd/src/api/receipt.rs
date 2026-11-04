@@ -1369,25 +1369,29 @@ mod tests {
             .create_session("main", Some("acp settle"))
             .unwrap();
         let run_id = new_run_id(session.id);
-        let mut budgets = Budgets::default();
-        // Admit the estimate at the top of the u64 range: the settle then
-        // cannot write that amount to SQLite (i64 range) and fails.
-        budgets.default.usd_cents = Some(u64::MAX);
         let mut host = StoreTurnHost::new(
             Arc::clone(&store),
             "main".to_string(),
             session.id,
-            budgets,
+            Budgets::default(),
             None,
         )
         .with_run_id(run_id.clone());
 
         let start = cursor_mark(&db);
-        let reservation = host.reserve_turn(u64::MAX).unwrap().unwrap();
+        let reservation = host.reserve_turn(10).unwrap().unwrap();
+        // The store refuses every new usage row: the settle fails.
+        aux_store::open_keyed(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_usage BEFORE INSERT ON usage
+                 BEGIN SELECT RAISE(ABORT, 'usage refused'); END;",
+            )
+            .unwrap();
         assert!(
             host.settle_turn(Some(reservation), &UsageUpdate::default())
                 .is_err(),
-            "an out-of-range estimate must fail the settle"
+            "a refused usage row must fail the settle"
         );
         let end = cursor_mark(&db);
 

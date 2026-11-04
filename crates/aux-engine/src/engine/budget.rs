@@ -117,36 +117,107 @@ pub(crate) fn request_model<'r>(
         .or_else(|| provider.model())
 }
 
-static UNPRICED_MODEL_NOTICE: std::sync::Once = std::sync::Once::new();
+/// Models already warned about as unpriced, keyed by model and UTC day: one
+/// warning per model per day, not one per process.
+static UNPRICED_MODEL_NOTICES: std::sync::Mutex<Vec<(String, u64)>> =
+    std::sync::Mutex::new(Vec::new());
 
 fn notice_unpriced_model(model: Option<&str>) {
-    UNPRICED_MODEL_NOTICE.call_once(|| {
-        tracing::warn!(
-            model = model.unwrap_or("<unreported>"),
-            "no price table entry for this model: the daily usd_cents cap cannot bind; \
-             the token caps are the effective ones (add [prices.models.<model>] to config.toml)"
-        );
-    });
+    let model = model.unwrap_or("<unreported>");
+    let day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() / 86_400);
+    let mut seen = kernel_core::lock_recover(&UNPRICED_MODEL_NOTICES);
+    seen.retain(|(_, seen_day)| *seen_day == day);
+    if seen.iter().any(|(seen_model, _)| seen_model == model) {
+        return;
+    }
+    seen.push((model.to_string(), day));
+    tracing::warn!(
+        model,
+        "no price for this model in [prices] or the bundled catalog: the daily usd_cents \
+         cap cannot be checked; the token caps are the effective ones, and an agent \
+         capped by money alone is refused (add [prices.models.<model>] to config.toml)"
+    );
+}
+
+/// The bundled catalog's list prices, in whole cents per million tokens
+/// rounded up, for every model id that carries both prices. When two
+/// providers list the same id, the higher price wins.
+fn catalog_prices() -> &'static PriceTable {
+    static PRICES: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
+    PRICES.get_or_init(|| {
+        let mut table = PriceTable {
+            models: Default::default(),
+        };
+        let cents = |usd: f64| (usd * 100.0 - 1e-6).ceil().max(0.0) as u64;
+        for row in aux_providers::Catalog::bundled().rows() {
+            let (Some(input), Some(output)) = (row.input_usd_mtok, row.output_usd_mtok) else {
+                continue;
+            };
+            let entry = table.models.entry(row.id.clone()).or_default();
+            entry.input_cents_per_million = entry.input_cents_per_million.max(cents(input));
+            entry.output_cents_per_million = entry.output_cents_per_million.max(cents(output));
+        }
+        table
+    })
+}
+
+/// The table that prices `model`: `[prices]` first, then the bundled
+/// catalog. `None` means the call is unpriced.
+fn price_source<'p>(prices: &'p PriceTable, model: Option<&str>) -> Option<&'p PriceTable> {
+    let model = model?;
+    if prices.price(model).is_some() {
+        Some(prices)
+    } else if catalog_prices().price(model).is_some() {
+        Some(catalog_prices())
+    } else {
+        None
+    }
 }
 
 fn priced_cents(prices: &PriceTable, model: Option<&str>, tokens_in: u64, tokens_out: u64) -> u64 {
-    match model {
-        Some(model) if prices.price(model).is_some() => {
-            prices.usd_cents_for(Some(model), tokens_in, tokens_out)
-        }
-        _ => {
+    match price_source(prices, model) {
+        Some(table) => table.usd_cents_for(model, tokens_in, tokens_out),
+        None => {
             notice_unpriced_model(model);
             0
         }
     }
 }
 
+/// The provider-reported cost in cents. A missing, zero, negative or
+/// non-finite cost is treated as "not reported", so the price table decides:
+/// a gateway that reports `0` must not make the money cap inert.
 fn provider_cost_cents(usage: Option<aux_providers::Usage>) -> Option<u64> {
     let cost = usage?.cost_usd?;
     if !cost.is_finite() || cost <= 0.0 {
-        return Some(0);
+        return None;
     }
     Some((cost * 100.0).ceil().min(u64::MAX as f64) as u64)
+}
+
+/// A call whose model has no price cannot be checked against the money cap.
+/// That is acceptable while a token cap still binds, but an agent capped by
+/// money alone (no token cap configured) would run uncapped, so it is refused.
+fn unpriced_money_only_cap(
+    caps: &kernel_core::budget::BudgetCaps,
+    prices: &PriceTable,
+    model: Option<&str>,
+) -> Option<String> {
+    let set = |cap: Option<u64>| cap.is_some_and(|value| value > 0);
+    if !set(caps.usd_cents) || set(caps.tokens_in) || set(caps.tokens_out) {
+        return None;
+    }
+    if price_source(prices, model).is_some() {
+        return None;
+    }
+    notice_unpriced_model(model);
+    Some(format!(
+        "model {} has no price, so the daily usd_cents cap cannot be checked and no \
+         token cap is set; add [prices.models.<model>] or a token cap to config.toml",
+        model.unwrap_or("<unreported>")
+    ))
 }
 
 pub(super) fn estimate_tokens(text: &str) -> u64 {
@@ -295,6 +366,20 @@ impl<'a> ChatSession<'a> {
             }
             return Ok(None);
         }
+        let model = request_model(self.provider, request);
+        if let Some(message) = unpriced_money_only_cap(&caps, self.prices, model) {
+            let denial = Denial {
+                agent: self.agent.clone(),
+                day: self.current_day()?,
+                reason: DenialReason::FailClosed { message },
+                audit_error: None,
+            };
+            let denial = self.store.with(|store| audit_denial(store, denial));
+            return Err(ChatError::BudgetDenied {
+                reason: denial.reason_text(),
+            });
+        }
+
         // The budget day is the Mac's local day at *check* time, not at
         // session start: a turn that crosses midnight starts enforcing the
         // new day on its next provider call.
@@ -1433,6 +1518,106 @@ mod tests {
         assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
         assert!(err.to_string().contains("tokens_in"), "{err}");
         assert_eq!(provider.request_count(), 0, "no provider call may happen");
+    }
+
+    fn wide_token_caps(usd_cents: u64) -> Budgets {
+        let mut budgets = Budgets::default();
+        budgets.default.tokens_in = Some(10_000_000);
+        budgets.default.tokens_out = Some(10_000_000);
+        budgets.default.usd_cents = Some(usd_cents);
+        budgets
+    }
+
+    fn reported(prompt: u64, completion: u64, cost_usd: Option<f64>) -> ChatResponse {
+        ChatResponse::assistant("done").with_usage(aux_providers::Usage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            cost_usd,
+            cached_prompt_tokens: None,
+        })
+    }
+
+    fn usd_spent(harness: &Harness) -> u64 {
+        let day = harness.store().local_day().unwrap();
+        harness
+            .store()
+            .usage_totals("main", &day)
+            .unwrap()
+            .usd_cents
+    }
+
+    #[tokio::test]
+    async fn a_zero_reported_cost_still_charges_from_the_price_table() {
+        let mut harness = Harness::new();
+        harness.prices.models.insert(
+            "priced-model".to_string(),
+            kernel_core::budget::ModelPrice {
+                input_cents_per_million: 100,
+                output_cents_per_million: 100,
+            },
+        );
+        let provider = FakeProvider::repeating("fake", reported(399_600, 400, Some(0.0)))
+            .with_model("priced-model");
+        let budgets = wide_token_caps(1_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(
+            usd_spent(&harness),
+            40,
+            "a reported 0 falls back to [prices]"
+        );
+    }
+
+    #[tokio::test]
+    async fn deepseek_chat_settles_its_catalog_price() {
+        // No [prices] entry: the bundled catalog lists deepseek-chat at
+        // 0.27 / 1.10 USD per million tokens.
+        let harness = Harness::new();
+        assert!(harness.prices.price("deepseek-chat").is_none());
+        let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+            .with_model("deepseek-chat");
+        let budgets = wide_token_caps(10_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(usd_spent(&harness), 27 + 110);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_model_under_a_money_only_cap_is_refused() {
+        let harness = Harness::new();
+        let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"))
+            .with_model("unpriced-model");
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        let err = session.send("hello").await.unwrap_err();
+
+        assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+        assert!(err.to_string().contains("unpriced-model"), "{err}");
+        assert_eq!(provider.request_count(), 0, "no provider call may happen");
+        assert_eq!(harness.store().event_count("budget.denied").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_model_still_runs_when_a_token_cap_binds() {
+        let harness = Harness::new();
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("ok"))
+            .with_model("unpriced-model");
+        let budgets = wide_token_caps(100);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(provider.request_count(), 1);
+        assert_eq!(usd_spent(&harness), 0, "unpriced: no money recorded");
     }
 
     #[tokio::test]

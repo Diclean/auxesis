@@ -401,6 +401,10 @@ impl Store {
                     estimate.tokens_out
                 ),
             })?;
+        let usd_cents =
+            i64::try_from(estimate.usd_cents).map_err(|_| StoreError::InvalidUsage {
+                reason: format!("reserved amount {} does not fit in i64", estimate.usd_cents),
+            })?;
 
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         // A day latched closed by a completed call that reached a cap admits
@@ -430,13 +434,16 @@ impl Store {
             [agent],
         )?;
         let (recorded_in, recorded_out, recorded_usd) = day_totals_tx(&tx, agent, day)?;
-        let (reserved_in, reserved_out): (i64, i64) = tx.query_row(
-            "SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0)
+        // Money is held like tokens: a call in flight keeps its estimated
+        // cents out of everyone else's headroom until it settles.
+        let (reserved_in, reserved_out, reserved_usd): (i64, i64, i64) = tx.query_row(
+            "SELECT COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0),
+                    COALESCE(SUM(usd_cents), 0)
              FROM usage_reservations
              WHERE agent = ?1 AND at >= ?2 AND at < date(?2, '+1 day')
                AND expires_at > datetime('now', 'localtime')",
             rusqlite::params![agent, day],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 
         let recorded = [
@@ -444,7 +451,11 @@ impl Store {
             recorded_out.max(0) as u64,
             recorded_usd.max(0) as u64,
         ];
-        let reserved = [reserved_in.max(0) as u64, reserved_out.max(0) as u64, 0];
+        let reserved = [
+            reserved_in.max(0) as u64,
+            reserved_out.max(0) as u64,
+            reserved_usd.max(0) as u64,
+        ];
         let mut effective = *estimate;
         // Provider dimensions only: connector calls are metered separately and
         // must never be able to deny a provider reservation (S2b).
@@ -496,9 +507,9 @@ impl Store {
 
         let ttl = format!("+{} seconds", RESERVATION_TTL.as_secs());
         tx.execute(
-            "INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out)
-             VALUES (?1, ?2, datetime('now', 'localtime', ?3), ?4, ?5)",
-            rusqlite::params![agent, day, ttl, tokens_in, tokens_out],
+            "INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out, usd_cents)
+             VALUES (?1, ?2, datetime('now', 'localtime', ?3), ?4, ?5, ?6)",
+            rusqlite::params![agent, day, ttl, tokens_in, tokens_out, usd_cents],
         )?;
         let id = tx.last_insert_rowid();
         tx.commit()?;
@@ -1327,6 +1338,47 @@ mod tests {
             (1, 1),
             "exactly one connection may reserve: {outcomes:?}"
         );
+    }
+
+    #[test]
+    fn concurrent_money_reservations_never_overshoot_the_money_cap() {
+        // Eight connections race for a 100-cent cap with 30 cents each:
+        // at most three may hold money at once, never four (120 > 100).
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        Store::open(&path).unwrap();
+        let mut caps = caps(Some(1_000_000), Some(1_000_000));
+        caps.usd_cents = Some(100);
+        let barrier = std::sync::Barrier::new(8);
+
+        let outcomes: Vec<ReserveOutcome> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (path, barrier, caps) = (&path, &barrier, &caps);
+                    scope.spawn(move || {
+                        let store = Store::open(path).unwrap();
+                        let mut money = estimate(1, 1);
+                        money.usd_cents = 30;
+                        barrier.wait();
+                        store
+                            .try_reserve("main", "2026-10-03", caps, &money)
+                            .unwrap()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        let held: u64 = outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                ReserveOutcome::Reserved(reservation) => Some(reservation.estimate.usd_cents),
+                ReserveOutcome::Denied(_) => None,
+            })
+            .sum();
+        assert_eq!(held, 90, "exactly three 30-cent holds fit: {outcomes:?}");
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.reservation_count().unwrap(), 3);
     }
 
     #[test]

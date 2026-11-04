@@ -1,4 +1,5 @@
 import Foundation
+import AuxesisShared
 
 /// All visible copy lives here so the two languages stay together.
 struct Copy {
@@ -6,9 +7,14 @@ struct Copy {
     init(locale: Locale) { french = locale.language.languageCode?.identifier == "fr" }
     init(french: Bool) { self.french = french }
     func callAsFunction(_ key: String, _ name: String = "Aux") -> String {
+        if let shared = Self.shared[key] { return L10n.t(shared, french ? .fr : .en) }
         let pair = Self.table[key] ?? (key, key)
         return (french ? pair.1 : pair.0).replacingOccurrences(of: "{name}", with: name)
     }
+    private static let shared: [String: StringKey] = [
+        "newAgent": .newAgentTitle, "cancel": .cancel, "send": .threadSend,
+        "allowOnce": .approvalAllowOnce, "deny": .approvalDeny, "name": .importRoleName,
+    ]
     private static let table: [String: (String, String)] = [
         "pairTitle": ("Connect to your Mac", "Connecte ton Mac"),
         "pairBody": ("On your Mac, open Auxesis › Settings › iPhone and type the six words it shows.", "Sur ton Mac, ouvre Auxesis › Réglages › iPhone et tape les six mots affichés."),
@@ -34,7 +40,6 @@ struct Copy {
         "ledgerRole": ("made by you", "créé par toi"),
         "ledgerSummary": ("Checks supplier invoices each Friday", "Vérifie les factures fournisseurs chaque vendredi"),
         "now": ("now", "maint."), "fri": ("Fri", "ven."),
-        "newAgent": ("New agent", "Nouvel agent"),
         "chats": ("Chats", "Discussions"), "waiting": ("Waiting", "En attente"),
         "since": ("Since you left", "Depuis ton départ"),
         "working": ("2 agents working", "2 agents au travail"), "private": ("Private", "Privé"),
@@ -54,7 +59,7 @@ struct Copy {
         "review": ("Review", "Relire"), "notNow": ("Not now", "Plus tard"),
         "message": ("Message {name}", "Écrire à {name}"),
         "hint": ("{name} asks before anything is sent, paid or deleted.", "{name} demande avant tout envoi, paiement ou suppression."),
-        "cancel": ("Cancel", "Annuler"), "replyTitle": ("Reply to Jonas", "Réponse à Jonas"),
+        "replyTitle": ("Reply to Jonas", "Réponse à Jonas"),
         "to": ("To Jonas Weber <jonas@atelier-brume.test>\nRe: Time this week?", "À Jonas Weber <jonas@atelier-brume.test>\nRe : Un moment cette semaine ?"),
         "body": ("Hi Jonas,\nHappy to. Any of these work for me (Berlin time):\n· Tue 13 Oct, 15:00–15:30\n· Wed 14 Oct, 10:00–10:30\n· Thu 15 Oct, 16:30–17:00\nPick one and I’ll send the invite.\nBest, Alex", "Bonjour Jonas,\nAvec plaisir. L’un de ces créneaux me va (heure de Berlin) :\n· mar. 13 oct., 15:00–15:30\n· mer. 14 oct., 10:00–10:30\n· jeu. 15 oct., 16:30–17:00\nChoisis et j’envoie l’invitation.\nBien à toi, Alex"),
         "reminderTo": ("To Camille Exemple <camille@example.test>\nRe: Invoice NW-2026-031", "À Camille Exemple <camille@example.test>\nRe : Facture NW-2026-031"),
@@ -62,7 +67,6 @@ struct Copy {
         "leaves": ("Sends 1 email from your Mac’s mail account, to 1 person.", "Envoie 1 mail depuis le compte mail de ton Mac, à 1 personne."),
         "stayed": ("Your calendar stayed on the Mac. The brain saw tokens, not names.", "Ton agenda est resté sur le Mac. Le cerveau a vu des jetons, pas des noms."),
         "cancelInfo": ("You get 10 seconds to cancel after Send.", "Tu as 10 secondes pour annuler après l’envoi."),
-        "send": ("Send", "Envoyer"),
         "faceInfo": ("Send asks for Face ID. “Always allow” only exists on the Mac.", "Envoyer demande Face ID. « Toujours autoriser » n’existe que sur le Mac."),
         "authReason": ("Confirm sending this draft", "Confirme l’envoi de ce brouillon"),
         "authFailed": ("Authentication was not completed. Nothing was sent.", "L’authentification n’a pas abouti. Rien n’a été envoyé."),
@@ -71,7 +75,6 @@ struct Copy {
         "reminderSub": ("Invoice NW-2026-031 · €860 · 12 days late", "Facture NW-2026-031 · 860 € · 12 jours de retard"),
         "receipts": ("File 34 matched receipts", "Classer 34 reçus rapprochés"),
         "receiptsSub": ("Moves files on your Mac · can be undone", "Déplace des fichiers sur ton Mac · réversible"),
-        "allowOnce": ("Allow once", "Autoriser une fois"), "deny": ("Deny", "Refuser"),
         "justAnswered": ("Just answered", "Répondu à l’instant"),
         "reply": ("Reply to Jonas Weber", "Réponse à Jonas Weber"),
         "sending": ("Sending…", "Envoi…"), "final": ("Final", "Définitif"),
@@ -89,7 +92,7 @@ struct Copy {
         "renameHint": ("Only the name you see changes. What your chief is allowed to do stays the same.", "Seul le nom affiché change. Ce que ton chef a le droit de faire reste pareil."),
         "preview": ("Preview", "Aperçu"), "asked": ("{name} asked Mail · 08:00", "{name} a demandé à Mail · 08:00"), "done": ("Done", "OK"),
         "create": ("Create", "Créer"), "startFrom": ("Start from", "Partir de"), "blank": ("Blank", "Vide"),
-        "name": ("Name", "Nom"), "what": ("What it does, in your words", "Ce qu’il fait, avec tes mots"),
+        "what": ("What it does, in your words", "Ce qu’il fait, avec tes mots"),
         "whatValue": ("Every Friday, check supplier invoices against my bank lines and tell me what doesn’t match.", "Chaque vendredi, compare les factures fournisseurs à mes lignes de banque et dis-moi ce qui ne colle pas."),
         "brain": ("Brain", "Cerveau"), "sameBrain": ("Same as {name}", "Le même que {name}"),
         "access": ("It can only use access {name} already has, and only what you pick on the Mac. It starts with none.", "Il ne peut utiliser qu’un accès que {name} a déjà, et seulement ce que tu choisis sur le Mac. Il démarre sans rien."),

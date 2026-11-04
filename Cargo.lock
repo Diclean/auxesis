@@ -427,6 +427,7 @@ dependencies = [
  "auxesis-kernel-core",
  "auxesis-kernel-net",
  "auxesis-kernel-privacy",
+ "chrono",
  "futures-util",
  "libc",
  "ring",

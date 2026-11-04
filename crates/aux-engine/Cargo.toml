@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
+# The kernel's `HH:MM` check, repeated where config.toml is parsed from its fd.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 kernel-core.workspace = true
 aux-runtime = { path = "../aux-runtime" }
 kernel-net.workspace = true

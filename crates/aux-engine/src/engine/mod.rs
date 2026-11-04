@@ -11,6 +11,7 @@
 
 mod approvals;
 mod budget;
+pub(crate) use budget::{admit, call_estimate, day_denied, request_model, usage_actual};
 mod context;
 mod privacy;
 mod session;

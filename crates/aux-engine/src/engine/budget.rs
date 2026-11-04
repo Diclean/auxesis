@@ -5,8 +5,8 @@ use super::{ChatError, ChatSession, DEFAULT_OUTPUT_RESERVE, ESTIMATED_UNIT};
 use aux_providers::{ChatDelta, ChatMessage, ChatProvider, ChatRequest, ChatResponse, SafeMessage};
 use aux_store::{StoreError, StoreHandle};
 use kernel_core::budget::{
-    audit_denial, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome, UsageActual,
-    UsageKind, UsageTotals,
+    audit_denial, BudgetCaps, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome,
+    UsageActual, UsageKind, UsageTotals,
 };
 
 fn unit_for(estimated: bool) -> &'static str {
@@ -68,7 +68,7 @@ pub(super) fn settle_streamed(
     }
 }
 
-pub(super) fn usage_actual(
+pub(crate) fn usage_actual(
     request: &ChatRequest,
     response: &ChatResponse,
     model: Option<&str>,
@@ -103,15 +103,10 @@ fn reservation_estimate(
     model: Option<&str>,
     prices: &PriceTable,
 ) -> UsageTotals {
-    let tokens_in = estimate_request_tokens(request).max(1);
-    UsageTotals {
-        tokens_in,
-        tokens_out: DEFAULT_OUTPUT_RESERVE,
-        usd_cents: priced_cents(prices, model, tokens_in, DEFAULT_OUTPUT_RESERVE),
-    }
+    call_estimate(request, model, prices, DEFAULT_OUTPUT_RESERVE)
 }
 
-pub(super) fn request_model<'r>(
+pub(crate) fn request_model<'r>(
     provider: &'r dyn ChatProvider,
     request: &'r ChatRequest,
 ) -> Option<&'r str> {
@@ -209,6 +204,66 @@ fn estimate_response_tokens(response: &ChatResponse) -> u64 {
     estimate_message_tokens(&response.message)
 }
 
+/// The one atomic admission every paid call goes through: a chat round and
+/// the shell judge (WO-BUD-1). The reservation is taken inside the store
+/// transaction that checks the caps; a denial, or a ledger that cannot
+/// answer, is audited as `budget.denied` and refuses the call.
+pub(crate) fn admit(
+    store: &StoreHandle<'_>,
+    run_id: Option<&str>,
+    agent: &str,
+    day: &str,
+    caps: &BudgetCaps,
+    estimate: &UsageTotals,
+) -> Result<Reservation, ChatError> {
+    let denial = match store.with(|store| store.try_reserve_for(run_id, agent, day, caps, estimate))
+    {
+        Ok(ReserveOutcome::Reserved(reservation)) => return Ok(reservation),
+        Ok(ReserveOutcome::Denied(denial)) => denial,
+        Err(err) => ledger_down(agent, day, err),
+    };
+    Err(refuse(store, denial))
+}
+
+/// Fail closed when the budget day cannot be read, with an audit trail.
+pub(crate) fn day_denied(store: &StoreHandle<'_>, agent: &str, err: StoreError) -> ChatError {
+    refuse(store, ledger_down(agent, "unknown", err))
+}
+
+fn ledger_down(agent: &str, day: &str, err: StoreError) -> Denial {
+    Denial {
+        agent: agent.to_string(),
+        day: day.to_string(),
+        reason: DenialReason::LedgerUnavailable {
+            message: err.to_string(),
+        },
+        audit_error: None,
+    }
+}
+
+/// Audit `denial` as `budget.denied` and turn it into the call's error.
+fn refuse(store: &StoreHandle<'_>, denial: Denial) -> ChatError {
+    let denial = store.with(|store| audit_denial(store, denial));
+    ChatError::BudgetDenied {
+        reason: denial.reason_text(),
+    }
+}
+
+/// The estimate one call reserves: its prompt, `tokens_out` of answer.
+pub(crate) fn call_estimate(
+    request: &ChatRequest,
+    model: Option<&str>,
+    prices: &PriceTable,
+    tokens_out: u64,
+) -> UsageTotals {
+    let tokens_in = estimate_request_tokens(request).max(1);
+    UsageTotals {
+        tokens_in,
+        tokens_out,
+        usd_cents: priced_cents(prices, model, tokens_in, tokens_out),
+    }
+}
+
 impl<'a> ChatSession<'a> {
     /// Reserve the estimated spend for one provider call, or fail the turn
     /// when a daily cap is reached. The reservation is taken atomically with
@@ -246,35 +301,15 @@ impl<'a> ChatSession<'a> {
         let day = self.current_day()?;
         let estimate =
             reservation_estimate(request, request_model(self.provider, request), self.prices);
-        match self.store.with(|store| {
-            store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)
-        }) {
-            Ok(ReserveOutcome::Reserved(reservation)) => Ok(Some(reservation)),
-            Ok(ReserveOutcome::Denied(denial)) => {
-                let denial = self.store.with(|store| audit_denial(store, denial));
-                Err(ChatError::BudgetDenied {
-                    reason: denial.reason_text(),
-                })
-            }
-            Err(err) => {
-                let denial = self.store.with(|store| {
-                    audit_denial(
-                        store,
-                        Denial {
-                            agent: self.agent.clone(),
-                            day,
-                            reason: DenialReason::LedgerUnavailable {
-                                message: err.to_string(),
-                            },
-                            audit_error: None,
-                        },
-                    )
-                });
-                Err(ChatError::BudgetDenied {
-                    reason: denial.reason_text(),
-                })
-            }
-        }
+        admit(
+            &self.store,
+            self.run_id.as_deref(),
+            &self.agent,
+            &day,
+            &caps,
+            &estimate,
+        )
+        .map(Some)
     }
 
     /// Test seam: replace the budget day source for one session.
@@ -296,22 +331,7 @@ impl<'a> ChatSession<'a> {
 
     /// Fail closed when the day itself cannot be read, with an audit trail.
     fn day_error(&self, err: StoreError) -> ChatError {
-        let denial = self.store.with(|store| {
-            audit_denial(
-                store,
-                Denial {
-                    agent: self.agent.clone(),
-                    day: "unknown".to_string(),
-                    reason: DenialReason::LedgerUnavailable {
-                        message: err.to_string(),
-                    },
-                    audit_error: None,
-                },
-            )
-        });
-        ChatError::BudgetDenied {
-            reason: denial.reason_text(),
-        }
+        day_denied(&self.store, &self.agent, err)
     }
 
     /// Record the provider call's usage when no cap required a reservation.

@@ -532,11 +532,11 @@ impl EngineTurnRunner {
     fn shell_judge(
         &self,
         config: &kernel_core::Config,
-        agent: &str,
         thread_id: i64,
         provider: Arc<dyn ChatProvider>,
         contacts: &aux_runtime::known_names::Contacts,
         sent: &SentOwner,
+        budget: aux_engine::judge::JudgeBudget,
     ) -> Option<aux_engine::judge::ShellJudge> {
         if !config.approval.shell_judge || config.shell.network || self.mode_floor.is_some() {
             return None;
@@ -545,16 +545,15 @@ impl EngineTurnRunner {
         let sent = Arc::clone(sent);
         let owner: aux_engine::judge::OwnerMessages =
             Arc::new(move || kernel_core::lock_recover(&sent).clone());
-        let mode = self.mode_fn(agent);
-        let started = mode();
+        let workspace = aux_engine::soul::workspace_dir(&self.home, &budget.agent);
         Some(aux_engine::judge::ShellJudge::new(
             provider,
-            mode,
-            started,
+            self.mode_fn(&budget.agent),
             thread_id,
             names,
             owner,
-            aux_engine::soul::workspace_dir(&self.home, agent),
+            workspace,
+            budget,
         ))
     }
 
@@ -2111,13 +2110,20 @@ impl EngineTurnRunner {
             &registry,
             StoreHandle::Shared(Arc::clone(&store)).audit_sink(),
             Some(run_id.clone()),
+            // WO-BUD-1: the judge's call is `agent`'s spend, on this run.
             self.shell_judge(
                 &config,
-                agent,
                 thread_id,
                 Arc::clone(&shared),
                 &contacts,
                 &sent,
+                aux_engine::judge::JudgeBudget {
+                    store: Arc::clone(&store),
+                    agent: agent.to_string(),
+                    run_id: Some(run_id.clone()),
+                    budgets: config.budgets.clone(),
+                    prices: config.prices.clone(),
+                },
             ),
         );
 

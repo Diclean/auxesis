@@ -1,4 +1,4 @@
-//! The accountant export (M5-2): the receipts of a period, optionally of one
+//! The accountant export: the receipts of a period, optionally of one
 //! client, as `receipts.csv` plus a folder of the originals.
 //!
 //! Every write goes through the fd-verified [`kernel_core::SandboxHome`]

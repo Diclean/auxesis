@@ -50,19 +50,19 @@ pub struct SkillConnectors {
     /// The frozen Google writes, when this Mac is connected and the feature is on.
     #[cfg(feature = "google")]
     pub google: Option<GoogleTools>,
-    /// The native mail tools (B19/B20/B22), when the home configures a mailbox.
+    /// The native mail tools, when the home configures a mailbox.
     pub mail: Option<aux_mail::MailToolset>,
-    /// The Mac bridge, for the EventKit create (B21).
+    /// The Mac bridge, for the EventKit create.
     pub bridge: Option<Arc<crate::bridge::Bridge>>,
     /// The owner's account address, used as the invite `ORGANIZER`.
     pub owner_email: Option<String>,
-    /// The live privacy mode, read at the mail send boundary (B20).
+    /// The live privacy mode, read at the mail send boundary.
     pub mode: Option<ModeFn>,
-    /// The local `docs.ingest` receipts collector (C1).
+    /// The local `docs.ingest` receipts collector.
     pub docs: Option<DocsSkillConnector>,
-    /// The local CRM follow-up write (B3).
+    /// The local CRM follow-up write.
     pub crm: Option<CrmSkillConnector>,
-    /// The home whose EventKit snapshot the free-times read uses (M4-3b).
+    /// The home whose EventKit snapshot the free-times read uses.
     pub calendar_home: Option<PathBuf>,
     /// The turn's store: the `mail.draft` rows a send-draft run claims.
     pub store: Option<Arc<Mutex<Store>>>,
@@ -104,8 +104,7 @@ pub fn attach_skill_runtime<'a>(
     }
 }
 
-/// The known-contacts directory plus each client's stored IANA time zone
-/// (CLIENT-TZ-FIELD).
+/// The known-contacts directory plus each client's stored IANA time zone.
 ///
 /// The recipient policy is the kernel index's, unchanged; the zone map only
 /// answers the invite's attendee. A directory built from a store with no zones
@@ -192,7 +191,7 @@ impl SkillConnector for DocsSkillConnector {
             return Err(ConnectorError::new(format!("no connector for `{logical}`")));
         }
         // The account is optional: the model never sees a slug, so a fill that
-        // names one is a guess (DOC-COLLECT-1). A fill that names none reads
+        // names one is a guess. A fill that names none reads
         // EVERY configured mailbox, one after another; a named account this
         // Mac does not have is still refused with the list.
         let ids = self.mail.account_ids();
@@ -346,13 +345,12 @@ impl SkillConnector for CompositeSkillConnector {
             return crm.call(skill, logical, arguments).await;
         }
         if logical == "docs.queue" {
-            // B4 leaves the documents queue as an empty read hook; C4 fills it
-            // with the receipts waiting to be checked (`docs/phase1.md` §5).
-            // Nothing is written here.
+            // The documents queue is still an empty read hook: it lists no
+            // item, and nothing is written here.
             return Ok(json!({ "items": [] }));
         }
         if logical == aux_runtime::skills::free_times::CALENDAR_READ {
-            // M4-3b: the runtime's own read for the free times. Only each
+            // The runtime's own read for the free times. Only each
             // event's start and end in `{from, to}` leave the snapshot; no
             // title, no attendee.
             let home = self
@@ -425,12 +423,12 @@ impl SkillConnector for CompositeSkillConnector {
         Err(ConnectorError::new(format!("no connector for `{logical}`")))
     }
 
-    /// CAL-UPDATE-1: the event an update names, in the calendar copy: by id,
+    /// The event an update names, in the calendar copy: by id,
     /// else by a title matching exactly one; an unknown id alone keeps its card.
-    /// Its guests are known only from a fresh copy that lists them (Seal B r1).
-    /// CAL-DEFAULT-ID: only an event found **by id** can be proved to sit on
+    /// Its guests are known only from a fresh copy that lists them.
+    /// Only an event found **by id** can be proved to sit on
     /// the owner's default calendar, by comparing the calendar ids it holds.
-    /// CAL-DEFAULT-ID (r2): a recurring event, or a detached occurrence of
+    /// A recurring event, or a detached occurrence of
     /// one, is never proved: EventKit's lookup can return the first
     /// occurrence, not the one the copy saw.
     fn find_event(&self, arguments: &Value) -> FoundEvent {
@@ -502,7 +500,7 @@ impl SkillConnector for CompositeSkillConnector {
     }
 }
 
-/// The A2b write through the Mac bridge, as a native tool (B21).
+/// The write through the Mac bridge, as a native tool.
 ///
 /// `auxd` cannot call EventKit; this tool publishes one `eventkit.create_event`
 /// frame and waits for the app's answer. The attribute is skill-only and the
@@ -591,7 +589,7 @@ pub fn register_eventkit_tools(
     registry.register_native(Box::new(EventkitCreateTool::new(bridge)));
 }
 
-/// The bridge arguments of a calendar write: the fields the card shows (M4-2)
+/// The bridge arguments of a calendar write: the fields the card shows
 /// and the update's search fields stay out of the writer.
 fn bridge_arguments(arguments: &Value) -> Value {
     let mut event = arguments.clone();
@@ -606,7 +604,7 @@ fn bridge_arguments(arguments: &Value) -> Value {
     event
 }
 
-/// The facts the write's approval rested on (CAL-DEFAULT-ID r1).
+/// The facts the write's approval rested on.
 ///
 /// An approval-free move is free only while the event still sits on the
 /// owner's default calendar and still has no guest. The copy that decided it
@@ -626,11 +624,11 @@ fn expected_facts(arguments: &Value) -> Option<(String, u64)> {
     Some((calendar_id.to_string(), 0))
 }
 
-/// One `eventkit.update_event` (CAL-UPDATE-1), the card-only fields dropped.
+/// One `eventkit.update_event`, the card-only fields dropped.
 /// An id the calendar does not hold is the typed `event_not_found`; every
 /// other failure is the bridge's own code.
 ///
-/// CAL-DEFAULT-ID (r1): the app answers `facts_changed` when the live event
+/// The app answers `facts_changed` when the live event
 /// no longer matches the facts the copy held. Nothing was written, so the
 /// owner decides with the normal card instead of the run failing silently.
 async fn update_event_through(
@@ -731,7 +729,7 @@ impl MailSkillConnector {
             .map(str::to_string);
         let account = self.resolve_account(arguments)?;
 
-        // B20: the kernel gate runs before the socket, once per to and cc
+        // The kernel gate runs before the socket, once per to and cc
         // recipient. In Private the row is `AskEachTime(FilteredRecipients)`:
         // the run card is the owner's approval and the executor already
         // filtered every recipient against the known-contacts directory, so an
@@ -911,7 +909,7 @@ impl MailSkillConnector {
             .bridge
             .as_ref()
             .ok_or_else(|| ConnectorError::new("the calendar bridge is unavailable"))?;
-        // M4-2: the card's zone fields stay for the `.ics`, not the bridge.
+        // The card's zone fields stay for the `.ics`, not the bridge.
         let result = bridge
             .call(
                 crate::bridge::BridgeOp::EventkitCreateEvent,
@@ -1031,7 +1029,7 @@ impl SkillConnector for MailSkillConnector {
                 let mut arguments = arguments.clone();
                 // The card names `invite.ics` only for a non-empty `ics`, so an
                 // empty or non-text one is refused, never sent as an invite the
-                // card did not show (SEND-REAL-ARGS-1).
+                // card did not show.
                 if let Some(marker) = arguments.get("ics") {
                     if !marker.as_str().is_some_and(|ics| !ics.is_empty()) {
                         return Err(ConnectorError::new(
@@ -1053,7 +1051,7 @@ impl SkillConnector for MailSkillConnector {
         self.mail.api().account_ids()
     }
 
-    /// MAIL-UNKNOWN-CONTACT-1: the `From` of the newest INBOX mails, read
+    /// The `From` of the newest INBOX mails, read
     /// locally (no body, nothing to a model). A capped scan or an unreadable
     /// mailbox marks the scan partial: a lone match then only asks. The To/Cc
     /// of a readable Sent folder give the trust bar its "owner wrote to them"
@@ -1233,7 +1231,7 @@ impl SkillConnector for GoogleSkillConnector {
 }
 
 /// The string entries of an optional JSON array (mail recipients).
-/// Run the B20 gate for every `to` and `cc` recipient. `Allow` and `Ask` pass
+/// Run the kernel gate for every `to` and `cc` recipient. `Allow` and `Ask` pass
 /// (the run card satisfies an `Ask`); the first `Deny` refuses the whole send,
 /// and so does an empty `to` list.
 fn admit_every_recipient(
@@ -1279,7 +1277,7 @@ fn contains_token(value: &Value) -> bool {
     }
 }
 
-/// The `<field>_utc` instant the card showed (M4-2), checked against the
+/// The `<field>_utc` instant the card showed, checked against the
 /// card's own `<field>`: the `.ics` carries exactly the instant shown, and a
 /// pair that disagrees refuses the invite.
 fn shown_instant(args: &Value, field: &str) -> Result<String, ConnectorError> {
@@ -1437,7 +1435,7 @@ mod tests {
     }
 
     /// One event of the copy, on the calendar `calendar` whose id is
-    /// `calendar_id` (CAL-DEFAULT-ID).
+    /// `calendar_id`.
     fn event_on(id: &str, title: &str, calendar: &str, calendar_id: &str, guests: Value) -> Value {
         let mut event = copy_event(id, title, calendar, Some(guests));
         event["calendar_id"] = json!(calendar_id);
@@ -1458,7 +1456,7 @@ mod tests {
             run(json!({ "event_id": "evt-team", "guests": 0 })),
             ok("Send")
         );
-        // CAL-PRIMARY-1: a blank calendar title is not the default calendar.
+        // A blank calendar title is not the default calendar.
         let own = json!({ "event_id": "evt-own", "start": "2026-10-31T15:00:00Z" });
         assert_eq!(run(own), ok("Unknown"));
         assert_eq!(run(json!({ "event_id": "evt-far" })), ok("Unknown"));
@@ -1470,7 +1468,7 @@ mod tests {
         assert!(run(json!({ "title": "No event named" })).is_err());
     }
 
-    /// CAL-DEFAULT-ID: Auxesis lifts the card for a move only when it found
+    /// Auxesis lifts the card for a move only when it found
     /// the event **by id**, on the owner's default calendar, with no guest.
     /// The calendar is known by id: a title, `primary` included, never frees a
     /// move, and a copy from a build that published no id keeps the card.
@@ -1508,7 +1506,7 @@ mod tests {
         );
     }
 
-    /// CAL-DEFAULT-ID (r2): a recurring event, or a detached occurrence of
+    /// A recurring event, or a detached occurrence of
     /// one, never takes the approval-free path. EventKit's lookup can return
     /// the first occurrence, not the one the copy saw, so the check and the
     /// save could land on another occurrence.
@@ -1527,9 +1525,9 @@ mod tests {
         );
     }
 
-    /// Seal B r1: a stale or partial copy keeps the card. CAL-PRIMARY-1: so
-    /// does any calendar title, `primary` and blank included: only the copy's
-    /// own ids prove the default calendar (CAL-DEFAULT-ID).
+    /// A stale or partial copy keeps the card, and so does any calendar
+    /// title, `primary` and blank included: only the copy's
+    /// own ids prove the default calendar.
     #[test]
     fn an_update_keeps_its_card_on_a_stale_or_partial_copy_or_a_named_calendar() {
         let own = Some(json!([]));
@@ -1579,7 +1577,7 @@ mod tests {
     }
 
     /// A fake app that refuses the write: the live event no longer matches
-    /// the facts the copy held (CAL-DEFAULT-ID r1).
+    /// the facts the copy held.
     fn facts_changed_app(
         home: &std::path::Path,
     ) -> (Arc<crate::bridge::Bridge>, Arc<Mutex<Vec<Value>>>) {
@@ -1607,7 +1605,7 @@ mod tests {
         (bridge, sent)
     }
 
-    /// CAL-DEFAULT-ID (r1): the daemon sends the facts the write rested on, and
+    /// The daemon sends the facts the write rested on, and
     /// the app's refusal is the owner's decision, never a silent failure.
     #[tokio::test]
     async fn a_write_carries_its_expected_facts_and_a_changed_calendar_asks_the_owner() {
@@ -1833,7 +1831,7 @@ mod tests {
         assert_eq!(bridge.decide(&card()).await, RunDecision::Refused);
     }
 
-    /// F5: an answer whose edit does not parse as one refuses the run. The
+    /// An answer whose edit does not parse as one refuses the run. The
     /// requested arguments must not run in its place.
     #[tokio::test]
     async fn bridge_an_unparseable_edit_is_a_refusal() {
@@ -1852,7 +1850,7 @@ mod tests {
         }
     }
 
-    /// SEND-REAL-ARGS-1: whatever shape the owner's edit has, the card the
+    /// Whatever shape the owner's edit has, the card the
     /// edit route checks and the arguments the executor runs agree, or both
     /// refuse. An edited call runs by its `tool` and its `real` object; every
     /// other key is ignored by both.
@@ -1961,7 +1959,7 @@ mod tests {
         );
     }
 
-    /// F4: the registry denies at the owner's countdown, which is the same
+    /// The registry denies at the owner's countdown, which is the same
     /// moment the card expires. That silence is a timeout, not a refusal.
     struct SilentApprover;
 
@@ -2089,7 +2087,7 @@ mod tests {
         assert!(composite.mail_draft(id + 1).unwrap().is_none());
     }
 
-    /// CAL-COMPLETE-DEDUP: the app may have cut the event list at its cap. A
+    /// The app may have cut the event list at its cap. A
     /// copy that says so is never read for free times, even when it looks
     /// fresh and carries one event: the missing one may be busy.
     #[tokio::test]

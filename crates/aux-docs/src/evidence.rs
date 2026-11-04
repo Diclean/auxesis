@@ -2,8 +2,8 @@
 //!
 //! The original bytes live at `<home>/evidence/<sha256>` (0600, written to a
 //! temp name then renamed), sealed with AES-256-GCM under a key derived from
-//! the store's `master.key` (DOC-SAFE-1); the name stays the SHA-256 of the
-//! plaintext. A blob from before that is sealed in place the first time it is
+//! the store's `master.key`; the name stays the SHA-256 of the plaintext. A
+//! blob from before that is sealed in place the first time it is
 //! read, or by [`migrate_blobs`] at daemon start. The `documents` /
 //! `evidence_source` rows live in
 //! the store. A known SHA-256 skips the blob and the `documents` row and
@@ -215,10 +215,10 @@ fn write_sealed(home: &Path, sha256: &str, plain: &[u8]) -> Result<(), String> {
         .map_err(|err| format!("writing evidence/{sha256}: {err}"))
 }
 
-/// The original bytes of the blob named `sha256`. A plaintext blob from before
-/// DOC-SAFE-1 is accepted only if its bytes hash to its name, and is sealed in
-/// place before it is returned. Crate-private: outside this crate the bytes
-/// leave only through the bridge's claim (`queue::claimed_blob`).
+/// The original bytes of the blob named `sha256`. A plaintext blob written
+/// before the sealing is accepted only if its bytes hash to its name, and is
+/// sealed in place before it is returned. Crate-private: outside this crate
+/// the bytes leave only through the bridge's claim (`queue::claimed_blob`).
 pub(crate) fn read_blob(home: &Path, sha256: &str) -> Result<Vec<u8>, String> {
     open_or_seal(home, sha256).map(|(plain, _)| plain)
 }
@@ -240,7 +240,7 @@ fn open_or_seal(home: &Path, sha256: &str) -> Result<(Vec<u8>, bool), String> {
     Ok((raw, true))
 }
 
-/// Seal every plaintext blob left from before DOC-SAFE-1. Returns how many were
+/// Seal every plaintext blob left in plaintext. Returns how many were
 /// sealed and how many files neither open nor hash to their name (left as they
 /// are, maybe in plaintext, for the owner to purge). Idempotent. Fails only
 /// without the evidence key.

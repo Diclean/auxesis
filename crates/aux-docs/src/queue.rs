@@ -1,5 +1,4 @@
-//! The extractor chain over the registry and the durable bridge queue
-//! (Wave C / C2b).
+//! The extractor chain over the registry and the durable bridge queue.
 //!
 //! [`sweep_and_claim`] is the one entry point the local API calls: it runs the
 //! chain over every document that has no `document_fields` row yet, then
@@ -81,7 +80,7 @@ pub fn claim_cutoff(now: chrono::DateTime<chrono::Utc>) -> String {
 
 /// The clock and privacy mode one queue pass runs under. `now` and `cutoff`
 /// are RFC 3339 UTC strings so tests can drive the clock; `private` keeps only
-/// metadata at rest (G5).
+/// metadata at rest.
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractWindow<'a> {
     /// RFC 3339 UTC "now".
@@ -182,7 +181,7 @@ const RELINK_LIMIT: usize = 500;
 /// The `party_match` reason of the owner's unlink, which a re-match never undoes.
 const OWNER_UNLINKED: &str = "unlinked by the owner";
 
-/// DOCS-RELINK: re-match the read, unlinked documents against the live
+/// Re-match the read, unlinked documents against the live
 /// clients, so a receipt read before its client existed is linked once the
 /// client is created. Same exact rule as extraction ([`extract::party_match`]):
 /// one matching client links, several or none link nothing, and the owner's
@@ -278,7 +277,7 @@ fn insert_failed(store: &Store, document_id: i64, now: &str) -> Result<(), Queue
     Ok(())
 }
 
-/// The CRM parties as the matcher sees them. `Store::parties` is the B1 party
+/// The CRM parties as the matcher sees them. `Store::parties` is the party
 /// list that `aux-crm::Crm::list` exposes.
 fn party_refs(store: &Store) -> Result<Vec<PartyRef>, StoreError> {
     let parties = store.parties()?;

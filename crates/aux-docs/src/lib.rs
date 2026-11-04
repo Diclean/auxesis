@@ -1,12 +1,12 @@
-//! Documents (Phase 1 Wave C).
+//! Documents: the receipts collector, the extractor chain and the evidence registry.
 //!
-//! C1 is the collector: it walks recent mail through the existing `aux-mail`
-//! read path, keeps the MIME types MA3 allows, and appends each part to the
-//! local evidence registry. C2b is the extractor chain ([`extract`]) and its
-//! durable bridge queue ([`queue`]): XML is parsed in Rust through
+//! The collector walks recent mail through the existing `aux-mail`
+//! read path, keeps the MIME types the mail download allows, and appends each
+//! part to the local evidence registry. The extractor chain ([`extract`]) and
+//! its durable bridge queue ([`queue`]) parse XML in Rust through
 //! `aux-invoices`, and anything else waits for the Mac bridge, which posts
 //! PDFKit text or Vision OCR back over the authenticated local API. There is no
-//! in-process PDF parser (D25/D26).
+//! in-process PDF parser.
 //!
 
 pub mod collector;

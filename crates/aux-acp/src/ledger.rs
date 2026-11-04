@@ -412,12 +412,31 @@ mod tests {
 
     #[test]
     fn a_failed_settle_records_a_marker_for_the_run() {
-        // An estimate above i64::MAX is admitted, then cannot be written
-        // to the usage table, so the settle fails. The failure must be
-        // recorded under the run for the receipt to mark usage unverified.
-        let (host, store) = host(capped_budgets(u64::MAX));
-        let mut host = host.with_run_id("turn-out-of-range");
-        let reservation = host.reserve_turn(u64::MAX).unwrap().unwrap();
+        // A settle that cannot write its usage row fails. The failure must
+        // be recorded under the run for the receipt to mark usage unverified.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&db).unwrap()));
+        let session = lock_store(&store)
+            .create_session("main", Some("acp test"))
+            .unwrap();
+        let mut host = StoreTurnHost::new(
+            Arc::clone(&store),
+            "main".to_string(),
+            session.id,
+            capped_budgets(50),
+            None,
+        )
+        .with_run_id("turn-settle-refused");
+        let reservation = host.reserve_turn(10).unwrap().unwrap();
+        // The store refuses every new usage row: the settle fails.
+        aux_store::open_keyed(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_usage BEFORE INSERT ON usage
+                 BEGIN SELECT RAISE(ABORT, 'usage refused'); END;",
+            )
+            .unwrap();
         assert!(host
             .settle_turn(Some(reservation), &UsageUpdate::default())
             .is_err());

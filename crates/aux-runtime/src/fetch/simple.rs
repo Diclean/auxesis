@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The browser handle the simple path carries: the WS-B placeholder.
+/// The browser handle the simple path carries; no browser ships in this build.
 fn unavailable_browser() -> Arc<dyn BrowserFetcher> {
     Arc::new(kernel_net::UnavailableBrowser)
 }
@@ -136,7 +136,7 @@ impl Fetcher {
         }
     }
 
-    /// Attach the level-2 browser engine (WS-B). Until one ships,
+    /// Attach the level-2 browser engine. Until one ships,
     /// [`RenderMode::Browser`] returns [`FetchError::BrowserUnavailable`].
     pub fn with_browser(browser: Arc<dyn BrowserFetcher>) -> Self {
         Self {
@@ -192,7 +192,7 @@ impl Fetcher {
     /// Fetch `input` according to `mode`.
     ///
     /// `Auto` uses the simple path today and never fails because the browser
-    /// is missing; when WS-B lands it may escalate for JavaScript pages.
+    /// is missing; when a browser ships it may escalate for JavaScript pages.
     /// `Browser` always delegates to the configured [`BrowserFetcher`].
     ///
     /// Without a [`FetchEgress`] the redirect hops still re-enter the gate,
@@ -881,10 +881,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_private_data_turn_refuses_a_cross_host_redirect() {
-        // P2-1: the *other* sensitive fact must be just as sticky at the hop
-        // level as taint. `carries_private_data` (mail/calendar/memory/notes)
-        // sends the unseen redirect host to its own card too, so the origin
-        // approval never silently carries private text to a new host.
+        // The *other* sensitive fact must be just as sticky at the hop level as
+        // taint. `carries_private_data` (mail/calendar/memory/notes) sends the
+        // unseen redirect host to its own card too, so the origin approval never
+        // silently carries private text to a new host.
         let (a, b) = cross_host_servers().await;
         let facts = egress(
             EgressContext {
@@ -920,7 +920,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_allowlisted_redirect_host_does_not_bypass_the_sensitive_hop() {
-        // P2-1: `allow_domains` exempts a host from the *mode*, never from
+        // `allow_domains` exempts a host from the *mode*, never from
         // the sensitive-turn card. With the redirect target allow-listed, the
         // hop must still refuse with the ask reason (`sensitive_turn`),
         // not the generic cross-host stop, proving the allowlist was not
@@ -1414,7 +1414,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_content_type_is_refused_unless_the_owner_allows_empty() {
-        // P3-2: a 200 with no `Content-Type` must not slide past the
+        // A 200 with no `Content-Type` must not slide past the
         // allowlist through the body sniffer. `set_body_bytes` writes a body
         // and no header, which is exactly the fail-open shape.
         let server = MockServer::start().await;
@@ -1663,7 +1663,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "release-only loopback timing test; run: cargo test -p aux-runtime --release --lib --features l1-fetch -- --ignored --nocapture --test-threads=1"]
     async fn extraction_cannot_outlive_the_fetch_timeout() {
-        // RV3-01: extraction runs in an uncancellable `spawn_blocking` task.
+        // Extraction runs in an uncancellable `spawn_blocking` task.
         // It must receive the earlier of its own budget and the remaining
         // fetch budget, so no CPU keeps burning after `Err(Timeout)`.
         let mut body = Vec::with_capacity(kernel_net::MAX_PARSE_BYTES + 16);

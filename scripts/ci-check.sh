@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI helper for the self-hosted runner (WO-05).
+# CI helper for the self-hosted runner.
 #
 # target-cap: every CI run on the runner shares ONE CARGO_TARGET_DIR (never one
 # per run). Artifacts pile up across branches, so when that directory is larger

@@ -35,10 +35,9 @@ impl ToolInfo {
     }
 
     /// True when a skill may run the tool with no card: a read, or the one
-    /// local ingest (`docs.ingest`, M5-5). That collector reads the owner's own
+    /// local ingest (`docs.ingest`). That collector reads the owner's own
     /// mailbox and appends originals to this Mac's registry: nothing is sent,
-    /// paid, deleted or changed on an account (owner rule 2026-10-16: cards are
-    /// for those only). Every other write keeps its card.
+    /// paid, deleted or changed on an account. Every other write keeps its card.
     pub fn runs_without_card(&self) -> bool {
         self.is_read_only() || self.logical == "docs.ingest"
     }
@@ -94,10 +93,10 @@ const STATIC_TOOLS: &[(&str, &str, ToolKind, bool)] = &[
     ),
     // DRAFT-ONLY: local save, no card; a later send keeps `mail.send`'s card.
     ("mail.draft", "mail_draft", WRITE, false),
-    // MA4: the one SMTP write (B20), skill-only exactly like the Gmail send it
-    // replaces, and the EventKit create through the Mac bridge (B21), also
-    // skill-only. `calendar.create_event` is the EventKit tool; the frozen
-    // Google path keeps its own `google.calendar.create_event` row.
+    // The one SMTP write, skill-only exactly like the Gmail send it replaces,
+    // and the EventKit create through the Mac bridge, also skill-only.
+    // `calendar.create_event` is the EventKit tool; the frozen Google path
+    // keeps its own `google.calendar.create_event` row.
     ("mail.send", "mail_send", WRITE, true),
     (
         "calendar.create_event",
@@ -105,14 +104,14 @@ const STATIC_TOOLS: &[(&str, &str, ToolKind, bool)] = &[
         WRITE,
         true,
     ),
-    // CAL-UPDATE-1: move or edit one EventKit event, skill-only like the create.
+    // Move or edit one EventKit event, skill-only like the create.
     (
         "calendar.update_event",
         "apple_calendar_update_event",
         WRITE,
         true,
     ),
-    // M4-0: the two EventKit reads (`apple_eventkit.rs`), so an agent file can
+    // The two EventKit reads (`apple_eventkit.rs`), so an agent file can
     // name them logically like every other registered connector tool.
     (
         "calendar.list_events",
@@ -650,7 +649,7 @@ mod tests {
         assert_eq!(event["required"], serde_json::json!(["summary", "start"]));
         assert!(arguments_schema("mcp.github.search_issues").is_none());
 
-        // MA4: the SMTP send and the EventKit create each have a pinned schema.
+        // The SMTP send and the EventKit create each have a pinned schema.
         let mail = arguments_schema("mail.send").unwrap();
         assert_eq!(
             mail["required"],

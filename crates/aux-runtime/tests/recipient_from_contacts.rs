@@ -39,7 +39,7 @@ fn agent() -> LoadedAgent {
         tools: vec![
             "google.calendar.create_event".to_string(),
             "google.gmail.send".to_string(),
-            // MA4: the fixture now declares the EventKit create and SMTP send.
+            // The fixture also declares the EventKit create and SMTP send.
             "calendar.create_event".to_string(),
             "mail.send".to_string(),
         ],

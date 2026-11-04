@@ -327,7 +327,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, security review FAIL P2): a tool this build does not know by
+    /// A tool this build does not know by
     /// name has no rule to save, so "Toujours" must be unavailable. Allow once,
     /// Deny and Edit stay available.
     func testAlwaysIsUnavailableForAnUnknownTool() throws {
@@ -360,7 +360,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, security review R3 P2 A): an unknown id past the scalar bound
+    /// An unknown id past the scalar bound
     /// is truncated, so two distinct ids render identically. "Allow once" is
     /// refused too, leaving Refuse and Modifier; known ids and unknown ids at or
     /// under the bound keep the current behaviour.
@@ -509,7 +509,7 @@ import Testing
         store.stop()
     }
 
-    /// Regression (PR #104, GLM r4 P3): the `.allowOnce` guard in `Store.resolve`
+    /// The `.allowOnce` guard in `Store.resolve`
     /// must not depend on the id's rendering path. An unknown id of 201 scalars —
     /// here built from quote delimiters, the very characters that used to be
     /// demoted — is over `ServerText.Limits.unknownTool`, so a direct

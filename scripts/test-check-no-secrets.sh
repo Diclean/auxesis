@@ -23,7 +23,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/scripts"
 cp "$root/scripts/check-no-secrets.sh" "$root/scripts/check-personal-data.sh" \
     "$root/scripts/secret-scan-allowlist.txt" "$tmp/scripts/"
-# The scanners source scripts/lib/guard.sh (J-02 round 7): the fixture needs it.
+# The scanners source scripts/lib/guard.sh: the fixture needs it.
 cp -R "$root/scripts/lib" "$tmp/scripts/"
 
 git -C "$tmp" init -q

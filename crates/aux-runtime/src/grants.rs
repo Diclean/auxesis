@@ -1,4 +1,4 @@
-//! Per-agent grants (D33, WO E0): what one agent may see and do.
+//! Per-agent grants: what one agent may see and do.
 //!
 //! A grant is a **ceiling, never a right**: a tool an agent's grants do not
 //! cover is refused before it runs, whatever the global rules say. The check
@@ -492,7 +492,7 @@ pub fn default_grants(agent: &str) -> Option<AgentGrants> {
         },
         "calendar" => AgentGrants {
             see: vec![see("calendar", "EventKit (local)", AccessLevel::Read)],
-            // M4-0: `send-invite` mails the `.ics` through `mail_send`, a
+            // `send-invite` mails the `.ics` through `mail_send`, a
             // skill-only tool, so Calendar may send behind the run's one
             // approval. Reads and drafts are off by name: the send grant must
             // not open the rest of the mail scope through the scope fallback.

@@ -1,4 +1,4 @@
-//! Cancellation token for one turn (E-18).
+//! Cancellation token for one turn.
 //!
 //! The token type lives in `aux-tools` so tool implementations can observe it
 //! through [`kernel_broker::ToolCtx::cancel`]: the engine fires it on client
@@ -7,8 +7,8 @@
 //! instead of relying on being dropped. Re-exported here under the engine's
 //! historical name.
 //!
-//! Cancelling never rolls back persisted state — the WS-C write-ahead taint
-//! marks written before an untrusted dispatch must survive exactly as they do
-//! for a crash or a timeout.
+//! Cancelling never rolls back persisted state — the write-ahead taint marks
+//! written before an untrusted dispatch must survive exactly as they do for a
+//! crash or a timeout.
 
 pub use kernel_broker::CancelToken as TurnCancel;

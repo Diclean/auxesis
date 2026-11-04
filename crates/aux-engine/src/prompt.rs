@@ -408,10 +408,10 @@ anything is sent or moved: one for the move, one for the message.\n";
 /// that it is never a payment card: the two are named apart, and the card is
 /// never refused and never withheld. The payment-card rule stays narrow: its
 /// numbers are hidden, and they are never asked for.
-/// The seal held the wording as not exact: in private
-/// mode the model reads tokens, so it does not receive what the owner sees;
-/// the rule says what the kernel did, mode by mode, and never claims that
-/// what the model received is what the owner sees.
+/// The wording must be exact: in private mode the model reads tokens, so it
+/// does not receive what the owner sees; the rule says what the kernel did,
+/// mode by mode, and never claims that what the model received is what the
+/// owner sees.
 const CLIENT_CARD_RULE: &str = "\n\n# Client cards\n\nA client card (a \"fiche client\") is the \
 CRM record of a client: name, company, contact details, timeline, follow-ups, tags and notes. \
 When the owner asks for one, always show it: a client card is never a payment card, so you \

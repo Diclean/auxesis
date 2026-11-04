@@ -28,7 +28,7 @@ import Testing
         XCTAssertEqual(ServerText.clean("short", maxLength: 200), "short")
     }
 
-    /// Regression (PR #104, security review FAIL P2 c): the cap counts Unicode scalars, not
+    /// The cap counts Unicode scalars, not
     /// grapheme clusters. 10 000 combining marks are a single cluster, so a
     /// `String.count` cap never fired and a hostile id stayed unbounded.
     func testLengthCapCountsUnicodeScalarsNotGraphemes() {

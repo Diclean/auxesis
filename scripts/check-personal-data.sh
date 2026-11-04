@@ -3,7 +3,7 @@
 # git. The username is read from the environment (or `id -un`) at run time and
 # never stored in this file or anywhere else.
 #
-# Scope notes (REPO-HYGIENE-1):
+# Scope notes:
 #   * scans the WHOLE tracked tree;
 #   * every tracked file is scanned, QA reports included. They used to be
 #     excluded while they were frozen; they are scrubbed now (owner data

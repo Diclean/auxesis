@@ -60,7 +60,7 @@ crates/aux-engine/src/layout.rs | fs::rename( | WO-07 one-time move of the legac
 # reviewed debt for the SandboxHome gateway follow-up.
 crates/aux-runtime/src/extensions/catalog.rs | fs::create_dir_all( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/catalog.rs | fs::write( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
-crates/aux-runtime/src/extensions/install.rs | OpenOptions::new( | 0700 re-force on a verified extension directory, via an O_NOFOLLOW fd
+crates/aux-runtime/src/extensions/install.rs | OpenOptions::new( | the one O_NOFOLLOW|O_DIRECTORY anchored directory open: the 0700 re-force and the extensions/ listing of load_installed go through its fd
 crates/aux-runtime/src/extensions/scenarios.rs | fs::create_dir_all( | test-only fixture catalog and installs live in TempDir homes
 crates/aux-runtime/src/extensions/scenarios.rs | fs::write( | test-only fixture catalog, scripts and .env canaries live in TempDir homes
 crates/aux-runtime/src/extensions/scenarios.rs | fs::remove_file( | test-only planted state row in a TempDir home

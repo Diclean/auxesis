@@ -2119,7 +2119,7 @@ mod tests {
     #[test]
     fn fresh_store_indexes_consumed_claims_and_the_prune_uses_it() {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path().join("store.db")).unwrap();
+        let store = Store::open(&dir.path().join("store.db")).unwrap();
         assert!(reconciled_index_exists(&store));
         let plan: Vec<String> = store
             .conn
@@ -2159,7 +2159,9 @@ mod tests {
         assert!(reconciled_index_exists(&store));
         let kept: i64 = store
             .conn
-            .query_row("SELECT COUNT(*) FROM usage_reconciled", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM usage_reconciled", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(kept, 1, "the upgrade keeps the existing claim");
         drop(store);

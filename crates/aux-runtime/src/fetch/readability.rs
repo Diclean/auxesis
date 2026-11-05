@@ -1,5 +1,6 @@
-//! Minimal readability: html5ever parses the document, a small scorer picks
-//! the main-content container, and a block-aware walker renders plain text.
+//! Minimal readability: html5ever parses the document into our own DOM
+//! ([`super::dom`]), a small scorer picks the main-content container, and a
+//! block-aware walker renders plain text.
 //!
 //! This deliberately models *structure*, not paint: it drops chrome elements
 //! (`script`, `style`, `noscript`, `template`, `nav`, `aside`, …), treats a
@@ -10,11 +11,11 @@
 //! ([`extract_body_text`]) also drops what an element hides through its own
 //! attributes, its inline style or a simple `<style>` rule ([`Sheet`]).
 
+use super::dom::{Dom, Handle, NodeData};
 use html5ever::parse_document;
 use html5ever::tendril::{StrTendril, Tendril, TendrilSink};
 use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::{Attribute, ExpandedName, QualName};
-use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -142,9 +143,10 @@ fn depth_exceeds(root: &Handle, deadline: &Deadline, mode: Mode) -> bool {
 /// stack around this size; below it nothing realistic lives.
 const MAX_DOM_DEPTH: usize = 512;
 
-/// Iteratively detach every node from the tree before `RcDom` drops. Without
-/// this, a 50k-deep document would recurse through `Rc<Node>::drop` and
-/// abort the process.
+/// Iteratively detach every node from the tree before the DOM drops, so a
+/// 50k-deep document never recurses through `Drop`. The DOM's own `Drop` is
+/// iterative as well ([`super::dom`]); this pass keeps the teardown explicit
+/// where every extraction ends.
 fn dismantle(root: &Handle) {
     let mut stack = vec![root.clone()];
     while let Some(node) = stack.pop() {
@@ -647,7 +649,7 @@ const PARSE_CHUNK_TARGET: Duration = Duration::from_millis(10);
 /// stack costs charges per stack element.
 const PARSE_CHUNK_WORK_TARGET: usize = 1_000_000;
 
-/// A [`TreeSink`] that delegates to [`RcDom`] while charging every step
+/// A [`TreeSink`] that delegates to our [`Dom`] while charging every step
 /// against a shared [`MAX_PARSE_WORK`] budget.
 ///
 /// The charged steps are the ones html5ever performs through the sink: the
@@ -658,7 +660,7 @@ const PARSE_CHUNK_WORK_TARGET: usize = 1_000_000;
 /// this counter cannot see them, and [`EXTRACT_WALL_BUDGET`] is responsible
 /// for bounding them.
 struct BoundedDom {
-    inner: RcDom,
+    inner: Dom,
     work: Arc<AtomicUsize>,
 }
 
@@ -669,14 +671,14 @@ impl BoundedDom {
 }
 
 impl TreeSink for BoundedDom {
-    type Output = RcDom;
+    type Output = Dom;
     type Handle = Handle;
     type ElemName<'a>
         = ExpandedName<'a>
     where
         Self: 'a;
 
-    fn finish(self) -> RcDom {
+    fn finish(self) -> Dom {
         self.inner.finish()
     }
 
@@ -769,22 +771,17 @@ impl TreeSink for BoundedDom {
         self.inner
             .is_mathml_annotation_xml_integration_point(target)
     }
-
-    fn maybe_clone_an_option_into_selectedcontent(&self, option: &Handle) {
-        self.inner
-            .maybe_clone_an_option_into_selectedcontent(option);
-    }
 }
 
 /// Parse `html`. The second return is `true` when the parse was stopped early
 /// by the [`EXTRACT_WALL_BUDGET`] deadline or the [`MAX_PARSE_WORK`] budget;
 /// the DOM holds whatever the parser built before then, and the caller must
 /// report the result as truncated.
-fn parse(html: &[u8], deadline: &Deadline) -> (RcDom, bool) {
+fn parse(html: &[u8], deadline: &Deadline) -> (Dom, bool) {
     let work = Arc::new(AtomicUsize::new(0));
     let mut parser = parse_document(
         BoundedDom {
-            inner: RcDom::default(),
+            inner: Dom::default(),
             work: work.clone(),
         },
         Default::default(),
@@ -836,7 +833,7 @@ fn attr(node: &Handle, key: &str) -> Option<String> {
         NodeData::Element { attrs, .. } => attrs
             .borrow()
             .iter()
-            .find(|attribute| attribute.name.local.as_ref() == key)
+            .find(|attribute| &*attribute.name.local == key)
             .map(|attribute| attribute.value.to_string()),
         _ => None,
     }
@@ -1812,6 +1809,136 @@ mod tests {
         let readable = extract_readable(html.as_bytes());
         assert!(readable.text.contains("Name | Value"), "{}", readable.text);
         assert!(readable.text.contains("alpha | 1"), "{}", readable.text);
+    }
+
+    /// Runs `body` on a thread with a fixed 4 MiB stack. Dropping a 100k-deep
+    /// tree recursively needs tens of MiB, so a recursive drop overflows here
+    /// whatever `RUST_MIN_STACK` the test runner sets.
+    fn on_a_small_stack(body: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(4 << 20)
+            .spawn(body)
+            .expect("spawn a small-stack thread")
+            .join()
+            .expect("the small-stack thread panicked");
+    }
+
+    /// A deadline the tests below never reach.
+    fn unhurried() -> Deadline {
+        Deadline {
+            limit: Instant::now() + Duration::from_secs(600),
+        }
+    }
+
+    /// The deepest level under `root`, template contents included, with an
+    /// explicit stack.
+    fn depth_of(root: &Handle) -> usize {
+        let mut deepest = 0;
+        let mut stack = vec![(root.clone(), 0)];
+        while let Some((node, depth)) = stack.pop() {
+            deepest = deepest.max(depth);
+            let children = node.children.borrow();
+            stack.extend(children.iter().map(|child| (child.clone(), depth + 1)));
+            if let NodeData::Element {
+                template_contents: Some(contents),
+                ..
+            } = &node.data
+            {
+                stack.push((contents.clone(), depth + 1));
+            }
+        }
+        deepest
+    }
+
+    #[test]
+    fn a_100k_deep_tree_parses_and_drops_without_overflowing_the_stack() {
+        // `<object>` ends html5ever's `<p>` scope scan for the next `<div>`,
+        // so that parse is linear and the work budget lets it finish; each
+        // `<template>` sits in the contents of the one before it.
+        for html in ["<div><object>".repeat(50_000), "<template>".repeat(100_000)] {
+            on_a_small_stack(move || {
+                let (dom, aborted) = parse(html.as_bytes(), &unhurried());
+                assert!(!aborted, "the work budget cut a linear parse");
+                assert!(depth_of(&dom.document) > 100_000);
+                // No `dismantle` first: dropping the DOM itself must not recurse.
+                drop(dom);
+            });
+        }
+    }
+
+    /// Misnested formatting (the adoption agency), text and elements
+    /// foster-parented out of a table, a link around a block, implied end
+    /// tags, a late `<body>` whose attributes are merged, and a `<select>`
+    /// holding a `<selectedcontent>`.
+    const MALFORMED: &str = "<!doctype html><html><head><title>Misnested &amp; fostered</title>\
+        </head><body><main><p>One <b>bold <i>both</b> italic</i> plain.</p>\
+        <b>Bold start<p>split paragraph</b> tail</p>\
+        <table>a<!--c-->b<tr><td>cell one<td>cell two</tr>Fostered <i>italic</i> text\
+        <tr><td>row two</td></table>\
+        <a href=\"/x\">link <div>inside block</a> after</div>\
+        <p>Unclosed para<p>Second para<ul><li>item one<li>item two</ul>\
+        <body data-late=\"1\"><select><button><selectedcontent></selectedcontent></button>\
+        <option selected>Choice</option></select><p>Last words.</main></body></html>";
+
+    #[test]
+    fn malformed_html_reads_as_it_did_on_the_old_dom() {
+        // The expected text is what the extractor returned on
+        // `markup5ever_rcdom` (html5ever 0.39), before it had its own DOM.
+        let page = extract_readable(MALFORMED.as_bytes());
+        assert_eq!(page.title, "Misnested & fostered");
+        assert_eq!(
+            page.text,
+            "One bold both italic plain.\nBold start\n\nsplit paragraph tail\n\
+             abFostered italic text\n\ncell one | cell two |\n\nrow two |\n\nlink\n\n\
+             inside block after\n\nUnclosed para\n\nSecond para\n\n- item one\n- item two\n\n\
+             Last words."
+        );
+        assert!(!page.truncated);
+        // A mail body reads the same text here: `<main>` holds all of it.
+        assert_eq!(extract_body_text(MALFORMED.as_bytes()).text, page.text);
+    }
+
+    #[test]
+    fn template_contents_are_never_page_text() {
+        // A template's contents are a fragment of their own, outside the
+        // tree's children: no walker reads them, not even the title fallback
+        // that ignores the drop list, and not inside a table either.
+        let html = "<body><h1>Real headline<template>TEMPLATE-TITLE</template></h1>\
+                    <main><p>The one paragraph that matters on this page.</p>\
+                    <template><p>TEMPLATE-BODY</p><template>TEMPLATE-NESTED</template></template>\
+                    <table><template><tr><td>TEMPLATE-ROW</td></tr></template>\
+                    <tr><td>Kept cell</td></tr></table></main></body>";
+        let page = extract_readable(html.as_bytes());
+        assert_eq!(page.title, "Real headline");
+        assert_eq!(
+            page.text,
+            "The one paragraph that matters on this page.\n\nKept cell |"
+        );
+        let mail = extract_body_text(html.as_bytes()).text;
+        assert!(!mail.contains("TEMPLATE"), "{mail:?}");
+        let (dom, _) = parse(html.as_bytes(), &unhurried());
+        let mut stack = vec![dom.document.clone()];
+        while let Some(node) = stack.pop() {
+            if let NodeData::Text { contents } = &node.data {
+                let text = contents.borrow();
+                assert!(!text.contains("TEMPLATE"), "{:?}", &text[..]);
+            }
+            stack.extend(node.children.borrow().iter().cloned());
+        }
+        dismantle(&dom.document);
+    }
+
+    #[test]
+    fn a_meta_charset_with_no_value_does_not_panic() {
+        // html5ever 0.39 indexed past the end of `content` when the word
+        // `charset` ended it, so one such page or mail panicked the
+        // extractor; 0.40.1 finds no encoding instead.
+        for content in ["text/html; charset", "text/html;CHARSET \t"] {
+            let html =
+                format!(r#"<meta http-equiv="Content-Type" content="{content}"><p>Body text.</p>"#);
+            assert_eq!(extract_readable(html.as_bytes()).text, "Body text.");
+            assert_eq!(extract_body_text(html.as_bytes()).text, "Body text.");
+        }
     }
 
     // ---------------------------------------------------------------------

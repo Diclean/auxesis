@@ -25,7 +25,6 @@ kernel-core.workspace = true
 kernel-mcp.workspace = true
 kernel-net.workspace = true
 kernel-privacy.workspace = true
-markup5ever_rcdom = "0.39"
 reqwest = { workspace = true, features = ["form"] }
 serde.workspace = true
 serde_json = "1"

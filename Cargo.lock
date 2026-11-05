@@ -592,7 +592,6 @@ dependencies = [
  "html5ever 0.40.1",
  "libc",
  "log",
- "markup5ever_rcdom",
  "proptest",
  "reqwest",
  "rusqlite",

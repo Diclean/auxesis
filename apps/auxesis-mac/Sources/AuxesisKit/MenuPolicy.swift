@@ -124,6 +124,48 @@ public enum GoMenu {
     }
 }
 
+/// One line of Help ▸ Keyboard Shortcuts.
+public struct MenuShortcut: Equatable {
+    public let title: String
+    public let keys: String
+}
+
+/// The shortcuts the app really binds, for the help sheet. `menu` mirrors
+/// the menu bar (`TeamCommands`): ⌘1… belong to the Go menu's agents alone,
+/// and the Records pages have no shortcut. `inView` are keys a view handles.
+public enum MenuShortcuts {
+    public static func menu(agents: [Agent], language: Language) -> [MenuShortcut] {
+        let fr = language == .fr
+        let go = GoMenu.agentItems(agents: agents).compactMap { item in
+            item.shortcut.map { MenuShortcut(title: GoMenu.title(for: item, language: language), keys: $0) }
+        }
+        return [
+            MenuShortcut(title: L10n.ui(.newConversation, language), keys: "⌘N"),
+            MenuShortcut(title: L10n.ui(.settings, language) + "…", keys: "⌘,"),
+            MenuShortcut(title: fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)", keys: "⌘Q"),
+        ] + go + [
+            MenuShortcut(title: fr ? "Afficher ou masquer la barre latérale" : "Show or hide sidebar", keys: "⌃⌘S"),
+            MenuShortcut(title: fr ? "Demander à Aux…" : "Ask Aux…", keys: "⌘K"),
+            MenuShortcut(title: fr ? "Envoyer la proposition" : "Send proposal", keys: "⌘↩"),
+            MenuShortcut(title: L10n.ui(.apNotNow, language), keys: "⌘D"),
+            MenuShortcut(title: L10n.ui(.panelToggle, language), keys: "⌥⌘I"),
+            MenuShortcut(title: L10n.ui(.back, language), keys: "⌘["),
+            MenuShortcut(title: L10n.ui(.stopAll, language) + " / " + L10n.ui(.resume, language), keys: "⌘."),
+            MenuShortcut(title: fr ? "Rechercher" : "Find", keys: "⌘F"),
+        ]
+    }
+
+    public static func inView(language: Language) -> [MenuShortcut] {
+        let fr = language == .fr
+        return [
+            MenuShortcut(title: fr ? "Modifier la proposition" : "Edit proposal", keys: "E"),
+            MenuShortcut(title: fr ? "Parcourir les éléments en attente" : "Move through waiting items", keys: "↑ / ↓ · J / K"),
+            MenuShortcut(title: fr ? "Ouvrir la ligne choisie" : "Open selected row", keys: "↩"),
+            MenuShortcut(title: fr ? "Quitter la modification" : "Leave editing", keys: "Esc"),
+        ]
+    }
+}
+
 public struct ProposalMenuAvailability: Equatable {
     public let edit: Bool
     public let notNow: Bool

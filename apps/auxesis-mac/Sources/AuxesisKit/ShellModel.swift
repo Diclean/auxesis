@@ -381,9 +381,10 @@ public final class ShellModel: ObservableObject {
     /// The daemon serves agent templates (a fixture or old client may not).
     public var canAddAgents: Bool { client is AgentTemplateClient }
 
-    /// Opens "Add an agent"; an added agent refreshes the lists.
+    /// Opens "Add an agent"; an added agent refreshes the lists. While the
+    /// sheet is open a second call does nothing, so its state is kept.
     public func beginAddAgent() {
-        guard let templates = client as? AgentTemplateClient else { return }
+        guard addingAgent == nil, let templates = client as? AgentTemplateClient else { return }
         addingAgent = AgentTemplatesModel(client: templates, language: language) { [weak self] in
             await self?.store.refreshAgents()
         }

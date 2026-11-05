@@ -41,8 +41,10 @@ struct ProfileInspector: View {
                         case .lastUse: lastUseRow(copy)
                         }
                     }
-                    heading(copy(.worksWith))
-                    paragraph(member.role == .chief ? TeamMember.worksWithLine(shell.roster, language) : copy(.worksWithAux))
+                    if let line = member.role == .chief ? TeamMember.worksWithLine(agents: shell.store.agents, language) : copy(.worksWithAux) {
+                        heading(copy(.worksWith))
+                        paragraph(line)
+                    }
                     memorySection(copy)
                     heading(copy(.skills))
                     paragraph(skillsLine(copy))

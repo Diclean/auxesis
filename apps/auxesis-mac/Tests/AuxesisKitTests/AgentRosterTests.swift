@@ -55,17 +55,20 @@ import Testing
     }
 
     func testTheChiefsWorksWithLineNamesOnlyTheAgentsThatExist() {
-        let alone = TeamMember.roster([agent("main", shown: "Aux")])
-        XCTAssertEqual(TeamMember.worksWithLine(alone, .en), "Add Mail, Calendar, Clients or Documents when you need them.")
-        XCTAssertEqual(TeamMember.worksWithLine(alone, .fr), "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin.")
+        XCTAssertNil(TeamMember.worksWithLine(agents: [], .en), "no list until the daemon has listed its agents")
+        XCTAssertNil(TeamMember.worksWithLine(agents: [], .fr))
 
-        let two = TeamMember.roster([agent("calendar"), agent("main", shown: "Aux"), agent("mail", shown: "Post")])
-        XCTAssertEqual(TeamMember.worksWithLine(two, .en), "Aux hands work to Post and Calendar.")
-        XCTAssertEqual(TeamMember.worksWithLine(two, .fr), "Aux confie du travail à Post et Calendar.")
+        let alone = [agent("main", shown: "Aux")]
+        XCTAssertEqual(TeamMember.worksWithLine(agents: alone, .en), "Add Mail, Calendar, Clients or Documents when you need them.")
+        XCTAssertEqual(TeamMember.worksWithLine(agents: alone, .fr), "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin.")
 
-        let four = TeamMember.roster(["main", "mail", "calendar", "clients", "documents"].map { agent($0) })
-        XCTAssertEqual(TeamMember.worksWithLine(four, .en), "Aux hands work to Mail, Calendar, Clients and Documents.")
-        XCTAssertEqual(TeamMember.worksWithLine(four, .fr), "Aux confie du travail à Mail, Calendar, Clients et Documents.")
+        let two = [agent("calendar"), agent("main", shown: "Aux"), agent("mail", shown: "Post")]
+        XCTAssertEqual(TeamMember.worksWithLine(agents: two, .en), "Aux hands work to Post and Calendar.")
+        XCTAssertEqual(TeamMember.worksWithLine(agents: two, .fr), "Aux confie du travail à Post et Calendar.")
+
+        let four = ["main", "mail", "calendar", "clients", "documents"].map { agent($0) }
+        XCTAssertEqual(TeamMember.worksWithLine(agents: four, .en), "Aux hands work to Mail, Calendar, Clients and Documents.")
+        XCTAssertEqual(TeamMember.worksWithLine(agents: four, .fr), "Aux confie du travail à Mail, Calendar, Clients et Documents.")
     }
 
     func testThePausedBannerCountsNoAgents() {

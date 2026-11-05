@@ -61,6 +61,35 @@ import XCTest
         XCTAssertTrue(entries.contains(.addAgent), "shown, and disabled by the menu while loading")
     }
 
+    func testNoTwoMenuItemsShareAShortcutAndDigitsBelongToAgentsAlone() {
+        for agents in [[], [agent("main")], allFive] {
+            for language in [Language.en, .fr] {
+                let keys = MenuShortcuts.menu(agents: agents, language: language).map(\.keys)
+                XCTAssertEqual(keys.count, Set(keys).count, "a shortcut is bound twice: \(keys)")
+            }
+            let digits = MenuShortcuts.menu(agents: agents, language: .en).filter { $0.keys.dropFirst().allSatisfy(\.isNumber) && $0.keys.count == 2 }
+            XCTAssertEqual(digits.map(\.title), GoMenu.agentItems(agents: agents).map { GoMenu.title(for: $0, language: .en) })
+        }
+        let pages = Set(GoMenu.recordItems.map { GoMenu.title(for: $0, language: .en) })
+        XCTAssertTrue(MenuShortcuts.menu(agents: allFive, language: .en).allSatisfy { !pages.contains($0.title) }, "a Records page has no shortcut")
+    }
+
+    func testAddAnAgentWhileItsSheetIsOpenKeepsTheOpenSheet() {
+        let shell = makeShell()
+        XCTAssertTrue(shell.canAddAgents)
+        shell.beginAddAgent()
+        let open = shell.addingAgent
+        XCTAssertNotNil(open)
+        open?.selected = "documents"
+        shell.beginAddAgent()
+        XCTAssertTrue(shell.addingAgent === open, "a second call does not swap the open sheet")
+        XCTAssertEqual(shell.addingAgent?.selected, "documents")
+        shell.addingAgent = nil
+        shell.beginAddAgent()
+        XCTAssertNotNil(shell.addingAgent, "once closed it opens again")
+        XCTAssertFalse(shell.addingAgent === open)
+    }
+
     func testGoMenuRecordsFollowASeparatorWithoutShortcuts() {
         let records = ShellModel.recordsMenu.flatMap { $0 }
         XCTAssertEqual(GoMenu.recordItems.map(\.route), records)
@@ -126,4 +155,10 @@ import XCTest
         XCTAssertFalse(ApprovalKeyboardPolicy.shouldHandle(.previousWaiting, focus: .waitingList, textFieldFocused: true))
         XCTAssertFalse(ApprovalKeyboardPolicy.shouldHandle(.nextWaiting, focus: .approvalProposal, textFieldFocused: false))
     }
+}
+
+/// The fixture daemon serves no templates; here it lists none so the sheet can open.
+extension FixtureDaemon: AgentTemplateClient {
+    public func agentTemplates() async throws -> [AgentTemplate] { [] }
+    public func createAgent(template: String) async throws {}
 }

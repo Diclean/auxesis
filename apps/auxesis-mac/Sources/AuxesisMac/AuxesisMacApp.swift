@@ -294,7 +294,7 @@ struct TeamCommands: Commands {
                     goButton(item, loading: loading)
                 case .addAgent:
                     Button(L10n.ui(.addAgentMenu, shell.language)) { shell.beginAddAgent() }
-                        .disabled(loading || !windows.hasMainWindow || !shell.canAddAgents)
+                        .disabled(loading || !windows.hasMainWindow || !shell.canAddAgents || shell.addingAgent != nil)
                         .accessibilityLabel(L10n.ui(.addAgentMenu, shell.language))
                         .accessibilityIdentifier("menu-go-add-agent")
                 case .separator:

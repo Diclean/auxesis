@@ -905,6 +905,21 @@ fn mac_account_key_is_a_stable_client_id_hash_that_never_needs_an_email() {
     assert_eq!(mac_account_key(CLIENT_ID), mac_account_key(CLIENT_ID));
 }
 
+/// Captured with sha2 0.10.9: the grant file names stay the same across a sha2
+/// upgrade, so a saved Google connection is still found. (The PKCE challenge is
+/// pinned by `pkce_rfc_7636_appendix_b_vector`.)
+#[test]
+fn old_version_vectors_keep_the_grant_file_names() {
+    assert_eq!(
+        mac_account_key(CLIENT_ID),
+        "3b6ac4a7b6f1a5a9a6a9ebb49dbd2d1ed80f90d8e6b2c6dc3d9b17fcc91e0fd1"
+    );
+    assert_eq!(
+        account_email_hash(EMAIL).unwrap(),
+        "50eec718e0d28837a8e606b9d92d48a234a78739c25fd80feb47b81f72cb912c"
+    );
+}
+
 #[test]
 fn grant_exists_only_accepts_the_exact_grant_file_name() {
     // The temp dir itself is the home: `tempfile` creates it, so the test

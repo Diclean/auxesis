@@ -1107,16 +1107,14 @@ CREATE TABLE IF NOT EXISTS usage_reconciled (
 );
 "#;
 
-/// v41: when each reconcile claim was made and the local day its
-/// reservation was taken, so a claim no late settle can still need is pruned
-/// (see `Store::prune_reconciled_claims`). Rows from before v41 are stamped
-/// with the upgrade time: they live one full retention from it.
+/// v41: when each reconcile claim was made and when a live settle consumed
+/// it, both from the store's clock (UTC), so a consumed claim is pruned once
+/// past its retention (see `Store::prune_reconciled_claims`). Rows from
+/// before v41 are stamped as claimed at the upgrade and stay unconsumed.
 pub(crate) const MIGRATION_V41_CLAIM_AGE: &str = r#"
-ALTER TABLE usage_reconciled ADD COLUMN day TEXT;
 ALTER TABLE usage_reconciled ADD COLUMN claimed_at TEXT;
-UPDATE usage_reconciled SET day = date('now', 'localtime'),
-    claimed_at = datetime('now', 'localtime')
-  WHERE claimed_at IS NULL;
+ALTER TABLE usage_reconciled ADD COLUMN consumed_at TEXT;
+UPDATE usage_reconciled SET claimed_at = datetime('now') WHERE claimed_at IS NULL;
 "#;
 
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
@@ -2097,12 +2095,12 @@ mod tests {
         let path = dir.path().join("store.db");
         {
             let store = Store::open(&path).unwrap();
-            // A v40 claim: no day, no claim time.
+            // A v40 claim: no claim nor consume time.
             store
                 .conn
                 .execute_batch(
-                    "ALTER TABLE usage_reconciled DROP COLUMN day;
-                     ALTER TABLE usage_reconciled DROP COLUMN claimed_at;
+                    "ALTER TABLE usage_reconciled DROP COLUMN claimed_at;
+                     ALTER TABLE usage_reconciled DROP COLUMN consumed_at;
                      INSERT INTO usage_reconciled VALUES (7, 60, 9, 0);
                      UPDATE meta SET value = '40' WHERE key = 'schema_version';",
                 )
@@ -2113,13 +2111,13 @@ mod tests {
         let stamped: (i64, bool) = store
             .conn
             .query_row(
-                "SELECT tokens_in, day = date('now', 'localtime') AND claimed_at IS NOT NULL
+                "SELECT tokens_in, claimed_at IS NOT NULL AND consumed_at IS NULL
                  FROM usage_reconciled WHERE reservation_id = 7",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(stamped, (60, true), "kept, one full retention from now");
+        assert_eq!(stamped, (60, true), "kept as an unconsumed claim");
         assert_eq!(store.prune_reconciled_claims().unwrap(), 0);
         drop(store);
         assert_eq!(

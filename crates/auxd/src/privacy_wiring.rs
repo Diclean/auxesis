@@ -471,7 +471,7 @@ pub const STORE_TABLES: &[(&str, PathId)] = &[
     ("usage", PathId::G6),
     ("usage_reservations", PathId::G6),
     // What a reconcile recorded for a held reservation it claimed: amounts
-    // keyed by the reservation id, with its day and claim time; no content.
+    // keyed by the reservation id, with its claim and consume times; no content.
     ("usage_reconciled", PathId::G6),
     ("usage_calls", PathId::G6),
     ("budget_stops", PathId::G6),

@@ -1,5 +1,5 @@
 import XCTest
-import AuxesisKit
+@testable import AuxesisKit
 
 @objcMembers @MainActor final class MenuPolicyTests: XCTestCase {
     private func makeShell() -> ShellModel {
@@ -9,13 +9,86 @@ import AuxesisKit
         return shell
     }
 
-    func testGoMenuListsTheAgentsInSidebarOrderWithCommandDigits() {
-        XCTAssertEqual(GoMenu.agentItems.map(\.route), TeamMember.all.map { .agent($0.id) })
-        XCTAssertEqual(GoMenu.agentItems.map(\.shortcut), ["⌘1", "⌘2", "⌘3", "⌘4", "⌘5"])
-        XCTAssertEqual(
-            GoMenu.agentItems.map { GoMenu.title(for: $0, language: .en) },
-            ["Aux", "Mail", "Calendar", "Clients", "Documents"]
-        )
+    private func agent(_ id: String, shown: String? = nil) -> Agent {
+        Agent(id: id, name: id, hue: 0, glyph: "", state: .idle, status: "", threadKey: id, displayName: shown)
+    }
+
+    private var allFive: [Agent] { TeamMember.all.map { agent($0.id) } }
+
+    func testWithFiveAgentsTheGoMenuListsThemInSidebarOrderWithCommandDigits() {
+        let items = GoMenu.agentItems(agents: allFive.reversed())
+        XCTAssertEqual(items.map(\.route), TeamMember.all.map { .agent($0.id) })
+        XCTAssertEqual(items.map(\.shortcut), ["⌘1", "⌘2", "⌘3", "⌘4", "⌘5"])
+        XCTAssertEqual(items.map { GoMenu.title(for: $0, language: .en) }, ["Aux", "Mail", "Calendar", "Clients", "Documents"])
+        XCTAssertFalse(GoMenu.canAddAgent(agents: allFive), "no template is left")
+        XCTAssertFalse(GoMenu.entries(agents: allFive).contains(.addAgent))
+    }
+
+    func testWithTheChiefAloneOnlyCommandOneExistsAndAddAnAgentIsOffered() {
+        let agents = [agent("main", shown: "Aux")]
+        let items = GoMenu.agentItems(agents: agents)
+        XCTAssertEqual(items.map(\.route), [.agent("main")])
+        XCTAssertEqual(items.map(\.shortcut), ["⌘1"])
+        XCTAssertEqual(items.map { GoMenu.title(for: $0, language: .fr) }, ["Aux"])
+        XCTAssertFalse(GoMenu.loading(agents: agents))
+        XCTAssertTrue(GoMenu.canAddAgent(agents: agents))
+        let entries = GoMenu.entries(agents: agents)
+        XCTAssertEqual(Array(entries.prefix(3)), [.item(items[0]), .addAgent, .separator])
+        XCTAssertEqual(L10n.ui(.addAgentMenu, .en), "Add an Agent…")
+        XCTAssertEqual(L10n.ui(.addAgentMenu, .fr), "Ajouter un agent…")
+    }
+
+    func testNoShortcutLeadsToAMissingAgent() {
+        let installs: [[Agent]] = [[], [agent("main")], [agent("main"), agent("calendar"), agent("documents")], allFive]
+        for agents in installs {
+            let existing = Set(agents.isEmpty ? [TeamMember.main.id] : agents.map(\.id))
+            let shortcuts = GoMenu.entries(agents: agents).compactMap(\.item).filter { $0.shortcut != nil }
+            for item in shortcuts {
+                guard case .agent(let id) = item.route else { return XCTFail("a page has \(item.shortcut!)") }
+                XCTAssertTrue(existing.contains(id), "\(item.shortcut!) leads to \(id)")
+            }
+            XCTAssertEqual(shortcuts.map(\.shortcut), (1...max(existing.count, 1)).map { "⌘\($0)" })
+        }
+        let three = GoMenu.agentItems(agents: [agent("documents"), agent("main"), agent("calendar")])
+        XCTAssertEqual(three.map(\.route), [.agent("main"), .agent("calendar"), .agent("documents")])
+    }
+
+    func testWhileTheAgentsLoadTheMenuKeepsItsPlaceWithTheChiefAndAddAnAgent() {
+        XCTAssertTrue(GoMenu.loading(agents: []))
+        XCTAssertFalse(GoMenu.canAddAgent(agents: []))
+        let entries = GoMenu.entries(agents: [])
+        XCTAssertEqual(entries.compactMap(\.item).filter { $0.shortcut != nil }.map(\.route), [.agent(TeamMember.main.id)])
+        XCTAssertTrue(entries.contains(.addAgent), "shown, and disabled by the menu while loading")
+    }
+
+    func testNoTwoMenuItemsShareAShortcutAndDigitsBelongToAgentsAlone() {
+        for agents in [[], [agent("main")], allFive] {
+            for language in [Language.en, .fr] {
+                let keys = MenuShortcuts.menu(agents: agents, language: language).map(\.keys)
+                XCTAssertEqual(keys.count, Set(keys).count, "a shortcut is bound twice: \(keys)")
+            }
+            let digits = MenuShortcuts.menu(agents: agents, language: .en).filter { $0.keys.dropFirst().allSatisfy(\.isNumber) && $0.keys.count == 2 }
+            XCTAssertEqual(digits.map(\.title), GoMenu.agentItems(agents: agents).map { GoMenu.title(for: $0, language: .en) })
+        }
+        // The Clients and Documents pages share a name with their agents: check routes, not titles.
+        let shortcuts = GoMenu.entries(agents: allFive).compactMap(\.item).filter { $0.shortcut != nil }
+        XCTAssertTrue(shortcuts.allSatisfy { if case .agent = $0.route { return true } else { return false } }, "a Records page has no shortcut")
+    }
+
+    func testAddAnAgentWhileItsSheetIsOpenKeepsTheOpenSheet() {
+        let shell = makeShell()
+        XCTAssertTrue(shell.canAddAgents)
+        shell.beginAddAgent()
+        let open = shell.addingAgent
+        XCTAssertNotNil(open)
+        open?.selected = "documents"
+        shell.beginAddAgent()
+        XCTAssertTrue(shell.addingAgent === open, "a second call does not swap the open sheet")
+        XCTAssertEqual(shell.addingAgent?.selected, "documents")
+        shell.addingAgent = nil
+        shell.beginAddAgent()
+        XCTAssertNotNil(shell.addingAgent, "once closed it opens again")
+        XCTAssertFalse(shell.addingAgent === open)
     }
 
     func testGoMenuRecordsFollowASeparatorWithoutShortcuts() {
@@ -23,10 +96,10 @@ import AuxesisKit
         XCTAssertEqual(GoMenu.recordItems.map(\.route), records)
         XCTAssertTrue(GoMenu.recordItems.allSatisfy { $0.shortcut == nil })
 
-        XCTAssertEqual(GoMenu.entries.count, GoMenu.agentItems.count + 1 + GoMenu.recordItems.count)
-        XCTAssertEqual(GoMenu.entries[GoMenu.agentItems.count], .separator)
-        XCTAssertEqual(GoMenu.entries.prefix(GoMenu.agentItems.count).compactMap(\.item), GoMenu.agentItems)
-        XCTAssertEqual(GoMenu.entries.dropFirst(GoMenu.agentItems.count + 1).compactMap(\.item), GoMenu.recordItems)
+        let entries = GoMenu.entries(agents: allFive)
+        XCTAssertEqual(entries.count, 5 + 1 + GoMenu.recordItems.count)
+        XCTAssertEqual(entries[5], .separator)
+        XCTAssertEqual(entries.dropFirst(6).compactMap(\.item), GoMenu.recordItems)
     }
 
     func testGoMenuTitlesFollowTheAppLanguage() {
@@ -41,7 +114,7 @@ import AuxesisKit
         let shell = makeShell()
         shell.go(.today)
 
-        XCTAssertTrue(GoMenu.select(GoMenu.agentItems[1], hasMainWindow: true, in: shell))
+        XCTAssertTrue(GoMenu.select(GoMenuItem(route: .agent(TeamMember.mail.id), shortcut: "⌘2"), hasMainWindow: true, in: shell))
         XCTAssertEqual(shell.route, .agent(TeamMember.mail.id))
         XCTAssertEqual(shell.selectedAgent, TeamMember.mail.id)
 
@@ -53,7 +126,7 @@ import AuxesisKit
 
     func testGoMenuDoesNothingWithoutAMainWindow() {
         let shell = makeShell()
-        XCTAssertFalse(GoMenu.select(GoMenu.agentItems[0], hasMainWindow: false, in: shell))
+        XCTAssertFalse(GoMenu.select(GoMenuItem(route: .agent(TeamMember.aux.id), shortcut: "⌘1"), hasMainWindow: false, in: shell))
         XCTAssertEqual(shell.route, .today)
     }
 
@@ -83,4 +156,10 @@ import AuxesisKit
         XCTAssertFalse(ApprovalKeyboardPolicy.shouldHandle(.previousWaiting, focus: .waitingList, textFieldFocused: true))
         XCTAssertFalse(ApprovalKeyboardPolicy.shouldHandle(.nextWaiting, focus: .approvalProposal, textFieldFocused: false))
     }
+}
+
+/// The fixture daemon serves no templates; here it lists none so the sheet can open.
+extension FixtureDaemon: AgentTemplateClient {
+    public func agentTemplates() async throws -> [AgentTemplate] { [] }
+    public func createAgent(template: String) async throws {}
 }

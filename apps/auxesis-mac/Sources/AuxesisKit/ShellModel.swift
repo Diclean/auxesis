@@ -169,6 +169,8 @@ public final class ShellModel: ObservableObject {
     @Published public private(set) var route: Route = .today
     @Published public var settingsTab: SettingsTab?
     @Published public var shortcutHelpOpen = false
+    /// The open "Add an agent" sheet, from the agents list or the Go menu.
+    @Published public var addingAgent: AgentTemplatesModel?
     @Published public private(set) var askFocusRequest = 0
     /// ⌘F: the sidebar search takes the keyboard.
     @Published public private(set) var searchFocusRequest = 0
@@ -375,6 +377,18 @@ public final class ShellModel: ObservableObject {
     /// ⌘K "Ask Aux…": Aux's conversation, its composer focused,
     /// even when that composer appears only after the move.
     public func askAux() { steer(TeamMember.aux.id) }
+
+    /// The daemon serves agent templates (a fixture or old client may not).
+    public var canAddAgents: Bool { client is AgentTemplateClient }
+
+    /// Opens "Add an agent"; an added agent refreshes the lists. While the
+    /// sheet is open a second call does nothing, so its state is kept.
+    public func beginAddAgent() {
+        guard addingAgent == nil, let templates = client as? AgentTemplateClient else { return }
+        addingAgent = AgentTemplatesModel(client: templates, language: language) { [weak self] in
+            await self?.store.refreshAgents()
+        }
+    }
 
     /// Work tab "Steer": that agent's conversation, its composer focused, to
     /// tell it more while its task runs. Nothing is sent by the click.

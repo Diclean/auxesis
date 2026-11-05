@@ -114,7 +114,7 @@ public enum UIKey: String, CaseIterable {
     // Agent profile
     case brain, brainDefault, change, canSee, canDo, never, worksWith, memory, forget, skills, workshop
     case lvRead, lvAsk, lvOff, lvAuto, lvAsksEveryTime, grantsUnavailable, memoryEmpty, workshopEmpty
-    case pauseAgent, agentPaused, worksWithAux, worksWithTeam, keptChief
+    case pauseAgent, agentPaused, worksWithAux, worksWithTeam, worksWithNone, listAnd, keptChief
     case agentIdle, agentThinking, agentWorking, agentNeedsYou, agentStopped, agentStateUnavailable, brainUnavailable
     case notificationsQuietHours, notificationsUnavailable, interruptRules, interruptDecisionWaiting
     case interruptFailure, interruptUnknownOutcome, quietHours, schedule, changeQuietHours
@@ -174,7 +174,7 @@ public enum UIKey: String, CaseIterable {
     case menuWorkingOne, menuWorkingMany, menuIdle, menuWaiting, menuOpen, menuQuit, menuOffline
 
     // Add an agent (templates)
-    case addAgent, addAgentLede, addAgentAdded, addAgentConfirm, addAgentExceedsChief, addAgentDoes, addAgentAsks
+    case addAgent, addAgentMenu, addAgentLede, addAgentAdded, addAgentConfirm, addAgentExceedsChief, addAgentDoes, addAgentAsks
     case grantMailRead, grantMailDraft, grantMailSend, grantCalendarRead, grantCalendarWrite, grantClientsRead, grantClientsNote, grantDocumentsRead, grantDocumentsFile
 }
 
@@ -202,6 +202,7 @@ public extension L10n {
 
     static let uiEnglish: [UIKey: String] = [
         .addAgent: "Add an agent",
+        .addAgentMenu: "Add an Agent…",
         .addAgentLede: "Aux works alone until you add an agent. Each one gets only the access listed here.",
         .addAgentAdded: "Already added",
         .addAgentConfirm: "Add agent",
@@ -762,7 +763,9 @@ public extension L10n {
         .pauseAgent: "Pause %@",
         .agentPaused: "Paused",
         .worksWithAux: "Aux hands it work and gets back only the result.",
-        .worksWithTeam: "Mail, Calendar, Clients and Documents.",
+        .worksWithTeam: "Aux hands work to %@.",
+        .worksWithNone: "Add Mail, Calendar, Clients or Documents when you need them.",
+        .listAnd: "and",
         .keptChief: "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them.",
         .agentIdle: "Idle",
         .workTab: "Work",
@@ -929,6 +932,7 @@ public extension L10n {
     /// FR peers, key by key (Today). Missing keys fall back to EN.
     static let uiFrench: [UIKey: String] = [
         .addAgent: "Ajouter un agent",
+        .addAgentMenu: "Ajouter un agent…",
         .addAgentLede: "Aux travaille seul tant que vous n’ajoutez pas d’agent. Chacun ne reçoit que les accès indiqués ici.",
         .addAgentAdded: "Déjà ajouté",
         .addAgentConfirm: "Ajouter l’agent",
@@ -1641,7 +1645,9 @@ public extension L10n {
         .workTab: "Travail",
         .worksWith: "Travaille avec",
         .worksWithAux: "Aux lui confie du travail et ne reçoit que le résultat.",
-        .worksWithTeam: "Mail, Calendrier, Clients et Documents.",
+        .worksWithTeam: "Aux confie du travail à %@.",
+        .worksWithNone: "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin.",
+        .listAnd: "et",
         .workshop: "Atelier",
         .workshopEmpty: "Aucun outil créé pour l’instant. Un outil n’est créé qu’après votre approbation de son code source.",
         .yesterday: "Hier",

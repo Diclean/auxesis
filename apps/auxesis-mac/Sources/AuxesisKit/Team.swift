@@ -54,6 +54,19 @@ public struct TeamMember: Identifiable, Equatable, Hashable {
             .map { (member($0.id) ?? .custom($0.id)).named($0.displayName) }
     }
 
+    /// The chief's "Works with" line: the other agents that exist, by the
+    /// name the sidebar shows, or a neutral line when Aux works alone. Nil
+    /// until the daemon has listed its agents (as the Go menu's loading
+    /// state): the catalogue never stands in for agents that may not exist.
+    public static func worksWithLine(agents: [Agent], _ language: Language) -> String? {
+        guard !GoMenu.loading(agents: agents) else { return nil }
+        let names = roster(agents).filter { $0.role != .chief }.map(\.name)
+        guard let last = names.last else { return L10n.ui(.worksWithNone, language) }
+        let list = names.count == 1 ? last
+            : names.dropLast().joined(separator: ", ") + " " + L10n.ui(.listAnd, language) + " " + last
+        return L10n.uf(.worksWithTeam, language, list)
+    }
+
     /// Display name for any agent id (a non-team agent keeps its own name).
     public static func displayName(_ id: String) -> String {
         member(id)?.name ?? id

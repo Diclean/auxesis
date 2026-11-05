@@ -482,9 +482,11 @@ struct RulesFile {
     rules: Vec<Rule>,
 }
 
-/// Load the optional `[[rules]]` section from the main config file.
+/// Load the optional `[[rules]]` section from the main config file, opened
+/// once by [`open_config`]: a symlink, a FIFO, another user's file or anything
+/// but a regular file is an error at once, never a wait.
 pub fn load_rules(path: &Path) -> Result<Vec<Rule>, RulesError> {
-    let text = std::fs::read_to_string(path)?;
+    let text = open_config(path, false)?.read(Duration::ZERO)?;
     let file: RulesFile = toml::from_str(&text).map_err(|err| RulesError::Parse {
         path: path.display().to_string(),
         source: kernel_core::redact_toml_error(&err, "config.toml", &text),
@@ -1074,6 +1076,7 @@ mod tests {
             }
             assert!(load_or_create(&path).is_err() && bootstrap_config(&verified).is_err());
             assert!(load_or_create_verified(&verified).is_err(), "{kind}");
+            assert!(load_rules(&path).is_err(), "{kind}");
             let wait = Duration::from_millis(100);
             assert!(append_rule_waiting(&path, &rule, wait).is_err(), "{kind}");
             let left = std::fs::symlink_metadata(&path).unwrap();

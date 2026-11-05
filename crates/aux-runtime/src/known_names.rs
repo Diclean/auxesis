@@ -132,7 +132,7 @@ pub fn enabled_kinds(home: &Path) -> Result<Vec<String>, String> {
 /// The text of `home`'s config.toml, through the home's verified directory
 /// fd (`O_NOFOLLOW | O_NONBLOCK`, regular files only), never by path. A missing
 /// home or file is `NotFound`; nothing is created or registered.
-fn read_config(home: &Path) -> std::io::Result<String> {
+pub(crate) fn read_config(home: &Path) -> std::io::Result<String> {
     use kernel_core::config::MAX_CONFIG_BYTES;
     use std::io::Read;
     let home = kernel_core::SandboxHome::open_existing(home)?;

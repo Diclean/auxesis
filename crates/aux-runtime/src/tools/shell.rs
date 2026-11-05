@@ -1079,8 +1079,8 @@ fn sweep_leftovers_with(
 
 /// Why waiting stopped.
 enum Stop {
-    /// The direct child exited.
-    Exited(std::io::Result<std::process::ExitStatus>),
+    /// The direct child exited; it is not reaped yet.
+    Exited(std::io::Result<()>),
     /// The wall-clock timeout fired.
     TimedOut,
     /// The turn's cancellation token fired.
@@ -1121,13 +1121,52 @@ impl TreeReaper {
         }
     }
 
-    /// Wait for the direct child. The `Child` is owned here, so the borrow
-    /// lasts only as long as the returned future.
-    async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        match self.child.as_mut() {
-            Some(child) => child.wait().await,
+    /// Resolve once the direct child has exited, *without reaping it*: the
+    /// zombie keeps its pid reserved, and with it the process-group id, so
+    /// [`Self::end_group`] can signal the group with no chance of reaching a
+    /// group the kernel recycled.
+    async fn wait(&mut self) -> std::io::Result<()> {
+        match self.child.as_ref().and_then(|child| child.id()) {
+            Some(pid) => tokio::task::spawn_blocking(move || wait_exited_unreaped(pid as i32))
+                .await
+                .map_err(std::io::Error::other)?,
             None => std::future::pending().await,
         }
+    }
+
+    /// The command exited normally and is still unreaped. SIGKILL its whole
+    /// process group — every process it backgrounded with `&` is in it unless
+    /// it called `setsid()`/`setpgid()` — twice, so a member forking during
+    /// the first signal is caught. Then reap the root and wait, bounded by
+    /// `max_time`, until the group is empty. Returns the exit status and
+    /// whether the group was proven empty.
+    async fn end_group(
+        &mut self,
+        max_time: Duration,
+    ) -> std::io::Result<(std::process::ExitStatus, bool)> {
+        let Some(child) = self.child.as_mut() else {
+            return Err(std::io::Error::other(
+                "shell: the command was already reaped",
+            ));
+        };
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            for _ in 0..2 {
+                // SAFETY: `kill` is the documented libc signal call. The
+                // root is exited but unreaped, so its pid and pgid stay
+                // reserved: `-pid` can only name the command's own group.
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+                std::thread::yield_now();
+            }
+        }
+        let status = child.wait().await?;
+        let empty = match self.root {
+            Some(root) => wait_group_empty(root, max_time).await,
+            None => true,
+        };
+        Ok((status, empty))
     }
 
     /// Reap the killed child with a bounded grace period.
@@ -1168,6 +1207,63 @@ impl Drop for TreeReaper {
         }
         // `self.child` drops after the sweep above, so the group kill always
         // runs with the root still unreaped.
+    }
+}
+
+/// Block until `pid` (a child of this process) has exited, leaving it a
+/// zombie: `WNOWAIT` reports the exit without reaping.
+#[cfg(unix)]
+fn wait_exited_unreaped(pid: i32) -> std::io::Result<()> {
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `info` is a live, correctly sized `siginfo_t` the call
+        // writes into; it is never read here.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_exited_unreaped(_pid: i32) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Poll (signal 0 only) until no process is left in group `pgid`, at most
+/// `max_time`. Signal 0 delivers nothing, so probing after the root was
+/// reaped is harmless even if the id were reused.
+async fn wait_group_empty(pgid: i32, max_time: Duration) -> bool {
+    #[cfg(unix)]
+    {
+        let deadline = tokio::time::Instant::now() + max_time;
+        loop {
+            // SAFETY: signal 0 only checks whether the group has members.
+            let rc = unsafe { libc::kill(-pgid, 0) };
+            if rc != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pgid, max_time);
+        true
     }
 }
 
@@ -1341,8 +1437,13 @@ impl Tool for ShellTool {
         let mut is_error = false;
         match stop {
             Stop::Exited(result) => {
-                // Nothing a call started outlives it: kill
-                // what the exited root left behind, `sleep 60 &` included.
+                result?;
+                // Nothing a call started outlives it. First the command's
+                // whole process group, while the exited root still pins it:
+                // `sleep 60 &` and `( … ) &` die here every time, with no
+                // process-table race. Then the scan, as the net for what left
+                // the group (`setsid()`/`setpgid()`, double forks).
+                let (status, group_empty) = reaper.end_group(self.sweep_time).await?;
                 let sweep = child_pid.map_or(Sweep::Clean, |root| {
                     sweep_leftovers_with(
                         root as i32,
@@ -1354,14 +1455,23 @@ impl Tool for ShellTool {
                         self.sweep_time,
                     )
                 });
-                if matches!(sweep, Sweep::Clean) {
+                if group_empty && matches!(sweep, Sweep::Clean) {
                     reaper.disarm();
                 }
-                let status = result?;
                 let out = read_capture(&mut stdout_capture)?;
                 let err = read_capture(&mut stderr_capture)?;
                 push_capture(&mut content, "stdout", &out);
                 push_capture(&mut content, "stderr", &err);
+                if !group_empty {
+                    // Same rule as an incomplete sweep: never a plain
+                    // success, and the reaper stays armed.
+                    is_error = true;
+                    let note = format!(
+                        "[cleanup incomplete: the command's process group was not empty after {} ms]",
+                        self.sweep_time.as_millis()
+                    );
+                    push_section(&mut content, &note);
+                }
                 if let Sweep::Incomplete(survivors) = sweep {
                     // The direct child exited 0, but the tree is not proven
                     // clean: report it like a timeout, never as a plain
@@ -2295,22 +2405,96 @@ mod tests {
         assert_eq!(sweep, Sweep::Incomplete(0));
     }
 
+    /// A command that backgrounds a long sleeper and exits: the sleeper is
+    /// in the command's process group, so the group kill at call end takes it
+    /// with no race against the process table. It must be gone the moment the
+    /// call returns — not killed-but-unreaped, not "soon".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_backgrounded_child_is_gone_when_the_call_returns() {
+        let dir = tempdir().unwrap();
+        let output = test_tool(Duration::from_secs(10))
+            .run(
+                &json!({"command": "sleep 300 & echo $! > bg.pid; echo hi"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
+        let pid = raw.trim().parse::<i32>().unwrap();
+        // SAFETY: signal 0 only probes a pid this test's command reported.
+        let rc = unsafe { libc::kill(pid, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        if rc == 0 {
+            // SAFETY: best-effort SIGKILL so a failure cannot leak the sleeper.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(
+            rc != 0 && errno == Some(libc::ESRCH),
+            "backgrounded pid {pid} still existed when the call returned"
+        );
+        assert!(!output.is_error, "{}", head(&output.content, 400));
+    }
+
+    /// Leaves the command's group and session *before* the command exits
+    /// (`setsid()`, then a ready file the command waits for), so the group
+    /// kill cannot reach it: only the marker scan can.
+    #[cfg(target_os = "macos")]
+    const SETSID_ESCAPEE: &str = "/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); \
+         open(my $r, q(>), q(.ready)) or exit 1; close $r; sleep 300' \
+         </dev/null >/dev/null 2>&1 & echo $! > bg.pid; i=0; \
+         while [ ! -f .ready ]; do i=$((i + 1)); [ $i -gt 1000 ] && exit 1; \
+         sleep 0.01; done; echo hi";
+
+    /// The scan stays the net for what the group kill cannot reach: a
+    /// `setsid()` escapee still holding the call's marker is reaped.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_setsid_escapee_is_still_reaped_by_the_scan() {
+        let dir = tempdir().unwrap();
+        let output = test_tool(Duration::from_secs(10))
+            .run(&json!({"command": SETSID_ESCAPEE}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
+        let pid = raw.trim().parse::<i32>().unwrap();
+        // It was killed during the call; launchd reaps it shortly after.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut gone = false;
+        while std::time::Instant::now() < deadline {
+            // SAFETY: signal 0 only probes a pid this test's command reported.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !gone {
+            // SAFETY: best-effort SIGKILL so a failure cannot leak the escapee.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(gone, "setsid escapee {pid} survived the call");
+        assert!(!output.is_error, "{}", head(&output.content, 400));
+    }
+
     /// SHELL-CLEANUP-1: a capped-out sweep must not report the direct child's
     /// success, and the reaper must stay armed. The pass cap is forced to
-    /// zero, so only the still-armed reaper's `Drop` can kill the backgrounded
-    /// sleeper: a disarmed reaper leaves it alive. Production caps are
-    /// unchanged.
+    /// zero, so only the still-armed reaper's `Drop` can kill a leftover the
+    /// group kill does not reach. On macOS that is a `setsid()` escapee, so a
+    /// disarmed reaper leaves it alive; elsewhere a plain sleeper, which the
+    /// group kill now also takes. Production caps are unchanged.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_exhausted_leftover_sweep_is_reported_and_keeps_the_reaper_armed() {
         let dir = tempdir().unwrap();
         let mut tool = test_tool(Duration::from_secs(10));
         tool.sweep_passes = 0;
+        #[cfg(target_os = "macos")]
+        let command = SETSID_ESCAPEE;
+        #[cfg(not(target_os = "macos"))]
+        let command = "sleep 300 & echo $! > bg.pid; echo hi";
         let output = tool
-            .run(
-                &json!({"command": "sleep 300 & echo $! > bg.pid; echo hi"}),
-                &ctx(dir.path()),
-            )
+            .run(&json!({ "command": command }), &ctx(dir.path()))
             .await
             .unwrap();
 

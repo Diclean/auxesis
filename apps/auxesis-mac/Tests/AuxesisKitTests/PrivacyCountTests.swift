@@ -94,6 +94,51 @@ import XCTest
         other.stop()
     }
 
+    /// A daemon that has not answered yet is not a record that could not be
+    /// read: the footer waits (no line) instead of saying the count is
+    /// unavailable on a first launch while the service is still starting.
+    func testAFirstConnectFailureWaitsInsteadOfSayingUnavailable() {
+        let transport = FakeTransport()
+        transport.healthResult = .failure(AuxdError.transport("connection refused"))
+        let gate = Gate()
+        let store = Store(transport: transport, sleeper: { _ in await gate.wait() })
+        store.start()
+        XCTAssertTrue(waitUntil { store.offlineCause != nil }, "the first attempt failed")
+        XCTAssertEqual(store.privacyRecordRead, .loading, "nothing was read yet: no number is not an unavailable count")
+        let footer = SidebarText.footer(
+            read: store.privacyRecordRead, receipts: store.receiptLog.receipts,
+            delegations: [], now: Date(), language: .en
+        )
+        XCTAssertNil(footer.requests)
+        store.stop()
+        gate.open()
+    }
+
+    /// The socket can drop after a good read (sleep/wake, a daemon restart).
+    /// The count was read, so the footer keeps the number instead of replacing
+    /// it with "unavailable" while the reconnect runs.
+    func testAConnectionDropKeepsTheCountTheAppAlreadyRead() {
+        let day = TodayPresentation.day(Date())
+        let transport = FakeTransport()
+        transport.receiptsResult = .success([
+            Receipt(runId: "run-a", agent: "aux", started: "\(day) 09:00:00", hostsContacted: ["api.example.test"])
+        ])
+        let gate = Gate()
+        let store = Store(transport: transport, sleeper: { _ in await gate.wait() })
+        store.start()
+        XCTAssertTrue(waitUntil { store.privacyRecordRead == .loaded && store.receiptLog.receipts.count == 1 }, "the record was read")
+        transport.healthResult = .failure(AuxdError.transport("connection refused"))
+        store.restart()
+        XCTAssertTrue(waitUntil { store.offlineCause != nil }, "the reconnect failed")
+        XCTAssertEqual(store.privacyRecordRead, .loaded, "a dropped socket does not unread the record")
+        XCTAssertEqual(
+            PrivacyRecordCounter.state(read: store.privacyRecordRead, receipts: store.receiptLog.receipts, now: Date()),
+            .count(1)
+        )
+        store.stop()
+        gate.open()
+    }
+
     /// The per-agent read (thread selection) must not say the count is
     /// unavailable: only the snapshot read decides that.
     func testAFailedAgentReadKeepsTheKnownCount() {

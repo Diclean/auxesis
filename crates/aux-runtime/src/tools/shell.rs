@@ -2436,6 +2436,78 @@ mod tests {
         assert_eq!(sweep, Sweep::Incomplete(0));
     }
 
+    /// A real zombie: a child of this test process that has exited and stays
+    /// unreaped until drop. Its parent is alive and is not launchd, like most
+    /// zombies on a busy machine.
+    #[cfg(unix)]
+    struct HeldZombie(std::process::Child);
+
+    #[cfg(unix)]
+    impl HeldZombie {
+        fn new() -> Self {
+            let child = std::process::Command::new("true")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            wait_exited_unreaped(child.id() as i32).unwrap();
+            Self(child)
+        }
+
+        fn pid(&self) -> i32 {
+            self.0.id() as i32
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for HeldZombie {
+        fn drop(&mut self) {
+            let _ = self.0.wait();
+        }
+    }
+
+    /// A zombie anywhere on the machine is dead and cannot hide a process of
+    /// the call. The sweep must not take one (here this test's own unreaped
+    /// child) for a child of the call not yet visible: a pass that finds
+    /// nothing is clean.
+    #[cfg(unix)]
+    #[test]
+    fn an_unrelated_zombie_does_not_keep_the_sweep_going() {
+        let zombie = HeldZombie::new();
+        assert!(all_pids().contains(&zombie.pid()), "the zombie is listed");
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        // No session has this id and no process holds this marker.
+        let sweep = sweep_leftovers(i32::MAX, &marker);
+        drop(zombie);
+        assert_eq!(
+            sweep,
+            Sweep::Clean,
+            "an unrelated zombie kept the sweep going"
+        );
+    }
+
+    /// The 2026-11-05 macOS CI failures end to end: with a zombie anywhere on
+    /// the machine, a command that exited 0 came back as an error. It must be
+    /// a plain success, with no cleanup note.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_zombie_elsewhere_does_not_fail_a_command_that_exited_zero() {
+        let zombie = HeldZombie::new();
+        let dir = tempdir().unwrap();
+        let out = test_tool(DEFAULT_TIMEOUT)
+            .run(&json!({"command": "echo hi"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        drop(zombie);
+        assert!(
+            !out.is_error && !out.content.contains("cleanup incomplete"),
+            "content: {}",
+            out.content
+        );
+        assert!(out.content.contains("hi"), "content: {}", out.content);
+    }
+
     /// A command that backgrounds a long sleeper and exits: the sleeper is
     /// in the command's process group, so the group kill at call end takes it
     /// with no race against the process table. It must be gone the moment the

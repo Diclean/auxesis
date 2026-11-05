@@ -1107,6 +1107,16 @@ CREATE TABLE IF NOT EXISTS usage_reconciled (
 );
 "#;
 
+/// v41: when each reconcile claim was made and when a live settle consumed
+/// it, both from the store's clock (UTC), so a consumed claim is pruned once
+/// past its retention (see `Store::prune_reconciled_claims`). Rows from
+/// before v41 are stamped as claimed at the upgrade and stay unconsumed.
+pub(crate) const MIGRATION_V41_CLAIM_AGE: &str = r#"
+ALTER TABLE usage_reconciled ADD COLUMN claimed_at TEXT;
+ALTER TABLE usage_reconciled ADD COLUMN consumed_at TEXT;
+UPDATE usage_reconciled SET claimed_at = datetime('now') WHERE claimed_at IS NULL;
+"#;
+
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
 ///
 /// A store created by this build has a unique `idx_mcp_tools_wire` and this is
@@ -1503,6 +1513,9 @@ impl Store {
             // The reconcile's claims on held rows. Purely additive DDL.
             self.apply_migration_with_version(MIGRATION_V40_RECONCILED, 40)?;
         }
+        if version < 41 {
+            self.apply_v41()?;
+        }
         // v15 is unreleased, but a store written by a pre-release draft may
         // already exist with the old non-unique wire index and duplicate wire
         // names. Repair it in place (idempotent: the fast path is a pragma
@@ -1724,6 +1737,29 @@ impl Store {
             "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             [39_i64.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply v41: the claim-age columns, re-checked under the write lock
+    /// because the `ALTER` is not idempotent.
+    fn apply_v41(&mut self) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('usage_reconciled') WHERE name = 'claimed_at'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has == 0 {
+            tx.execute_batch(MIGRATION_V41_CLAIM_AGE)?;
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [41_i64.to_string()],
         )?;
         tx.commit()?;
         Ok(())
@@ -2046,6 +2082,43 @@ mod tests {
         assert_eq!(parties[0].display_name, "Camille Exemple");
         assert_eq!(parties[0].time_zone, None);
         // Reopening is idempotent: no ALTER runs twice.
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().schema_version().unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn v40_store_upgrades_to_v41_and_stamps_its_claims() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        {
+            let store = Store::open(&path).unwrap();
+            // A v40 claim: no claim nor consume time.
+            store
+                .conn
+                .execute_batch(
+                    "ALTER TABLE usage_reconciled DROP COLUMN claimed_at;
+                     ALTER TABLE usage_reconciled DROP COLUMN consumed_at;
+                     INSERT INTO usage_reconciled VALUES (7, 60, 9, 0);
+                     UPDATE meta SET value = '40' WHERE key = 'schema_version';",
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        let stamped: (i64, bool) = store
+            .conn
+            .query_row(
+                "SELECT tokens_in, claimed_at IS NOT NULL AND consumed_at IS NULL
+                 FROM usage_reconciled WHERE reservation_id = 7",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stamped, (60, true), "kept as an unconsumed claim");
+        assert_eq!(store.prune_reconciled_claims().unwrap(), 0);
         drop(store);
         assert_eq!(
             Store::open(&path).unwrap().schema_version().unwrap(),

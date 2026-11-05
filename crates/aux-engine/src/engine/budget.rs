@@ -2011,16 +2011,17 @@ mod tests {
         std::thread::spawn(move || settle_jobs(&queue))
             .join()
             .unwrap();
-        let claim = "SELECT tokens_in, tokens_out FROM usage_reconciled WHERE reservation_id = ?1";
-        let claimed: (i64, i64) = raw
+        let claim = "SELECT tokens_in, tokens_out, consumed_at IS NOT NULL
+            FROM usage_reconciled WHERE reservation_id = ?1";
+        let claimed: (i64, i64, bool) = raw
             .query_row(claim, [reservation.id], |row| {
-                Ok((row.get(0)?, row.get(1)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .unwrap();
         assert_eq!(
             claimed,
-            (90, 20),
-            "the reconcile claimed it, the job topped it"
+            (60, 9, true),
+            "the reconcile claimed it at the reserve, the job topped and consumed it"
         );
         let totals = settled(&store);
         assert_eq!(

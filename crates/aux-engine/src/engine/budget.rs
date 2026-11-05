@@ -372,7 +372,7 @@ pub struct HeldReservation<'k, S: SettleStore> {
 impl<'k, S: SettleStore> HeldReservation<'k, S> {
     /// Hold `reservation`, taken in `store`, until it is settled.
     pub fn new(store: S, reservation: Reservation) -> Self {
-        settler(); // started now, so no drop waits for it
+        SETTLER.get_or_init(Settler::start); // started now, so no drop waits for it
         Self {
             store,
             reservation,

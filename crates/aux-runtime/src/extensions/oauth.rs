@@ -994,6 +994,15 @@ mod tests {
         );
     }
 
+    /// RFC 7636 Appendix B; it also pins the challenge across a sha2 upgrade.
+    #[test]
+    fn pkce_rfc_7636_appendix_b_vector() {
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
     #[test]
     fn an_http_token_endpoint_is_refused_outside_the_test_seam() {
         let dir = tempfile::tempdir().unwrap();

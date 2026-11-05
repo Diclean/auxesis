@@ -4303,8 +4303,8 @@
       "fr" : "Arrêter"
     },
     "stoppedBody" : {
-      "en" : "All five agents are paused. Nothing runs or sends until you press Resume.",
-      "fr" : "Les cinq agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre."
+      "en" : "All agents are paused. Nothing runs or sends until you press Resume.",
+      "fr" : "Tous les agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre."
     },
     "stoppedCancelledMany" : {
       "en" : "%d pending sends were cancelled.",

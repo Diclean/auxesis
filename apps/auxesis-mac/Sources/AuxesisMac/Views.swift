@@ -104,7 +104,7 @@ struct WaitingView: View {
                 : agents.count == 1 ? copy.f(.waitingLedeOneAgent, open.count)
                 : copy.f(.waitingLede, open.count, agents.count)
         ) {
-            ForEach(TeamMember.all.filter { member in shown.contains { $0.agent == member.id } }) { member in
+            ForEach(shell.roster.filter { member in shown.contains { $0.agent == member.id } }) { member in
                 HStack(spacing: 8) {
                     AgentTile(member: member, size: .sm)
                     Text(member.name).font(.hk(Theme.Text.ui, Theme.Weight.strong))
@@ -179,7 +179,7 @@ struct LedgerView: View {
                 Spacer()
                 Picker(copy(.colAgent), selection: $agent) {
                     Text(copy(.allAgents)).tag("")
-                    ForEach(TeamMember.all) { member in
+                    ForEach(shell.roster) { member in
                         Text(member.name).tag(member.id)
                     }
                 }

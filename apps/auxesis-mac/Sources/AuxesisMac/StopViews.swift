@@ -87,7 +87,7 @@ private struct StopReportSheet: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(copy.grants).font(.hk(Theme.Text.ui, Theme.Weight.semibold)).foregroundStyle(palette.ink.color)
                         Text(copy.grantsRule).font(.ui).foregroundStyle(palette.ink2.color)
-                        ForEach(TeamMember.all) { member in
+                        ForEach(shell.roster) { member in
                             HStack {
                                 Text(member.name).font(.ui).foregroundStyle(palette.ink.color)
                             }

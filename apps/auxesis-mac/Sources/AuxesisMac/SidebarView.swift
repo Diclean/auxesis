@@ -214,7 +214,7 @@ struct AgentSelectionList: View {
                 EmptyRouteView(copyKey: .runningEmpty)
             } else {
                 List(selection: $selected) {
-                    ForEach(TeamMember.all.filter { !workingOnly || shell.workingAgents.contains($0.id) }) { member in
+                    ForEach(shell.roster.filter { !workingOnly || shell.workingAgents.contains($0.id) }) { member in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Label(member.name, systemImage: "person")

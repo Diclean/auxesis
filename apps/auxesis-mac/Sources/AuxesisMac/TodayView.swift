@@ -26,7 +26,7 @@ struct TodayView: View {
         let copy = Copy(language: language)
         let selected = TodayQueueModel.resolvedSelection(selection,
             waitingIDs: shell.waitingApprovals.map(\.id), ledgerIDs: shell.ledger.value?.map(\.id) ?? [],
-            agentIDs: TeamMember.all.filter { shell.workingAgents.contains($0.id) }.map(\.id))
+            agentIDs: shell.roster.filter { shell.workingAgents.contains($0.id) }.map(\.id))
         ViewPage(title: copy(.today), lede: lede(copy)) {
             selectionDetail(copy, selected: selected)
             switch shell.today {

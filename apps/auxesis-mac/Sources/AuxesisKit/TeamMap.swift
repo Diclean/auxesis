@@ -73,9 +73,9 @@ public enum TeamMap {
         text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
     }
 
-    /// Aux, the four built-ins, then every other agent by name.
+    /// The agents that exist: Aux, the built-ins, then every other agent by name.
     public static func members(agents: [Agent]) -> [TeamMember] {
-        TeamMember.all + agents.map(\.name).filter { TeamMember.member($0) == nil }.sorted().map(TeamMember.custom)
+        TeamMember.roster(agents)
     }
 
     public static func today(agent: String, delegations: [Delegation], now: Date, calendar: Calendar = .current) -> TodayCounts {
@@ -137,7 +137,14 @@ extension TeamMember {
     }
 }
 
+public extension Store {
+    /// The agents that exist, as the lists show them (see `TeamMember.roster`).
+    var roster: [TeamMember] { TeamMember.roster(agents) }
+}
+
 public extension ShellModel {
+    var roster: [TeamMember] { store.roster }
+
     func teamNodes(now: Date = Date()) -> [TeamNode] {
         TeamMap.members(agents: store.agents).map { member in
             let record = store.agents.first { $0.name == member.id }

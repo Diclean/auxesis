@@ -151,7 +151,7 @@ struct PreviewSheet: View {
         return HStack(spacing: 6) {
             Text(parts.first ?? "").font(.ui).foregroundStyle(palette.ink.color)
             Picker(sentence, selection: Binding(get: { store.pluginAgent }, set: { agent in Task { await store.choosePluginAgent(agent) } })) {
-                ForEach(TeamMember.all) { Text($0.name).tag($0.id) }
+                ForEach(store.roster) { Text($0.name).tag($0.id) }
             }
             .labelsHidden().pickerStyle(.menu).fixedSize()
             .disabled(store.pluginPreviewCatalogID == nil || store.pluginPreviewAgent == nil)

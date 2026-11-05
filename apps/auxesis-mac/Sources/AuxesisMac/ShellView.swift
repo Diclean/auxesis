@@ -248,7 +248,7 @@ private struct TodayQueueList: View {
         let copy = Copy(language: language)
         let approvals = shell.waitingApprovals
         let entries = SinceYouLeftPresentation.previewEntries(shell.ledger.value ?? [])
-        let running = TeamMember.all.filter { shell.workingAgents.contains($0.id) }
+        let running = shell.roster.filter { shell.workingAgents.contains($0.id) }
         let groups = TodayQueueModel.groups(waiting: approvals.count, dueToday: 0,
                                              sinceYouLeft: nil, runningNow: running.count)
         List {

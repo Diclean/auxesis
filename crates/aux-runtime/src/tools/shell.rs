@@ -3699,13 +3699,13 @@ await(q(bg.pid));
         let mut seen: HashSet<_> = (0..MAX_SEEN_PIDS as i32).map(|p| at(p, p as u64)).collect();
         let same = |pid: i32| Some((1, me, pid as u64));
         let described = |_: i32| Visibility::Described;
-        assert!(!forget_gone(&mut seen, -1, &same, &described));
+        assert!(forget_gone(&mut seen, -1, &same, &described).is_none());
         assert_eq!(seen.len(), MAX_SEEN_PIDS);
         let zombie = |_: i32| Visibility::Zombie {
             orphan: true,
             parent: 1,
         };
-        assert!(!forget_gone(&mut seen, -1, &|_| None, &zombie));
+        assert!(forget_gone(&mut seen, -1, &|_| None, &zombie).is_none());
         assert!(seen.is_empty());
     }
 

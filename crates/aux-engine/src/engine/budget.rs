@@ -9,7 +9,9 @@ use kernel_core::budget::{
     UsageActual, UsageKind, UsageTotals,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 fn unit_for(estimated: bool) -> &'static str {
@@ -131,6 +133,8 @@ enum Work {
     Settle(Box<SettleJob>),
     /// A store whose abandoned held rows it settles, now and every minute.
     Watch(Weak<Mutex<Store>>),
+    /// Nothing to do: wakes the worker so it sees the stop flag.
+    Wake,
 }
 
 struct SettleJob {
@@ -151,24 +155,95 @@ const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } els
 /// no job is ever turned away. Each job keeps its row held until it
 /// settles, and the store refuses new reservations past a bound on held
 /// rows, so a store that stops settling cannot grow this queue without end.
-fn settler() -> &'static mpsc::Sender<Work> {
-    static SETTLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
-    SETTLER.get_or_init(|| {
-        let (work, queue) = mpsc::channel();
-        let worker = std::thread::Builder::new().name("budget-settle".to_string());
-        if let Err(err) = worker.spawn(move || settle_jobs(&queue)) {
-            tracing::error!(error = %err, "no settlement worker: dropped calls stay held");
-        }
-        work
-    })
+struct Settler {
+    work: mpsc::Sender<Work>,
+    stop: Arc<AtomicBool>,
+    worker: Mutex<Option<Running>>,
 }
 
-/// Hand `work` to the worker. This never blocks; it fails only with no
-/// worker, and the row then stays held for a reconcile.
-fn hand_over(work: Work) {
-    if settler().send(work).is_err() {
-        tracing::error!("no settlement worker: the call stays held for a reconcile");
+/// The worker thread, and the signal it sends as it ends.
+struct Running {
+    thread: JoinHandle<()>,
+    done: mpsc::Receiver<()>,
+}
+
+impl Settler {
+    fn start() -> Self {
+        let (work, queue) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (done_tx, done) = mpsc::channel();
+        let flag = Arc::clone(&stop);
+        let spawned = std::thread::Builder::new()
+            .name("budget-settle".to_string())
+            .spawn(move || {
+                settle_jobs(&queue, &flag);
+                let _ = done_tx.send(());
+            });
+        let worker = match spawned {
+            Ok(thread) => Some(Running { thread, done }),
+            Err(err) => {
+                tracing::error!(error = %err, "no settlement worker: dropped calls stay held");
+                None
+            }
+        };
+        Self {
+            work,
+            stop,
+            worker: Mutex::new(worker),
+        }
     }
+
+    /// Hand `work` to the worker. This never blocks; it fails only with no
+    /// worker, and the row then stays held for a reconcile.
+    fn send(&self, work: Work) {
+        if self.work.send(work).is_err() {
+            tracing::error!("no settlement worker: the call stays held for a reconcile");
+        }
+    }
+
+    /// Tell the worker to stop, and wait up to `bound` for it to end. True
+    /// once it has ended: no statement of its is then in flight. A job it
+    /// still owes keeps its row held; the next start settles it.
+    fn stop(&self, bound: Duration) -> bool {
+        self.stop.store(true, AtomicOrdering::Release);
+        self.send_quietly(Work::Wake);
+        let mut worker = kernel_core::lock_recover(&self.worker);
+        let Some(running) = worker.take() else {
+            return true;
+        };
+        match running.done.recv_timeout(bound) {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                tracing::warn!("the settlement worker is still mid-statement; not waited for");
+                *worker = Some(running);
+                false
+            }
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = running.thread.join();
+                true
+            }
+        }
+    }
+
+    fn send_quietly(&self, work: Work) {
+        let _ = self.work.send(work);
+    }
+}
+
+static SETTLER: OnceLock<Settler> = OnceLock::new();
+
+/// Hand `work` to the process-wide worker, started on first use.
+fn hand_over(work: Work) {
+    SETTLER.get_or_init(Settler::start).send(work);
+}
+
+/// Stop the process-wide settlement worker before the process exits, and
+/// wait up to `bound` for it: a retry mid-statement when SQLCipher's exit hook
+/// frees its memory is a use-after-free. True once no statement is in
+/// flight (also when the worker never started). A reservation still unsettled
+/// stays held, and the next start's reconcile settles it. Calls after this
+/// are held for that reconcile, not settled.
+pub fn stop_settle_worker(bound: Duration) -> bool {
+    SETTLER.get().is_none_or(|settler| settler.stop(bound))
 }
 
 /// Settle, now and every minute while this process runs, the held
@@ -181,7 +256,8 @@ pub fn watch_held_reservations(store: &Arc<Mutex<Store>>) {
 /// A job the worker owes: when it is next due, and the wait after that.
 type Owed = (SettleJob, Instant, Duration);
 
-fn settle_jobs(queue: &mpsc::Receiver<Work>) {
+fn settle_jobs(queue: &mpsc::Receiver<Work>, stop: &AtomicBool) {
+    let stopped = || stop.load(AtomicOrdering::Acquire);
     let mut owed: Vec<Owed> = Vec::new();
     let mut watched: Vec<Weak<Mutex<Store>>> = Vec::new();
     let mut reconcile_at = Instant::now();
@@ -200,12 +276,18 @@ fn settle_jobs(queue: &mpsc::Receiver<Work>) {
                 watched.push(store);
                 reconcile_at = Instant::now();
             }
+            Ok(Work::Wake) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
+        // Checked after every wait and before every try, so no statement
+        // starts once a stop is asked for.
+        if stopped() {
+            return;
+        }
         let now = Instant::now();
         owed.retain_mut(|(job, at, wait)| {
-            if *at > now {
+            if *at > now || stopped() {
                 return true;
             }
             if try_settle(job) {
@@ -215,6 +297,9 @@ fn settle_jobs(queue: &mpsc::Receiver<Work>) {
             *wait = (*wait * 2).min(RETRY_CAP);
             true
         });
+        if stopped() {
+            return;
+        }
         if !watched.is_empty() && now >= reconcile_at {
             watched.retain(|store| match store.upgrade() {
                 Some(store) => {
@@ -1959,6 +2044,59 @@ mod tests {
         );
     }
 
+    /// A worker of its own (the process-wide one must outlive the other
+    /// tests), retrying a job against a store that refuses every settle.
+    #[test]
+    fn stop_ends_a_worker_mid_retry_runs_no_more_sql_and_keeps_the_row_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        let raw = aux_store::open_keyed(&path).unwrap();
+        raw.execute_batch(
+            "CREATE TABLE tries(n);
+             CREATE TRIGGER tried AFTER UPDATE ON usage_reservations
+             BEGIN INSERT INTO tries VALUES (1); END;
+             CREATE TRIGGER refuse BEFORE DELETE ON usage_reservations
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .unwrap();
+        let tries = || raw.query_row("SELECT COUNT(*) FROM tries", [], |row| row.get::<_, i64>(0));
+        let held = || {
+            let held = "SELECT COUNT(*) FROM usage_reservations WHERE id = ?1";
+            raw.query_row(held, [reservation.id], |row| row.get::<_, i64>(0))
+        };
+        let settler = Settler::start();
+        settler.send(Work::Settle(Box::new(SettleJob {
+            store: Arc::clone(&store),
+            reservation: reservation.clone(),
+            actual: UsageActual::default(),
+        })));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while tries().unwrap() < 5 {
+            assert!(Instant::now() < deadline, "the worker never retried");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let asked = Instant::now();
+        assert!(settler.stop(Duration::from_secs(2)), "the worker ended");
+        assert!(asked.elapsed() < Duration::from_secs(2), "within the bound");
+        let after_stop = tries().unwrap();
+        std::thread::sleep(Duration::from_millis(100)); // 25+ retries' worth
+        assert_eq!(tries().unwrap(), after_stop, "no SQL runs after stop");
+        assert_eq!(held().unwrap(), 1, "the row is still held");
+    }
+
+    #[test]
+    fn stop_wakes_an_idle_worker_and_a_second_stop_returns_at_once() {
+        let settler = Settler::start();
+        let asked = Instant::now();
+        assert!(settler.stop(Duration::from_secs(2)));
+        assert!(asked.elapsed() < Duration::from_secs(2));
+        assert!(settler.stop(Duration::from_secs(2)));
+    }
+
     #[test]
     fn a_watched_store_settles_an_abandoned_held_row_without_a_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -2008,7 +2146,7 @@ mod tests {
         work.send(job()).unwrap();
         work.send(job()).unwrap();
         drop(work);
-        std::thread::spawn(move || settle_jobs(&queue))
+        std::thread::spawn(move || settle_jobs(&queue, &AtomicBool::new(false)))
             .join()
             .unwrap();
         let claim = "SELECT tokens_in, tokens_out, consumed_at IS NOT NULL

@@ -39,6 +39,11 @@ use tracing_subscriber::EnvFilter;
 /// uninstall` / `launchctl bootout` / Ctrl-C are never blocked by a run.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// How long shutdown waits for the budget settle worker to end. A retry
+/// mid-statement when the process exits is a use-after-free in SQLCipher's
+/// exit hook; a reservation it leaves unsettled stays held for the next start.
+const SETTLE_STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[derive(Debug, Parser)]
 #[command(name = "auxd", version, about = "Auxesis daemon")]
 struct Args {}
@@ -79,6 +84,11 @@ fn main() -> ExitCode {
         // Never await a blocking job on shutdown: give the runtime a short
         // grace, then abandon it and let the process exit.
         runtime.shutdown_timeout(SHUTDOWN_GRACE);
+        // After the runtime, so a call it abandoned has handed over its
+        // reservation; no settle statement is in flight at exit.
+        if !aux_engine::stop_settle_worker(SETTLE_STOP_BOUND) {
+            eprintln!("auxd: the budget settle worker did not stop in time");
+        }
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,

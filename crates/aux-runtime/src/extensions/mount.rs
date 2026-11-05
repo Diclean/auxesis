@@ -93,9 +93,11 @@ struct PrivacyFile {
 /// The live privacy mode of `home`, re-read on every call.
 ///
 /// A config that cannot be read or parsed is [`PrivacyMode::Private`], so a
-/// broken file fails toward refusing the mount.
+/// broken file fails toward refusing the mount. config.toml is opened once
+/// and never waited on: a FIFO, a symlink, a directory or another user's file
+/// is refused at once, and so is Private too.
 pub fn current_mode(home: &Path) -> kernel_core::privacy::PrivacyMode {
-    let read = std::fs::read_to_string(home.join("config.toml"))
+    let read = crate::known_names::read_config(home)
         .ok()
         .and_then(|text| toml::from_str::<PrivacyFile>(&text).ok());
     read.map(|file| file.privacy.mode)
@@ -808,6 +810,43 @@ mod tests {
             format!("[privacy]\nmode = \"{mode}\"\n"),
         )
         .unwrap();
+    }
+
+    /// Any config.toml that cannot be read safely, a FIFO above all, gives
+    /// Private (the most restrictive mode) at once and never blocks.
+    #[cfg(unix)]
+    #[test]
+    fn a_special_config_file_gives_private_at_once_and_never_blocks() {
+        use kernel_core::privacy::PrivacyMode;
+        let home = tempfile::tempdir().unwrap();
+        let (home, config) = (home.path().to_path_buf(), home.path().join("config.toml"));
+        let open = home.join("open.toml");
+        std::fs::write(&open, "[privacy]\nmode = \"open\"\n").unwrap();
+        set_mode(&home, "open");
+        assert_eq!(current_mode(&home), PrivacyMode::Open);
+        std::fs::remove_file(&config).unwrap();
+        for kind in ["fifo", "symlink", "directory"] {
+            match kind {
+                "fifo" => {
+                    let made = std::process::Command::new("mkfifo").arg(&config).status();
+                    assert!(made.unwrap().success());
+                }
+                "symlink" => std::os::unix::fs::symlink(&open, &config).unwrap(),
+                _ => std::fs::create_dir(&config).unwrap(),
+            }
+            let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || sent.send(current_mode(&moved)));
+            let mode = got.recv_timeout(Duration::from_secs(10));
+            assert_eq!(
+                mode.expect("current_mode blocked"),
+                PrivacyMode::Private,
+                "{kind}"
+            );
+            std::fs::remove_file(&config)
+                .or_else(|_| std::fs::remove_dir(&config))
+                .unwrap();
+        }
+        assert_eq!(current_mode(&home), PrivacyMode::Private, "no config");
     }
 
     #[test]

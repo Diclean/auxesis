@@ -164,10 +164,27 @@ jobs:
           date; xcode-select -p
       - name: Clippy
         run: scripts/ci-sandbox-env.sh cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo-nextest 0.9.150 (official release, pinned by checksum)
+        # A prebuilt binary, no compile: the tarball must match this SHA-256,
+        # and check-no-keychain.sh checks the binary hash again before it runs.
+        env:
+          NEXTEST_URL: https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-universal-apple-darwin.tar.gz
+          NEXTEST_TGZ_SHA256: 82a759b4d218d38359424196ab244c470e8f7c7d149c814fbbeef4d67c3c301a
+        run: |
+          tgz="$RUNNER_TEMP/cargo-nextest.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$tgz" "$NEXTEST_URL"
+          echo "$NEXTEST_TGZ_SHA256  $tgz" | shasum -a 256 -c -
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p "$bin"
+          tar -xzf "$tgz" -C "$bin" cargo-nextest
+          rm -f "$tgz"
+          "$bin/cargo-nextest" nextest --version
       - name: Tests (sandboxed, no Keychain)
         # The workspace suite under a scratch HOME with a fake `security` on
-        # PATH: a test that reaches the Keychain fails the step.
-        run: scripts/check-no-keychain.sh --locked
+        # PATH: a test that reaches the Keychain fails the step. --nextest runs
+        # test binaries in parallel with a fixed config written by the script
+        # (no retries, no fail-fast), then the doctests with cargo test --doc.
+        run: scripts/check-no-keychain.sh --nextest --locked
 
   swift:
     needs: changes

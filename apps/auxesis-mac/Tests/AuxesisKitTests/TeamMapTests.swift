@@ -28,9 +28,9 @@ import Testing
         Agent(id: name, name: name, hue: 0, glyph: "", state: state, status: "", threadKey: name)
     }
 
-    func testNodeOrderIsAuxThenTheFourThenCustomAgentsByName() {
+    func testNodeOrderIsAuxThenTheBuiltInsThatExistThenCustomAgentsByName() {
         let members = TeamMap.members(agents: [agent("zeta"), agent("mail"), agent("alpha"), agent("aux")])
-        XCTAssertEqual(members.map(\.id), ["aux", "mail", "calendar", "clients", "documents", "alpha", "zeta"])
+        XCTAssertEqual(members.map(\.id), ["aux", "mail", "alpha", "zeta"], "an agent that does not exist gets no node")
     }
 
     func testIdleWorkingNeedsYouAndStoppedStates() {

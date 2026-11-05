@@ -91,9 +91,13 @@ struct ContactsSection {
 /// so an explicit `sources = ["file"]` cannot turn the CRM off. A config that
 /// does not parse, or that names an unknown kind, is an error: the caller mounts
 /// nothing. The error never quotes the config's contents.
+///
+/// config.toml is opened once, as the app's config loader opens it: never
+/// following a symlink nor waiting on a FIFO, checked on that descriptor (a
+/// regular file this user owns, at most `MAX_CONFIG_BYTES`) and read from it.
 pub fn enabled_kinds(home: &Path) -> Result<Vec<String>, String> {
     let default = || vec!["file".to_string(), "crm".to_string()];
-    let text = match std::fs::read_to_string(kernel_core::config_path(home)) {
+    let text = match read_config(home) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(default()),
         Err(_) => return Err("config.toml cannot be read".to_string()),
@@ -123,6 +127,36 @@ pub fn enabled_kinds(home: &Path) -> Result<Vec<String>, String> {
         kinds.push("crm".to_string());
     }
     Ok(kinds)
+}
+
+/// The text of `home`'s config.toml, through the home's verified directory
+/// fd (`O_NOFOLLOW | O_NONBLOCK`, regular files only), never by path. A missing
+/// home or file is `NotFound`; nothing is created or registered.
+pub(crate) fn read_config(home: &Path) -> std::io::Result<String> {
+    use kernel_core::config::MAX_CONFIG_BYTES;
+    use std::io::Read;
+    let home = kernel_core::SandboxHome::open_existing(home)?;
+    let file = home.open_read_existing(Path::new("config.toml"), MAX_CONFIG_BYTES)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: `geteuid` has no preconditions and cannot fail.
+        if file.metadata()?.uid() != unsafe { libc::geteuid() } {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "another user owns config.toml",
+            ));
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "config.toml is over the size limit",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| std::io::ErrorKind::InvalidData.into())
 }
 
 /// Whether the kernel's secret scrubber would touch `text`: such a value is
@@ -765,6 +799,37 @@ mod tests {
             elapsed < std::time::Duration::from_secs(1),
             "the decoder took {elapsed:?} on a megabyte"
         );
+    }
+
+    /// A FIFO, a symlink or a directory at config.toml is refused at once:
+    /// the read never waits on a FIFO no writer feeds, and nothing is mounted.
+    #[cfg(unix)]
+    #[test]
+    fn a_special_config_file_is_refused_at_once_and_never_blocks() {
+        let (dir, home) = stored(&[camille_record()]);
+        let config = home.join("config.toml");
+        let target = dir.path().join("elsewhere.toml");
+        std::fs::write(&target, "[contacts]\nsources = [\"file\"]\n").unwrap();
+        for kind in ["fifo", "symlink", "directory"] {
+            match kind {
+                "fifo" => {
+                    let made = std::process::Command::new("mkfifo").arg(&config).status();
+                    assert!(made.unwrap().success());
+                }
+                "symlink" => std::os::unix::fs::symlink(&target, &config).unwrap(),
+                _ => std::fs::create_dir(&config).unwrap(),
+            }
+            let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || sent.send(enabled_kinds(&moved)));
+            let kinds = got.recv_timeout(std::time::Duration::from_secs(10));
+            let error = kinds.expect("enabled_kinds blocked").unwrap_err();
+            assert_eq!(error, "config.toml cannot be read", "{kind}");
+            assert!(owner_contacts_at(&home).is_empty(), "{kind}");
+            std::fs::remove_file(&config)
+                .or_else(|_| std::fs::remove_dir(&config))
+                .unwrap();
+        }
+        assert_eq!(owner_contacts_at(&home).len(), 1);
     }
 
     #[test]

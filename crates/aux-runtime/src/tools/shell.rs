@@ -538,6 +538,37 @@ fn pid_ppid_uid_start(_pid: i32) -> Option<(i32, u32, u64)> {
     None
 }
 
+/// True when `pid` is in the process listing but the kernel cannot describe
+/// it yet: `proc_pidinfo` fails with `ESRCH` (a zombie still answers, and a
+/// process we may not inspect fails with `EPERM`). That is a process still
+/// being created, for example a child forked by a command that has already
+/// exited but not yet scheduled on a loaded machine. Until it can be
+/// described, `getsid` fails on it too, so no scan can tell whether it
+/// belongs to the call; the sweep must not count such a pass as clean.
+#[cfg(target_os = "macos")]
+fn pid_not_yet_visible(pid: i32) -> bool {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    // SAFETY: `info` is a live, correctly sized buffer and `proc_pidinfo`
+    // writes at most `size` bytes into it; the contents are never read.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    n <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// Linux lists a task under `/proc` only once it is fully created.
+#[cfg(not(target_os = "macos"))]
+fn pid_not_yet_visible(_pid: i32) -> bool {
+    false
+}
+
 /// Identity of the read-only marker file every command inherits as an open
 /// descriptor. A process that still holds the same `(device, inode)` belongs
 /// to the call, even after it reparented to launchd and called `setsid()` —
@@ -955,6 +986,7 @@ fn sweep_leftovers(root: i32, marker: &Marker) -> Sweep {
         marker,
         &pid_ppid_uid_start,
         &|_pass| Vec::new(),
+        &|_pass, pid| pid_not_yet_visible(pid),
         MAX_SWEEP_PASSES,
         MAX_SWEEP_TIME,
     )
@@ -962,13 +994,15 @@ fn sweep_leftovers(root: i32, marker: &Marker) -> Sweep {
 
 /// `extra_pids` is the test seam: pids injected into a given pass's scan,
 /// standing in for a child forked while the previous pass's kills were still
-/// landing. `max_passes`/`max_time` are the production bound, lowered only by
-/// tests.
+/// landing. `not_yet_visible(pass, pid)` is the second seam, standing in for
+/// [`pid_not_yet_visible`]. `max_passes`/`max_time` are the production bound,
+/// lowered only by tests.
 fn sweep_leftovers_with(
     root: i32,
     marker: &Marker,
     lookup: StartLookup<'_>,
     extra_pids: &dyn Fn(usize) -> Vec<i32>,
+    not_yet_visible: &dyn Fn(usize, i32) -> bool,
     max_passes: usize,
     max_time: Duration,
 ) -> Sweep {
@@ -976,6 +1010,7 @@ fn sweep_leftovers_with(
     {
         let started = std::time::Instant::now();
         let mut survivors = 0usize;
+        let mut pending = false;
         for pass in 0..max_passes {
             let all = all_pids();
             // An empty listing means the syscall failed (this process itself
@@ -1004,28 +1039,48 @@ fn sweep_leftovers_with(
                     }
                 }
                 if !found_any {
-                    return Sweep::Clean;
+                    // An empty pass proves nothing while a listed process
+                    // cannot be described yet: it may be a child of the
+                    // exited command that the scheduler has not run, which
+                    // would then outlive the call. Wait for it to become
+                    // visible (or gone) and scan again.
+                    let own = std::process::id() as i32;
+                    let unseen = all
+                        .iter()
+                        .any(|&pid| pid > 1 && pid != own && not_yet_visible(pass, pid));
+                    if !unseen {
+                        return Sweep::Clean;
+                    }
+                    pending = true;
+                } else {
+                    pending = false;
                 }
                 survivors = signalled;
             }
             if started.elapsed() >= max_time {
                 break;
             }
-            std::thread::yield_now();
+            if pending {
+                // Give the scheduler a moment to run the new process.
+                std::thread::sleep(Duration::from_millis(1));
+            } else {
+                std::thread::yield_now();
+            }
         }
         Sweep::Incomplete(survivors)
     }
     #[cfg(not(unix))]
     {
-        let _ = (root, marker, lookup, extra_pids, max_passes, max_time);
+        let _ = (root, marker, lookup, extra_pids, not_yet_visible);
+        let _ = (max_passes, max_time);
         Sweep::Clean
     }
 }
 
 /// Why waiting stopped.
 enum Stop {
-    /// The direct child exited.
-    Exited(std::io::Result<std::process::ExitStatus>),
+    /// The direct child exited; it is not reaped yet.
+    Exited(std::io::Result<()>),
     /// The wall-clock timeout fired.
     TimedOut,
     /// The turn's cancellation token fired.
@@ -1066,13 +1121,49 @@ impl TreeReaper {
         }
     }
 
-    /// Wait for the direct child. The `Child` is owned here, so the borrow
-    /// lasts only as long as the returned future.
-    async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        match self.child.as_mut() {
-            Some(child) => child.wait().await,
+    /// Resolve once the direct child has exited, *without reaping it*: the
+    /// zombie keeps its pid reserved, and with it the process-group id, so
+    /// [`Self::end_group`] can signal the group with no chance of reaching a
+    /// group the kernel recycled.
+    async fn wait(&mut self) -> std::io::Result<()> {
+        match self.child.as_ref().and_then(|child| child.id()) {
+            Some(pid) => tokio::task::spawn_blocking(move || wait_exited_unreaped(pid as i32))
+                .await
+                .map_err(std::io::Error::other)?,
             None => std::future::pending().await,
         }
+    }
+
+    /// SIGKILL the exited, unreaped command's whole process group (`&`
+    /// children stay in it unless they `setsid()`/`setpgid()`) twice, reap
+    /// the root, then wait at most `max_time` for the group to be empty.
+    async fn end_group(
+        &mut self,
+        max_time: Duration,
+    ) -> std::io::Result<(std::process::ExitStatus, bool)> {
+        let Some(child) = self.child.as_mut() else {
+            return Err(std::io::Error::other(
+                "shell: the command was already reaped",
+            ));
+        };
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            for _ in 0..2 {
+                // SAFETY: `kill` is the documented libc signal call. The
+                // root is exited but unreaped, so its pid and pgid stay
+                // reserved: `-pid` can only name the command's own group.
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+                std::thread::yield_now();
+            }
+        }
+        let status = child.wait().await?;
+        let empty = match self.root {
+            Some(root) => wait_group_empty(root, max_time).await,
+            None => true,
+        };
+        Ok((status, empty))
     }
 
     /// Reap the killed child with a bounded grace period.
@@ -1113,6 +1204,62 @@ impl Drop for TreeReaper {
         }
         // `self.child` drops after the sweep above, so the group kill always
         // runs with the root still unreaped.
+    }
+}
+
+/// Block until `pid` (a child of this process) has exited, leaving it a
+/// zombie: `WNOWAIT` reports the exit without reaping.
+#[cfg(unix)]
+fn wait_exited_unreaped(pid: i32) -> std::io::Result<()> {
+    loop {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `info` is a live, correctly sized `siginfo_t` the call
+        // writes into; it is never read here.
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_exited_unreaped(_pid: i32) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Poll (signal 0, harmless even on a reused id) until group `pgid` is
+/// empty, at most `max_time`.
+async fn wait_group_empty(pgid: i32, max_time: Duration) -> bool {
+    #[cfg(unix)]
+    {
+        let deadline = tokio::time::Instant::now() + max_time;
+        loop {
+            // SAFETY: signal 0 only checks whether the group has members.
+            let rc = unsafe { libc::kill(-pgid, 0) };
+            if rc != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pgid, max_time);
+        true
     }
 }
 
@@ -1286,26 +1433,39 @@ impl Tool for ShellTool {
         let mut is_error = false;
         match stop {
             Stop::Exited(result) => {
-                // Nothing a call started outlives it: kill
-                // what the exited root left behind, `sleep 60 &` included.
+                result?;
+                // Nothing a call started outlives it: first the whole group,
+                // pinned by the unreaped root (no process-table race), then
+                // the scan as the net for what left the group.
+                let (status, group_empty) = reaper.end_group(self.sweep_time).await?;
                 let sweep = child_pid.map_or(Sweep::Clean, |root| {
                     sweep_leftovers_with(
                         root as i32,
                         &reaper.marker,
                         &pid_ppid_uid_start,
                         &|_pass| Vec::new(),
+                        &|_pass, pid| pid_not_yet_visible(pid),
                         self.sweep_passes,
                         self.sweep_time,
                     )
                 });
-                if matches!(sweep, Sweep::Clean) {
+                if group_empty && matches!(sweep, Sweep::Clean) {
                     reaper.disarm();
                 }
-                let status = result?;
                 let out = read_capture(&mut stdout_capture)?;
                 let err = read_capture(&mut stderr_capture)?;
                 push_capture(&mut content, "stdout", &out);
                 push_capture(&mut content, "stderr", &err);
+                if !group_empty {
+                    // Same rule as an incomplete sweep: never a plain
+                    // success, and the reaper stays armed.
+                    is_error = true;
+                    let note = format!(
+                        "[cleanup incomplete: the command's process group was not empty after {} ms]",
+                        self.sweep_time.as_millis()
+                    );
+                    push_section(&mut content, &note);
+                }
                 if let Sweep::Incomplete(survivors) = sweep {
                     // The direct child exited 0, but the tree is not proven
                     // clean: report it like a timeout, never as a plain
@@ -2127,6 +2287,7 @@ mod tests {
                     Vec::new()
                 }
             },
+            &|_pass, _pid| false,
             MAX_SWEEP_PASSES,
             MAX_SWEEP_TIME,
         );
@@ -2156,22 +2317,178 @@ mod tests {
         );
     }
 
+    /// A child the exited command forked but the scheduler has not run yet is
+    /// in the process listing, yet `getsid`/`proc_pidinfo` fail on it, so the
+    /// first pass sees no member. The seam forces exactly that: on pass 0 the
+    /// live helper is listed but "not yet visible"; from pass 1 it is found.
+    /// The old sweep stopped on pass 0 as clean and the helper (the real
+    /// backgrounded writer) outlived the call; the sweep must scan again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_not_yet_visible_keeps_the_sweep_going_until_it_is_reaped() {
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+
+        struct KillOnDrop(Vec<std::process::Child>);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                for child in &mut self.0 {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+        let sleeper = |group: bool| {
+            let mut command = std::process::Command::new("sleep");
+            command
+                .arg("300")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if group {
+                command.process_group(0);
+            }
+            command.spawn().unwrap()
+        };
+
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let mut children = KillOnDrop(vec![sleeper(true), sleeper(false)]);
+        let root_pid = children.0[0].id() as i32;
+        let helper = children.0[1].id() as i32;
+        assert!(all_pids().contains(&helper), "the helper must be listed");
+
+        let sweep = sweep_leftovers_with(
+            root_pid,
+            &marker,
+            &pid_ppid_uid_start,
+            &|pass| if pass == 1 { vec![helper] } else { Vec::new() },
+            &|pass, pid| pass == 0 && pid == helper,
+            MAX_SWEEP_PASSES,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Clean);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while children.0[1].try_wait().unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "helper pid {helper} outlived the sweep: a pass with an unseen \
+                 process was counted as clean"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A listed process that never becomes visible must not end the sweep as
+    /// clean: it stops at its cap and says so.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_stays_unseen_makes_the_sweep_incomplete() {
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let own = std::process::id() as i32;
+        // No session has this id, so only the seam keeps the pass unclean.
+        let sweep = sweep_leftovers_with(
+            i32::MAX,
+            &marker,
+            &pid_ppid_uid_start,
+            &|_pass| Vec::new(),
+            &|_pass, pid| pid > 1 && pid != own,
+            3,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Incomplete(0));
+    }
+
+    /// A command that backgrounds a long sleeper and exits: the sleeper is
+    /// in the command's process group, so the group kill at call end takes it
+    /// with no race against the process table. It must be gone the moment the
+    /// call returns — not killed-but-unreaped, not "soon".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_backgrounded_child_is_gone_when_the_call_returns() {
+        let dir = tempdir().unwrap();
+        let output = test_tool(Duration::from_secs(10))
+            .run(
+                &json!({"command": "sleep 300 & echo $! > bg.pid; echo hi"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
+        let pid = raw.trim().parse::<i32>().unwrap();
+        // SAFETY: signal 0 only probes a pid this test's command reported.
+        let rc = unsafe { libc::kill(pid, 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        if rc == 0 {
+            // SAFETY: best-effort SIGKILL so a failure cannot leak the sleeper.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(
+            rc != 0 && errno == Some(libc::ESRCH),
+            "backgrounded pid {pid} still existed when the call returned"
+        );
+        assert!(!output.is_error, "{}", head(&output.content, 400));
+    }
+
+    /// Leaves the command's group and session *before* the command exits
+    /// (`setsid()`, then a ready file the command waits for), so the group
+    /// kill cannot reach it: only the marker scan can.
+    #[cfg(target_os = "macos")]
+    const SETSID_ESCAPEE: &str = "/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); \
+         open(my $r, q(>), q(.ready)) or exit 1; close $r; sleep 300' \
+         </dev/null >/dev/null 2>&1 & echo $! > bg.pid; i=0; \
+         while [ ! -f .ready ]; do i=$((i + 1)); [ $i -gt 1000 ] && exit 1; \
+         sleep 0.01; done; echo hi";
+
+    /// The scan stays the net for what the group kill cannot reach: a
+    /// `setsid()` escapee still holding the call's marker is reaped.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_setsid_escapee_is_still_reaped_by_the_scan() {
+        let dir = tempdir().unwrap();
+        let output = test_tool(Duration::from_secs(10))
+            .run(&json!({"command": SETSID_ESCAPEE}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
+        let pid = raw.trim().parse::<i32>().unwrap();
+        // It was killed during the call; launchd reaps it shortly after.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut gone = false;
+        while std::time::Instant::now() < deadline {
+            // SAFETY: signal 0 only probes a pid this test's command reported.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if !gone {
+            // SAFETY: best-effort SIGKILL so a failure cannot leak the escapee.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(gone, "setsid escapee {pid} survived the call");
+        assert!(!output.is_error, "{}", head(&output.content, 400));
+    }
+
     /// SHELL-CLEANUP-1: a capped-out sweep must not report the direct child's
     /// success, and the reaper must stay armed. The pass cap is forced to
-    /// zero, so only the still-armed reaper's `Drop` can kill the backgrounded
-    /// sleeper: a disarmed reaper leaves it alive. Production caps are
-    /// unchanged.
+    /// zero, so only the still-armed reaper's `Drop` can kill a leftover the
+    /// group kill does not reach. On macOS that is a `setsid()` escapee, so a
+    /// disarmed reaper leaves it alive; elsewhere a plain sleeper, which the
+    /// group kill now also takes. Production caps are unchanged.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_exhausted_leftover_sweep_is_reported_and_keeps_the_reaper_armed() {
         let dir = tempdir().unwrap();
         let mut tool = test_tool(Duration::from_secs(10));
         tool.sweep_passes = 0;
+        #[cfg(target_os = "macos")]
+        let command = SETSID_ESCAPEE;
+        #[cfg(not(target_os = "macos"))]
+        let command = "sleep 300 & echo $! > bg.pid; echo hi";
         let output = tool
-            .run(
-                &json!({"command": "sleep 300 & echo $! > bg.pid; echo hi"}),
-                &ctx(dir.path()),
-            )
+            .run(&json!({ "command": command }), &ctx(dir.path()))
             .await
             .unwrap();
 

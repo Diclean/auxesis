@@ -1,15 +1,18 @@
 import Foundation
 
-/// One Go-menu destination: an agent conversation (⌘1–⌘5) or a Records page
-/// (no shortcut). The title is not stored here; it comes from `L10n` so EN and
-/// FR stay in the app's one copy table.
+/// One Go-menu destination: an agent conversation (⌘1…) or a Records page
+/// (no shortcut). A page title comes from `L10n` so EN and FR stay in the
+/// app's one copy table; an agent item carries the name the sidebar shows.
 public struct GoMenuItem: Equatable, Identifiable {
     public let route: ShellModel.Route
     public let shortcut: String?
+    /// The agent's shown name (`display_name`, else its brand name).
+    public let name: String?
 
-    public init(route: ShellModel.Route, shortcut: String? = nil) {
+    public init(route: ShellModel.Route, shortcut: String? = nil, name: String? = nil) {
         self.route = route
         self.shortcut = shortcut
+        self.name = name
     }
 
     public var id: String { GoMenu.identifier(for: route) }
@@ -17,11 +20,14 @@ public struct GoMenuItem: Equatable, Identifiable {
 
 public enum GoMenuEntry: Equatable, Identifiable {
     case item(GoMenuItem)
+    /// "Add an Agent…": opens the same sheet as the agents list.
+    case addAgent
     case separator
 
     public var id: String {
         switch self {
         case .item(let item): return item.id
+        case .addAgent: return "add-agent"
         case .separator: return "separator"
         }
     }
@@ -32,24 +38,41 @@ public enum GoMenuEntry: Equatable, Identifiable {
     }
 }
 
-/// The Go menu, in menu order. The five items above the separator are
-/// the sidebar's order — Aux, then the four built-in agents — with ⌘1–⌘5. The
-/// v5 shell's Records pages sit below it with no shortcut: they are pages, not
-/// conversations, and never steal a key from an agent.
+/// The Go menu, in menu order. Above the separator: the agents that exist,
+/// in the sidebar's order, the first nine with ⌘1–⌘9, then "Add an Agent…"
+/// while a template is left. Below it: the Records pages, with no shortcut —
+/// they are pages, not conversations, and never steal a key from an agent.
+/// Until the daemon has listed its agents the menu shows the chief alone and
+/// keeps its agent items disabled, so no shortcut can reach a missing agent.
 public enum GoMenu {
-    public static let agentItems: [GoMenuItem] = TeamMember.all.enumerated().map { index, member in
-        GoMenuItem(route: .agent(member.id), shortcut: "⌘\(index + 1)")
+    /// The daemon has not listed its agents yet (an install always has the chief).
+    public static func loading(agents: [Agent]) -> Bool { agents.isEmpty }
+
+    public static func agentItems(agents: [Agent]) -> [GoMenuItem] {
+        let members = loading(agents: agents) ? [TeamMember.main] : TeamMember.roster(agents)
+        return members.enumerated().map { index, member in
+            GoMenuItem(route: .agent(member.id), shortcut: index < 9 ? "⌘\(index + 1)" : nil, name: member.name)
+        }
+    }
+
+    /// A built-in template is not an agent yet.
+    public static func canAddAgent(agents: [Agent]) -> Bool {
+        let ids = Set(agents.map(\.id))
+        return !loading(agents: agents) && TeamMember.domain.contains { !ids.contains($0.id) }
     }
 
     public static let recordItems: [GoMenuItem] = ShellModel.recordsMenu
         .flatMap { $0 }
         .map { GoMenuItem(route: $0) }
 
-    public static let entries: [GoMenuEntry] =
-        agentItems.map(GoMenuEntry.item) + [.separator] + recordItems.map(GoMenuEntry.item)
+    /// While loading, "Add an Agent…" stays in place, disabled.
+    public static func entries(agents: [Agent]) -> [GoMenuEntry] {
+        let add: [GoMenuEntry] = loading(agents: agents) || canAddAgent(agents: agents) ? [.addAgent] : []
+        return agentItems(agents: agents).map(GoMenuEntry.item) + add + [.separator] + recordItems.map(GoMenuEntry.item)
+    }
 
     public static func title(for item: GoMenuItem, language: Language) -> String {
-        title(for: item.route, language: language)
+        item.name ?? title(for: item.route, language: language)
     }
 
     public static func title(for route: ShellModel.Route, language: Language) -> String {
@@ -98,6 +121,48 @@ public enum GoMenu {
         case .privacyRecord: return "privacy-record"
         case .agentsAndRules: return "agents-and-rules"
         }
+    }
+}
+
+/// One line of Help ▸ Keyboard Shortcuts.
+public struct MenuShortcut: Equatable {
+    public let title: String
+    public let keys: String
+}
+
+/// The shortcuts the app really binds, for the help sheet. `menu` mirrors
+/// the menu bar (`TeamCommands`): ⌘1… belong to the Go menu's agents alone,
+/// and the Records pages have no shortcut. `inView` are keys a view handles.
+public enum MenuShortcuts {
+    public static func menu(agents: [Agent], language: Language) -> [MenuShortcut] {
+        let fr = language == .fr
+        let go = GoMenu.agentItems(agents: agents).compactMap { item in
+            item.shortcut.map { MenuShortcut(title: GoMenu.title(for: item, language: language), keys: $0) }
+        }
+        return [
+            MenuShortcut(title: L10n.ui(.newConversation, language), keys: "⌘N"),
+            MenuShortcut(title: L10n.ui(.settings, language) + "…", keys: "⌘,"),
+            MenuShortcut(title: fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)", keys: "⌘Q"),
+        ] + go + [
+            MenuShortcut(title: fr ? "Afficher ou masquer la barre latérale" : "Show or hide sidebar", keys: "⌃⌘S"),
+            MenuShortcut(title: fr ? "Demander à Aux…" : "Ask Aux…", keys: "⌘K"),
+            MenuShortcut(title: fr ? "Envoyer la proposition" : "Send proposal", keys: "⌘↩"),
+            MenuShortcut(title: L10n.ui(.apNotNow, language), keys: "⌘D"),
+            MenuShortcut(title: L10n.ui(.panelToggle, language), keys: "⌥⌘I"),
+            MenuShortcut(title: L10n.ui(.back, language), keys: "⌘["),
+            MenuShortcut(title: L10n.ui(.stopAll, language) + " / " + L10n.ui(.resume, language), keys: "⌘."),
+            MenuShortcut(title: fr ? "Rechercher" : "Find", keys: "⌘F"),
+        ]
+    }
+
+    public static func inView(language: Language) -> [MenuShortcut] {
+        let fr = language == .fr
+        return [
+            MenuShortcut(title: fr ? "Modifier la proposition" : "Edit proposal", keys: "E"),
+            MenuShortcut(title: fr ? "Parcourir les éléments en attente" : "Move through waiting items", keys: "↑ / ↓ · J / K"),
+            MenuShortcut(title: fr ? "Ouvrir la ligne choisie" : "Open selected row", keys: "↩"),
+            MenuShortcut(title: fr ? "Quitter la modification" : "Leave editing", keys: "Esc"),
+        ]
     }
 }
 

@@ -3,11 +3,14 @@
 
 use super::{ChatError, ChatSession, DEFAULT_OUTPUT_RESERVE, ESTIMATED_UNIT};
 use aux_providers::{ChatDelta, ChatMessage, ChatProvider, ChatRequest, ChatResponse, SafeMessage};
-use aux_store::{StoreError, StoreHandle};
+use aux_store::{Store, StoreError, StoreHandle};
 use kernel_core::budget::{
     audit_denial, BudgetCaps, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome,
     UsageActual, UsageKind, UsageTotals,
 };
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 fn unit_for(estimated: bool) -> &'static str {
     if estimated {
@@ -48,23 +51,300 @@ impl StreamCapture {
     }
 }
 
-pub(super) fn settle_streamed(
-    store: &StoreHandle<'_>,
-    reservation: &Reservation,
+/// What a streaming call is known to have used: the counts the provider
+/// reported, else the estimates of its prompt and of the text that streamed.
+pub(super) fn streamed_actual(
+    request: &ChatRequest,
+    capture: &StreamCapture,
+    provider: &dyn ChatProvider,
+    prices: &PriceTable,
+) -> UsageActual {
+    let mut response = ChatResponse::assistant(capture.text());
+    response.usage = capture.usage();
+    usage_actual(request, &response, request_model(provider, request), prices)
+}
+
+pub(super) fn settle_streamed<S: SettleStore>(
+    held: HeldReservation<'_, S>,
     request: &ChatRequest,
     capture: &StreamCapture,
     provider: &dyn ChatProvider,
     prices: &PriceTable,
 ) {
-    let mut response = ChatResponse::assistant(capture.text());
-    response.usage = capture.usage();
-    let actual = usage_actual(request, &response, request_model(provider, request), prices);
-    if let Err(err) = store.with(|store| store.settle_reservation(reservation, &actual)) {
+    let id = held.reservation().id;
+    if let Err(err) = held.settle(&streamed_actual(request, capture, provider, prices)) {
         tracing::warn!(
-            reservation = reservation.id,
+            reservation = id,
             error = %err,
             "could not settle a failed streaming call's estimated usage"
         );
+    }
+}
+
+/// The store a [`HeldReservation`] settles in: a turn's own handle, or a
+/// shared store (one a future that must be `Send` can hold). Sealed, so a
+/// guard's drop runs no code from outside this crate but its own callback.
+pub trait SettleStore: sealed::Sealed {
+    /// Settle `reservation` at `actual`. The store settles a reservation once.
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError>;
+    /// Hand that settle to the settlement worker: never blocks, never locks.
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual);
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for aux_store::StoreHandle<'_> {}
+    impl Sealed for std::sync::Arc<std::sync::Mutex<aux_store::Store>> {}
+}
+
+impl SettleStore for StoreHandle<'_> {
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
+        self.with(|store| store.settle_reservation(reservation, actual))
+    }
+
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
+        // A borrowed store cannot reach the worker: its row stays held for
+        // the daemon's reconcile.
+        if let StoreHandle::Shared(store) = self {
+            store.settle_later(reservation, actual);
+        }
+    }
+}
+
+impl SettleStore for Arc<Mutex<Store>> {
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
+        kernel_core::lock_recover(self).settle_reservation(reservation, actual)
+    }
+
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
+        hand_over(Work::Settle(Box::new(SettleJob {
+            store: Arc::clone(self),
+            reservation: reservation.clone(),
+            actual,
+        })));
+    }
+}
+
+/// What the settlement worker is handed.
+enum Work {
+    /// A settle it owes until it succeeds.
+    Settle(Box<SettleJob>),
+    /// A store whose abandoned held rows it settles, now and every minute.
+    Watch(Weak<Mutex<Store>>),
+}
+
+struct SettleJob {
+    store: Arc<Mutex<Store>>,
+    reservation: Reservation,
+    actual: UsageActual,
+}
+
+/// A failed try is retried after `FIRST_RETRY`, then twice as long each
+/// time up to `RETRY_CAP`, and never given up. Tests run the same schedule
+/// faster.
+const FIRST_RETRY: Duration = Duration::from_millis(if cfg!(test) { 1 } else { 500 });
+const RETRY_CAP: Duration = Duration::from_millis(if cfg!(test) { 4 } else { 60_000 });
+const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } else { 60_000 });
+
+/// The settlement worker, started by the first guard: one thread on an
+/// unbounded queue, so no drop waits on the store's lock or on SQLite and
+/// no job is ever turned away. Each job keeps its row held until it
+/// settles, and the store refuses new reservations past a bound on held
+/// rows, so a store that stops settling cannot grow this queue without end.
+fn settler() -> &'static mpsc::Sender<Work> {
+    static SETTLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
+    SETTLER.get_or_init(|| {
+        let (work, queue) = mpsc::channel();
+        let worker = std::thread::Builder::new().name("budget-settle".to_string());
+        if let Err(err) = worker.spawn(move || settle_jobs(&queue)) {
+            tracing::error!(error = %err, "no settlement worker: dropped calls stay held");
+        }
+        work
+    })
+}
+
+/// Hand `work` to the worker. This never blocks; it fails only with no
+/// worker, and the row then stays held for a reconcile.
+fn hand_over(work: Work) {
+    if settler().send(work).is_err() {
+        tracing::error!("no settlement worker: the call stays held for a reconcile");
+    }
+}
+
+/// Settle, now and every minute while this process runs, the held
+/// reservations in `store` past their TTL (those a stopped process left), each
+/// at the most its call is known to have spent. The daemon watches its store.
+pub fn watch_held_reservations(store: &Arc<Mutex<Store>>) {
+    hand_over(Work::Watch(Arc::downgrade(store)));
+}
+
+/// A job the worker owes: when it is next due, and the wait after that.
+type Owed = (SettleJob, Instant, Duration);
+
+fn settle_jobs(queue: &mpsc::Receiver<Work>) {
+    let mut owed: Vec<Owed> = Vec::new();
+    let mut watched: Vec<Weak<Mutex<Store>>> = Vec::new();
+    let mut reconcile_at = Instant::now();
+    loop {
+        let due = owed.iter().map(|(_, at, _)| *at);
+        let next = due
+            .chain((!watched.is_empty()).then_some(reconcile_at))
+            .min();
+        // Nothing due: wait for the next work, however long that takes.
+        let wait = next.map_or(Duration::MAX, |at| {
+            at.saturating_duration_since(Instant::now())
+        });
+        match queue.recv_timeout(wait) {
+            Ok(Work::Settle(job)) => owed.push((*job, Instant::now(), FIRST_RETRY)),
+            Ok(Work::Watch(store)) => {
+                watched.push(store);
+                reconcile_at = Instant::now();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        let now = Instant::now();
+        owed.retain_mut(|(job, at, wait)| {
+            if *at > now {
+                return true;
+            }
+            if try_settle(job) {
+                return false;
+            }
+            *at = now + *wait;
+            *wait = (*wait * 2).min(RETRY_CAP);
+            true
+        });
+        if !watched.is_empty() && now >= reconcile_at {
+            watched.retain(|store| match store.upgrade() {
+                Some(store) => {
+                    reconcile(&store, &owed);
+                    true
+                }
+                None => false, // the store is gone (a test's)
+            });
+            reconcile_at = now + RECONCILE_EVERY;
+        }
+    }
+}
+
+/// One try at `job`: raise its held row to the job's amount first, so the
+/// most its call is known to have spent outlives this process, then settle.
+fn try_settle(job: &SettleJob) -> bool {
+    let (store, reservation) = (kernel_core::lock_recover(&job.store), &job.reservation);
+    let tried = catch_unwind(AssertUnwindSafe(|| {
+        // A raise that fails leaves the settle to fail or succeed on its own.
+        let _ = store.raise_held_reservation(reservation.id, &job.actual);
+        store.settle_reservation(reservation, &job.actual)
+    }));
+    match tried {
+        Ok(Ok(())) => true,
+        Ok(Err(err)) => {
+            tracing::warn!(reservation = reservation.id, error = %err, "settle failed; retried");
+            false
+        }
+        Err(_) => {
+            tracing::error!(reservation = reservation.id, "settle panicked; retried");
+            false
+        }
+    }
+}
+
+/// Settle `store`'s abandoned held rows, but those a job here still owes: it
+/// records its own amount. A settle this cannot see (a job still in the
+/// channel, a direct one) may find its row claimed here; the store then
+/// records what it tops the claim by, once, so the live amount still wins.
+fn reconcile(store: &Arc<Mutex<Store>>, owed: &[Owed]) {
+    let skip: Vec<i64> = (owed.iter())
+        .filter(|(job, ..)| Arc::ptr_eq(&job.store, store))
+        .map(|(job, ..)| job.reservation.id)
+        .collect();
+    let store = kernel_core::lock_recover(store);
+    let settle = || store.settle_abandoned_reservations(&skip);
+    match catch_unwind(AssertUnwindSafe(settle)) {
+        Ok(Ok((0, 0))) => {}
+        outcome => tracing::warn!(?outcome, "settled held reservations a stopped process left"),
+    }
+}
+
+/// A reservation whose call the provider may already bill, held from the
+/// reserve until it is settled: every reservation a call takes comes as one.
+///
+/// [`HeldReservation::settle`] records what the call cost. Dropped
+/// unsettled (the future making the call was cancelled after the request
+/// went out), it hands the settlement worker the reserved estimate, or what
+/// [`HeldReservation::or_known`] reports where that is more, so the spend is
+/// never handed back as headroom. The drop never blocks, takes no lock and
+/// never panics; the store row stays held (counted, never swept) until a
+/// settle deletes it, so the reservation settles once.
+pub struct HeldReservation<'k, S: SettleStore> {
+    store: S,
+    reservation: Reservation,
+    settled: bool,
+    known: Option<Box<dyn Fn() -> UsageActual + Send + 'k>>,
+}
+
+impl<'k, S: SettleStore> HeldReservation<'k, S> {
+    /// Hold `reservation`, taken in `store`, until it is settled.
+    pub fn new(store: S, reservation: Reservation) -> Self {
+        settler(); // started now, so no drop waits for it
+        Self {
+            store,
+            reservation,
+            settled: false,
+            known: None,
+        }
+    }
+
+    /// What the call is known to have used so far, read only if this drops
+    /// unsettled: the drop then settles the larger of it and the reserved
+    /// estimate in each direction, never less than the reservation.
+    pub fn or_known(mut self, known: impl Fn() -> UsageActual + Send + 'k) -> Self {
+        self.known = Some(Box::new(known));
+        self
+    }
+
+    /// The reservation held: its estimate (the output clamped to the
+    /// headroom left) and the caps it was admitted under.
+    pub fn reservation(&self) -> &Reservation {
+        &self.reservation
+    }
+
+    /// Settle what the call cost. The guard is spent whatever the outcome;
+    /// a settle that fails goes to the settlement worker to retry.
+    pub fn settle(mut self, actual: &UsageActual) -> Result<(), StoreError> {
+        self.settled = true;
+        let settled = self.store.settle(&self.reservation, actual);
+        if settled.is_err() {
+            self.store.settle_later(&self.reservation, *actual);
+        }
+        settled
+    }
+}
+
+impl<S: SettleStore> Drop for HeldReservation<'_, S> {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        // The callback is the caller's code: if it panics, the reserve
+        // stands in for it, and nothing unwinds out of a drop.
+        let known =
+            (self.known.as_ref()).and_then(|known| catch_unwind(AssertUnwindSafe(known)).ok());
+        let actual = at_least(known.unwrap_or_default(), &self.reservation.estimate);
+        self.store.settle_later(&self.reservation, actual);
+    }
+}
+
+/// `known`, raised to `reserved` in each direction it falls short in; a
+/// raised amount is an estimate.
+fn at_least(known: UsageActual, reserved: &UsageTotals) -> UsageActual {
+    UsageActual {
+        tokens_in: known.tokens_in.max(reserved.tokens_in),
+        tokens_in_estimated: known.tokens_in_estimated || known.tokens_in < reserved.tokens_in,
+        tokens_out: known.tokens_out.max(reserved.tokens_out),
+        tokens_out_estimated: known.tokens_out_estimated || known.tokens_out < reserved.tokens_out,
+        usd_cents: known.usd_cents.max(reserved.usd_cents),
     }
 }
 
@@ -380,11 +660,12 @@ impl<'a> ChatSession<'a> {
     /// Returns `None` only for an explicit `unlimited = true` (or an empty
     /// per-agent cap set): usage is still recorded after the call. A fresh
     /// config no longer takes this path; it carries the conservative
-    /// defaults.
-    pub(super) fn reserve_budget(
+    /// defaults. The reservation comes held: a turn dropped before it settles
+    /// it still settles the reserved estimate.
+    pub(super) fn reserve_budget<'k>(
         &self,
         request: &ChatRequest,
-    ) -> Result<Option<Reservation>, ChatError> {
+    ) -> Result<Option<HeldReservation<'k, StoreHandle<'a>>>, ChatError> {
         let caps = self.budgets.caps_for(&self.agent);
         if caps.is_unlimited() {
             if caps.unlimited {
@@ -423,7 +704,7 @@ impl<'a> ChatSession<'a> {
             &caps,
             &estimate,
         )
-        .map(Some)
+        .map(|reservation| Some(HeldReservation::new(self.store.clone(), reservation)))
     }
 
     /// Test seam: replace the budget day source for one session.
@@ -1518,6 +1799,257 @@ mod tests {
             totals.tokens_out, 0,
             "nothing streamed before the cancel: {totals:?}"
         );
+    }
+
+    /// A provider that takes the request, streams `before`, then never answers.
+    struct AcceptsThenHangs {
+        before: Vec<ChatDelta>,
+        sent: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl ChatProvider for AcceptsThenHangs {
+        async fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+            self.sent.notify_one();
+            std::future::pending().await
+        }
+
+        async fn complete_streaming(
+            &self,
+            _req: &ChatRequest,
+            sink: &(dyn Fn(ChatDelta) + Send + Sync),
+        ) -> Result<ChatResponse, ProviderError> {
+            for delta in &self.before {
+                sink(delta.clone());
+            }
+            self.sent.notify_one();
+            std::future::pending().await
+        }
+
+        fn name(&self) -> &str {
+            "hangs"
+        }
+    }
+
+    /// One turn whose future is dropped once its provider has the request
+    /// (and streamed `before`): `main`'s totals today, reservations still held.
+    async fn dropped_after_dispatch(before: Vec<ChatDelta>) -> (UsageTotals, usize) {
+        let harness = Harness::new();
+        let provider = AcceptsThenHangs {
+            before,
+            sent: tokio::sync::Notify::new(),
+        };
+        let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+        tokio::select! {
+            _ = session.send("hello") => panic!("the provider never answers"),
+            () = provider.sent.notified() => {}
+        }
+        settled(&harness.store);
+        let store = harness.store();
+        let day = store.local_day().unwrap();
+        let totals = store.usage_totals("main", &day).unwrap();
+        (totals, store.reservation_count().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_turn_dropped_after_dispatch_still_charges_its_reserve() {
+        let partial = ChatDelta::Text("partial ".to_string());
+        for before in [vec![], vec![partial]] {
+            let (totals, held) = dropped_after_dispatch(before).await;
+            assert_eq!(held, 0, "settled, not left to expire");
+            assert!(totals.tokens_in > 0, "{totals:?}");
+            assert_eq!(
+                totals.tokens_out, DEFAULT_OUTPUT_RESERVE,
+                "never less than the reserve: {totals:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_turn_charges_what_streamed_when_it_tops_the_reserve() {
+        let usage = Usage {
+            prompt_tokens: 90_000,
+            completion_tokens: 5_000,
+            ..Default::default()
+        };
+        let (totals, held) = dropped_after_dispatch(vec![ChatDelta::Usage(usage)]).await;
+        assert_eq!(held, 0, "settled once");
+        assert_eq!((totals.tokens_in, totals.tokens_out), (90_000, 5_000));
+    }
+
+    /// Waits (10 s at most) for the settlement worker to settle all of
+    /// `store`, then reads the day's totals for "main".
+    fn settled(store: &Mutex<Store>) -> UsageTotals {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let store = kernel_core::lock_recover(store);
+            if store.reservation_count().unwrap() == 0 {
+                return store
+                    .usage_totals("main", &store.local_day().unwrap())
+                    .unwrap();
+            }
+            drop(store);
+            assert!(std::time::Instant::now() < deadline, "never settled");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// `tokens_in` in, 9 out, for "main" under a 100-token input cap.
+    fn reserve(store: &Mutex<Store>, tokens_in: u64) -> ReserveOutcome {
+        let store = kernel_core::lock_recover(store);
+        let caps = BudgetCaps {
+            tokens_in: Some(100),
+            ..Default::default()
+        };
+        let estimate = UsageTotals {
+            tokens_in,
+            tokens_out: 9,
+            usd_cents: 0,
+        };
+        let day = store.local_day().unwrap();
+        store
+            .try_reserve_for(None, "main", &day, &caps, &estimate)
+            .unwrap()
+    }
+
+    const EXPIRE: &str = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+
+    #[test]
+    fn a_call_above_its_reserve_outlives_failed_settles_and_records_its_actual_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        // Each try is counted (its raise is an update), and the store refuses
+        // settles, as a busy one would, while `hold` has a row.
+        let raw = aux_store::open_keyed(&path).unwrap();
+        raw.execute_batch(
+            "CREATE TABLE tries(n); CREATE TABLE hold(n); INSERT INTO hold VALUES (1);
+             CREATE TRIGGER tried AFTER UPDATE ON usage_reservations
+             BEGIN INSERT INTO tries VALUES (1); END;
+             CREATE TRIGGER busy BEFORE DELETE ON usage_reservations
+             WHEN EXISTS (SELECT 1 FROM hold) BEGIN SELECT RAISE(ABORT, 'database is busy'); END;",
+        )
+        .unwrap();
+        // Dropped knowing more than it reserved: its job is the only copy.
+        let known = UsageActual {
+            tokens_in: 90,
+            tokens_out: 20,
+            ..UsageActual::default()
+        };
+        drop(HeldReservation::new(Arc::clone(&store), reservation).or_known(move || known));
+        let tries = || raw.query_row("SELECT COUNT(*) FROM tries", [], |row| row.get::<_, i64>(0));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while tries().unwrap() < 200 {
+            assert!(Instant::now() < deadline, "the retries stopped");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Past 150 failures and its TTL, the row holds the actual: 20 more
+        // would fit beside the reserve (60 + 20), not beside it (90 + 20).
+        raw.execute_batch(EXPIRE).unwrap();
+        assert!(matches!(reserve(&store, 20), ReserveOutcome::Denied(_)));
+        raw.execute_batch("DELETE FROM hold").unwrap();
+        let totals = settled(&store);
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out),
+            (90, 20),
+            "the actual, once"
+        );
+    }
+
+    #[test]
+    fn a_watched_store_settles_an_abandoned_held_row_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        watch_held_reservations(&store);
+        // A row a stopped process left: held, with no guard, past its TTL.
+        assert!(matches!(reserve(&store, 60), ReserveOutcome::Reserved(_)));
+        aux_store::open_keyed(&path)
+            .unwrap()
+            .execute_batch(EXPIRE)
+            .unwrap();
+        let totals = settled(&store);
+        assert_eq!((totals.tokens_in, totals.tokens_out), (60, 9));
+    }
+
+    /// The race a minute reconcile can win: a live job still in the channel
+    /// while the reconcile claims its expired row. A worker of its own, its
+    /// queue filled before it starts, fixes that order without a sleep.
+    #[test]
+    fn a_job_still_queued_when_the_reconcile_claims_its_row_records_its_actual_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        let raw = aux_store::open_keyed(&path).unwrap();
+        raw.execute_batch(EXPIRE).unwrap();
+        let actual = UsageActual {
+            tokens_in: 90,
+            tokens_out: 20,
+            ..UsageActual::default()
+        };
+        let job = || {
+            let store = Arc::clone(&store);
+            let reservation = reservation.clone();
+            Work::Settle(Box::new(SettleJob {
+                store,
+                reservation,
+                actual,
+            }))
+        };
+        let (work, queue) = mpsc::channel();
+        // The reconcile runs on the first message, the job and its retry wait.
+        work.send(Work::Watch(Arc::downgrade(&store))).unwrap();
+        work.send(job()).unwrap();
+        work.send(job()).unwrap();
+        drop(work);
+        std::thread::spawn(move || settle_jobs(&queue))
+            .join()
+            .unwrap();
+        let claim = "SELECT tokens_in, tokens_out, consumed_at IS NOT NULL
+            FROM usage_reconciled WHERE reservation_id = ?1";
+        let claimed: (i64, i64, bool) = raw
+            .query_row(claim, [reservation.id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(
+            claimed,
+            (60, 9, true),
+            "the reconcile claimed it at the reserve, the job topped and consumed it"
+        );
+        let totals = settled(&store);
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out),
+            (90, 20),
+            "the actual, once"
+        );
+    }
+
+    #[test]
+    fn a_drop_takes_no_lock_and_outlives_a_callback_that_panics_while_unwinding() {
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        let held =
+            HeldReservation::new(Arc::clone(&store), reservation).or_known(|| panic!("boom"));
+        // Dropped while this thread holds the store's lock and is unwinding: a
+        // drop that locked would deadlock, a panic out of it would abort.
+        let locked = kernel_core::lock_recover(&store);
+        let unwound = catch_unwind(AssertUnwindSafe(move || {
+            let _held = held;
+            panic!("the turn fails");
+        }));
+        assert!(unwound.is_err());
+        drop(locked);
+        let totals = settled(&store);
+        assert_eq!((totals.tokens_in, totals.tokens_out), (60, 9));
     }
 
     #[tokio::test]

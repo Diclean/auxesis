@@ -1958,6 +1958,38 @@
       "en" : "A brain run by another app (ACP) reads only its own workspace through Auxesis; anything it asks permission for opens a card.",
       "fr" : "Un modèle géré par une autre app (ACP) ne lit que son propre espace de travail via Auxesis ; ce pour quoi il demande la permission ouvre une carte."
     },
+    "addAgent" : {
+      "en" : "Add an agent",
+      "fr" : "Ajouter un agent"
+    },
+    "addAgentAdded" : {
+      "en" : "Already added",
+      "fr" : "Déjà ajouté"
+    },
+    "addAgentAsks" : {
+      "en" : "Asks you first: %@",
+      "fr" : "Vous demande d’abord : %@"
+    },
+    "addAgentConfirm" : {
+      "en" : "Add agent",
+      "fr" : "Ajouter l’agent"
+    },
+    "addAgentDoes" : {
+      "en" : "Does on its own: %@",
+      "fr" : "Fait seul : %@"
+    },
+    "addAgentExceedsChief" : {
+      "en" : "This agent would get more access than Aux itself, so it was not created.",
+      "fr" : "Cet agent aurait plus d’accès qu’Aux lui-même, il n’a donc pas été créé."
+    },
+    "addAgentLede" : {
+      "en" : "Aux works alone until you add an agent. Each one gets only the access listed here.",
+      "fr" : "Aux travaille seul tant que vous n’ajoutez pas d’agent. Chacun ne reçoit que les accès indiqués ici."
+    },
+    "addAgentMenu" : {
+      "en" : "Add an Agent…",
+      "fr" : "Ajouter un agent…"
+    },
     "agentIdle" : {
       "en" : "Idle",
       "fr" : "Inactif"
@@ -2938,6 +2970,42 @@
       "en" : "Go",
       "fr" : "Aller"
     },
+    "grantCalendarRead" : {
+      "en" : "read the calendar",
+      "fr" : "lire l’agenda"
+    },
+    "grantCalendarWrite" : {
+      "en" : "add events",
+      "fr" : "ajouter des événements"
+    },
+    "grantClientsNote" : {
+      "en" : "add client notes",
+      "fr" : "annoter les fiches clients"
+    },
+    "grantClientsRead" : {
+      "en" : "read client records",
+      "fr" : "lire les fiches clients"
+    },
+    "grantDocumentsFile" : {
+      "en" : "file documents",
+      "fr" : "classer les documents"
+    },
+    "grantDocumentsRead" : {
+      "en" : "read documents",
+      "fr" : "lire les documents"
+    },
+    "grantMailDraft" : {
+      "en" : "draft replies",
+      "fr" : "rédiger des brouillons"
+    },
+    "grantMailRead" : {
+      "en" : "read mail",
+      "fr" : "lire les e-mails"
+    },
+    "grantMailSend" : {
+      "en" : "send mail",
+      "fr" : "envoyer des e-mails"
+    },
     "grantsUnavailable" : {
       "en" : "This Auxesis does not report grants yet. Every action that leaves this Mac asks you first.",
       "fr" : "Cette version d’Auxesis ne signale pas encore les autorisations. Chaque action qui quitte ce Mac vous demande d’abord votre accord."
@@ -3133,6 +3201,10 @@
     "leftMac" : {
       "en" : "Left this Mac",
       "fr" : "Sorti de ce Mac"
+    },
+    "listAnd" : {
+      "en" : "and",
+      "fr" : "et"
     },
     "loadFailed" : {
       "en" : "Couldn't load this.",
@@ -4303,8 +4375,8 @@
       "fr" : "Arrêter"
     },
     "stoppedBody" : {
-      "en" : "All five agents are paused. Nothing runs or sends until you press Resume.",
-      "fr" : "Les cinq agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre."
+      "en" : "All agents are paused. Nothing runs or sends until you press Resume.",
+      "fr" : "Tous les agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre."
     },
     "stoppedCancelledMany" : {
       "en" : "%d pending sends were cancelled.",
@@ -4662,9 +4734,13 @@
       "en" : "Aux hands it work and gets back only the result.",
       "fr" : "Aux lui confie du travail et ne reçoit que le résultat."
     },
+    "worksWithNone" : {
+      "en" : "Add Mail, Calendar, Clients or Documents when you need them.",
+      "fr" : "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin."
+    },
     "worksWithTeam" : {
-      "en" : "Mail, Calendar, Clients and Documents.",
-      "fr" : "Mail, Calendrier, Clients et Documents."
+      "en" : "Aux hands work to %@.",
+      "fr" : "Aux confie du travail à %@."
     },
     "workshop" : {
       "en" : "Workshop",
@@ -4683,7 +4759,5 @@
       "fr" : "Vous : "
     }
   },
-  "uiMissingFrench" : [
-
-  ]
+  "uiMissingFrench" : []
 }

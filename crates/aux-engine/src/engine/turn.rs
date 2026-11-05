@@ -2,7 +2,7 @@
 //! out. Every message is persisted as it happens, so a crash mid-run
 //! still leaves an honest history behind.
 
-use super::budget::{request_model, settle_streamed, usage_actual, StreamCapture};
+use super::budget::{request_model, settle_streamed, streamed_actual, usage_actual, StreamCapture};
 use super::context::{
     assistant_meta, cap_reasoning, role_str, safe_tool_calls_meta, tool_calls_meta,
     tool_result_meta,
@@ -553,7 +553,7 @@ impl<'a> ChatSession<'a> {
             // cap so a compliant provider cannot settle above the admitted
             // reservation. With no output cap there is no cap to honor, so
             // the request keeps the provider's default.
-            if let Some(reservation) = &reservation {
+            if let Some(reservation) = reservation.as_ref().map(|hold| hold.reservation()) {
                 if reservation.caps.tokens_out.is_some() {
                     let cap = u32::try_from(reservation.estimate.tokens_out).unwrap_or(u32::MAX);
                     request = request.with_max_tokens(cap);
@@ -578,6 +578,13 @@ impl<'a> ChatSession<'a> {
             let draft = rounds as u64;
             let delta_seq = std::sync::atomic::AtomicU64::new(0);
             let capture = Arc::new(StreamCapture::default());
+            // A turn dropped mid-call (its future cancelled while the provider
+            // has the request) settles the larger of the reserved estimate
+            // and what already streamed, never less than the reservation.
+            let reservation = reservation.map(|hold| {
+                let (capture, request, prices) = (Arc::clone(&capture), &request, self.prices);
+                hold.or_known(move || streamed_actual(request, &capture, provider, prices))
+            });
             // CAL-NO-TOOL-GUESS: while a data question has read nothing, the
             // text is held, so a guess the guard drops never reaches the app.
             let mut held: Option<Arc<Mutex<Vec<String>>>> = ((read_domain.is_some()
@@ -617,9 +624,8 @@ impl<'a> ChatSession<'a> {
                         // the provider may bill is not recorded as zero. The
                         // taint marks already written for earlier untrusted
                         // dispatches are untouched.
-                        if let Some(reservation) = &reservation {
+                        if let Some(reservation) = reservation {
                             settle_streamed(
-                                &self.store,
                                 reservation,
                                 &request,
                                 &capture,
@@ -649,15 +655,13 @@ impl<'a> ChatSession<'a> {
             let response = match completion {
                 Ok(response) => response,
                 Err(err) => {
-                    if let Some(reservation) = &reservation {
+                    if let Some(reservation) = reservation {
                         // The call failed after the provider had already been
                         // fed the prompt (and may already have generated some
                         // of the answer): settle the conservative estimate
-                        // instead of releasing at zero (I-01). A settle
-                        // failure is logged; the reservation still expires on
-                        // its TTL.
+                        // instead of releasing at zero (I-01). A failed
+                        // settle is retried; the reservation stays held.
                         settle_streamed(
-                            &self.store,
                             reservation,
                             &request,
                             &capture,
@@ -668,17 +672,13 @@ impl<'a> ChatSession<'a> {
                     return Err(err.into());
                 }
             };
-            match &reservation {
-                Some(reservation) => {
-                    let actual = usage_actual(
-                        &request,
-                        &response,
-                        request_model(self.provider, &request),
-                        self.prices,
-                    );
-                    self.store
-                        .with(|store| store.settle_reservation(reservation, &actual))?;
-                }
+            // Consumed whole (never left as `None`), so `request` is free below.
+            let settled = reservation.map(|reservation| {
+                let model = request_model(self.provider, &request);
+                reservation.settle(&usage_actual(&request, &response, model, self.prices))
+            });
+            match settled {
+                Some(settled) => settled?,
                 None => self.record_usage(&request, &response)?,
             }
             self.record_usage_call(&request, &response, rounds);

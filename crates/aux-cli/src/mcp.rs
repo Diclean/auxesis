@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use clap::{Args, Subcommand};
 use kernel_core::i18n::{format, text};
 use kernel_core::{Lang, Message};
-use kernel_mcp::{McpConfig, McpConfigError, McpRuntime, McpServerState};
+use kernel_mcp::{McpConfig, McpRuntime, McpServerState};
 
 /// `aux mcp <list|tools>`.
 #[derive(Debug, Args)]
@@ -36,7 +36,7 @@ enum McpAction {
 /// Run `aux mcp`.
 pub fn run(args: McpArgs, lang: Lang) -> ExitCode {
     let home = kernel_core::auxesis_home();
-    let config = match load(&home) {
+    let config = match auxd::mcp::load(&home) {
         Ok(config) => config,
         Err(err) => {
             let message = format(Message::McpConfigUnusable, lang, &[&err.to_string()]);
@@ -50,15 +50,6 @@ pub fn run(args: McpArgs, lang: Lang) -> ExitCode {
         McpAction::Tools { id } => print_tools(&runtime, &id, lang),
     }
     ExitCode::SUCCESS
-}
-
-/// Load `mcp.toml` through the verified home.
-fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
-    let path = kernel_core::verified_home_or_verify(home)
-        .and_then(|verified| verified.real_path())
-        .map_err(McpConfigError::Io)?
-        .join("mcp.toml");
-    McpConfig::load_from_path(&path)
 }
 
 /// Discover the enabled servers, applying the same web deny-domain gate as the

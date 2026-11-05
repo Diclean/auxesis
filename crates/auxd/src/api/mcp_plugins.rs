@@ -1951,8 +1951,10 @@ pub(super) async fn delete_server(
     })
     .await
 }
+/// `mcp.toml` read safely through the home's fd: a link or a FIFO is refused.
 fn read_config(home: &Path) -> Result<kernel_mcp::McpConfig, ()> {
-    kernel_mcp::McpConfig::load_from_path(&home.join("mcp.toml")).map_err(|_| ())
+    let home = kernel_core::SandboxHome::open_existing(home).map_err(drop)?;
+    crate::mcp::read_config(&home).map_err(drop)
 }
 async fn mutate(
     state: &std::sync::Arc<ApiState>,

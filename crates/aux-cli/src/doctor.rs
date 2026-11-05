@@ -467,7 +467,8 @@ fn parse_error_line(err: &aux_providers::ConfigError, path: &Path) -> Option<usi
         return None;
     };
     let span = source.span()?;
-    let text = std::fs::read_to_string(path).ok()?;
+    // The same safe read as the load: a file swapped for a FIFO since is no wait.
+    let text = aux_providers::config::read_existing(path).ok()?;
     let head = text.get(..span.start.min(text.len()))?;
     Some(head.matches('\n').count() + 1)
 }

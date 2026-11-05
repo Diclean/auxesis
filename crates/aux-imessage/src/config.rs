@@ -206,20 +206,25 @@ impl GatewaysConfig {
 }
 
 /// Read `<home>/gateways.toml`. A missing file is the default (disabled); an
-/// unreadable or invalid file is logged and reads back disabled.
+/// unreadable or invalid file is logged and reads back disabled. A link, a
+/// FIFO or a file over 1 MiB there is unreadable: refused at once, never
+/// followed nor waited on, so no channel opens from it.
 pub fn load(home: &Path) -> GatewaysConfig {
     load_file(&home.join(GATEWAYS_FILE))
 }
 
 /// Read an explicit `gateways.toml` (test seam and the helper binary).
 pub fn load_file(path: &Path) -> GatewaysConfig {
-    let bytes = match std::fs::read(path) {
+    let bytes = match read_bounded(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return GatewaysConfig::default();
         }
         Err(err) => {
-            tracing::warn!(error = %err, "gateways.toml is unreadable; gateways stay disabled");
+            tracing::warn!(
+                error = %err,
+                "gateways.toml is unreadable or not a regular file; gateways stay disabled"
+            );
             return GatewaysConfig::default();
         }
     };
@@ -246,6 +251,27 @@ pub fn load_file(path: &Path) -> GatewaysConfig {
             GatewaysConfig::default()
         }
     }
+}
+
+/// The bytes at `path`, opened once through its folder's handle as the kernel
+/// opens a config file (`O_NOFOLLOW | O_NONBLOCK`): never through a link nor
+/// waiting on a FIFO; a regular file of at most `MAX_CONFIG_BYTES`, read from
+/// that descriptor. Nothing is created: a missing folder or file is `NotFound`.
+fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    use kernel_core::config::MAX_CONFIG_BYTES;
+    use std::io::Read;
+    let path = std::path::absolute(path)?;
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    };
+    let dir = kernel_core::SandboxHome::open_existing(dir)?;
+    let file = dir.open_read_existing(Path::new(name), MAX_CONFIG_BYTES)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(std::io::ErrorKind::FileTooLarge.into());
+    }
+    Ok(bytes)
 }
 
 /// True when two handles name the same principal: email handles compare
@@ -357,5 +383,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = load(dir.path());
         assert!(!config.imessage.enabled);
+    }
+
+    /// A FIFO nobody writes to, a link or a dangling link at gateways.toml
+    /// reads back disabled at once: never a wait, and the link is never
+    /// followed although its target is a valid, enabled section.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_linked_gateways_file_reads_disabled_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = (dir.path().join(GATEWAYS_FILE), dir.path().join("o.toml"));
+        let owner = "owner_handles = [\"+33600000001\"]\nchat_guid = \"iMessage;-;+33600000001\"";
+        let section =
+            format!("[imessage]\nenabled = true\n{owner}\nagent_handle = \"a@example.test\"\n");
+        std::fs::write(&other, section).unwrap();
+        for kind in ["fifo", "link", "dangling"] {
+            match kind {
+                "fifo" => {
+                    let made = std::process::Command::new("mkfifo").arg(&path).status();
+                    assert!(made.unwrap().success());
+                }
+                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
+                _ => std::os::unix::fs::symlink(dir.path().join("gone"), &path).unwrap(),
+            }
+            let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+            std::thread::spawn(move || sent.send(load(&home).imessage.enabled));
+            let wait = std::time::Duration::from_secs(10);
+            assert!(!got.recv_timeout(wait).expect("blocked"), "{kind}");
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::fs::rename(&other, &path).unwrap();
+        assert!(load(dir.path()).imessage_usable(), "a regular file is read");
     }
 }

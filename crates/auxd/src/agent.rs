@@ -129,11 +129,13 @@ pub fn state(home: &Path, agent: &str) -> AgentState {
 }
 
 /// The sidecar a read should use: `agent.toml`, or the legacy `dot.toml` while
-/// `agent.toml` does not exist yet. Writes always use `agent.toml`.
+/// nothing is at `agent.toml`. A link there counts (it is then refused), never
+/// passed over for the other file. Writes always use `agent.toml`.
 fn config_read_path(home: &Path, agent: &str) -> PathBuf {
     let current = agent_dir(home, agent).join(AGENT_CONFIG_FILE);
     let legacy = agent_dir(home, agent).join(LEGACY_AGENT_CONFIG_FILE);
-    if !current.exists() && legacy.exists() {
+    let there = |path: &Path| std::fs::symlink_metadata(path).is_ok();
+    if !there(&current) && there(&legacy) {
         legacy
     } else {
         current
@@ -143,36 +145,15 @@ fn config_read_path(home: &Path, agent: &str) -> PathBuf {
 /// Read the sidecar; a missing file yields defaults.
 ///
 /// A present-but-unusable file is an error (fail closed): silently ignoring
-/// it would drop a tools allowlist.
+/// it would drop a tools allowlist. It is read as the soul is read, so a link
+/// or a FIFO there is refused at once, never followed nor waited on.
 pub fn config(home: &Path, agent: &str) -> Result<AgentConfig, AgentError> {
     let path = config_read_path(home, agent);
-    let meta = match std::fs::metadata(&path) {
-        Ok(meta) => meta,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(AgentConfig::default());
-        }
-        Err(err) => {
-            return Err(AgentError::Config(format!(
-                "could not read {}: {err}",
-                path.display()
-            )));
-        }
+    let name = path.file_name().unwrap_or_default();
+    let read = read_agent_file(home, agent, name, MAX_AGENT_CONFIG_BYTES);
+    let Some(text) = read.map_err(|err| AgentError::Config(err.to_string()))? else {
+        return Ok(AgentConfig::default());
     };
-    if !meta.is_file() {
-        return Err(AgentError::Config(format!(
-            "{} is not a regular file",
-            path.display()
-        )));
-    }
-    if meta.len() > MAX_AGENT_CONFIG_BYTES {
-        return Err(AgentError::Config(format!(
-            "{} is unexpectedly large ({} bytes)",
-            path.display(),
-            meta.len()
-        )));
-    }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|err| AgentError::Config(format!("could not read {}: {err}", path.display())))?;
     let mut config: AgentConfig = toml::from_str(&text).map_err(|err| {
         let file = path.display().to_string();
         AgentError::Config(
@@ -224,24 +205,37 @@ pub fn read_soul(home: &Path, agent: &str) -> Option<String> {
 
 /// Read an agent's soul through the verified home handle, or `None` when no soul
 /// file exists.
+fn read_soul_checked(home: &Path, agent: &str) -> Result<Option<String>, AgentError> {
+    let soul = soul_path(home, agent);
+    let name = soul.file_name().unwrap_or_default();
+    read_agent_file(home, agent, name, MAX_SOUL_BYTES)
+}
+
+/// Read the file `name` of an agent's directory through the verified home
+/// handle, or `None` when it does not exist.
 ///
 /// The read is fd-relative: `agents`, then the agent
-/// directory, then `soul.md` — every component opened with `O_NOFOLLOW`
-/// (`O_DIRECTORY` for the directories), so a symlinked agent directory or soul
+/// directory, then `name` — every component opened with `O_NOFOLLOW`
+/// (`O_DIRECTORY` for the directories), so a symlinked agent directory or file
 /// is refused instead of followed, and the leaf additionally with
 /// `O_NONBLOCK` so a FIFO can never block the daemon. The final descriptor is
 /// `fstat`ed: it must be a regular file owned by this process's uid, and the
-/// read is bounded to [`MAX_SOUL_BYTES`] + 1 bytes, so an oversized file is
+/// read is bounded to `max` + 1 bytes, so an oversized file is
 /// refused rather than silently truncated.
-fn read_soul_checked(home: &Path, agent: &str) -> Result<Option<String>, AgentError> {
-    let path = soul_path(home, agent);
+fn read_agent_file(
+    home: &Path,
+    agent: &str,
+    name: &std::ffi::OsStr,
+    max: u64,
+) -> Result<Option<String>, AgentError> {
+    let path = agent_dir(home, agent).join(name);
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => handle,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(AgentError::Io(err.to_string())),
     };
-    let rel = Path::new("agents").join(agent).join("soul.md");
-    let mut file = match handle.open_read_existing(&rel, MAX_SOUL_BYTES) {
+    let rel = Path::new("agents").join(agent).join(name);
+    let mut file = match handle.open_read_existing(&rel, max) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
@@ -265,14 +259,13 @@ fn read_soul_checked(home: &Path, agent: &str) -> Result<Option<String>, AgentEr
         }
     }
     let mut bytes = Vec::new();
-    Read::take(&mut file, MAX_SOUL_BYTES + 1)
+    Read::take(&mut file, max + 1)
         .read_to_end(&mut bytes)
         .map_err(|err| AgentError::Io(format!("could not read {}: {err}", path.display())))?;
-    if bytes.len() as u64 > MAX_SOUL_BYTES {
+    if bytes.len() as u64 > max {
         return Err(AgentError::Io(format!(
-            "{} is unexpectedly large (>{} bytes)",
-            path.display(),
-            MAX_SOUL_BYTES
+            "{} is unexpectedly large (>{max} bytes)",
+            path.display()
         )));
     }
     String::from_utf8(bytes)
@@ -518,6 +511,37 @@ mod tests {
             config(dir.path(), "scout"),
             Err(AgentError::Config(_))
         ));
+    }
+
+    /// A FIFO nobody writes to, a link or a dangling link at agent.toml fails
+    /// closed at once: never a wait, never followed, never passed over for the
+    /// legacy dot.toml nor read as no file (which would drop the allowlist).
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_linked_sidecar_fails_closed_at_once() {
+        let dir = tempdir().unwrap();
+        let agent = dir_of(dir.path(), "scout");
+        std::fs::create_dir_all(&agent).unwrap();
+        let path = agent.join(AGENT_CONFIG_FILE);
+        let other = agent.join(LEGACY_AGENT_CONFIG_FILE);
+        std::fs::write(&other, "tools = [\"read_file\"]\n").unwrap();
+        for kind in ["fifo", "link", "dangling"] {
+            match kind {
+                "fifo" => {
+                    let made = std::process::Command::new("mkfifo").arg(&path).status();
+                    assert!(made.unwrap().success());
+                }
+                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
+                _ => std::os::unix::fs::symlink(agent.join("gone"), &path).unwrap(),
+            }
+            let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+            std::thread::spawn(move || sent.send(config(&home, "scout").is_err()));
+            let wait = std::time::Duration::from_secs(10);
+            assert!(got.recv_timeout(wait).expect("blocked"), "{kind}");
+            std::fs::remove_file(&path).unwrap();
+        }
+        let tools = config(dir.path(), "scout").unwrap().tools.unwrap();
+        assert_eq!(tools, ["read_file"], "dot.toml is read");
     }
 
     #[test]

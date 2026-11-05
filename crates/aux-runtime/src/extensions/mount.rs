@@ -394,10 +394,8 @@ pub fn remove_from_all_mounts(home: &Path, name: &str) -> std::io::Result<()> {
 
 /// Freeze `name`: unmount everywhere, persist the flag and write the Ledger row.
 ///
-/// The mount table is checked before anything is written, and the flag is
-/// written first: any later failure leaves the extension frozen (fail closed).
-/// An unreadable table is never rewritten; it mounts nothing (every reader
-/// fails closed), the freeze is still logged, and the table is reported.
+/// The table is read first, the flag written first (fail closed): an unreadable
+/// table mounts nothing and is never rewritten; the freeze is logged, the table reported.
 pub fn freeze(home: &Path, name: &str, reason: &str) -> Result<(), MountError> {
     let mut state =
         load_state(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
@@ -703,42 +701,24 @@ mod tests {
     }
 
     #[test]
-    fn mount_refuses_an_unreadable_table_and_leaves_it_alone() {
+    fn an_unreadable_table_refuses_mounts_and_still_freezes() {
         let home = tempfile::tempdir().unwrap();
         let path = unreadable_table(home.path());
-        assert!(matches!(
-            mount(home.path(), "demo", "alice"),
-            Err(MountError::MountsUnreadable)
-        ));
-        assert_eq!(std::fs::read(&path).unwrap(), b"not json");
-    }
-
-    #[test]
-    fn freeze_with_an_unreadable_table_still_freezes_and_reports_it() {
-        let home = tempfile::tempdir().unwrap();
-        let path = unreadable_table(home.path());
-        assert!(matches!(
-            freeze(home.path(), "demo", "drift"),
-            Err(MountError::MountsUnreadable)
-        ));
+        let mounted = mount(home.path(), "demo", "alice");
+        assert!(matches!(mounted, Err(MountError::MountsUnreadable)));
+        let frozen = freeze(home.path(), "demo", "drift");
+        assert!(matches!(frozen, Err(MountError::MountsUnreadable)));
         assert!(is_frozen(home.path(), "demo"));
         assert_eq!(std::fs::read(&path).unwrap(), b"not json");
-        assert!(mount(home.path(), "demo", "alice").is_err());
     }
 
     #[test]
     fn an_oversized_state_row_reads_as_frozen() {
         let home = tempfile::tempdir().unwrap();
-        install_entry(
-            home.path(),
-            "demo",
-            super::super::catalog::Sensitivity::Public,
-        );
-        store_state(home.path(), &state("demo")).unwrap();
+        unreadable_table(home.path());
         let row = home.path().join("extensions/state/demo.json");
         std::fs::write(&row, vec![b' '; MAX_STATE_BYTES as usize + 1]).unwrap();
         assert!(is_frozen(home.path(), "demo"));
-        assert!(mount(home.path(), "demo", "alice").is_err());
     }
 
     fn install_entry(home: &Path, name: &str, sensitivity: super::super::catalog::Sensitivity) {

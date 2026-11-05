@@ -150,10 +150,13 @@ fn open_dir_anchored(
         };
         let name = std::ffi::CString::new(part.as_bytes())
             .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        // SAFETY: `dir` is an open directory fd owned by this frame and `name` a
+        // NUL-terminated CString that outlives the call; openat borrows both.
         let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), libc::O_RDONLY | flags) };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
         dir = unsafe { std::fs::File::from_raw_fd(fd) };
     }
     Ok(dir)
@@ -756,21 +759,6 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
     let mut record = |err: InstallError| {
         first_error.get_or_insert(err);
     };
-    // A `000` subdirectory makes the guarded home scan refuse the whole home, so
-    // owner bits are restored first; `make_writable_tree` never follows a link,
-    // and a real `extensions/` dir is required. Failures surface below.
-    let raw_root = extensions_dir(home);
-    if std::fs::symlink_metadata(&raw_root).is_ok_and(|meta| meta.is_dir()) {
-        for entry in std::fs::read_dir(&raw_root).into_iter().flatten().flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&format!("{name}@"))
-            {
-                let _ = make_writable_tree(&entry.path());
-            }
-        }
-    }
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => Some(handle),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -780,42 +768,7 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
         }
     };
     if let Some(handle) = handle.as_ref() {
-        // Trees and the state row are removed by name through the verified
-        // home: a link anywhere on the way is refused, and a planted link,
-        // FIFO or dangling state row is unlinked itself, never its target.
-        let extensions = Path::new("extensions");
-        // A root that exists but cannot be read is an error, never "nothing to remove".
-        let entries = anchored_dir_exists(handle, extensions).and_then(|exists| {
-            if !exists {
-                return Ok(None);
-            }
-            std::fs::read_dir(handle.real_path()?.join(extensions)).map(Some)
-        });
-        let entries = entries.unwrap_or_else(|err| {
-            record(err.into());
-            None
-        });
-        for entry in entries.into_iter().flatten().flatten() {
-            let file_name = entry.file_name();
-            if !file_name.to_string_lossy().starts_with(&format!("{name}@")) {
-                continue;
-            }
-            let rel = extensions.join(&file_name);
-            let result = (|| -> Result<(), InstallError> {
-                // `file_type` is the listing's own entry type: a link is never followed.
-                if !entry.file_type()?.is_dir() {
-                    let msg = format!("{} is not a directory", rel.display());
-                    return Err(std::io::Error::other(msg).into());
-                }
-                make_writable_tree(&handle.real_path()?.join(&rel))?;
-                handle.remove_dir_all(&rel)?;
-                Ok(())
-            })();
-            match result {
-                Ok(()) => removed += 1,
-                Err(err) => record(err),
-            }
-        }
+        removed = remove_trees(handle, name, &mut record);
         // State, mounts and secrets are cleaned up even when a tree could not be
         // deleted, and the first failure is reported at the end.
         if let Err(err) = remove_state_row(handle, name) {
@@ -838,6 +791,58 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
         Some(err) => Err(err),
         None => Ok(removed),
     }
+}
+
+/// Delete every `extensions/<name>@*` tree through the verified home, after it
+/// is verified: a link anywhere on the way is refused, never followed. Returns
+/// how many trees went; each failure is passed to `record`.
+fn remove_trees(
+    handle: &kernel_core::SandboxHome,
+    name: &str,
+    record: &mut impl FnMut(InstallError),
+) -> usize {
+    let extensions = Path::new("extensions");
+    // A root that exists but cannot be read is an error, never "nothing to remove".
+    let entries = anchored_dir_exists(handle, extensions).and_then(|exists| {
+        if !exists {
+            return Ok(None);
+        }
+        std::fs::read_dir(handle.real_path()?.join(extensions)).map(Some)
+    });
+    let entries = entries.unwrap_or_else(|err| {
+        record(err.into());
+        None
+    });
+    let mut removed = 0;
+    for entry in entries.into_iter().flatten().flatten() {
+        let file_name = entry.file_name();
+        if !file_name.to_string_lossy().starts_with(&format!("{name}@")) {
+            continue;
+        }
+        let rel = extensions.join(&file_name);
+        let result = (|| -> Result<(), InstallError> {
+            // `file_type` is the listing's own entry type: a link is never followed.
+            let kind = entry.file_type()?;
+            if !kind.is_dir() {
+                let (fr, en) = if kind.is_symlink() {
+                    ("est un lien symbolique", "is a symlink")
+                } else {
+                    ("n'est pas un dossier", "is not a directory")
+                };
+                let at = rel.display();
+                let msg = format!("refus de sandbox : {at} {fr}. / sandbox refused: {at} {en}.");
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg).into());
+            }
+            make_writable_tree(&handle.real_path()?.join(&rel))?;
+            handle.remove_dir_all(&rel)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => removed += 1,
+            Err(err) => record(err),
+        }
+    }
+    removed
 }
 
 /// Unlink `extensions/state/<name>.json` through the verified home. The row is
@@ -1400,7 +1405,8 @@ mod tests {
         let dir = extensions_dir(home.path()).join("demo@1.0.0");
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub/file"), b"x").unwrap();
-        set_mode(&dir.join("sub"), 0o000).unwrap();
+        // 0500, not 0000: the guarded home scan must still be able to read it.
+        set_mode(&dir.join("sub"), 0o500).unwrap();
         set_mode(&dir, 0o555).unwrap();
         let removed = remove(home.path(), "demo").unwrap();
         assert_eq!(removed, 1);
@@ -1409,25 +1415,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn remove_touches_nothing_in_a_home_it_cannot_verify() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let dir = extensions_dir(home.path()).join("demo@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        set_mode(&dir, 0o500).unwrap();
+        // The guard (on in CI) refuses a home holding a link; off, this home verifies.
+        std::os::unix::fs::symlink("gone", home.path().join("planted")).unwrap();
+        let result = remove(home.path(), "demo");
+        if kernel_core::sandbox_guard_active() {
+            assert!(result.is_err());
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o500, "no mode changes before verification");
+        }
+        let traversal = remove(home.path(), "../x");
+        assert!(matches!(traversal, Err(InstallError::NotInstalled(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn force_private_dir_never_follows_a_swapped_parent() {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        std::fs::create_dir(outside.path().join("state")).unwrap();
-        set_mode(&outside.path().join("state"), 0o755).unwrap();
+        let target = outside.path().join("state");
+        std::fs::create_dir(&target).unwrap();
+        set_mode(&target, 0o755).unwrap();
         let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
         // `extensions/` is swapped for a link after the handle was opened.
         std::os::unix::fs::symlink(outside.path(), home.path().join("extensions")).unwrap();
         assert!(force_private_dir(&handle, Path::new("extensions/state")).is_err());
-        let mode = std::fs::metadata(outside.path().join("state"))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(
-            mode & 0o777,
-            0o755,
-            "the link target's mode must not change"
-        );
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "the target's mode is kept");
     }
 
     #[cfg(unix)]
@@ -1458,21 +1478,44 @@ mod tests {
         assert!(real.join("extensions/demo@1.0.0/index.js").is_file());
     }
 
+    // Links are planted after the handle opens, as a swap would be: the guard
+    // (on in CI) refuses a home that already holds one before any of this runs.
     #[cfg(unix)]
     #[test]
-    fn remove_never_follows_a_linked_state_dir() {
+    fn a_state_dir_swapped_for_a_link_is_refused_at_the_link() {
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("demo.json"), b"{}").unwrap();
         std::fs::create_dir(home.path().join("extensions")).unwrap();
+        let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
         let state = home.path().join("extensions/state");
         std::os::unix::fs::symlink(outside.path(), &state).unwrap();
-        assert!(
-            remove(home.path(), "demo").is_err(),
-            "a linked state dir is reported"
-        );
+        let err = remove_state_row(&handle, "demo").unwrap_err();
+        // O_NOFOLLOW | O_DIRECTORY on a link: ELOOP on Linux, ENOTDIR on macOS.
+        let code = err.raw_os_error();
+        assert!(matches!(code, Some(libc::ELOOP | libc::ENOTDIR)), "{err}");
         assert!(outside.path().join("demo.json").is_file());
         assert!(std::fs::symlink_metadata(&state).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_swapped_for_a_link_is_refused_and_its_target_survives() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("kept"), b"x").unwrap();
+        std::fs::create_dir(home.path().join("extensions")).unwrap();
+        let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
+        let tree = extensions_dir(home.path()).join("demo@1.0.0");
+        std::os::unix::fs::symlink(outside.path(), &tree).unwrap();
+        let mut errors = Vec::new();
+        let removed = remove_trees(&handle, "demo", &mut |err| errors.push(err.to_string()));
+        assert_eq!(removed, 0);
+        assert!(
+            errors.len() == 1 && errors[0].contains("is a symlink"),
+            "{errors:?}"
+        );
+        assert!(outside.path().join("kept").is_file());
     }
 
     #[cfg(unix)]
@@ -1485,14 +1528,9 @@ mod tests {
         let mkfifo = std::process::Command::new("mkfifo").arg(&row).status();
         assert!(mkfifo.unwrap().success());
         remove(home.path(), "demo").unwrap();
-        assert!(
-            std::fs::symlink_metadata(&row).is_err(),
-            "the FIFO row is gone"
-        );
+        assert!(std::fs::symlink_metadata(&row).is_err(), "FIFO row gone");
     }
 
-    // A home holding a link is refused whole while the sandbox guard is on (CI),
-    // so the link rows are planted after the handle is opened, as a swap would be.
     #[cfg(unix)]
     #[test]
     fn a_link_or_dangling_state_row_is_unlinked_never_its_target() {
@@ -1507,10 +1545,7 @@ mod tests {
             let row = dir.join("demo.json");
             std::os::unix::fs::symlink(&link_to, &row).unwrap();
             remove_state_row(&handle, "demo").unwrap();
-            assert!(
-                std::fs::symlink_metadata(&row).is_err(),
-                "the link row is gone"
-            );
+            assert!(std::fs::symlink_metadata(&row).is_err(), "link row gone");
         }
         assert!(target.is_file(), "a link row's target survives");
     }

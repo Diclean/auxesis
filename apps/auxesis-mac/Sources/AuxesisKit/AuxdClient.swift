@@ -1036,6 +1036,18 @@ extension AuxdClient: TeamClient {
     }
 }
 
+extension AuxdClient: AgentTemplateClient {
+    public func agentTemplates() async throws -> [AgentTemplate] {
+        struct List: Decodable { let templates: [AgentTemplate] }
+        return try await perform(request("GET", "/v1/agent-templates"), as: List.self).templates
+    }
+
+    public func createAgent(template: String) async throws {
+        struct Body: Encodable { let template: String }
+        _ = try await post("/v1/agents", Body(template: template), as: AgentCreateResponse.self)
+    }
+}
+
 extension AuxdClient: MemoryClient {
     /// `GET /v1/agents/{id}/memory/view`: the sections and the suggestions.
     public func memorySnapshot(agent: String) async throws -> MemorySnapshot {

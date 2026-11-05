@@ -172,6 +172,10 @@ public enum UIKey: String, CaseIterable {
 
     // Menu bar
     case menuWorkingOne, menuWorkingMany, menuIdle, menuWaiting, menuOpen, menuQuit, menuOffline
+
+    // Add an agent (templates)
+    case addAgent, addAgentLede, addAgentAdded, addAgentConfirm, addAgentExceedsChief, addAgentDoes, addAgentAsks
+    case grantMailRead, grantMailDraft, grantMailSend, grantCalendarRead, grantCalendarWrite, grantClientsRead, grantClientsNote, grantDocumentsRead, grantDocumentsFile
 }
 
 public extension L10n {
@@ -197,6 +201,22 @@ public extension L10n {
     }()
 
     static let uiEnglish: [UIKey: String] = [
+        .addAgent: "Add an agent",
+        .addAgentLede: "Aux works alone until you add an agent. Each one gets only the access listed here.",
+        .addAgentAdded: "Already added",
+        .addAgentConfirm: "Add agent",
+        .addAgentExceedsChief: "This agent would get more access than Aux itself, so it was not created.",
+        .addAgentDoes: "Does on its own: %@",
+        .addAgentAsks: "Asks you first: %@",
+        .grantMailRead: "read mail",
+        .grantMailDraft: "draft replies",
+        .grantMailSend: "send mail",
+        .grantCalendarRead: "read the calendar",
+        .grantCalendarWrite: "add events",
+        .grantClientsRead: "read client records",
+        .grantClientsNote: "add client notes",
+        .grantDocumentsRead: "read documents",
+        .grantDocumentsFile: "file documents",
         .appName: "Auxesis",
         .go: "Go",
         .team: "Team",
@@ -908,6 +928,22 @@ public extension L10n {
 
     /// FR peers, key by key (Today). Missing keys fall back to EN.
     static let uiFrench: [UIKey: String] = [
+        .addAgent: "Ajouter un agent",
+        .addAgentLede: "Aux travaille seul tant que vous n’ajoutez pas d’agent. Chacun ne reçoit que les accès indiqués ici.",
+        .addAgentAdded: "Déjà ajouté",
+        .addAgentConfirm: "Ajouter l’agent",
+        .addAgentExceedsChief: "Cet agent aurait plus d’accès qu’Aux lui-même, il n’a donc pas été créé.",
+        .addAgentDoes: "Fait seul : %@",
+        .addAgentAsks: "Vous demande d’abord : %@",
+        .grantMailRead: "lire les e-mails",
+        .grantMailDraft: "rédiger des brouillons",
+        .grantMailSend: "envoyer des e-mails",
+        .grantCalendarRead: "lire l’agenda",
+        .grantCalendarWrite: "ajouter des événements",
+        .grantClientsRead: "lire les fiches clients",
+        .grantClientsNote: "annoter les fiches clients",
+        .grantDocumentsRead: "lire les documents",
+        .grantDocumentsFile: "classer les documents",
         .tabPlugins: "Plugins",
         .pluginsLede: "Les plugins donnent de nouveaux outils à vos agents. Parcourir cette liste ne connecte rien : un plugin ne tourne qu'après votre accord.",
         .pluginsInstalled: "Installés",

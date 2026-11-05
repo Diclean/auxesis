@@ -206,6 +206,7 @@ struct AgentSelectionList: View {
     @Binding var selected: String
     var workingOnly = false
     var onSelect: ((String) -> Void)?
+    @State private var adding: AgentTemplatesModel?
 
     var body: some View {
         let copy = Copy(language: language)
@@ -235,6 +236,15 @@ struct AgentSelectionList: View {
                             onSelect?(member.id)
                         }
                     }
+                    if !workingOnly, let client = shell.client as? AgentTemplateClient {
+                        Button {
+                            adding = AgentTemplatesModel(client: client, language: language) { await shell.store.refreshAgents() }
+                        } label: {
+                            Label(copy(.addAgent), systemImage: "plus")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("agent-selection-add")
+                    }
                     if !workingOnly {
                         Section {
                             Label([copy(.interruptRules), copy(.quietHours), copy(.channels)].joined(separator: " · "), systemImage: "bell")
@@ -256,6 +266,7 @@ struct AgentSelectionList: View {
         .background(palette.work.color)
         .accessibilityLabel(copy(.agentsRules))
         .onAppear { shell.loadProviders() }
+        .sheet(item: $adding) { model in AgentTemplatesSheet(model: model) }
     }
 
     private func agentState(_ member: TeamMember) -> String {

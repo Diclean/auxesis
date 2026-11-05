@@ -698,6 +698,12 @@ public final class Store: ObservableObject {
         }
     }
 
+    /// Re-read `GET /v1/agents` (after an agent was added).
+    public func refreshAgents() async {
+        guard let list = try? await transport.agents() else { return }
+        for agent in list { upsert(agent: agent) }
+    }
+
     private func upsert(agent agent: AgentSummary) {
         let mapped = Mapper.agent(
             from: agent,

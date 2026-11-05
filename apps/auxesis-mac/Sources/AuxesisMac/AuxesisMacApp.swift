@@ -74,6 +74,9 @@ enum MainWindowOpener {
 /// itself rather than pretending it can switch a window that is not there.
 final class MainWindowPresence: ObservableObject {
     @Published private(set) var hasMainWindow = false
+    /// What covers the window, for the greyed proposal items; their actions
+    /// read AppKit again when they run.
+    @Published private(set) var cover = MainWindowCover(noWindowOnScreen: true)
     private let center: NotificationCenter
     private var observers: [NSObjectProtocol] = []
 
@@ -86,6 +89,9 @@ final class MainWindowPresence: ObservableObject {
             NSWindow.willCloseNotification,
             NSWindow.didMiniaturizeNotification,
             NSWindow.didDeminiaturizeNotification,
+            // A sheet, an alert or a dialog opens or closes over a window.
+            NSWindow.willBeginSheetNotification,
+            NSWindow.didEndSheetNotification,
         ] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 // willClose arrives while the window still exists; one main
@@ -104,6 +110,24 @@ final class MainWindowPresence: ObservableObject {
         // The same predicate `applicationShouldHandleReopen` and the menu-bar
         // "Open" use: a minimized window still exists and still counts.
         hasMainWindow = (NSApp?.windows ?? []).contains { $0.canBecomeMain }
+        cover = .current
+    }
+}
+
+extension MainWindowCover {
+    /// What AppKit shows over the main window now: the `ProposalMenuGate` input.
+    static var current: MainWindowCover {
+        guard let app = NSApp else { return MainWindowCover(noWindowOnScreen: true) }
+        let windows = app.windows
+        return MainWindowCover(
+            // The window `MainWindowPresence` counts, on screen.
+            noWindowOnScreen: !windows.contains { $0.canBecomeMain && $0.isVisible && !$0.isMiniaturized },
+            // Every window, not only `mainWindow`: an app that is not frontmost
+            // has no main window, yet its sheet is still up.
+            sheetAttached: app.mainWindow?.attachedSheet != nil || windows.contains { $0.attachedSheet != nil },
+            keyWindowIsSheet: app.keyWindow?.sheetParent != nil,
+            modalSession: app.modalWindow != nil
+        )
     }
 }
 
@@ -313,30 +337,21 @@ struct TeamCommands: Commands {
             Button(shell.language == .fr ? "Demander à Aux…" : "Ask Aux…") { shell.askAux() }
                 .menuShortcut(.askAux)
                 .accessibilityLabel(shell.language == .fr ? "Demander à Aux…" : "Ask Aux…").accessibilityIdentifier("menu-ask-aux")
-            let selected = shell.selectedWaitingApproval
-            Button(shell.language == .fr ? "Envoyer la proposition" : "Send proposal") {
-                if let selected { shell.sendProposal(selected) }
-            }
-            .menuShortcut(.sendProposal)
-            .disabled(selected.map { !shell.canSendProposal($0) } ?? true)
-            .accessibilityLabel(shell.language == .fr ? "Envoyer la proposition" : "Send proposal").accessibilityIdentifier("menu-send-proposal")
-            let availability = ProposalMenuAvailability.evaluate(
-                hasSelection: selected != nil,
-                isEditing: selected.map { shell.editing == $0.id } ?? false,
-                stopped: shell.stopped,
-                textFieldFocused: AppTextFocus.isFocused
-            )
-            Button(shell.language == .fr ? "Modifier la proposition" : "Edit proposal") {
-                if availability.edit, let selected, !AppTextFocus.isFocused { shell.beginEdit(selected) }
-            }
-            .disabled(!availability.edit)
-            .accessibilityLabel(shell.language == .fr ? "Modifier la proposition" : "Edit proposal").accessibilityIdentifier("menu-edit-proposal")
-            Button(Copy(language: shell.language)(.apNotNow)) {
-                if availability.notNow, let selected { shell.notNow(selected) }
-            }
-            .menuShortcut(.notNow)
-            .disabled(!availability.notNow)
-            .accessibilityLabel(Copy(language: shell.language)(.apNotNow)).accessibilityIdentifier("menu-not-now")
+            // Send, Edit and Not now pass the one gate: greyed while the window
+            // is covered, and asked again when they run.
+            let cover = windows.cover
+            let textFocused = AppTextFocus.isFocused
+            Button(shell.language == .fr ? "Envoyer la proposition" : "Send proposal") { runProposal(.send) }
+                .menuShortcut(.sendProposal)
+                .disabled(!proposalEnabled(.send, cover: cover, textFocused: textFocused))
+                .accessibilityLabel(shell.language == .fr ? "Envoyer la proposition" : "Send proposal").accessibilityIdentifier("menu-send-proposal")
+            Button(shell.language == .fr ? "Modifier la proposition" : "Edit proposal") { runProposal(.edit) }
+                .disabled(!proposalEnabled(.edit, cover: cover, textFocused: textFocused))
+                .accessibilityLabel(shell.language == .fr ? "Modifier la proposition" : "Edit proposal").accessibilityIdentifier("menu-edit-proposal")
+            Button(Copy(language: shell.language)(.apNotNow)) { runProposal(.notNow) }
+                .menuShortcut(.notNow)
+                .disabled(!proposalEnabled(.notNow, cover: cover, textFocused: textFocused))
+                .accessibilityLabel(Copy(language: shell.language)(.apNotNow)).accessibilityIdentifier("menu-not-now")
             Divider()
             Button(L10n.ui(.panelToggle, shell.language)) { shell.toggleRightPanel() }
                 .menuShortcut(.togglePanel)
@@ -367,6 +382,20 @@ struct TeamCommands: Commands {
             }
             .accessibilityLabel(shell.language == .fr ? "Raccourcis clavier" : "Keyboard Shortcuts…").accessibilityIdentifier("menu-keyboard-shortcuts")
         }
+    }
+
+    /// A proposal item is on when the gate, as the window looked when the menu
+    /// drew, hands out an approval.
+    @MainActor
+    private func proposalEnabled(_ action: ProposalMenuGate.Action, cover: MainWindowCover, textFocused: Bool) -> Bool {
+        ProposalMenuGate.target(for: action, in: shell, cover: cover, textFieldFocused: textFocused) != nil
+    }
+
+    /// Every proposal item's action: the gate again, on AppKit as it is now,
+    /// so a sheet that opened after the menu drew leaves the item inert.
+    @MainActor
+    private func runProposal(_ action: ProposalMenuGate.Action) {
+        ProposalMenuGate.perform(action, in: shell, cover: .current, textFieldFocused: AppTextFocus.isFocused)
     }
 
     /// One Go item: the agents that exist get ⌘1…; a Records page has none.

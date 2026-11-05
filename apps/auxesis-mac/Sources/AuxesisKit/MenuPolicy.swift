@@ -497,6 +497,82 @@ public struct ProposalMenuAvailability: Equatable {
     }
 }
 
+/// What AppKit shows over the main window when a proposal menu item is drawn
+/// or run. The app reads it from `NSApp` (`MainWindowCover.current`); tests
+/// pass one in, so the gate below is proved without a window.
+public struct MainWindowCover: Equatable, Sendable {
+    /// No main window on screen: closed, minimised or hidden.
+    public var noWindowOnScreen: Bool
+    /// A window has an attached sheet: every `.sheet`, `.alert` and
+    /// `.confirmationDialog`, whether the model tracks it or not.
+    public var sheetAttached: Bool
+    /// The key window is itself a sheet.
+    public var keyWindowIsSheet: Bool
+    /// An app-modal session runs: an `NSAlert` or an open panel's `runModal()`.
+    public var modalSession: Bool
+
+    public init(noWindowOnScreen: Bool = false, sheetAttached: Bool = false,
+                keyWindowIsSheet: Bool = false, modalSession: Bool = false) {
+        self.noWindowOnScreen = noWindowOnScreen
+        self.sheetAttached = sheetAttached
+        self.keyWindowIsSheet = keyWindowIsSheet
+        self.modalSession = modalSession
+    }
+
+    /// Nothing covers the window.
+    public static let clear = MainWindowCover()
+
+    public var coversWindow: Bool { noWindowOnScreen || sheetAttached || keyWindowIsSheet || modalSession }
+}
+
+/// The one gate in front of every menu action that sends, edits or sets aside
+/// an approval (Agents ▸ Send proposal, Edit proposal, Not now). It hands out
+/// the approval only while it is on screen: the Waiting card the model selects
+/// (`selectedWaitingApproval`) with nothing AppKit shows over the window. The
+/// menu asks when it draws, so the items grey out, and again when the action
+/// runs, so a sheet the model never sees (a view's own `.sheet`, an alert, a
+/// modal panel) leaves the action inert.
+public enum ProposalMenuGate {
+    public enum Action: CaseIterable {
+        case send, edit, notNow
+    }
+
+    /// The approval `action` may touch now, or nil.
+    @MainActor
+    public static func target(
+        for action: Action, in shell: ShellModel, cover: MainWindowCover, textFieldFocused: Bool
+    ) -> Approval? {
+        guard !cover.coversWindow, let approval = shell.selectedWaitingApproval else { return nil }
+        let availability = ProposalMenuAvailability.evaluate(
+            hasSelection: true, isEditing: shell.editing == approval.id,
+            stopped: shell.stopped, textFieldFocused: textFieldFocused)
+        switch action {
+        // ⌘Return in the open editor sends the edit: text focus never blocks Send.
+        case .send: return shell.canSendProposal(approval) ? approval : nil
+        case .edit: return availability.edit ? approval : nil
+        case .notNow: return availability.notNow ? approval : nil
+        }
+    }
+
+    /// Runs `action` on the gate's approval. False, and nothing changes, when
+    /// the gate refuses.
+    @MainActor
+    @discardableResult
+    public static func perform(
+        _ action: Action, in shell: ShellModel, cover: MainWindowCover, textFieldFocused: Bool
+    ) -> Bool {
+        guard let approval = target(for: action, in: shell, cover: cover, textFieldFocused: textFieldFocused) else {
+            return false
+        }
+        switch action {
+        case .send: shell.sendProposal(approval)
+        case .edit: shell.beginEdit(approval)
+        case .notNow: shell.notNow(approval)
+        }
+        return true
+    }
+}
+
 /// Printable navigation keys are handled only by the view that owns their action,
 /// and never while the user is editing text.
 public enum ApprovalKeyboardPolicy {

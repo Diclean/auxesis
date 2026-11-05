@@ -148,7 +148,9 @@ const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } els
 
 /// The settlement worker, started by the first guard: one thread on an
 /// unbounded queue, so no drop waits on the store's lock or on SQLite and
-/// no job is ever turned away.
+/// no job is ever turned away. Each job keeps its row held until it
+/// settles, and the store refuses new reservations past a bound on held
+/// rows, so a store that stops settling cannot grow this queue without end.
 fn settler() -> &'static mpsc::Sender<Work> {
     static SETTLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
     SETTLER.get_or_init(|| {
@@ -248,8 +250,10 @@ fn try_settle(job: &SettleJob) -> bool {
     }
 }
 
-/// Settle `store`'s abandoned held rows, but those a job here still owes: its
-/// row may not hold the job's amount yet.
+/// Settle `store`'s abandoned held rows, but those a job here still owes: it
+/// records its own amount. A settle this cannot see (a job still in the
+/// channel, a direct one) may find its row claimed here; the store then
+/// records what it tops the claim by, once, so the live amount still wins.
 fn reconcile(store: &Arc<Mutex<Store>>, owed: &[Owed]) {
     let skip: Vec<i64> = (owed.iter())
         .filter(|(job, ..)| Arc::ptr_eq(&job.store, store))
@@ -1969,6 +1973,61 @@ mod tests {
             .unwrap();
         let totals = settled(&store);
         assert_eq!((totals.tokens_in, totals.tokens_out), (60, 9));
+    }
+
+    /// The race a minute reconcile can win: a live job still in the channel
+    /// while the reconcile claims its expired row. A worker of its own, its
+    /// queue filled before it starts, fixes that order without a sleep.
+    #[test]
+    fn a_job_still_queued_when_the_reconcile_claims_its_row_records_its_actual_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        let raw = aux_store::open_keyed(&path).unwrap();
+        raw.execute_batch(EXPIRE).unwrap();
+        let actual = UsageActual {
+            tokens_in: 90,
+            tokens_out: 20,
+            ..UsageActual::default()
+        };
+        let job = || {
+            let store = Arc::clone(&store);
+            let reservation = reservation.clone();
+            Work::Settle(Box::new(SettleJob {
+                store,
+                reservation,
+                actual,
+            }))
+        };
+        let (work, queue) = mpsc::channel();
+        // The reconcile runs on the first message, the job and its retry wait.
+        work.send(Work::Watch(Arc::downgrade(&store))).unwrap();
+        work.send(job()).unwrap();
+        work.send(job()).unwrap();
+        drop(work);
+        std::thread::spawn(move || settle_jobs(&queue))
+            .join()
+            .unwrap();
+        let claim = "SELECT tokens_in, tokens_out FROM usage_reconciled WHERE reservation_id = ?1";
+        let claimed: (i64, i64) = raw
+            .query_row(claim, [reservation.id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            claimed,
+            (90, 20),
+            "the reconcile claimed it, the job topped it"
+        );
+        let totals = settled(&store);
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out),
+            (90, 20),
+            "the actual, once"
+        );
     }
 
     #[test]

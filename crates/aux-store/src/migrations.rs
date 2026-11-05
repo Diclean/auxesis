@@ -1096,6 +1096,17 @@ pub(crate) const MIGRATION_V38_RESERVED_USD: &str =
 pub(crate) const MIGRATION_V39_UNSETTLED: &str =
     "ALTER TABLE usage_reservations ADD COLUMN unsettled TEXT;";
 
+/// v40: what a reconcile recorded for each held row it claimed, kept so a
+/// live settle that comes after records only what tops it, once.
+pub(crate) const MIGRATION_V40_RECONCILED: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_reconciled (
+    reservation_id INTEGER PRIMARY KEY,
+    tokens_in      INTEGER NOT NULL,
+    tokens_out     INTEGER NOT NULL,
+    usd_cents      INTEGER NOT NULL
+);
+"#;
+
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
 ///
 /// A store created by this build has a unique `idx_mcp_tools_wire` and this is
@@ -1487,6 +1498,10 @@ impl Store {
         }
         if version < 39 {
             self.apply_v39()?;
+        }
+        if version < 40 {
+            // The reconcile's claims on held rows. Purely additive DDL.
+            self.apply_migration_with_version(MIGRATION_V40_RECONCILED, 40)?;
         }
         // v15 is unreleased, but a store written by a pre-release draft may
         // already exist with the old non-unique wire index and duplicate wire

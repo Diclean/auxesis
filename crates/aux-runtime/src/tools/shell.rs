@@ -1134,12 +1134,9 @@ impl TreeReaper {
         }
     }
 
-    /// The command exited normally and is still unreaped. SIGKILL its whole
-    /// process group — every process it backgrounded with `&` is in it unless
-    /// it called `setsid()`/`setpgid()` — twice, so a member forking during
-    /// the first signal is caught. Then reap the root and wait, bounded by
-    /// `max_time`, until the group is empty. Returns the exit status and
-    /// whether the group was proven empty.
+    /// SIGKILL the exited, unreaped command's whole process group (`&`
+    /// children stay in it unless they `setsid()`/`setpgid()`) twice, reap
+    /// the root, then wait at most `max_time` for the group to be empty.
     async fn end_group(
         &mut self,
         max_time: Duration,
@@ -1241,9 +1238,8 @@ fn wait_exited_unreaped(_pid: i32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Poll (signal 0 only) until no process is left in group `pgid`, at most
-/// `max_time`. Signal 0 delivers nothing, so probing after the root was
-/// reaped is harmless even if the id were reused.
+/// Poll (signal 0, harmless even on a reused id) until group `pgid` is
+/// empty, at most `max_time`.
 async fn wait_group_empty(pgid: i32, max_time: Duration) -> bool {
     #[cfg(unix)]
     {
@@ -1438,11 +1434,9 @@ impl Tool for ShellTool {
         match stop {
             Stop::Exited(result) => {
                 result?;
-                // Nothing a call started outlives it. First the command's
-                // whole process group, while the exited root still pins it:
-                // `sleep 60 &` and `( … ) &` die here every time, with no
-                // process-table race. Then the scan, as the net for what left
-                // the group (`setsid()`/`setpgid()`, double forks).
+                // Nothing a call started outlives it: first the whole group,
+                // pinned by the unreaped root (no process-table race), then
+                // the scan as the net for what left the group.
                 let (status, group_empty) = reaper.end_group(self.sweep_time).await?;
                 let sweep = child_pid.map_or(Sweep::Clean, |root| {
                     sweep_leftovers_with(

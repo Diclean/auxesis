@@ -332,10 +332,11 @@ public final class Store: ObservableObject {
             } catch {
                 if Task.isCancelled || generation != sessionGeneration { return }
                 connection = connectionState(for: error)
-                // The service is not answering: the record cannot be read, so
-                // the footer says the count is unavailable rather than
-                // keeping a number the app can no longer stand behind.
-                privacyRecordRead = .unavailable
+                // A failed session does not decide the count. The footer keeps
+                // the record the last successful read brought in (loading
+                // before any read): only a failed `/v1/receipts` read says the
+                // count is unavailable, never a dropped socket or a daemon
+                // that is still starting.
                 maybeStartBundledService()
             }
             if Task.isCancelled || generation != sessionGeneration { return }

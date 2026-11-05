@@ -70,8 +70,9 @@ import XCTest
             let digits = MenuShortcuts.menu(agents: agents, language: .en).filter { $0.keys.dropFirst().allSatisfy(\.isNumber) && $0.keys.count == 2 }
             XCTAssertEqual(digits.map(\.title), GoMenu.agentItems(agents: agents).map { GoMenu.title(for: $0, language: .en) })
         }
-        let pages = Set(GoMenu.recordItems.map { GoMenu.title(for: $0, language: .en) })
-        XCTAssertTrue(MenuShortcuts.menu(agents: allFive, language: .en).allSatisfy { !pages.contains($0.title) }, "a Records page has no shortcut")
+        // The Clients and Documents pages share a name with their agents: check routes, not titles.
+        let shortcuts = GoMenu.entries(agents: allFive).compactMap(\.item).filter { $0.shortcut != nil }
+        XCTAssertTrue(shortcuts.allSatisfy { if case .agent = $0.route { return true } else { return false } }, "a Records page has no shortcut")
     }
 
     func testAddAnAgentWhileItsSheetIsOpenKeepsTheOpenSheet() {

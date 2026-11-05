@@ -14,7 +14,7 @@ quick-xml = "=0.41.0"
 # Exact decimal arithmetic only: the default features pull serde, rkyv, borsh,
 # bitvec and uuid, none of which this crate uses (C2b supply-chain review). The
 # app converts a `Decimal` through `Display`; nothing serialises it.
-rust_decimal = { version = "=1.39.0", default-features = false, features = ["std"] }
+rust_decimal = { version = "=1.43.0", default-features = false, features = ["std"] }
 thiserror = "2"
 
 [dev-dependencies]

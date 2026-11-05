@@ -145,13 +145,17 @@ pub fn config(home: &Path, agent: &str) -> Result<AgentConfig, AgentError> {
     let current = read(AGENT_CONFIG_FILE)?;
     let legacy = match current {
         Some(_) => None,
-        None => read(LEGACY_AGENT_CONFIG_FILE)?,
+        None => {
+            // A seen agent.toml that is gone at the open must not hand over to
+            // the older dot.toml: fail closed before any legacy read.
+            missing_sidecar(&dir.join(AGENT_CONFIG_FILE), current_seen)?;
+            read(LEGACY_AGENT_CONFIG_FILE)?
+        }
     };
     let (path, text) = match (current, legacy) {
         (Some(text), _) => (dir.join(AGENT_CONFIG_FILE), text),
         (None, Some(text)) => (dir.join(LEGACY_AGENT_CONFIG_FILE), text),
         (None, None) => {
-            missing_sidecar(&dir.join(AGENT_CONFIG_FILE), current_seen)?;
             missing_sidecar(&dir.join(LEGACY_AGENT_CONFIG_FILE), legacy_seen)?;
             return Ok(AgentConfig::default());
         }

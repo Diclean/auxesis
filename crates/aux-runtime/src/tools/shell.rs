@@ -639,6 +639,26 @@ fn visibility_of(n: i32, size: i32, errno: Option<i32>, zombie: bool, ppid: u32)
     }
 }
 
+/// True when the kernel says `pid` is a zombie right now (never a seam).
+#[cfg(target_os = "macos")]
+fn is_zombie(pid: i32) -> bool {
+    matches!(pid_visibility(pid), Visibility::Zombie { .. })
+}
+
+#[cfg(target_os = "linux")]
+fn is_zombie(pid: i32) -> bool {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    let state = stat
+        .rfind(')')
+        .and_then(|close| stat[close + 1..].split_whitespace().next());
+    state == Some("Z")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn is_zombie(_pid: i32) -> bool {
+    false
+}
+
 /// Linux lists a task under `/proc` only once it is fully created.
 #[cfg(not(target_os = "macos"))]
 fn pid_visibility(_pid: i32) -> Visibility {
@@ -1183,6 +1203,10 @@ fn identity_of(
             true => Identity::Same,
             false => Identity::Gone,
         };
+    }
+    // A zombie cannot fork: the kernel's own answer, whatever the seam says.
+    if is_zombie(tracked.pid) {
+        return Identity::Gone;
     }
     match visibility(tracked.pid) {
         Visibility::Unseen | Visibility::Zombie { .. } => Identity::Gone,

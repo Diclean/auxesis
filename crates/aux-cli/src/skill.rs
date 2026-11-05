@@ -403,6 +403,20 @@ fn operator_rules(verified: &SandboxHome) -> Result<Vec<kernel_broker::Rule>, St
     aux_engine::load_rules(&path.join("config.toml")).map_err(|err| err.to_string())
 }
 
+/// The operator's rules held to the agent's own grants, then to the chief
+/// ceiling, over every tool a skill can call, as `aux chat`, jobs and the
+/// daemon hold a turn: a skill run never does what the agent's grants or the
+/// chief could not.
+fn held_to_grants(
+    home: &Path,
+    agent: &str,
+    mut rules: Vec<kernel_broker::Rule>,
+) -> Vec<kernel_broker::Rule> {
+    let no_tools = kernel_broker::ToolRegistry::new();
+    auxd::api::constrain_non_api_turn(home, agent, &no_tools, &mut rules);
+    rules
+}
+
 /// Execute one skill for real: validate → rehydrate → approve → broker →
 /// connector → Ledger, with no retry.
 fn run_skill(
@@ -455,7 +469,7 @@ fn run_skill(
         }
     };
     let rules = match operator_rules(&verified) {
-        Ok(rules) => rules,
+        Ok(rules) => held_to_grants(home, agent_name, rules),
         Err(err) => {
             eprintln!("aux skill run: {err}");
             return ExitCode::FAILURE;
@@ -1005,6 +1019,19 @@ mod tests {
         stop: &dyn RunStop,
         clock: &dyn Clock,
     ) -> Result<RunOutcome, String> {
+        run_as("assistant", approver, connector, sink, rules, stop, clock).await
+    }
+
+    /// [`run_with`], run as `agent`.
+    async fn run_as(
+        agent_name: &str,
+        approver: &dyn SkillApprover,
+        connector: &CountingConnector,
+        sink: &Arc<kernel_broker::MemoryAuditSink>,
+        rules: Vec<kernel_broker::Rule>,
+        stop: &dyn RunStop,
+        clock: &dyn Clock,
+    ) -> Result<RunOutcome, String> {
         let skill = parse_skill(
             SEND_INVITE.as_bytes(),
             "send-invite.md",
@@ -1013,7 +1040,7 @@ mod tests {
         )
         .unwrap();
         let run = RunContext {
-            agent: "assistant",
+            agent: agent_name,
             run_id: "cli-test",
             schemas: None,
             owner_input: Some("Send the invitation to Camille Exemple."),
@@ -1069,6 +1096,69 @@ mod tests {
         );
         assert_eq!(connector.0.load(Ordering::SeqCst), 0, "nothing was sent");
         assert_eq!(sink.payloads("skill.run")[0]["outcome"], "refused");
+    }
+
+    /// The invite run as `agent` under `operator` held as `aux skill run`
+    /// holds it: its outcome, and how many calls reached the connector.
+    async fn invite_as(
+        home: &Path,
+        agent: &str,
+        operator: Vec<kernel_broker::Rule>,
+    ) -> (String, usize) {
+        let connector = CountingConnector::default();
+        let sink = Arc::new(kernel_broker::MemoryAuditSink::new());
+        let rules = held_to_grants(home, agent, operator);
+        let outcome = run_as(
+            agent,
+            &AlwaysYes,
+            &connector,
+            &sink,
+            rules,
+            &NeverStopped,
+            &ImmediateClock,
+        )
+        .await;
+        let outcome = match outcome {
+            Ok(RunOutcome::Done { .. }) => "done".to_string(),
+            Ok(RunOutcome::Refused { .. }) => "refused".to_string(),
+            other => format!("{other:?}"),
+        };
+        (outcome, connector.0.load(Ordering::SeqCst))
+    }
+
+    /// `aux skill run` is held to the agent's own grants, then to the chief,
+    /// as `aux chat`, jobs and the daemon are. Calendar's invite runs on its
+    /// shipped grants. With its `mail.send` set `off` it is refused before
+    /// any call, though the chief may send. Back on its shipped grants, a
+    /// wildcard deny of the chief caps it though the owner allows Calendar
+    /// after.
+    #[tokio::test]
+    async fn a_skill_run_is_held_to_the_agents_own_grants_and_the_chief() {
+        use aux_runtime::grants::{default_grants, ActionLevel};
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        std::fs::create_dir_all(aux_engine::agent_dir(home, "calendar")).unwrap();
+        let (done, refused) = (("done".to_string(), 2), ("refused".to_string(), 0));
+        assert_eq!(invite_as(home, "calendar", Vec::new()).await, done);
+        let shipped = default_grants("calendar").unwrap();
+        let mut own = shipped.clone();
+        for grant in own.can_do.iter_mut().filter(|g| g.skill == "mail.send") {
+            grant.level = ActionLevel::Off;
+        }
+        auxd::agents::write_grants(home, "calendar", &own).unwrap();
+        assert_eq!(invite_as(home, "calendar", Vec::new()).await, refused);
+        assert_eq!(invite_as(home, "main", Vec::new()).await, done);
+        auxd::agents::write_grants(home, "calendar", &shipped).unwrap();
+        let rule = |agent: &str, action: &str| {
+            format!("[[rules]]\nagent = \"{agent}\"\ntool = \"mail_send\"\naction = \"{action}\"\n")
+        };
+        let operator = rules_from(&format!(
+            "{}{}",
+            rule("*", "deny"),
+            rule("calendar", "allow")
+        ));
+        assert_eq!(invite_as(home, "calendar", operator).await, refused);
     }
 
     /// STOP raised before the run: the CLI refuses and sends nothing.

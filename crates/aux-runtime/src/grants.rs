@@ -48,12 +48,14 @@ const CONNECTOR_PREFIXES: [&str; 4] = ["google_", "apple_", "eventkit_", "mcp__"
 /// The daemon's own connector tools whose names carry a connector prefix.
 /// Only these resolve their domain scope from the name; any other prefixed
 /// or MCP tool needs an explicit grant (see [`AgentGrants::action_for_origin`]).
-const NATIVE_CONNECTOR_TOOLS: [&str; 6] = [
+const NATIVE_CONNECTOR_TOOLS: [&str; 7] = [
     "google_calendar_create_event",
     "google_gmail_create_draft",
     "google_gmail_send",
     "apple_calendar_list_events",
     "apple_calendar_create_event",
+    // The move-event skill's EventKit update, through the Mac bridge.
+    "apple_calendar_update_event",
     "apple_reminders_list",
 ];
 

@@ -482,9 +482,11 @@ struct RulesFile {
     rules: Vec<Rule>,
 }
 
-/// Load the optional `[[rules]]` section from the main config file.
+/// Load the optional `[[rules]]` section from the main config file, opened
+/// once by [`open_config`]: a symlink, a FIFO, another user's file or anything
+/// but a regular file is an error at once, never a wait.
 pub fn load_rules(path: &Path) -> Result<Vec<Rule>, RulesError> {
-    let text = std::fs::read_to_string(path)?;
+    let text = open_config(path, false)?.read(Duration::ZERO)?;
     let file: RulesFile = toml::from_str(&text).map_err(|err| RulesError::Parse {
         path: path.display().to_string(),
         source: kernel_core::redact_toml_error(&err, "config.toml", &text),
@@ -1056,7 +1058,10 @@ mod tests {
     #[test]
     fn special_files_are_refused_and_a_fifo_is_waited_on_only_so_long() {
         let dir = tempdir().unwrap();
-        let verified = kernel_core::verified_home_or_verify(dir.path()).unwrap();
+        // An unregistered handle: registering this home would make it the
+        // process's latest verified home, and a test running at the same time
+        // would read its FIFO config through `owner_contacts()`.
+        let verified = kernel_core::SandboxHome::open(dir.path()).unwrap();
         let path = dir.path().join("config.toml");
         let rule = Rule::new("main", "shell", Action::Allow);
         let mkfifo = |path: &Path| {
@@ -1071,6 +1076,7 @@ mod tests {
             }
             assert!(load_or_create(&path).is_err() && bootstrap_config(&verified).is_err());
             assert!(load_or_create_verified(&verified).is_err(), "{kind}");
+            assert!(load_rules(&path).is_err(), "{kind}");
             let wait = Duration::from_millis(100);
             assert!(append_rule_waiting(&path, &rule, wait).is_err(), "{kind}");
             let left = std::fs::symlink_metadata(&path).unwrap();

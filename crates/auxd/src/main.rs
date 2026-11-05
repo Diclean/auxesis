@@ -39,9 +39,9 @@ use tracing_subscriber::EnvFilter;
 /// uninstall` / `launchctl bootout` / Ctrl-C are never blocked by a run.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// How long shutdown waits, each try, for the budget settle worker to end:
-/// over the store's busy timeout (5 s, which a settle blocked on the database
-/// can spend) and the worker's 1 s to record what it owes. A retry mid-statement
+/// How long shutdown waits, each try, for the budget settle worker to end: over
+/// the store's busy timeout (5 s, which a settle blocked on the database can
+/// spend) and the worker's 1 s to record what it owes. A retry mid-statement
 /// when the process exits is a use-after-free in SQLCipher's exit hook.
 const SETTLE_STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(7);
 
@@ -99,14 +99,14 @@ fn main() -> ExitCode {
         (0..SETTLE_STOP_TRIES).any(|_| {
             let ended = aux_engine::stop_settle_worker(SETTLE_STOP_BOUND);
             if !ended {
-                eprintln!("auxd: waiting for the budget settle worker to end");
+                eprintln!("auxd: waiting for a budget settle (worker or inline) to end");
             }
             ended
         })
     });
     // Only after the post-grace descendant sweep, which an abort would skip.
     if !settled {
-        eprintln!("auxd: the budget settle worker did not end; aborting");
+        eprintln!("auxd: a budget settle (worker or inline) did not end; aborting");
         std::process::abort();
     }
     match result {

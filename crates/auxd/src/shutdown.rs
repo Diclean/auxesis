@@ -335,6 +335,15 @@ mod tests {
     const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
     /// Wait (bounded) for a pid to die.
+    /// A child killed but not yet reaped by its parent.
+    fn is_zombie(pid: u32) -> bool {
+        let stat = Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output();
+        let out = stat.map(|out| out.stdout).unwrap_or_default();
+        String::from_utf8_lossy(&out).trim_start().starts_with('Z')
+    }
+
     fn wait_for_exit(pid: u32) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while alive(pid) {
@@ -588,7 +597,9 @@ mod tests {
 
         let started = Instant::now();
         let grace_pidfile = pidfile.0.clone();
-        shutdown_runtime(root.id(), move || {
+        // What the grace returns comes back only after the post-grace sweep:
+        // the daemon aborts on it, and an abort runs no sweep of its own.
+        let graced = shutdown_everything(root.id(), None, move || {
             writeln!(stdin, "go").expect("release the shell");
             let _ = stdin.flush();
             // Wait until the child exists: the pid file is written after the
@@ -602,10 +613,12 @@ mod tests {
                 std::thread::sleep(POLL);
             }
             std::thread::sleep(POLL);
+            "graced"
         });
         let bounded = started.elapsed() < Duration::from_secs(3);
 
         let late = read_pid(&pidfile.0);
+        let signalled = late.is_some_and(|pid| !alive(pid) || is_zombie(pid));
         let swept = late.is_some_and(wait_for_exit);
         // Clean up (and the guards do it again on the way out) even when the
         // assertions below fail: a regression here must not leak a sleeper
@@ -626,6 +639,8 @@ mod tests {
             swept,
             "a child spawned during the grace must be swept after it"
         );
+        assert_eq!(graced, "graced", "the grace's result comes back");
+        assert!(signalled, "already swept when it does");
     }
 
     /// The post-grace sweep must never touch a process that is not a

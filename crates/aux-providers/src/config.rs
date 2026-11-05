@@ -434,7 +434,7 @@ pub fn load_providers(path: &Path) -> Result<Vec<ProviderConfig>, ConfigError> {
 /// descriptor. Nothing is created: a missing folder or file is `NotFound`.
 /// (This crate sits below `aux-engine`, whose `read_config_text` adds an
 /// owner check.)
-pub(crate) fn read_existing(path: &Path) -> std::io::Result<String> {
+pub fn read_existing(path: &Path) -> std::io::Result<String> {
     use kernel_core::config::MAX_CONFIG_BYTES;
     use std::io::Read;
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {

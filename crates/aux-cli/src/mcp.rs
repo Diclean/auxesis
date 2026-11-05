@@ -54,11 +54,7 @@ pub fn run(args: McpArgs, lang: Lang) -> ExitCode {
 
 /// Load `mcp.toml` through the verified home.
 fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
-    let path = kernel_core::verified_home_or_verify(home)
-        .and_then(|verified| verified.real_path())
-        .map_err(McpConfigError::Io)?
-        .join("mcp.toml");
-    McpConfig::load_from_path(&path)
+    auxd::mcp::load(home)
 }
 
 /// Discover the enabled servers, applying the same web deny-domain gate as the

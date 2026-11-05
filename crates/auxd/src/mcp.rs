@@ -141,22 +141,30 @@ async fn rebuild(home: &Path, slot: &McpSlot, mode: PrivacyMode, ordering: &McpO
     true
 }
 
-/// The verified path of `mcp.toml` (never a raw spelling of the home).
-pub fn config_path(home: &Path) -> std::io::Result<PathBuf> {
-    Ok(kernel_core::verified_home_or_verify(home)?
-        .real_path()?
-        .join(MCP_CONFIG_FILE))
-}
-
-/// Read and validate the user's MCP configuration.
+/// Read and validate the user's MCP configuration, through the verified home.
 ///
 /// A missing file is an empty configuration. The caller decides whether an
 /// invalid file is fatal (it is not: the daemon logs and keeps running).
 pub fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
-    match config_path(home) {
-        Ok(path) => McpConfig::load_from_path(&path),
-        Err(err) => Err(McpConfigError::Io(err)),
+    read_config(&kernel_core::verified_home_or_verify(home)?)
+}
+
+/// `mcp.toml` opened once through `home`'s fd (`O_NOFOLLOW | O_NONBLOCK`): a
+/// link, a FIFO or an oversized file is refused at once, never followed.
+pub fn read_config(home: &kernel_core::SandboxHome) -> Result<McpConfig, McpConfigError> {
+    use std::io::Read;
+    let max = kernel_mcp::MAX_MCP_CONFIG_BYTES;
+    let path = home.real_path()?.join(MCP_CONFIG_FILE);
+    let file = match home.open_read_existing(Path::new(MCP_CONFIG_FILE), max) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(McpConfig::default()),
+        file => file?,
+    };
+    let mut text = String::new();
+    file.take(max + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > max {
+        return Err(std::io::Error::other("mcp.toml grew past its cap").into());
     }
+    McpConfig::parse(&path.display().to_string(), &text)
 }
 
 /// The curated catalog pin for one configured server, if its claimed entry
@@ -554,5 +562,25 @@ main = ["X"]
         );
         assert_eq!(mcp.statuses()[0].reason, Some("catalog_stdio_unverifiable"));
         assert_eq!(mcp.tool_count(), 0);
+    }
+
+    /// A link or a FIFO at mcp.toml is an error at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_linked_mcp_toml_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = (dir.path().join(MCP_CONFIG_FILE), dir.path().join("o.toml"));
+        std::fs::write(&other, "[[server]]\nid = \"on\"\ntransport = \"http\"\nenabled = true\nurl = \"https://a.invalid/mcp\"\n").unwrap();
+        // Unregistered: no other test can reach this home.
+        let home = kernel_core::SandboxHome::open(dir.path()).unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(read_config(&home).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(read_config(&moved).is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
     }
 }

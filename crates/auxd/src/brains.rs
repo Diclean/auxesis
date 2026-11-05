@@ -58,9 +58,12 @@ impl FallbackLedger for StoreFallbackLedger {
     }
 }
 
-/// True when this home has a `providers.toml`.
+/// True when anything is at this home's `providers.toml`: a link (dangling
+/// too), a FIFO or a folder counts, and the load then refuses it. Only a
+/// missing name is absent, so it never falls back to the legacy provider.
 pub fn providers_toml_present(home: &Path) -> bool {
-    home.join(PROVIDERS_FILE).exists()
+    let there = std::fs::symlink_metadata(home.join(PROVIDERS_FILE));
+    !matches!(there, Err(err) if err.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// The agent's own brain reference: the `<provider>` or `<provider>/<model>`
@@ -316,5 +319,32 @@ impl ChatProvider for NoModelSkill {
 
     fn name(&self) -> &str {
         "none"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A link or a FIFO at providers.toml never falls back to config.toml.
+    #[cfg(unix)]
+    #[test]
+    fn an_unusable_providers_toml_is_refused_and_never_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let (path, other) = (home.join(PROVIDERS_FILE), home.join("o.toml"));
+        std::fs::write(&other, "[[provider]]\nid = \"p\"\nkind = \"openai\"\nmodels = [\"m\"]\nbase_url = \"http://127.0.0.1:9/v1\"\n[brain]\ndefault = \"p/m\"\n").unwrap();
+        std::fs::write(kernel_core::config_path(&home), "[[providers]]\nid = \"old\"\nkind = \"openai-compat\"\nmodel = \"m\"\nbase_url = \"http://127.0.0.2:9/v1\"\n").unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(providers_toml_present(&home));
+        assert!(resolved_entry(&home, None, None).is_err());
+        assert!(resolved_label(&home, None).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(resolved_entry(&moved, None, None).is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
     }
 }

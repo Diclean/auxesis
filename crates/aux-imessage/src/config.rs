@@ -206,14 +206,14 @@ impl GatewaysConfig {
 }
 
 /// Read `<home>/gateways.toml`. A missing file is the default (disabled); an
-/// unreadable or invalid file is logged and reads back disabled.
+/// unreadable, linked or FIFO file is logged and reads back disabled.
 pub fn load(home: &Path) -> GatewaysConfig {
     load_file(&home.join(GATEWAYS_FILE))
 }
 
 /// Read an explicit `gateways.toml` (test seam and the helper binary).
 pub fn load_file(path: &Path) -> GatewaysConfig {
-    let bytes = match std::fs::read(path) {
+    let bytes = match read_bounded(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return GatewaysConfig::default();
@@ -246,6 +246,25 @@ pub fn load_file(path: &Path) -> GatewaysConfig {
             GatewaysConfig::default()
         }
     }
+}
+
+/// The bytes at `path`, read as the kernel reads a config file (`O_NOFOLLOW |
+/// O_NONBLOCK`, bounded): never through a link nor waiting on a FIFO.
+fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    use kernel_core::config::MAX_CONFIG_BYTES;
+    use std::io::Read;
+    let path = std::path::absolute(path)?;
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    };
+    let dir = kernel_core::SandboxHome::open_existing(dir)?;
+    let file = dir.open_read_existing(Path::new(name), MAX_CONFIG_BYTES)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(std::io::ErrorKind::FileTooLarge.into());
+    }
+    Ok(bytes)
 }
 
 /// True when two handles name the same principal: email handles compare
@@ -357,5 +376,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = load(dir.path());
         assert!(!config.imessage.enabled);
+    }
+
+    /// A link or a FIFO at gateways.toml reads back disabled at once.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_linked_gateways_file_reads_disabled_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = (dir.path().join(GATEWAYS_FILE), dir.path().join("o.toml"));
+        std::fs::write(&other, "[imessage]\nenabled = true\n").unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(!load(dir.path()).imessage.enabled, "a link is refused");
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(load(&home).imessage.enabled));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(!got.recv_timeout(wait).expect("blocked"));
     }
 }

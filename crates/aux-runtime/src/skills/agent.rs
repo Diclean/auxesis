@@ -11,7 +11,6 @@
 //! it loads normally and is told, once, where the cap now lives.
 
 use std::fmt;
-use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -369,23 +368,35 @@ enum ReadError {
     Io(std::io::Error),
 }
 
-/// Read at most [`MAX_AGENT_BYTES`], refusing a final symlink.
+/// Read at most [`MAX_AGENT_BYTES`] through the kernel safe open: the agent
+/// directory as a handle, then the leaf (`O_NOFOLLOW | O_NONBLOCK`, `fstat`),
+/// so a link or FIFO swapped in after any path check is refused at once.
 fn read_bounded(path: &Path) -> Result<Vec<u8>, ReadError> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => return Err(ReadError::Symlink),
-        Ok(meta) if !meta.is_file() => {
-            return Err(ReadError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "not a regular file",
-            )));
-        }
-        Ok(_) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ReadError::NotFound);
+    read_bounded_with(path, || {})
+}
+
+fn read_bounded_with(path: &Path, before_open: impl FnOnce()) -> Result<Vec<u8>, ReadError> {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+    };
+    let home = match kernel_core::SandboxHome::open_existing(dir) {
+        Ok(home) => home,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(ReadError::NotFound),
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(ReadError::Symlink)
         }
         Err(err) => return Err(ReadError::Io(err)),
-    }
-    let file = fs::File::open(path).map_err(ReadError::Io)?;
+    };
+    before_open();
+    let file = match home.open_read_existing(Path::new(name), MAX_AGENT_BYTES) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(ReadError::NotFound),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
+            return Err(ReadError::TooLarge)
+        }
+        Err(err) if err.raw_os_error() == Some(libc::ELOOP) => return Err(ReadError::Symlink),
+        Err(err) => return Err(ReadError::Io(err)),
+    };
     let mut bytes = Vec::new();
     file.take(MAX_AGENT_BYTES + 1)
         .read_to_end(&mut bytes)
@@ -427,6 +438,7 @@ fn string_list(value: &Value, key: &str, file: &str) -> Result<Vec<String>, Agen
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
 
     #[test]
@@ -666,6 +678,41 @@ mod tests {
         symlink(dir.path().join("real-dot.toml"), agent_dir.join("dot.toml")).unwrap();
         let err = load_agent(&agent_dir).unwrap_err();
         assert!(err.reason.contains("symbolic link"), "{err}");
+    }
+
+    /// A link or FIFO swapped in before the open is refused at once (10 s bound).
+    #[cfg(unix)]
+    #[test]
+    fn a_link_or_fifo_swapped_in_before_the_open_is_refused() {
+        use std::{sync::mpsc, time::Duration};
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("assistant");
+        fs::create_dir_all(&agent_dir).unwrap();
+        let path = agent_dir.join("agent.md");
+        for kind in ["link", "fifo"] {
+            fs::write(&path, "---\nname: assistant\n---\n").unwrap();
+            let (target, (sent, got)) = (path.clone(), mpsc::channel());
+            std::thread::spawn(move || {
+                let result = read_bounded_with(&target, || {
+                    fs::remove_file(&target).unwrap();
+                    if kind == "link" {
+                        std::os::unix::fs::symlink("gone", &target).unwrap();
+                    } else {
+                        assert!(std::process::Command::new("mkfifo")
+                            .arg(&target)
+                            .status()
+                            .unwrap()
+                            .success());
+                    }
+                });
+                sent.send(result.is_err())
+            });
+            assert!(
+                got.recv_timeout(Duration::from_secs(10)).expect("blocked"),
+                "{kind}"
+            );
+            fs::remove_file(&path).unwrap();
+        }
     }
 
     #[test]

@@ -444,9 +444,10 @@ pub fn parse_providers_toml(text: &str) -> Result<ProvidersFile, ConfigError> {
     Ok(file)
 }
 
-/// Load and validate `providers.toml`.
+/// Load and validate `providers.toml`, read safely: a link, a FIFO, a folder or
+/// an oversized file is an error at once, never followed nor waited on.
 pub fn load_providers_toml(path: &Path) -> Result<ProvidersFile, ConfigError> {
-    let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+    let text = crate::config::read_existing(path).map_err(|source| ConfigError::Io {
         path: path.display().to_string(),
         source,
     })?;
@@ -454,7 +455,8 @@ pub fn load_providers_toml(path: &Path) -> Result<ProvidersFile, ConfigError> {
 }
 
 /// Load `providers.toml` from an Auxesis home, treating a missing file as
-/// empty (so a fresh install with no providers is not an error).
+/// empty (so a fresh install with no providers is not an error). A dangling
+/// link is an error, never an empty file.
 pub fn load_providers_for_home(home: &Path) -> Result<ProvidersFile, ConfigError> {
     match load_providers_toml(&home.join(PROVIDERS_FILE)) {
         Ok(file) => Ok(file),
@@ -634,12 +636,11 @@ fn comment_out_legacy_providers(config: &str, today: &str) -> Option<String> {
 /// Migrate a legacy `[[providers]]` table from `config.toml` into
 /// `providers.toml` once.
 ///
-/// Idempotent: when `providers.toml` already exists, nothing is read from the
-/// legacy table and nothing is written. The migration never reads or copies a
-/// Keychain item.
+/// Idempotent: when anything is at `providers.toml` (a dangling link too),
+/// nothing is read from the legacy table and nothing is written. No Keychain.
 pub fn migrate_legacy_config(home: &Path, today: &str) -> Result<MigrationOutcome, ConfigError> {
     let providers_path = home.join(PROVIDERS_FILE);
-    if providers_path.exists() {
+    if std::fs::symlink_metadata(&providers_path).is_ok() {
         return Ok(MigrationOutcome::Skipped);
     }
     let config_path = home.join("config.toml");
@@ -1162,6 +1163,31 @@ preset = "ollama"
         let outcome = migrate_legacy_config(dir.path(), "2026-10-12").unwrap();
         assert_eq!(outcome, MigrationOutcome::Skipped);
         assert!(!dir.path().join(PROVIDERS_FILE).exists());
+    }
+
+    /// A link or a FIFO at providers.toml is an error at once, never "no
+    /// file"; the migration writes nothing over it.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_linked_providers_toml_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = (dir.path().join(PROVIDERS_FILE), dir.path().join("o.toml"));
+        std::fs::write(&other, FULL).unwrap();
+        let legacy = "[[providers]]\nid = \"x\"\nkind = \"fake\"\nmodel = \"m\"\n";
+        std::fs::write(dir.path().join("config.toml"), legacy).unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(load_providers_for_home(dir.path()).is_err());
+        assert_eq!(
+            migrate_legacy_config(dir.path(), "2026-11-05").unwrap(),
+            MigrationOutcome::Skipped
+        );
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(load_providers_for_home(&home).is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
     }
 
     #[test]

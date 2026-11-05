@@ -545,11 +545,11 @@ fn pid_ppid_uid_start(_pid: i32) -> Option<(i32, u32, u64)> {
 }
 
 /// What the kernel can say right now about a pid from the process listing.
-/// Only macOS reports zombies and unseen pids here.
+/// Only macOS reports zombies, unseen and unknown pids here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 enum Visibility {
-    /// Alive and described, or a process we may not inspect (`EPERM`).
+    /// Alive and described, whoever owns it.
     Described,
     /// Exited and not reaped yet; `orphan` when launchd is its parent.
     Zombie { orphan: bool },
@@ -559,40 +559,50 @@ enum Visibility {
     /// listing. `getsid` fails on it too, so no scan can tell whether it
     /// belongs to the call.
     Unseen,
+    /// Any answer but a full one or `ESRCH`: a short read, `EPERM` (this query
+    /// has no owner check, so only a security policy refuses it), `EIO` or
+    /// another errno. It says nothing about the pid, so it counts like `Unseen`.
+    Unknown,
 }
 
-/// [`Visibility`] of a listed pid. `PROC_PIDTBSDINFO` describes a zombie only
-/// when `arg` is non-zero: with `0` (what [`pid_ppid_uid_start`] passes) a
-/// zombie fails with `ESRCH` exactly like a process still being created.
+/// [`Visibility`] of a listed pid. `PROC_PIDT_SHORTBSDINFO` has no owner check
+/// in xnu, so it describes root and other-user processes too, which
+/// `PROC_PIDTBSDINFO` refuses with `EPERM`. It describes a zombie only when
+/// `arg` is non-zero: with `0` (what [`pid_ppid_uid_start`] passes) a zombie
+/// fails with `ESRCH` exactly like a process still being created.
 #[cfg(target_os = "macos")]
 fn pid_visibility(pid: i32) -> Visibility {
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as i32;
     // SAFETY: `info` is a live, correctly sized buffer and `proc_pidinfo`
     // writes at most `size` bytes into it.
     let n = unsafe {
         libc::proc_pidinfo(
             pid,
-            libc::PROC_PIDTBSDINFO,
+            libc::PROC_PIDT_SHORTBSDINFO,
             1,
             info.as_mut_ptr().cast(),
             size,
         )
     };
-    if n == size {
-        // SAFETY: the exact-size return proves the whole struct was written.
-        let info = unsafe { info.assume_init() };
-        if info.pbi_status == libc::SZOMB {
-            return Visibility::Zombie {
-                orphan: info.pbi_ppid == 1,
-            };
-        }
-        return Visibility::Described;
-    }
-    if n <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        Visibility::Unseen
-    } else {
-        Visibility::Described
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    // SAFETY: zeroed and at most partly overwritten, so fully initialised;
+    // any bytes are a valid value of this integer-only struct.
+    let info = unsafe { info.assume_init() };
+    let zombie = info.pbsi_status == libc::SZOMB;
+    visibility_of(n, size, errno, zombie, info.pbsi_ppid)
+}
+
+/// Sorts one `proc_pidinfo` answer: `n` of `size` bytes written, then
+/// `errno`; `zombie` and `ppid` count only in a full answer. Anything but a
+/// full answer or `ESRCH` fails closed. Pure, so tested on every OS.
+#[cfg(any(target_os = "macos", test))]
+fn visibility_of(n: i32, size: i32, errno: Option<i32>, zombie: bool, ppid: u32) -> Visibility {
+    match (n == size, zombie) {
+        (true, true) => Visibility::Zombie { orphan: ppid == 1 },
+        (true, false) => Visibility::Described,
+        _ if n <= 0 && errno == Some(libc::ESRCH) => Visibility::Unseen,
+        _ => Visibility::Unknown,
     }
 }
 
@@ -1107,11 +1117,13 @@ fn sweep_leftovers_with(
                     //   trace higher up keeps the pass open, and this zombie
                     //   need not. Counting every zombie let one unrelated
                     //   zombie anywhere on the machine keep every pass unclean.
+                    // An `Unknown` answer cannot rule out either trace, so it
+                    // keeps the pass open like `Unseen`: fail closed.
                     let own = std::process::id() as i32;
                     let mut unsettled = false;
                     for &pid in all.iter().filter(|&&pid| pid > 1 && pid != own) {
                         match visibility(pass, pid) {
-                            Visibility::Unseen => unsettled = true,
+                            Visibility::Unseen | Visibility::Unknown => unsettled = true,
                             Visibility::Zombie { orphan: true } => {
                                 unsettled |= counted_zombies.insert(pid);
                             }
@@ -2470,6 +2482,59 @@ mod tests {
             MAX_SWEEP_TIME,
         );
         assert_eq!(sweep, Sweep::Incomplete(0));
+        // An answer that says nothing fails closed the same way: the sweep
+        // ends `Incomplete`, so the caller notes it and keeps its reaper armed.
+        let sweep = sweep_leftovers_with(
+            i32::MAX,
+            &marker,
+            &pid_ppid_uid_start,
+            &|_pass| Vec::new(),
+            &|_pass, _pid| Visibility::Unknown,
+            3,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Incomplete(0));
+    }
+
+    /// Only a full answer or `ESRCH` says something about a listed pid. A
+    /// short read, `EPERM`, `EIO` or no errno is `Unknown`, never `Described`.
+    #[test]
+    fn an_indeterminate_pid_answer_is_unknown() {
+        use Visibility::*;
+        let full = 64;
+        for (n, errno, zombie, ppid, want) in [
+            (full, None, true, 1, Zombie { orphan: true }),
+            (full, None, true, 7, Zombie { orphan: false }),
+            (full, None, false, 1, Described),
+            (0, Some(libc::ESRCH), false, 0, Unseen),
+            (32, Some(libc::ESRCH), true, 1, Unknown),
+            (0, Some(libc::EPERM), false, 0, Unknown),
+            (0, Some(libc::EIO), false, 0, Unknown),
+            (0, None, false, 0, Unknown),
+        ] {
+            let got = visibility_of(n, full, errno, zombie, ppid);
+            assert_eq!(got, want, "n {n}, errno {errno:?}");
+        }
+    }
+
+    /// `PROC_PIDTBSDINFO` refuses every root or other-user process with `EPERM`,
+    /// hundreds on a Mac: failing closed on that would cap every sweep. The
+    /// probe describes them all, so no listed pid reads `Unknown`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn other_users_processes_are_described_not_unknown() {
+        // pid 1 is launchd, owned by root.
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(pid_ppid_uid_start(1), None);
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            assert_eq!(errno, Some(libc::EPERM));
+        }
+        assert_eq!(pid_visibility(1), Visibility::Described);
+        let unknown: Vec<i32> = all_pids()
+            .into_iter()
+            .filter(|&pid| pid_visibility(pid) == Visibility::Unknown)
+            .collect();
+        assert!(unknown.is_empty(), "unreadable pids: {unknown:?}");
     }
 
     /// A real zombie: a child of this test process that has exited and stays

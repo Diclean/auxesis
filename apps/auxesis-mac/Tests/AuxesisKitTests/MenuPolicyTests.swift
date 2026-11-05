@@ -110,8 +110,10 @@ import XCTest
     /// view is a chord the collision test below cannot see, so only the one
     /// bridge in `AuxesisMacApp.swift` may spell one out.
     func testEveryViewShortcutIsReadFromATable() throws {
-        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        let sources = tests.deletingLastPathComponent()
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // MenuPolicyTests.swift -> AuxesisKitTests
+            .deletingLastPathComponent()   // -> Tests
+            .deletingLastPathComponent()   // -> apps/auxesis-mac
             .appendingPathComponent("Sources/AuxesisMac", isDirectory: true)
         let files = FileManager.default.enumerator(
             at: sources,

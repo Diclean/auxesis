@@ -1648,7 +1648,7 @@ mod tests {
         // client's own time zone, the money a reservation holds, the held
         // reservation, its claim and the claim's age.
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 41);
+        assert_eq!(SCHEMA_VERSION, 42);
     }
 
     #[test]

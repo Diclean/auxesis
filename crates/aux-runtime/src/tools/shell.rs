@@ -87,6 +87,10 @@ pub struct ShellTool {
     /// [`MAX_SWEEP_TIME`].
     sweep_passes: usize,
     sweep_time: Duration,
+    /// Tests only: which exit kill steps run. A real build has no such field
+    /// and always runs both ([`ExitSteps::BOTH`]).
+    #[cfg(test)]
+    exit_steps: ExitSteps,
 }
 
 impl Default for ShellTool {
@@ -97,6 +101,8 @@ impl Default for ShellTool {
             memory_limit: sandbox::MAX_COMMAND_MEMORY_BYTES,
             sweep_passes: MAX_SWEEP_PASSES,
             sweep_time: MAX_SWEEP_TIME,
+            #[cfg(test)]
+            exit_steps: ExitSteps::BOTH,
         }
     }
 }
@@ -961,6 +967,25 @@ enum Sweep {
     Incomplete(usize),
 }
 
+/// The two kill steps that run, in this order, when the command exits on its
+/// own. Production always runs both ([`ExitSteps::BOTH`]); a test turns one
+/// off to prove that the other works alone.
+#[derive(Debug, Clone, Copy)]
+struct ExitSteps {
+    /// SIGKILL the command's whole process group, pinned by the unreaped root.
+    group_kill: bool,
+    /// The session and marker scan for what left the group, and the armed
+    /// reaper's retry of it.
+    scan: bool,
+}
+
+impl ExitSteps {
+    const BOTH: Self = Self {
+        group_kill: true,
+        scan: true,
+    };
+}
+
 /// SIGKILL what an exited command left behind: the members of its session
 /// (the kernel never reuses a session id while a member lives) and the
 /// processes holding its marker, each pid re-checked right before its
@@ -1137,8 +1162,10 @@ impl TreeReaper {
     /// SIGKILL the exited, unreaped command's whole process group (`&`
     /// children stay in it unless they `setsid()`/`setpgid()`) twice, reap
     /// the root, then wait at most `max_time` for the group to be empty.
+    /// `group_kill` is false only in a test that proves the scan alone.
     async fn end_group(
         &mut self,
+        group_kill: bool,
         max_time: Duration,
     ) -> std::io::Result<(std::process::ExitStatus, bool)> {
         let Some(child) = self.child.as_mut() else {
@@ -1146,8 +1173,10 @@ impl TreeReaper {
                 "shell: the command was already reaped",
             ));
         };
+        #[cfg(not(unix))]
+        let _ = group_kill;
         #[cfg(unix)]
-        if let Some(pid) = child.id() {
+        if let Some(pid) = child.id().filter(|_| group_kill) {
             for _ in 0..2 {
                 // SAFETY: `kill` is the documented libc signal call. The
                 // root is exited but unreaped, so its pid and pgid stay
@@ -1434,12 +1463,17 @@ impl Tool for ShellTool {
         match stop {
             Stop::Exited(result) => {
                 result?;
+                #[cfg(not(test))]
+                let steps = ExitSteps::BOTH;
+                #[cfg(test)]
+                let steps = self.exit_steps;
                 // Nothing a call started outlives it: first the whole group,
                 // pinned by the unreaped root (no process-table race), then
                 // the scan as the net for what left the group.
-                let (status, group_empty) = reaper.end_group(self.sweep_time).await?;
-                let sweep = child_pid.map_or(Sweep::Clean, |root| {
-                    sweep_leftovers_with(
+                let (status, group_empty) =
+                    reaper.end_group(steps.group_kill, self.sweep_time).await?;
+                let sweep = match child_pid {
+                    Some(root) if steps.scan => sweep_leftovers_with(
                         root as i32,
                         &reaper.marker,
                         &pid_ppid_uid_start,
@@ -1447,9 +1481,12 @@ impl Tool for ShellTool {
                         &|_pass, pid| pid_not_yet_visible(pid),
                         self.sweep_passes,
                         self.sweep_time,
-                    )
-                });
-                if group_empty && matches!(sweep, Sweep::Clean) {
+                    ),
+                    _ => Sweep::Clean,
+                };
+                // The armed reaper's retry is a scan too, so a test that
+                // turned the scan off turns that off as well.
+                if !steps.scan || (group_empty && matches!(sweep, Sweep::Clean)) {
                     reaper.disarm();
                 }
                 let out = read_capture(&mut stdout_capture)?;
@@ -2430,91 +2467,126 @@ mod tests {
         assert!(!output.is_error, "{}", head(&output.content, 400));
     }
 
-    /// Leaves the command's group and session *before* the command exits
-    /// (`setsid()`, then a ready file the command waits for), so the group
-    /// kill cannot reach it: only the marker scan can.
-    #[cfg(target_os = "macos")]
-    const SETSID_ESCAPEE: &str = "/usr/bin/perl -MPOSIX -e 'POSIX::setsid(); \
-         open(my $r, q(>), q(.ready)) or exit 1; close $r; sleep 300' \
-         </dev/null >/dev/null 2>&1 & echo $! > bg.pid; i=0; \
-         while [ ! -f .ready ]; do i=$((i + 1)); [ $i -gt 1000 ] && exit 1; \
-         sleep 0.01; done; echo hi";
+    /// A command whose background child leaves the command's process group
+    /// with the perl call `leave` *before* the command exits: the child then
+    /// makes a ready file, which the command waits for (bounded). So the group
+    /// kill cannot reach it; only the scan can. Its pid lands in `bg.pid`.
+    #[cfg(unix)]
+    fn escapee(leave: &str) -> String {
+        format!(
+            "/usr/bin/perl -MPOSIX -e '{leave} or exit 1; \
+             open(my $r, q(>), q(.ready)) or exit 1; close $r; sleep 300' \
+             </dev/null >/dev/null 2>&1 & echo $! > bg.pid; i=0; \
+             while [ ! -f .ready ]; do i=$((i + 1)); [ $i -gt 1000 ] && exit 1; \
+             sleep 0.01; done; echo hi"
+        )
+    }
 
-    /// The scan stays the net for what the group kill cannot reach: a
-    /// `setsid()` escapee still holding the call's marker is reaped.
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn a_setsid_escapee_is_still_reaped_by_the_scan() {
-        let dir = tempdir().unwrap();
-        let output = test_tool(Duration::from_secs(10))
-            .run(&json!({"command": SETSID_ESCAPEE}), &ctx(dir.path()))
-            .await
-            .unwrap();
-        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
-        let pid = raw.trim().parse::<i32>().unwrap();
-        // It was killed during the call; launchd reaps it shortly after.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut gone = false;
-        while std::time::Instant::now() < deadline {
-            // SAFETY: signal 0 only probes a pid this test's command reported.
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                gone = true;
-                break;
+    /// The pid a test command wrote to `bg.pid`.
+    #[cfg(unix)]
+    fn bg_pid(dir: &std::path::Path) -> i32 {
+        let raw = std::fs::read_to_string(dir.join("bg.pid")).unwrap();
+        raw.trim().parse::<i32>().unwrap()
+    }
+
+    /// Waits at most `limit` for `pid` to be gone. A process killed during the
+    /// call is reaped by init (launchd) right after it, so it goes at once; one
+    /// still there at the limit is SIGKILLed, so a failing test cannot leak it.
+    #[cfg(unix)]
+    async fn gone_within(pid: i32, limit: Duration) -> bool {
+        let deadline = std::time::Instant::now() + limit;
+        // SAFETY: signal 0 only probes a pid this test's command reported.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            if std::time::Instant::now() >= deadline {
+                // SAFETY: best-effort SIGKILL of a process this test spawned.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                return false;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        if !gone {
-            // SAFETY: best-effort SIGKILL so a failure cannot leak the escapee.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-        }
-        assert!(gone, "setsid escapee {pid} survived the call");
+        true
+    }
+
+    /// Exit step 1 alone: with the scan off, only the group kill can take a
+    /// backgrounded sleeper that stays in the command's group. Without the
+    /// group signal in `end_group`, the sleeper outlives the call and the
+    /// group never empties, so this fails.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_group_kill_alone_takes_a_sleeper_left_in_the_group() {
+        let dir = tempdir().unwrap();
+        let mut tool = test_tool(Duration::from_secs(10));
+        tool.exit_steps = ExitSteps {
+            group_kill: true,
+            scan: false,
+        };
+        let output = tool
+            .run(
+                &json!({"command": "sleep 300 & echo $! > bg.pid; echo hi"}),
+                &ctx(dir.path()),
+            )
+            .await
+            .unwrap();
+        let pid = bg_pid(dir.path());
+        assert!(
+            gone_within(pid, Duration::from_secs(5)).await,
+            "sleeper {pid} outlived the call: the group kill did not take it"
+        );
         assert!(!output.is_error, "{}", head(&output.content, 400));
+    }
+
+    /// Exit step 2 alone: with the group kill off, the scan must still reap a
+    /// child that left the command's group before the command exited, both
+    /// one that only changed group (the session scan finds it) and one that
+    /// called `setsid()` (the marker scan finds it). Without the scan in
+    /// `run`, both outlive the call, so this fails.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_scan_alone_reaps_a_child_that_left_the_group() {
+        let mut tool = test_tool(Duration::from_secs(10));
+        tool.exit_steps = ExitSteps {
+            group_kill: false,
+            scan: true,
+        };
+        for leave in ["setpgrp(0, 0)", "POSIX::setsid()"] {
+            let dir = tempdir().unwrap();
+            let output = tool
+                .run(&json!({ "command": escapee(leave) }), &ctx(dir.path()))
+                .await
+                .unwrap();
+            let pid = bg_pid(dir.path());
+            assert!(
+                gone_within(pid, Duration::from_secs(5)).await,
+                "{leave} child {pid} survived the call: the scan did not reap it"
+            );
+            assert!(!output.is_error, "{leave}: {}", head(&output.content, 400));
+        }
     }
 
     /// SHELL-CLEANUP-1: a capped-out sweep must not report the direct child's
     /// success, and the reaper must stay armed. The pass cap is forced to
     /// zero, so only the still-armed reaper's `Drop` can kill a leftover the
-    /// group kill does not reach. On macOS that is a `setsid()` escapee, so a
-    /// disarmed reaper leaves it alive; elsewhere a plain sleeper, which the
-    /// group kill now also takes. Production caps are unchanged.
+    /// group kill does not reach: a child that left the group, so a disarmed
+    /// reaper leaves it alive. Production caps are unchanged.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_exhausted_leftover_sweep_is_reported_and_keeps_the_reaper_armed() {
         let dir = tempdir().unwrap();
         let mut tool = test_tool(Duration::from_secs(10));
         tool.sweep_passes = 0;
-        #[cfg(target_os = "macos")]
-        let command = SETSID_ESCAPEE;
-        #[cfg(not(target_os = "macos"))]
-        let command = "sleep 300 & echo $! > bg.pid; echo hi";
         let output = tool
-            .run(&json!({ "command": command }), &ctx(dir.path()))
+            .run(
+                &json!({ "command": escapee("setpgrp(0, 0)") }),
+                &ctx(dir.path()),
+            )
             .await
             .unwrap();
 
-        let raw = std::fs::read_to_string(dir.path().join("bg.pid")).unwrap();
-        let pid = raw.trim().parse::<i32>().unwrap();
         // The sweep ran zero passes; only the reaper still being armed can kill
-        // what the command left behind. Wait, then clean up before asserting so
-        // a failure cannot leak the sleeper.
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut reaper_swept = false;
-        while std::time::Instant::now() < deadline {
-            // SAFETY: signal 0 only probes existence of a process this test's
-            // command spawned.
-            if unsafe { libc::kill(pid, 0) } != 0 {
-                reaper_swept = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        if !reaper_swept {
-            // SAFETY: best-effort SIGKILL of a process this test spawned.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-        }
-
+        // what the command left behind.
+        let pid = bg_pid(dir.path());
         assert!(
-            reaper_swept,
+            gone_within(pid, Duration::from_secs(5)).await,
             "leftover pid {pid} survived the call: the reaper did not stay armed"
         );
         assert!(

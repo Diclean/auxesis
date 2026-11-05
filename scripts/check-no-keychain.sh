@@ -114,12 +114,14 @@ priority = 100
 # Bomb and resource-limit tests each run alone: process limits count every
 # process the user runs, and a fork bomb, a 600 MB allocation or a CPU spin
 # starves its neighbours. threads-required takes every test slot; the group
-# also keeps them from overlapping each other.
+# also keeps them from overlapping each other. The two shell exit-step proofs
+# (group_kill_alone, scan_alone) run alone too, so load cannot stretch their
+# bounded waits.
 [test-groups]
 resource-limits = { max-threads = 1 }
 
 [[profile.ci.overrides]]
-filter = 'test(/fork_bomb|process_bomb|memory_bomb|_limit_stops_|memory_watchdog/)'
+filter = 'test(/fork_bomb|process_bomb|memory_bomb|_limit_stops_|memory_watchdog|group_kill_alone|scan_alone/)'
 test-group = "resource-limits"
 threads-required = "num-test-threads"
 

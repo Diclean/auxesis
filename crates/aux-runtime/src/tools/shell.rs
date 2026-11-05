@@ -538,6 +538,37 @@ fn pid_ppid_uid_start(_pid: i32) -> Option<(i32, u32, u64)> {
     None
 }
 
+/// True when `pid` is in the process listing but the kernel cannot describe
+/// it yet: `proc_pidinfo` fails with `ESRCH` (a zombie still answers, and a
+/// process we may not inspect fails with `EPERM`). That is a process still
+/// being created, for example a child forked by a command that has already
+/// exited but not yet scheduled on a loaded machine. Until it can be
+/// described, `getsid` fails on it too, so no scan can tell whether it
+/// belongs to the call; the sweep must not count such a pass as clean.
+#[cfg(target_os = "macos")]
+fn pid_not_yet_visible(pid: i32) -> bool {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    // SAFETY: `info` is a live, correctly sized buffer and `proc_pidinfo`
+    // writes at most `size` bytes into it; the contents are never read.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    n <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+/// Linux lists a task under `/proc` only once it is fully created.
+#[cfg(not(target_os = "macos"))]
+fn pid_not_yet_visible(_pid: i32) -> bool {
+    false
+}
+
 /// Identity of the read-only marker file every command inherits as an open
 /// descriptor. A process that still holds the same `(device, inode)` belongs
 /// to the call, even after it reparented to launchd and called `setsid()` —
@@ -955,6 +986,7 @@ fn sweep_leftovers(root: i32, marker: &Marker) -> Sweep {
         marker,
         &pid_ppid_uid_start,
         &|_pass| Vec::new(),
+        &|_pass, pid| pid_not_yet_visible(pid),
         MAX_SWEEP_PASSES,
         MAX_SWEEP_TIME,
     )
@@ -962,13 +994,15 @@ fn sweep_leftovers(root: i32, marker: &Marker) -> Sweep {
 
 /// `extra_pids` is the test seam: pids injected into a given pass's scan,
 /// standing in for a child forked while the previous pass's kills were still
-/// landing. `max_passes`/`max_time` are the production bound, lowered only by
-/// tests.
+/// landing. `not_yet_visible(pass, pid)` is the second seam, standing in for
+/// [`pid_not_yet_visible`]. `max_passes`/`max_time` are the production bound,
+/// lowered only by tests.
 fn sweep_leftovers_with(
     root: i32,
     marker: &Marker,
     lookup: StartLookup<'_>,
     extra_pids: &dyn Fn(usize) -> Vec<i32>,
+    not_yet_visible: &dyn Fn(usize, i32) -> bool,
     max_passes: usize,
     max_time: Duration,
 ) -> Sweep {
@@ -976,6 +1010,7 @@ fn sweep_leftovers_with(
     {
         let started = std::time::Instant::now();
         let mut survivors = 0usize;
+        let mut pending = false;
         for pass in 0..max_passes {
             let all = all_pids();
             // An empty listing means the syscall failed (this process itself
@@ -1004,20 +1039,40 @@ fn sweep_leftovers_with(
                     }
                 }
                 if !found_any {
-                    return Sweep::Clean;
+                    // An empty pass proves nothing while a listed process
+                    // cannot be described yet: it may be a child of the
+                    // exited command that the scheduler has not run, which
+                    // would then outlive the call. Wait for it to become
+                    // visible (or gone) and scan again.
+                    let own = std::process::id() as i32;
+                    let unseen = all
+                        .iter()
+                        .any(|&pid| pid > 1 && pid != own && not_yet_visible(pass, pid));
+                    if !unseen {
+                        return Sweep::Clean;
+                    }
+                    pending = true;
+                } else {
+                    pending = false;
                 }
                 survivors = signalled;
             }
             if started.elapsed() >= max_time {
                 break;
             }
-            std::thread::yield_now();
+            if pending {
+                // Give the scheduler a moment to run the new process.
+                std::thread::sleep(Duration::from_millis(1));
+            } else {
+                std::thread::yield_now();
+            }
         }
         Sweep::Incomplete(survivors)
     }
     #[cfg(not(unix))]
     {
-        let _ = (root, marker, lookup, extra_pids, max_passes, max_time);
+        let _ = (root, marker, lookup, extra_pids, not_yet_visible);
+        let _ = (max_passes, max_time);
         Sweep::Clean
     }
 }
@@ -1294,6 +1349,7 @@ impl Tool for ShellTool {
                         &reaper.marker,
                         &pid_ppid_uid_start,
                         &|_pass| Vec::new(),
+                        &|_pass, pid| pid_not_yet_visible(pid),
                         self.sweep_passes,
                         self.sweep_time,
                     )
@@ -2127,6 +2183,7 @@ mod tests {
                     Vec::new()
                 }
             },
+            &|_pass, _pid| false,
             MAX_SWEEP_PASSES,
             MAX_SWEEP_TIME,
         );
@@ -2154,6 +2211,88 @@ mod tests {
             0,
             "the root must survive"
         );
+    }
+
+    /// A child the exited command forked but the scheduler has not run yet is
+    /// in the process listing, yet `getsid`/`proc_pidinfo` fail on it, so the
+    /// first pass sees no member. The seam forces exactly that: on pass 0 the
+    /// live helper is listed but "not yet visible"; from pass 1 it is found.
+    /// The old sweep stopped on pass 0 as clean and the helper (the real
+    /// backgrounded writer) outlived the call; the sweep must scan again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_child_not_yet_visible_keeps_the_sweep_going_until_it_is_reaped() {
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+
+        struct KillOnDrop(Vec<std::process::Child>);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                for child in &mut self.0 {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+        let sleeper = |group: bool| {
+            let mut command = std::process::Command::new("sleep");
+            command
+                .arg("300")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if group {
+                command.process_group(0);
+            }
+            command.spawn().unwrap()
+        };
+
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let mut children = KillOnDrop(vec![sleeper(true), sleeper(false)]);
+        let root_pid = children.0[0].id() as i32;
+        let helper = children.0[1].id() as i32;
+        assert!(all_pids().contains(&helper), "the helper must be listed");
+
+        let sweep = sweep_leftovers_with(
+            root_pid,
+            &marker,
+            &pid_ppid_uid_start,
+            &|pass| if pass == 1 { vec![helper] } else { Vec::new() },
+            &|pass, pid| pass == 0 && pid == helper,
+            MAX_SWEEP_PASSES,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Clean);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while children.0[1].try_wait().unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "helper pid {helper} outlived the sweep: a pass with an unseen \
+                 process was counted as clean"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// A listed process that never becomes visible must not end the sweep as
+    /// clean: it stops at its cap and says so.
+    #[cfg(unix)]
+    #[test]
+    fn a_process_that_stays_unseen_makes_the_sweep_incomplete() {
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let own = std::process::id() as i32;
+        // No session has this id, so only the seam keeps the pass unclean.
+        let sweep = sweep_leftovers_with(
+            i32::MAX,
+            &marker,
+            &pid_ppid_uid_start,
+            &|_pass| Vec::new(),
+            &|_pass, pid| pid > 1 && pid != own,
+            3,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Incomplete(0));
     }
 
     /// SHELL-CLEANUP-1: a capped-out sweep must not report the direct child's

@@ -130,10 +130,10 @@ struct PreviewSheet: View {
                 if store.mcpFailureCode != nil { Text(copy(.pluginError)).font(.meta).foregroundStyle(palette.red.color) }
                 Spacer()
                 Button(copy(.apNotNow)) { store.cancelPluginPreview() }
-                    .buttonStyle(AuxButtonStyle()).keyboardShortcut(.cancelAction)
+                    .buttonStyle(AuxButtonStyle()).viewShortcut(.dismissSheet)
                     .accessibilityLabel(copy(.apNotNow)).accessibilityIdentifier("plugin-preview-cancel")
                 Button(copy(.pluginApprove)) { Task { await store.approvePluginPreview() } }
-                    .buttonStyle(AuxButtonStyle(kind: .primary)).keyboardShortcut(.defaultAction)
+                    .buttonStyle(AuxButtonStyle(kind: .primary)).viewShortcut(.confirmSheet)
                     .disabled(store.pluginPreviewAgent != store.pluginAgent)
                     .accessibilityLabel(copy(.pluginApprove)).accessibilityIdentifier("plugin-preview-approve")
             }

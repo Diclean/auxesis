@@ -57,14 +57,14 @@ struct MascotPickerSheet: View {
                 Spacer()
                 Button { picker.cancel(looks); dismiss() } label: { keyLabel(copy(.mascotCancel), key: "esc") }
                     .buttonStyle(AuxButtonStyle())
-                    .keyboardShortcut(.cancelAction)
+                    .viewShortcut(.dismissSheet)
                     .accessibilityLabel(copy(.mascotCancel)).accessibilityIdentifier("mascot-cancel")
                 Button {
                     picker.save(to: looks)
                     dismiss()
                 } label: { keyLabel(copy(.mascotDone), key: "↩") }
                     .buttonStyle(AuxButtonStyle(kind: .primary))
-                    .keyboardShortcut(.defaultAction)
+                    .viewShortcut(.confirmSheet)
                     .accessibilityLabel(copy(.mascotDone)).accessibilityIdentifier("mascot-done")
             }
         }

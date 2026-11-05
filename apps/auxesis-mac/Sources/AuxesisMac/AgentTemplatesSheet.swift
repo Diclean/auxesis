@@ -32,13 +32,13 @@ struct AgentTemplatesSheet: View {
                 Spacer()
                 Button(L10n.t(.cancel, model.language)) { dismiss() }
                     .buttonStyle(AuxButtonStyle())
-                    .keyboardShortcut(.cancelAction)
+                    .viewShortcut(.dismissSheet)
                     .accessibilityLabel(L10n.t(.cancel, model.language)).accessibilityIdentifier("agent-templates-cancel")
                 Button(copy(.addAgentConfirm)) {
                     Task { if await model.confirm() { dismiss() } }
                 }
                 .buttonStyle(AuxButtonStyle(kind: .primary))
-                .keyboardShortcut(.defaultAction)
+                .viewShortcut(.confirmSheet)
                 .disabled(!model.canConfirm)
                 .accessibilityLabel(copy(.addAgentConfirm)).accessibilityIdentifier("agent-templates-add")
             }

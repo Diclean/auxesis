@@ -29,7 +29,7 @@ struct SettingsSheet: View {
             .background(palette.list.color)
             .overlay(alignment: .topTrailing) {
                 ToolbarIconButton(icon: .x, help: copy(.close), identifier: "settings-close") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                    .viewShortcut(.dismissSheet)
                     .padding(10)
             }
             Hairline()

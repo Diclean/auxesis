@@ -390,8 +390,10 @@ struct TeamCommands: Commands {
     }
 }
 
-/// The menu bar uses `MenuShortcutTable` as its one list of chords: the two
-/// per-action calls below are the only bridge from that table to SwiftUI.
+/// The app's only bridge from the shortcut tables to SwiftUI: the menu bar
+/// reads `MenuShortcutTable`, views read `ViewShortcutTable`. Every
+/// `.keyboardShortcut` call lives here, so a chord cannot miss the collision
+/// tests.
 private extension MenuShortcutModifiers {
     var eventModifiers: EventModifiers {
         var modifiers: EventModifiers = []
@@ -403,7 +405,7 @@ private extension MenuShortcutModifiers {
     }
 }
 
-private extension View {
+extension View {
     /// Bind the chord the one table gives this action.
     func menuShortcut(_ action: MenuAction) -> some View {
         menuShortcut(MenuShortcutTable.binding(for: action))
@@ -412,6 +414,22 @@ private extension View {
     /// Bind one table row (the Go menu picks its agent digits at runtime).
     func menuShortcut(_ binding: MenuShortcutBinding) -> some View {
         keyboardShortcut(KeyEquivalent(binding.key), modifiers: binding.modifiers.eventModifiers)
+    }
+
+    /// Bind one in-view table row. Return and Escape keep SwiftUI's symbolic
+    /// sheet cases so the sheet behaves the standard macOS way.
+    @ViewBuilder
+    func viewShortcut(_ action: ViewAction) -> some View {
+        switch ViewShortcutTable.binding(for: action).key {
+        case .some(.character(let key, let modifiers)):
+            keyboardShortcut(KeyEquivalent(key), modifiers: modifiers.eventModifiers)
+        case .some(.cancel):
+            keyboardShortcut(.cancelAction)
+        case .some(.defaultAction):
+            keyboardShortcut(.defaultAction)
+        case .none:
+            self
+        }
     }
 }
 

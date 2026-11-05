@@ -51,7 +51,7 @@ struct SetupSheet: View {
                 Button(copy(.setupSkip)) { model.skip(); dismiss() }.buttonStyle(AuxButtonStyle(kind: .plain))
                     .accessibilityLabel(copy(.setupSkip)).accessibilityIdentifier("setup-skip")
                 Button(copy(.setupDone)) { model.finish(); dismiss() }.buttonStyle(AuxButtonStyle(kind: .primary))
-                    .keyboardShortcut(.defaultAction)
+                    .viewShortcut(.confirmSheet)
                     .accessibilityLabel(copy(.setupDone)).accessibilityIdentifier("setup-finish")
             }
         }

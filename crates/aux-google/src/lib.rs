@@ -1049,7 +1049,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn random_b64url(length: usize) -> Result<String, AuthError> {
     let mut bytes = vec![0u8; length];
-    getrandom::getrandom(&mut bytes).map_err(|_| AuthError::Network)?;
+    getrandom::fill(&mut bytes).map_err(|_| AuthError::Network)?;
     let encoded = URL_SAFE_NO_PAD.encode(&bytes);
     bytes.zeroize();
     Ok(encoded)

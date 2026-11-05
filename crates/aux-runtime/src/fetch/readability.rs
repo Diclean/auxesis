@@ -1043,13 +1043,20 @@ fn find_heading(node: &Handle, tag: &str, depth: usize, deadline: &Deadline) -> 
 
 /// The page's `<title>`: the first one in the HTML namespace. An SVG
 /// `<title>` is an icon's tooltip, which the renderer drops with its `<svg>`.
+/// The search enters `<head>` (where a real title lives) but no other
+/// dropped element, so a `<title>` inside `<noscript>`, `<template>`, a
+/// `<form>` or an `<svg>` is never the page title.
 fn find_title(node: &Handle, depth: usize, deadline: &Deadline) -> Option<Handle> {
     if let NodeData::Element { name, .. } = &node.data {
         if name.ns == ns!(html) && &*name.local == "title" {
             return Some(node.clone());
         }
     }
-    if depth >= MAX_DOM_DEPTH || deadline.expired() {
+    let tag = tag_name(node);
+    if tag.is_some_and(|tag| tag != "head" && is_dropped(tag))
+        || depth >= MAX_DOM_DEPTH
+        || deadline.expired()
+    {
         return None;
     }
     for child in node.children() {
@@ -2187,6 +2194,27 @@ mod tests {
         ] {
             let html = format!("<body>{chrome}{article}</body>");
             assert_eq!(extract_readable(html.as_bytes()).title, "", "{chrome}");
+        }
+    }
+
+    #[test]
+    fn a_title_inside_dropped_content_is_not_the_page_title() {
+        // The real title is in <head>; a <title> the renderer would drop
+        // (inside <noscript>, <template>, a <form> or an <svg>) never is.
+        let html = "<html><head><title>Real page</title></head><body>\
+                    <noscript><title>Hidden</title></noscript><p>Text.</p></body></html>";
+        assert_eq!(extract_readable(html.as_bytes()).title, "Real page");
+        for hidden in [
+            "<noscript><title>Hidden one</title></noscript>",
+            "<template><title>Hidden two</title></template>",
+            "<form><title>Hidden three</title></form>",
+            "<svg><title>Hidden four</title></svg>",
+        ] {
+            let html = format!("<body>{hidden}<h1>Visible</h1><p>Body text.</p></body>");
+            let title = extract_readable(html.as_bytes()).title;
+            assert!(!title.contains("Hidden"), "{hidden} gave {title:?}");
+            let title = extract_body_text(html.as_bytes()).title;
+            assert!(!title.contains("Hidden"), "{hidden} gave {title:?} (mail)");
         }
     }
 

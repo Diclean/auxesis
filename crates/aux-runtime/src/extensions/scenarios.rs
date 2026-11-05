@@ -428,8 +428,37 @@ async fn reinstall_keeps_a_freeze_until_accept() {
         is_frozen(home.path(), "demo"),
         "reinstall must keep the freeze until `verify --accept`"
     );
+    #[cfg(unix)]
+    {
+        let state = home.path().join("extensions/state/demo.json");
+        for kind in ["fifo", "garbage"] {
+            std::fs::remove_file(&state).unwrap();
+            if kind == "fifo" {
+                assert!(std::process::Command::new("mkfifo")
+                    .arg(&state)
+                    .status()
+                    .unwrap()
+                    .success());
+            } else {
+                std::fs::write(&state, b"not json").unwrap();
+            }
+            assert!(is_frozen(home.path(), "demo"), "{kind}");
+            install_fixture(home.path(), "demo", &script).await;
+            assert!(is_frozen(home.path(), "demo"), "reinstall over {kind}");
+        }
+    }
     accept(home.path(), "demo").unwrap();
     assert!(!is_frozen(home.path(), "demo"));
+    #[cfg(unix)]
+    {
+        let state = home.path().join("extensions/state/demo.json");
+        std::fs::remove_file(&state).unwrap();
+        std::os::unix::fs::symlink(home.path().join("nothing"), &state).unwrap();
+        if !kernel_core::sandbox_guard_active() {
+            install_fixture(home.path(), "demo", &script).await;
+        }
+        assert!(is_frozen(home.path(), "demo"), "a link must read frozen");
+    }
 }
 
 #[tokio::test]

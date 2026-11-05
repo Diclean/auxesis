@@ -88,22 +88,30 @@ pub fn catalog_cache_dir(home: &Path) -> PathBuf {
     home.join("catalog")
 }
 
-/// Read a bounded UTF-8 file below `home` through its verified handle: every
-/// component `O_NOFOLLOW`, the leaf `O_NONBLOCK`, a regular file only, never
-/// created. `None` covers a missing or unusable file (link, FIFO, oversized,
-/// not UTF-8), so a caller's fail-closed default applies.
-pub(crate) fn read_text_at(
+pub(crate) enum ReadAt {
+    Absent,
+    Unreadable,
+    Text(String),
+}
+
+pub(crate) fn read_text_at_checked(
     handle: &kernel_core::SandboxHome,
     rel: &Path,
     max: u64,
-) -> Option<String> {
-    let file = handle.open_read_existing(rel, max).ok()?;
+) -> ReadAt {
+    let file = match handle.open_read_existing(rel, max) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return ReadAt::Absent,
+        Err(_) => return ReadAt::Unreadable,
+    };
     let mut bytes = Vec::new();
-    file.take(max + 1).read_to_end(&mut bytes).ok()?;
-    if bytes.len() as u64 > max {
-        return None;
+    if file.take(max + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > max {
+        return ReadAt::Unreadable;
     }
-    String::from_utf8(bytes).ok()
+    match String::from_utf8(bytes) {
+        Ok(text) => ReadAt::Text(text),
+        Err(_) => ReadAt::Unreadable,
+    }
 }
 
 /// Decode a 32-byte Ed25519 public key, or `None` when the bytes are not a

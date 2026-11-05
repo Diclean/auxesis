@@ -73,6 +73,22 @@ fn error(file: &str, reason: impl Into<String>) -> AgentLoadError {
     }
 }
 
+fn read_error(file: &str, err: &ReadError) -> AgentLoadError {
+    match err {
+        ReadError::NotFound => error(file, format!("{file} is missing")),
+        ReadError::TooLarge => error(file, format!("{file} is larger than 1 MiB")),
+        ReadError::Symlink => error(file, format!("{file} is a symbolic link")),
+        ReadError::PermissionDenied => error(
+            file,
+            "the home directory is not accessible (permission denied, or a symbolic link planted in the home)",
+        ),
+        ReadError::NotDirectory => {
+            error(file, "a path component below the home is not a directory")
+        }
+        ReadError::Io(err) => error(file, format!("could not read {file}: {err}")),
+    }
+}
+
 /// One agent's identity and capabilities.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedAgent {
@@ -129,11 +145,7 @@ pub fn load_agent(agent_dir: &Path) -> Result<LoadedAgent, AgentLoadError> {
     match read_bounded(&agent_md) {
         Ok(bytes) => parse_agent_md(&bytes, agent_dir, &name),
         Err(ReadError::NotFound) => load_legacy(agent_dir, &name),
-        Err(ReadError::TooLarge) => Err(error("agent.md", "agent.md is larger than 1 MiB")),
-        Err(ReadError::Symlink) => Err(error("agent.md", "agent.md is a symbolic link")),
-        Err(ReadError::Io(err)) => {
-            Err(error("agent.md", format!("could not read agent.md: {err}")))
-        }
+        Err(err) => Err(read_error("agent.md", &err)),
     }
 }
 
@@ -279,13 +291,7 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
             String::from_utf8(bytes).map_err(|_| error("soul.md", "soul.md is not valid UTF-8"))?
         }
         Err(ReadError::NotFound) => String::new(),
-        Err(ReadError::TooLarge) => {
-            return Err(error("soul.md", "soul.md is larger than 1 MiB"));
-        }
-        Err(ReadError::Symlink) => return Err(error("soul.md", "soul.md is a symbolic link")),
-        Err(ReadError::Io(err)) => {
-            return Err(error("soul.md", format!("could not read soul.md: {err}")));
-        }
+        Err(err) => return Err(read_error("soul.md", &err)),
     };
 
     // The daemon writes `agent.toml`; the pre-WO-07 `dot.toml` is read only
@@ -320,24 +326,7 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
         }
         Err(ReadError::NotFound) if name == crate::grants::CHIEF_AGENT => vec!["*".into()],
         Err(ReadError::NotFound) => Vec::new(),
-        Err(ReadError::TooLarge) => {
-            return Err(error(
-                sidecar_name,
-                format!("{sidecar_name} is larger than 1 MiB"),
-            ));
-        }
-        Err(ReadError::Symlink) => {
-            return Err(error(
-                sidecar_name,
-                format!("{sidecar_name} is a symbolic link"),
-            ));
-        }
-        Err(ReadError::Io(err)) => {
-            return Err(error(
-                sidecar_name,
-                format!("could not read {sidecar_name}: {err}"),
-            ));
-        }
+        Err(err) => return Err(read_error(sidecar_name, &err)),
     };
 
     Ok(LoadedAgent {
@@ -365,41 +354,42 @@ enum ReadError {
     NotFound,
     TooLarge,
     Symlink,
+    PermissionDenied,
+    NotDirectory,
     Io(std::io::Error),
 }
 
-/// Read at most [`MAX_AGENT_BYTES`] through the kernel safe open: the agent's
-/// home directory as a handle, then `agents/<name>/<file>` relative to it
-/// (every component `O_NOFOLLOW`, the leaf `O_NONBLOCK` too, `fstat`), so a
-/// symlinked agent directory, a link or a FIFO is refused at once.
+/// Read through the kernel safe open, `agents/<name>/<file>` relative to home.
 fn read_bounded(path: &Path) -> Result<Vec<u8>, ReadError> {
     read_bounded_with(path, || {})
 }
 
 fn read_bounded_with(path: &Path, before_open: impl FnOnce()) -> Result<Vec<u8>, ReadError> {
+    let invalid = || ReadError::Io(std::io::ErrorKind::InvalidInput.into());
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+        return Err(invalid());
     };
     let Some(agents) = dir.parent() else {
-        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+        return Err(invalid());
     };
     let Some(agent) = dir.file_name() else {
-        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+        return Err(invalid());
     };
     if agents.file_name() != Some(std::ffi::OsStr::new("agents")) {
-        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+        return Err(invalid());
     }
     let Some(home_dir) = agents.parent() else {
-        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+        return Err(invalid());
     };
-    // The file's path below the home is `agents/<name>/<file>`; walking it
-    // component by component is what refuses a symlinked agent directory.
     let rel = Path::new("agents").join(agent).join(name);
     let home = match kernel_core::SandboxHome::open_existing(home_dir) {
         Ok(home) => home,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(ReadError::NotFound),
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            return Err(ReadError::Symlink)
+            return Err(ReadError::PermissionDenied)
+        }
+        Err(err) if err.raw_os_error() == Some(libc::ENOTDIR) => {
+            return Err(ReadError::NotDirectory)
         }
         Err(err) => return Err(ReadError::Io(err)),
     };
@@ -410,10 +400,16 @@ fn read_bounded_with(path: &Path, before_open: impl FnOnce()) -> Result<Vec<u8>,
         Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
             return Err(ReadError::TooLarge)
         }
-        // On Linux a symlinked directory component reports ELOOP on openat;
-        // on some filesystems/platforms it is ENOTDIR. Both are a refusal.
+        // ELOOP (Linux) or ENOTDIR (macOS): a planted link, or a plain file.
         Err(err) if matches!(err.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) => {
-            return Err(ReadError::Symlink)
+            let linked = std::fs::symlink_metadata(path)
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+                || std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.file_type().is_symlink());
+            return Err(if linked {
+                ReadError::Symlink
+            } else {
+                ReadError::NotDirectory
+            });
         }
         Err(err) => return Err(ReadError::Io(err)),
     };
@@ -700,15 +696,10 @@ mod tests {
         assert!(err.reason.contains("symbolic link"), "{err}");
     }
 
-    /// A symlinked `agents/<name>` directory is refused with the sandbox guard
-    /// off too: the loader opens the home, then `agents` and `<name>` with
-    /// `O_NOFOLLOW`. The test binary may itself run under the guard, so the
-    /// case runs in a child with `AUXESIS_SANDBOX` removed and the OS user's
-    /// real `HOME` (the loader still gets a temp home path, never the real
-    /// one).
     #[cfg(unix)]
     #[test]
     fn a_symlinked_agent_directory_is_refused_with_the_guard_off() {
+        let agent_home = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--exact",
@@ -717,6 +708,8 @@ mod tests {
                 "--test-threads=1",
             ])
             .env_remove("AUXESIS_SANDBOX")
+            .env_remove("AUXESIS_HOME")
+            .env("AUXESIS_TEST_AGENT_HOME", agent_home.path())
             .env(
                 "HOME",
                 kernel_core::real_user_home().expect("the OS user home"),
@@ -735,13 +728,19 @@ mod tests {
     #[test]
     #[ignore = "spawned by the guard-off parent with AUXESIS_SANDBOX removed"]
     fn a_symlinked_agent_directory_is_refused_with_the_guard_off_child() {
-        let home = tempfile::tempdir().unwrap();
-        let real = home.path().join("agents").join("real");
+        assert!(
+            !kernel_core::sandbox_guard_active(),
+            "the child must really run with the guard off"
+        );
+        let home = PathBuf::from(
+            std::env::var_os("AUXESIS_TEST_AGENT_HOME").expect("the temp agent home"),
+        );
+        let real = home.join("agents").join("real");
         fs::create_dir_all(&real).unwrap();
         write(&real, "agent.md", "---\nname: scout\n---\nbody\n");
-        std::os::unix::fs::symlink(&real, home.path().join("agents").join("scout")).unwrap();
+        std::os::unix::fs::symlink(&real, home.join("agents").join("scout")).unwrap();
 
-        let err = load_agent(&home.path().join("agents").join("scout")).unwrap_err();
+        let err = load_agent(&home.join("agents").join("scout")).unwrap_err();
         assert!(err.reason.contains("symbolic link"), "{err}");
     }
 

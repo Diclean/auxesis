@@ -61,9 +61,11 @@ crates/aux-engine/src/layout.rs | fs::rename( | WO-07 one-time move of the legac
 crates/aux-runtime/src/extensions/catalog.rs | fs::create_dir_all( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/catalog.rs | fs::write( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/install.rs | fs::remove_dir_all( | removing the extension install tree on remove/reinstall; pending the SandboxHome gateway follow-up
+crates/aux-runtime/src/extensions/install.rs | OpenOptions::new( | 0700 re-force on a verified extension directory, via an O_NOFOLLOW fd
 crates/aux-runtime/src/extensions/install.rs | fs::remove_file( | removing the per-extension state file on remove; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/scenarios.rs | fs::create_dir_all( | test-only fixture catalog and installs live in TempDir homes
 crates/aux-runtime/src/extensions/scenarios.rs | fs::write( | test-only fixture catalog, scripts and .env canaries live in TempDir homes
+crates/aux-runtime/src/extensions/scenarios.rs | fs::remove_file( | test-only planted state row in a TempDir home
 crates/aux-runtime/src/extensions/session.rs | "HOME" | sets the sandboxed child's private HOME to its own work dir; not a home read
 
 crates/aux-fakemail/src/serve.rs | fs::create_dir_all( | dev-only mail simulator (not shipped, not a dep of auxd/aux-cli): creates its own --dir and outbox/, never the Auxesis home

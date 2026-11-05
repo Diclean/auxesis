@@ -278,8 +278,8 @@ fn upsert_account_config(home: &Path, account: &MailAccount) -> Result<(), Strin
         aux_engine::config::bootstrap_config(&handle)
             .map_err(|err| format!("creating {}: {err}", path.display()))?;
         // A file that exists but cannot be read is an error, never an empty
-        // config written over it.
-        let text = std::fs::read_to_string(&path)
+        // config written over it. It is read through the handle that writes.
+        let text = aux_engine::config::read_config_text(&handle)
             .map_err(|err| format!("reading {}: {err}", path.display()))?;
         let mut document: toml_edit::DocumentMut =
             text.parse().map_err(|err: toml_edit::TomlError| {
@@ -364,9 +364,13 @@ fn runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|err| format!("starting the runtime: {err}"))
 }
 
-/// Read `[connectors.mail]` from `home`, or `None` when it is absent.
+/// Read `[connectors.mail]` from `home`, or `None` when it is absent. A
+/// config.toml that cannot be read safely (a FIFO, a symlink) is an error at
+/// once, never a wait.
 fn load_config(home: &Path) -> Result<MailConfig, String> {
-    let text = std::fs::read_to_string(kernel_core::config_path(home))
+    let text = kernel_core::SandboxHome::open_existing(home)
+        .map_err(kernel_core::ConfigError::from)
+        .and_then(|home| aux_engine::config::read_config_text(&home))
         .map_err(|err| format!("reading config.toml: {err}"))?;
     let value: toml::Value = toml::from_str(&text).map_err(|err| {
         let err = kernel_core::redact_toml_error(&err, "config.toml", &text);
@@ -624,6 +628,38 @@ mod tests {
         upsert_account_config(home, &account).unwrap();
         let text = std::fs::read_to_string(kernel_core::config_path(home)).unwrap();
         assert_eq!(text.matches("imap.exemple.fr").count(), 1, "{text}");
+    }
+
+    /// A FIFO nobody writes to or a symlink at config.toml is an error at
+    /// once for both readers, never a wait, and is never written over.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_symlinked_config_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, other) = (dir.path().to_path_buf(), dir.path().join("o.toml"));
+        let (config, text) = (kernel_core::config_path(&home), "[connectors.mail]\n");
+        std::fs::write(&other, text).unwrap();
+        for kind in ["fifo", "symlink"] {
+            if kind == "fifo" {
+                let made = std::process::Command::new("mkfifo").arg(&config).status();
+                assert!(made.unwrap().success());
+            } else {
+                std::os::unix::fs::symlink(&other, &config).unwrap();
+            }
+            let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || {
+                let read = load_config(&moved).map(drop);
+                sent.send((read, upsert_account_config(&moved, &MailAccount::default())))
+            });
+            let wait = std::time::Duration::from_secs(10);
+            let (read, upsert) = got.recv_timeout(wait).expect("blocked");
+            assert!(read.unwrap_err().starts_with("reading"), "{kind}");
+            assert!(upsert.is_err(), "{kind}");
+            let left = std::fs::symlink_metadata(&config).unwrap();
+            assert!(!left.is_file(), "{kind}");
+            std::fs::remove_file(&config).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), text);
     }
 
     #[test]

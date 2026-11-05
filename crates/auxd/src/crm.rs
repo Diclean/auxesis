@@ -1397,10 +1397,12 @@ fn err_kind(err: &aux_crm::CrmError) -> &'static str {
 }
 
 /// The configured `[connectors.mail]` accounts, or `None` when there is none
-/// or the config does not parse. The private check and the dial share this
-/// one parse, so they cannot disagree about the host.
-fn mail_config(home: &Path) -> Option<aux_mail::MailConfig> {
-    let text = std::fs::read_to_string(kernel_core::config_path(home)).ok()?;
+/// or the config cannot be read safely (a FIFO, a symlink: at once, never a
+/// wait) or does not parse. The private check and the dial share this one
+/// parse, so they cannot disagree about the host.
+pub(crate) fn mail_config(home: &Path) -> Option<aux_mail::MailConfig> {
+    let home = kernel_core::SandboxHome::open_existing(home).ok()?;
+    let text = aux_engine::config::read_config_text(&home).ok()?;
     let value: toml::Value = toml::from_str(&text).ok()?;
     let mail = value.get("connectors")?.get("mail")?;
     let text = toml::to_string(mail).ok()?;

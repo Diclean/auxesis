@@ -43,6 +43,17 @@ pub fn load_or_create_verified(home: &kernel_core::SandboxHome) -> Result<Config
     open_verified(home)?.load()
 }
 
+/// The text of `home`'s `config.toml`, for a reader that parses its own
+/// tables. The file is opened once as [`load_or_create_verified`] opens it:
+/// through the verified home's directory fd, never through a symlink nor
+/// waiting on a FIFO, a regular file this user owns, at most
+/// [`MAX_CONFIG_BYTES`], read from that descriptor. It is never created: a
+/// missing file is [`ConfigError::Io`] with `NotFound`.
+pub fn read_config_text(home: &kernel_core::SandboxHome) -> Result<String, ConfigError> {
+    let path = home.real_path()?.join("config.toml");
+    open_in_home(home, &path)?.text()
+}
+
 /// [`load_or_create_verified`] for a config file given by path, as the
 /// kernel's path-based load takes it: a missing file is published from
 /// [`new_config_text`], and only a regular file this user owns is loaded.
@@ -53,14 +64,19 @@ pub fn load_or_create(path: &Path) -> Result<Config, ConfigError> {
     open_or_new(path, || open_config(path, false))?.load()
 }
 
-/// `config.toml` through the verified home's directory fd: the kernel opens
-/// it `O_NOFOLLOW | O_NONBLOCK` and refuses anything but a regular file.
+/// `config.toml` through the verified home's directory fd, published first
+/// when it is missing.
 fn open_verified(home: &kernel_core::SandboxHome) -> Result<Opened, ConfigError> {
     let path = home.real_path()?.join("config.toml");
-    open_or_new(&path, || {
-        let file = home.open_read_existing(Path::new("config.toml"), u64::MAX);
-        Opened::check(&path, file.map_err(|err| named(&path, err))?, false)
-    })
+    open_or_new(&path, || open_in_home(home, &path))
+}
+
+/// The existing `config.toml` through the verified home's directory fd: the
+/// kernel opens it `O_NOFOLLOW | O_NONBLOCK` and refuses anything but a
+/// regular file. `path` names it in errors.
+fn open_in_home(home: &kernel_core::SandboxHome, path: &Path) -> io::Result<Opened> {
+    let file = home.open_read_existing(Path::new("config.toml"), u64::MAX);
+    Opened::check(path, file.map_err(|err| named(path, err))?, false)
 }
 
 /// `open()`, or when nothing is there, publish `path` from
@@ -284,15 +300,22 @@ impl Opened {
         Ok(())
     }
 
+    /// The text, refused over [`MAX_CONFIG_BYTES`] by this descriptor's
+    /// `fstat`, as the kernel loader refuses it.
+    fn text(mut self) -> Result<String, ConfigError> {
+        if self.size > MAX_CONFIG_BYTES {
+            let (path, size) = (self.path.display().to_string(), self.size);
+            return Err(ConfigError::TooLarge { path, size });
+        }
+        Ok(self.read(Duration::ZERO)?)
+    }
+
     /// Load it with the kernel loader's checks. The kernel has no public
     /// parse-from-text entry (its checks are private), so they are repeated
     /// here; a test pins both to the same outcome.
-    fn load(mut self) -> Result<Config, ConfigError> {
-        let (path, size) = (self.path.display().to_string(), self.size);
-        if size > MAX_CONFIG_BYTES {
-            return Err(ConfigError::TooLarge { path, size });
-        }
-        let text = self.read(Duration::ZERO)?;
+    fn load(self) -> Result<Config, ConfigError> {
+        let path = self.path.display().to_string();
+        let text = self.text()?;
         let config: Config = toml::from_str(&text).map_err(|err| ConfigError::Parse {
             path,
             source: kernel_core::redact_toml_error(&err, "config.toml", &text),
@@ -1091,6 +1114,48 @@ mod tests {
         append_rule_waiting(&path, &rule, Duration::from_secs(10)).unwrap();
         writer.join().unwrap().unwrap();
         assert_eq!(load_rules(&path).unwrap(), vec![rule]);
+    }
+
+    /// `read_config_text` reads a regular file and never creates a missing
+    /// one. A FIFO nobody writes to, a symlink, a folder or a socket is
+    /// refused at once: each read runs on its own thread, bounded in time.
+    #[cfg(unix)]
+    #[test]
+    fn reading_the_text_never_waits_follows_or_creates() {
+        let dir = tempdir().unwrap();
+        // Unregistered, as above: no other test can reach this home.
+        let home = kernel_core::SandboxHome::open(dir.path()).unwrap();
+        let (path, other) = (dir.path().join("config.toml"), dir.path().join("o.toml"));
+        std::fs::write(&other, "version = 1\n").unwrap();
+        let read = || {
+            let (home, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || sent.send(read_config_text(&home)).ok());
+            got.recv_timeout(Duration::from_secs(10))
+                .expect("read_config_text blocked")
+        };
+        let missing = read().unwrap_err();
+        assert!(matches!(&missing, ConfigError::Io(err) if err.kind() == io::ErrorKind::NotFound));
+        assert!(std::fs::symlink_metadata(&path).is_err(), "never created");
+        for kind in ["fifo", "symlink", "directory", "socket"] {
+            match kind {
+                "fifo" => {
+                    let made = std::process::Command::new("mkfifo").arg(&path).status();
+                    assert!(made.unwrap().success());
+                }
+                "symlink" => std::os::unix::fs::symlink(&other, &path).unwrap(),
+                "directory" => std::fs::create_dir(&path).unwrap(),
+                _ => drop(std::os::unix::net::UnixListener::bind(&path).unwrap()),
+            }
+            let err = read().unwrap_err().to_string();
+            assert!(kind != "symlink" || err.contains("symlink"), "{err}");
+            std::fs::remove_file(&path)
+                .or_else(|_| std::fs::remove_dir(&path))
+                .unwrap();
+        }
+        std::fs::write(&path, "version = 1\n").unwrap();
+        assert_eq!(read().unwrap(), "version = 1\n");
+        std::fs::write(&path, vec![b'#'; MAX_CONFIG_BYTES as usize + 1]).unwrap();
+        assert!(matches!(read(), Err(ConfigError::TooLarge { .. })));
     }
 
     /// A publish's temp name goes on every exit path: a failed link removes

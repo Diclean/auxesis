@@ -644,9 +644,9 @@ fn append_provider_config(home: &Path, provider: &ProviderConfig) -> Result<(), 
         // Create the default config first so a fresh home has a valid file.
         crate::api::load_config_verified(home).map_err(|err| err.to_string())?;
         let handle = kernel_core::SandboxHome::open(home).map_err(|err| err.to_string())?;
-        let real = handle.real_path().map_err(|err| err.to_string())?;
-        let path = real.join("config.toml");
-        let mut text = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+        // Read through the handle that writes: never a symlink nor a FIFO.
+        let mut text =
+            aux_engine::config::read_config_text(&handle).map_err(|err| err.to_string())?;
         if !text.ends_with('\n') {
             text.push('\n');
         }

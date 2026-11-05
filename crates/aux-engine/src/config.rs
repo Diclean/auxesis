@@ -1056,7 +1056,10 @@ mod tests {
     #[test]
     fn special_files_are_refused_and_a_fifo_is_waited_on_only_so_long() {
         let dir = tempdir().unwrap();
-        let verified = kernel_core::verified_home_or_verify(dir.path()).unwrap();
+        // An unregistered handle: registering this home would make it the
+        // process's latest verified home, and a test running at the same time
+        // would read its FIFO config through `owner_contacts()`.
+        let verified = kernel_core::SandboxHome::open(dir.path()).unwrap();
         let path = dir.path().join("config.toml");
         let rule = Rule::new("main", "shell", Action::Allow);
         let mkfifo = |path: &Path| {

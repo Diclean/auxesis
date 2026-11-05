@@ -2150,6 +2150,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn minimax_flash_settles_its_catalog_price() {
+        // No [prices] entry: the bundled catalog lists minimax-m3.1-flash at
+        // 0.15 / 0.60 USD per million tokens.
+        let harness = Harness::new();
+        assert!(harness.prices.price("minimax-m3.1-flash").is_none());
+        let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+            .with_model("minimax-m3.1-flash");
+        let budgets = wide_token_caps(10_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(usd_spent(&harness), 15 + 60);
+    }
+
+    #[tokio::test]
     async fn an_unpriced_model_under_a_money_only_cap_is_refused() {
         let harness = Harness::new();
         let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();

@@ -6,6 +6,10 @@
 
 use super::*;
 
+/// The most reservations a store holds unsettled at once (see
+/// [`Store::try_reserve_for`]); a daemon's calls hold a handful.
+const MAX_HELD_RESERVATIONS: i64 = 10_000;
+
 impl Store {
     /// Close one agent's existing daily budget latch and audit it atomically.
     /// This reuses the v6 `budget_stops` table; it does not add a migration.
@@ -426,6 +430,25 @@ impl Store {
                 audit_error: None,
             }));
         }
+        // Each settle a daemon still owes waits in its memory and keeps its
+        // row held: a store that takes reservations but stops settling them
+        // refuses new ones here, so that queue cannot grow without bound.
+        let held: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM usage_reservations WHERE unsettled IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if held >= MAX_HELD_RESERVATIONS {
+            drop(tx); // rollback: nothing was reserved
+            let message =
+                format!("{held} reserved calls are still unsettled, the most a store holds");
+            return Ok(ReserveOutcome::Denied(Denial {
+                agent: agent.to_string(),
+                day: day.to_string(),
+                reason: DenialReason::LedgerUnavailable { message },
+                audit_error: None,
+            }));
+        }
         // An older plain reservation of a process that died mid-call is
         // ignored below and swept here past its TTL. A held one (`unsettled`)
         // never expires: its call may be billed, so it counts until settled.
@@ -540,6 +563,10 @@ impl Store {
     /// never bill the daily cap twice. The spend of a call whose reservation
     /// was swept *before* its first settle is therefore not recorded; the
     /// `RESERVATION_TTL` is sized to keep that case out of the stream path.
+    /// A held row a reconcile claimed first is the exception: the claim
+    /// recorded the row's amount and kept it (`usage_reconciled`), so this
+    /// records what `actual` tops it by in each direction and raises the
+    /// claim to it: the live amount wins, and is still recorded once.
     ///
     /// When the recorded totals reach or cross a cap of `reservation.caps`,
     /// the same transaction writes a `budget_stops` latch for the agent and the
@@ -552,17 +579,70 @@ impl Store {
         reservation: &Reservation,
         actual: &UsageActual,
     ) -> Result<(), StoreError> {
+        self.settle_held(reservation, actual, false)
+    }
+
+    /// [`Store::settle_reservation`], or with `claim` a reconcile's: that
+    /// records only a row it deletes itself, and keeps what it recorded.
+    fn settle_held(
+        &self,
+        reservation: &Reservation,
+        actual: &UsageActual,
+        claim: bool,
+    ) -> Result<(), StoreError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         let deleted = tx.execute(
             "DELETE FROM usage_reservations WHERE id = ?1",
             [reservation.id],
         )?;
+        let mut record = *actual;
         if deleted == 0 {
             // Already settled (or swept after its TTL): settle once, record
-            // nothing a second time.
-            tx.commit()?;
-            return Ok(());
+            // nothing a second time, but what a live settle tops a claim by.
+            let claimed = if claim {
+                None
+            } else {
+                tx.query_row(
+                    "SELECT tokens_in, tokens_out, usd_cents FROM usage_reconciled
+                     WHERE reservation_id = ?1",
+                    [reservation.id],
+                    |row| Ok([row.get::<_, u64>(0)?, row.get(1)?, row.get(2)?]),
+                )
+                .optional()?
+            };
+            let rest = claimed.map(|[tokens_in, tokens_out, usd_cents]| UsageActual {
+                tokens_in: actual.tokens_in.saturating_sub(tokens_in),
+                tokens_out: actual.tokens_out.saturating_sub(tokens_out),
+                usd_cents: actual.usd_cents.saturating_sub(usd_cents),
+                ..*actual
+            });
+            match rest {
+                Some(rest) if [rest.tokens_in, rest.tokens_out, rest.usd_cents] != [0; 3] => {
+                    record = rest;
+                }
+                _ => {
+                    tx.commit()?;
+                    return Ok(());
+                }
+            }
         }
+        if claim || deleted == 0 {
+            // The claim keeps the most recorded for this reservation so far.
+            tx.execute(
+                "INSERT INTO usage_reconciled(reservation_id, tokens_in, tokens_out, usd_cents)
+                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(reservation_id) DO UPDATE SET
+                   tokens_in = MAX(tokens_in, excluded.tokens_in),
+                   tokens_out = MAX(tokens_out, excluded.tokens_out),
+                   usd_cents = MAX(usd_cents, excluded.usd_cents)",
+                rusqlite::params![
+                    reservation.id,
+                    actual.tokens_in,
+                    actual.tokens_out,
+                    actual.usd_cents
+                ],
+            )?;
+        }
+        let actual = &record;
         if actual.tokens_in > 0 {
             tx.execute(
                 "INSERT INTO usage(agent, at, kind, amount, unit, run_id)
@@ -679,9 +759,11 @@ impl Store {
     /// Settle the held reservations a stopped process left: rows past their
     /// TTL (a live call settles well within it) and not in `skip`, each at the
     /// most its call is known to have spent (its reserve, or more once
-    /// raised), through [`Store::settle_reservation`], so once. The daemon
-    /// runs it at start and every minute. Returns how many settled and how
-    /// many failed; a failed one stays held for the next pass.
+    /// raised), once. Each is claimed: deleted, recorded and kept in one
+    /// transaction, so a live settle that still comes records only what tops
+    /// it (see [`Store::settle_reservation`]). The daemon runs it at start
+    /// and every minute. Returns how many settled and how many failed; a
+    /// failed one stays held for the next pass.
     pub fn settle_abandoned_reservations(
         &self,
         skip: &[i64],
@@ -721,7 +803,7 @@ impl Store {
                 tokens_out_estimated: true,
                 usd_cents,
             };
-            failed += usize::from(self.settle_reservation(&reservation, &actual).is_err());
+            failed += usize::from(self.settle_held(&reservation, &actual, true).is_err());
         }
         Ok((rows.len() - failed, failed))
     }
@@ -2129,6 +2211,72 @@ mod tests {
             (totals.tokens_in, totals.tokens_out, totals.usd_cents),
             (90, 7, 3)
         );
+    }
+
+    #[test]
+    fn a_live_settle_after_the_reconcile_claimed_its_row_records_only_what_tops_it() {
+        let store = Store::open_in_memory().unwrap();
+        let (caps, day) = (caps(Some(1000), None), store.local_day().unwrap());
+        let reserved = store.try_reserve("main", &day, &caps, &estimate(60, 9));
+        let ReserveOutcome::Reserved(held) = reserved.unwrap() else {
+            panic!("admitted");
+        };
+        let expire = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+        store.conn.execute(expire, []).unwrap();
+        // The reconcile claims the row at its reserve before the live settle
+        // lands: that tops it in and in money, not out; a retry adds nothing.
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (1, 0));
+        let live = UsageActual {
+            tokens_in: 90,
+            tokens_out: 4,
+            usd_cents: 3,
+            ..UsageActual::default()
+        };
+        store.settle_reservation(&held, &live).unwrap();
+        store.settle_reservation(&held, &live).unwrap();
+        let totals = store.usage_totals("main", &day).unwrap();
+        let sum = |t: UsageTotals| (t.tokens_in, t.tokens_out, t.usd_cents);
+        assert_eq!(sum(totals), (90, 9, 3));
+        // The other order: a claim that finds its row settled records nothing.
+        let reserved = store.try_reserve("main", &day, &caps, &estimate(5, 5));
+        let ReserveOutcome::Reserved(other) = reserved.unwrap() else {
+            panic!("admitted");
+        };
+        store.settle_reservation(&other, &live).unwrap();
+        store
+            .settle_held(&other, &UsageActual::default(), true)
+            .unwrap();
+        store.settle_reservation(&other, &live).unwrap();
+        assert_eq!(sum(store.usage_totals("main", &day).unwrap()), (180, 13, 6));
+    }
+
+    #[test]
+    fn past_ten_thousand_held_reservations_a_new_one_waits_for_a_settle() {
+        let store = Store::open_in_memory().unwrap();
+        let (caps, day) = (caps(Some(100), None), store.local_day().unwrap());
+        // Another agent's calls, held by a store that stopped settling.
+        store
+            .conn
+            .execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+                 INSERT INTO usage_reservations(agent, at, expires_at, unsettled)
+                 SELECT 'other', ?1, '2999-01-01 00:00:00', '{}' FROM n",
+                [&day],
+            )
+            .unwrap();
+        let next = store.try_reserve("main", &day, &caps, &estimate(1, 0));
+        let ReserveOutcome::Denied(denial) = next.unwrap() else {
+            panic!("refused");
+        };
+        let reason = denial.reason_text();
+        assert!(
+            reason.contains("10000 reserved calls are still unsettled"),
+            "{reason}"
+        );
+        let settle_one = "DELETE FROM usage_reservations WHERE id = 1";
+        store.conn.execute(settle_one, []).unwrap();
+        let next = store.try_reserve("main", &day, &caps, &estimate(1, 0));
+        assert!(matches!(next.unwrap(), ReserveOutcome::Reserved(_)));
     }
 
     #[test]

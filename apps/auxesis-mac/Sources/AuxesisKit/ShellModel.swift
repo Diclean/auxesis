@@ -643,8 +643,12 @@ public final class ShellModel: ObservableObject {
         // ⌘Return sends only what is on screen: the Waiting for you page shows
         // each pending body whole; from any other page the focused item is
         // unseen, so the shortcut does nothing.
+        // A conversation opened from the Waiting page covers it while the
+        // route stays .waiting: the card is then unseen and ⌘Return belongs
+        // to the composer.
         guard !stopped,
               route == .waiting,
+              !conversationPresented,
               let id = store.focusedApprovalId,
               let approval = store.approvals.first(where: { $0.id == id }),
               approval.state.isPending,

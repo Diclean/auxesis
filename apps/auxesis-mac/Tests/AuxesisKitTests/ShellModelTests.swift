@@ -228,6 +228,21 @@ import Testing
         XCTAssertEqual(shell.selectedWaitingApproval?.id, ask.id)
     }
 
+    func testSendShortcutIsOffWhileAConversationCoversTheWaitingPage() {
+        let (shell, _) = makeShell()
+        guard let ask = approval(shell, "ap-camille") else { return XCTFail("fixture approval") }
+        shell.go(.waiting)
+        shell.store.focus(ask.id)
+        XCTAssertEqual(shell.selectedWaitingApproval?.id, ask.id)
+
+        shell.openConversation(agent: TeamMember.aux.id)
+        XCTAssertEqual(shell.route, .waiting, "the page under the conversation stays Waiting")
+        XCTAssertNil(shell.selectedWaitingApproval, "⌘Return in the composer must never send the hidden card")
+
+        shell.closeConversation()
+        XCTAssertEqual(shell.selectedWaitingApproval?.id, ask.id, "back on the page, the card is on screen again")
+    }
+
     func testDelegationOpenAndReturnKeepsTheRow() {
         let (shell, _) = makeShell()
         shell.open(agent: "mail", fromDelegation: "dl-5")

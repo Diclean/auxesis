@@ -1736,6 +1736,12 @@ impl EngineTurnRunner {
         }
         // Mounting is decided once per turn; each dispatch asks the live mode.
         kernel_broker::gate_dispatch(&mut registry, self.mode_fn(agent));
+        // A skill reaches these through its connector, not the registry.
+        for name in skill_tools_outside(&registry) {
+            origins
+                .entry(name)
+                .or_insert(aux_runtime::grants::ToolOrigin::Connector);
+        }
         let mut rules = load_rules(&self.config_file).map_err(|err| TurnError::ProviderConfig {
             detail: err.to_string(),
         })?;
@@ -1743,7 +1749,6 @@ impl EngineTurnRunner {
         // are the owner's own: config `[[rules]]`, plus (below) the grant asks
         // of an agent whose grants differ from the shipped defaults.
         let mut owner_rules = rules.clone();
-        let mut customised_grants = true;
         // Tools ceiling (B-API v3, F7): each list that is set caps the agent,
         // and a tool must be on every one of them. The lists never grant
         // anything: a listed tool keeps its global rules, and every other
@@ -1759,40 +1764,15 @@ impl EngineTurnRunner {
         if let Some(tools) = agent_md_tools {
             ceilings.push(tools);
         }
-        for name in registry.names() {
-            if !ceilings.iter().all(|tools| listed(tools, name)) {
+        for name in constrained_names(&registry) {
+            if !ceilings.iter().all(|tools| listed(tools, &name)) {
                 rules.push(Rule::new(agent, name, Action::Deny));
             }
         }
-        // D33: the per-agent grant ceiling. A tool whose scope this agent's
-        // grants do not cover is denied before the broker runs it, whatever
-        // the global rules say; a tool covered only at `ask` is forced to
-        // ask. An agent outside the seed has no implicit domain access: its
-        // grants are exactly the scopes it explicitly lists, and everything
-        // else scoped is denied. A corrupt grants file fails closed.
-        match crate::agents::grants(&self.home, agent) {
-            Ok(grants) => {
-                customised_grants =
-                    Some(&grants) != aux_runtime::grants::default_grants(agent).as_ref();
-                apply_grant_rules(&mut rules, agent, &registry, &grants, &origins)
-            }
-            Err(crate::agents::RegistryError::UnknownAgent(_)) => {
-                let grants = implicit_grants(agent, &ceilings, &rules);
-                apply_grant_rules(&mut rules, agent, &registry, &grants, &origins);
-            }
-            Err(err) => {
-                tracing::warn!(agent, error = %err, "agent grants unreadable; scoped tools refused");
-                for name in registry.names() {
-                    let origin = origins
-                        .get(name)
-                        .copied()
-                        .unwrap_or(aux_runtime::grants::ToolOrigin::Unknown);
-                    if aux_runtime::grants::tool_scope(name).is_some() || !origin.is_builtin() {
-                        rules.push(Rule::new(agent, name, Action::Deny));
-                    }
-                }
-            }
-        }
+        // D33: the per-agent grant ceiling ([`apply_own_grants`]).
+        let customised_grants = apply_own_grants(
+            &self.home, agent, &registry, &origins, &ceilings, &mut rules,
+        );
         let chief_asks = apply_chief_ceiling(
             &self.home,
             agent,
@@ -1801,18 +1781,8 @@ impl EngineTurnRunner {
             &owner_rules,
             &mut rules,
         );
-        // A generated grant `ask` never softens the owner's own deny: what the
-        // config rules deny (as the broker selects) is denied again last.
-        for name in registry.names() {
-            let explicit = registry
-                .get(name)
-                .is_some_and(|tool| tool.class().requires_explicit_rule);
-            if kernel_broker::matching_rule(&owner_rules, agent, name, explicit)
-                .is_some_and(|(_, rule)| rule.action == Action::Deny)
-            {
-                rules.push(Rule::new(agent, name, Action::Deny));
-            }
-        }
+        // A generated grant `ask` never softens the owner's own deny.
+        deny_again(agent, &registry, &owner_rules, &mut rules);
         if customised_grants {
             let added = rules[owner_rules.len()..].iter();
             let asks: Vec<Rule> = added
@@ -2617,18 +2587,80 @@ fn apply_grant_rules(
     grants: &aux_runtime::grants::AgentGrants,
     origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
 ) {
-    for name in registry.names() {
+    for name in constrained_names(registry) {
         let origin = origins
-            .get(name)
+            .get(&name)
             .copied()
             .unwrap_or(aux_runtime::grants::ToolOrigin::Unknown);
-        let scope = aux_runtime::grants::tool_scope(name);
-        match grants.action_for_origin(agent, name, origin, scope) {
+        let scope = aux_runtime::grants::tool_scope(&name);
+        match grants.action_for_origin(agent, &name, origin, scope) {
             Err(_) => rules.push(Rule::new(agent, name, Action::Deny)),
             Ok(aux_runtime::grants::GrantLevel::Ask) => {
                 rules.push(Rule::new(agent, name, Action::Ask))
             }
             Ok(aux_runtime::grants::GrantLevel::Allow) => {}
+        }
+    }
+}
+
+/// D33: the agent's own grant ceiling. A tool whose scope its grants do not
+/// cover is denied before the broker runs it, whatever the global rules say;
+/// a tool covered only at `ask` is forced to ask. An agent outside the seed
+/// has no implicit domain access: its grants are exactly the scopes it
+/// explicitly lists (`lists`, its tools lists, and its exact `allow` rules),
+/// and everything else scoped is denied. A corrupt grants file fails closed.
+///
+/// Returns false only for grants that are the shipped defaults (ACT-FREE).
+fn apply_own_grants(
+    home: &Path,
+    agent: &str,
+    registry: &kernel_broker::ToolRegistry,
+    origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
+    lists: &[Vec<String>],
+    rules: &mut Vec<Rule>,
+) -> bool {
+    match crate::agents::grants(home, agent) {
+        Ok(grants) => {
+            apply_grant_rules(rules, agent, registry, &grants, origins);
+            Some(&grants) != aux_runtime::grants::default_grants(agent).as_ref()
+        }
+        Err(crate::agents::RegistryError::UnknownAgent(_)) => {
+            let grants = implicit_grants(agent, lists, rules);
+            apply_grant_rules(rules, agent, registry, &grants, origins);
+            true
+        }
+        Err(err) => {
+            tracing::warn!(agent, error = %err, "agent grants unreadable; scoped tools refused");
+            for name in constrained_names(registry) {
+                let origin = origins
+                    .get(&name)
+                    .copied()
+                    .unwrap_or(aux_runtime::grants::ToolOrigin::Unknown);
+                if aux_runtime::grants::tool_scope(&name).is_some() || !origin.is_builtin() {
+                    rules.push(Rule::new(agent, name, Action::Deny));
+                }
+            }
+            true
+        }
+    }
+}
+
+/// What `owner_rules` deny `agent` (as the broker selects) is denied again,
+/// last: a generated ask never softens the owner's own deny.
+fn deny_again(
+    agent: &str,
+    registry: &kernel_broker::ToolRegistry,
+    owner_rules: &[Rule],
+    rules: &mut Vec<Rule>,
+) {
+    for name in constrained_names(registry) {
+        let explicit = registry
+            .get(&name)
+            .is_some_and(|tool| tool.class().requires_explicit_rule);
+        if kernel_broker::matching_rule(owner_rules, agent, &name, explicit)
+            .is_some_and(|(_, rule)| rule.action == Action::Deny)
+        {
+            rules.push(Rule::new(agent, name, Action::Deny));
         }
     }
 }
@@ -2681,10 +2713,13 @@ fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &st
 }
 
 /// An agent other than the chief can do nothing the chief
-/// could not. A tool the chief is refused (its grants, its tools lists, its
-/// own config deny) is denied for the agent; one the chief must ask about
-/// asks, unless the agent is already denied it. Only ever narrows. Returns
-/// the asks it added, so the auto policy keeps their cards.
+/// could not. A tool the chief is refused (its grants, its tools lists, an
+/// owner rule that denies it) is denied for the agent; one the chief must
+/// ask about asks, unless the agent is already denied it. Only ever narrows.
+/// Returns the asks it added, so the auto policy keeps their cards.
+///
+/// The chief's owner rules are `owner_rules` as the broker matches them:
+/// an `agent = "*"` rule covers the chief too, and the last match wins.
 ///
 /// The chief is the one this home runs ([`crate::agents::ceilings`]): on an
 /// older install an added agent stays under `aux` as well as under `main`.
@@ -2713,14 +2748,11 @@ pub fn apply_chief_ceiling(
                 .ok()
                 .map(|agents| crate::agents::ceiling_grants(agents, id)),
             lists: tool_lists(home, id),
-            rules: owner_rules
-                .iter()
-                .filter(|rule| rule.agent == id)
-                .cloned()
-                .collect(),
         })
         .collect();
-    for name in registry.names() {
+    let mut capped = Vec::new();
+    for name in constrained_names(registry) {
+        let name = name.as_str();
         let explicit = registry
             .get(name)
             .is_some_and(|tool| tool.class().requires_explicit_rule);
@@ -2737,7 +2769,7 @@ pub fn apply_chief_ceiling(
                 .grants
                 .as_ref()
                 .and_then(|grants| grants.action_for_origin(cap.id, name, origin, scope).ok());
-            let owner = action(&cap.rules, cap.id);
+            let owner = action(owner_rules, cap.id);
             if level.is_none()
                 || owner == Some(Action::Deny)
                 || !cap.lists.iter().all(|tools| listed(tools, name))
@@ -2748,10 +2780,17 @@ pub fn apply_chief_ceiling(
             }
         }
         if denied {
+            // Logged when the agent's own rules would have let it through.
+            if action(rules, agent) != Some(Action::Deny) {
+                capped.push(name.to_string());
+            }
             rules.push(Rule::new(agent, name, Action::Deny));
         } else if ask && action(rules, agent) != Some(Action::Deny) {
             asks.push(Rule::new(agent, name, Action::Ask));
         }
+    }
+    if !capped.is_empty() {
+        crate::agents::log_capped(agent, &capped);
     }
     rules.extend(asks.iter().cloned());
     asks
@@ -2763,13 +2802,11 @@ struct Ceiling {
     /// `None` when the registry cannot be read.
     grants: Option<aux_runtime::grants::AgentGrants>,
     lists: Vec<Vec<String>>,
-    /// The owner's config rules for this agent.
-    rules: Vec<Rule>,
 }
 
 /// An agent's tools lists: `agent.toml`'s, and `agent.md`'s when it names
 /// tools. An unreadable one allows nothing.
-fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
+pub(crate) fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
     let mut lists: Vec<Vec<String>> = Vec::new();
     match agent::config(home, id) {
         Ok(config) => lists.extend(config.tools),
@@ -2788,8 +2825,13 @@ fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
     lists
 }
 
-/// The chief ceiling for the CLI and scheduled-job turns, whose registries
-/// are the built-ins plus mounted MCP tools.
+/// What a turn outside the API may do (`aux skill run`, `aux chat`, scheduled
+/// jobs, routines, watchers), as the daemon holds its own turns: the agent's
+/// own grants, then the chief ceiling, then every deny the caller's `rules`
+/// already hold (the owner's config, a tools list, MAIL-NO-SHELL) again, last,
+/// so a generated ask never softens one. The registries are the built-ins
+/// plus mounted MCP tools; the scoped tools a skill reaches outside them are
+/// covered too ([`constrained_names`]).
 pub fn constrain_non_api_turn(
     home: &Path,
     agent: &str,
@@ -2810,13 +2852,37 @@ pub fn constrain_non_api_turn(
             ToolOrigin::Builtin
         }
     };
-    let origins = registry
-        .names()
+    let origins = constrained_names(registry)
         .into_iter()
-        .map(|name| (name.to_string(), origin(name)))
+        .map(|name| {
+            let kind = origin(&name);
+            (name, kind)
+        })
         .collect();
     let owner_rules = rules.clone();
+    let lists = tool_lists(home, agent);
+    apply_own_grants(home, agent, registry, &origins, &lists, rules);
     apply_chief_ceiling(home, agent, registry, &origins, &owner_rules, rules);
+    deny_again(agent, registry, &owner_rules, rules);
+}
+
+/// The scoped tools a skill run can call through its connector that this
+/// registry does not hold (the EventKit update): the rules cover them as
+/// the daemon's own connector tools.
+fn skill_tools_outside(registry: &kernel_broker::ToolRegistry) -> Vec<String> {
+    aux_runtime::skills::tool_map::wire_names()
+        .filter(|name| registry.get(name).is_none())
+        .filter(|name| aux_runtime::grants::tool_scope(name).is_some())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Every name a turn's rules cover: the registry and [`skill_tools_outside`],
+/// so a skill call meets the same grants and chief ceiling as a tool call.
+fn constrained_names(registry: &kernel_broker::ToolRegistry) -> Vec<String> {
+    let mut names: Vec<String> = registry.names().into_iter().map(str::to_string).collect();
+    names.extend(skill_tools_outside(registry));
+    names
 }
 
 /// True when an agent's tool list names the registered tool `name`.
@@ -2824,7 +2890,7 @@ pub fn constrain_non_api_turn(
 /// The registry holds wire names (`mail_send`); agent files list logical ones
 /// (`mail.send`). The wire name is mapped back through the one table, so
 /// either form matches.
-fn listed(tools: &[String], name: &str) -> bool {
+pub(crate) fn listed(tools: &[String], name: &str) -> bool {
     let logical = aux_runtime::skills::tool_map::from_wire(name)
         .map(|info| info.logical)
         .or_else(|| aux_runtime::skills::tool_map::canonical_name(name));
@@ -4026,6 +4092,16 @@ mod tests {
         }
     }
 
+    /// An added agent's `agent.toml` listing `tools`: its own grants are
+    /// exactly these, so only a ceiling can deny them.
+    fn list_tools(home: &Path, agent: &str, tools: &[&str]) {
+        let config = crate::agent::AgentConfig {
+            tools: Some(tools.iter().map(|tool| tool.to_string()).collect()),
+            ..crate::agent::AgentConfig::default()
+        };
+        crate::agent::write_config(home, agent, &config).unwrap();
+    }
+
     /// Break-It D: the CLI/job ceiling does not label a connector-shaped
     /// tool built-in, so the chief's refusal of an unknown connector caps
     /// every other agent too.
@@ -4034,6 +4110,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        list_tools(home, "scout", &["google_mail_send_x", "mail_read"]);
         let mut registry = kernel_broker::ToolRegistry::new();
         registry.register_native(Box::new(NamedTestTool("google_mail_send_x")));
         registry.register_native(Box::new(NamedTestTool("mail_read")));
@@ -4050,12 +4127,16 @@ mod tests {
 
     /// An older install's chief `aux` has no mail access: the CLI/job ceiling
     /// denies a mail tool to an added agent and to `main` (not the chief
-    /// there), while Mail, which `aux` hands work to, keeps it. A `main` home
-    /// is as before.
+    /// there), though their own lists name it, while Mail, which `aux` hands
+    /// work to, keeps it. `aux` is never capped, and its own grants hand mail
+    /// to Mail, as in the daemon. A `main` home is as before.
     #[test]
     fn the_non_api_ceiling_holds_an_agent_under_the_legacy_chief() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
+        for agent in ["scout", "main"] {
+            list_tools(home, agent, &["mail_read", "read_file"]);
+        }
         let mut registry = kernel_broker::ToolRegistry::new();
         registry.register_native(Box::new(NamedTestTool("mail_read")));
         registry.register_native(Box::new(NamedTestTool("read_file")));
@@ -4073,7 +4154,7 @@ mod tests {
         assert_eq!(denied("scout"), (true, false));
         assert_eq!(denied("main"), (true, false));
         assert_eq!(denied("mail"), (false, false));
-        assert_eq!(denied("aux"), (false, false));
+        assert_eq!(denied("aux"), (true, false));
         std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
         assert_eq!(denied("scout"), (false, false));
     }
@@ -4102,6 +4183,138 @@ mod tests {
         assert!(asks.is_empty(), "{asks:?}");
         let last = kernel_broker::matching_rule(&rules, "scout", "mail_read", false);
         assert_eq!(last.map(|(_, rule)| rule.action), Some(Action::Deny));
+    }
+
+    /// A skill moves an event through its connector, never the registry: the
+    /// grants and the chief ceiling still cover that call. The chief keeps it,
+    /// Calendar asks, Mail is denied, and once the chief's calendar writes are
+    /// off no agent may make it: Calendar under the chief, the chief under
+    /// its own grants.
+    #[test]
+    fn a_skill_tool_outside_the_registry_is_held_to_grants_and_the_chief() {
+        use aux_runtime::grants::{default_grants, ActionLevel, ToolOrigin};
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let registry = kernel_broker::ToolRegistry::new();
+        let update = "apple_calendar_update_event";
+        let last = |rules: &[Rule], agent: &str| {
+            kernel_broker::matching_rule(rules, agent, update, false).map(|(_, rule)| rule.action)
+        };
+        let origins: HashMap<String, ToolOrigin> = skill_tools_outside(&registry)
+            .into_iter()
+            .map(|name| (name, ToolOrigin::Connector))
+            .collect();
+        let own = |agent: &str| {
+            let mut rules = Vec::new();
+            let grants = default_grants(agent).unwrap();
+            apply_grant_rules(&mut rules, agent, &registry, &grants, &origins);
+            last(&rules, agent)
+        };
+        assert_eq!(own("main"), None);
+        assert_eq!(own("calendar"), Some(Action::Ask));
+        assert_eq!(own("mail"), Some(Action::Deny));
+        // Calendar made from its template: its own grants ask, as above.
+        std::fs::create_dir_all(aux_engine::agent_dir(home, "calendar")).unwrap();
+        let ceiling = |agent: &str| {
+            let mut rules = Vec::new();
+            constrain_non_api_turn(home, agent, &registry, &mut rules);
+            last(&rules, agent)
+        };
+        assert_eq!(ceiling("calendar"), Some(Action::Ask));
+        // The API never narrows the chief below an existing agent: Calendar's
+        // folder goes, the chief's calendar writes are turned off, and the
+        // folder is made again by hand.
+        let calendar = aux_engine::agent_dir(home, "calendar");
+        std::fs::remove_dir_all(&calendar).unwrap();
+        let mut chief = default_grants("main").unwrap();
+        for grant in chief
+            .can_do
+            .iter_mut()
+            .filter(|g| g.skill == "calendar.write")
+        {
+            grant.level = ActionLevel::Off;
+        }
+        crate::agents::write_grants(home, "main", &chief).unwrap();
+        std::fs::create_dir_all(&calendar).unwrap();
+        assert_eq!(ceiling("calendar"), Some(Action::Deny));
+        assert_eq!(ceiling("main"), Some(Action::Deny));
+    }
+
+    /// An `agent = "*"` rule is the chief's as much as an exact one, in the
+    /// broker's order. `mail_send` denied to every agent, then allowed to
+    /// Mail: the chief is denied it, so Mail is too, in the daemon's turn and
+    /// in `aux chat`, jobs and `aux skill run`. The reverse order denies both
+    /// as well. An allow for the chief after the wildcard lifts the cap.
+    #[test]
+    fn a_wildcard_deny_of_the_chief_caps_an_agent_allowed_after_it() {
+        use aux_runtime::grants::ToolOrigin;
+        let rule = |agent: &str, action: &str| {
+            format!(
+                "\n[[rules]]\nagent = \"{agent}\"\ntool = \"mail_send\"\naction = \"{action}\"\n"
+            )
+        };
+        let (every, mail, chief) = (
+            rule("*", "deny"),
+            rule("mail", "allow"),
+            rule("main", "allow"),
+        );
+        let registry = kernel_broker::ToolRegistry::new();
+        let origins: HashMap<String, ToolOrigin> = skill_tools_outside(&registry)
+            .into_iter()
+            .map(|name| (name, ToolOrigin::Connector))
+            .collect();
+        let denied = |rules: &[Rule]| {
+            kernel_broker::matching_rule(rules, "mail", "mail_send", false)
+                .is_some_and(|(_, rule)| rule.action == Action::Deny)
+        };
+        for (rules, capped) in [
+            (format!("{every}{mail}"), true),
+            (format!("{mail}{every}"), true),
+            (format!("{every}{chief}{mail}"), false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path();
+            let config = home.join("config.toml");
+            std::fs::write(&config, format!("default_agent = \"main\"\n{rules}")).unwrap();
+            std::fs::create_dir_all(aux_engine::agent_dir(home, "mail")).unwrap();
+            let owner = aux_engine::config::load_rules(&config).unwrap();
+            let mut api = owner.clone();
+            apply_chief_ceiling(home, "mail", &registry, &origins, &owner, &mut api);
+            assert_eq!(denied(&api), capped, "daemon turn: {rules}");
+            let mut cli = owner.clone();
+            constrain_non_api_turn(home, "mail", &registry, &mut cli);
+            assert_eq!(denied(&cli), capped, "outside the API: {rules}");
+        }
+    }
+
+    /// Outside the API an agent is held to its own grants before the chief:
+    /// Calendar's `mail.send` set `off` denies its `mail_send` though the
+    /// chief may send, and a generated ask never softens the owner's deny.
+    #[test]
+    fn the_non_api_turn_holds_an_agent_to_its_own_grants_first() {
+        use aux_runtime::grants::{default_grants, ActionLevel};
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        std::fs::create_dir_all(aux_engine::agent_dir(home, "calendar")).unwrap();
+        let registry = kernel_broker::ToolRegistry::new();
+        let send = |mut rules: Vec<Rule>, agent: &str| {
+            constrain_non_api_turn(home, agent, &registry, &mut rules);
+            kernel_broker::matching_rule(&rules, agent, "mail_send", false)
+                .map(|(_, rule)| rule.action)
+        };
+        assert_eq!(send(Vec::new(), "main"), None);
+        assert_eq!(send(Vec::new(), "calendar"), Some(Action::Ask));
+        let owner = vec![Rule::new("calendar", "mail_send", Action::Deny)];
+        assert_eq!(send(owner, "calendar"), Some(Action::Deny));
+        let mut own = default_grants("calendar").unwrap();
+        for grant in own.can_do.iter_mut().filter(|g| g.skill == "mail.send") {
+            grant.level = ActionLevel::Off;
+        }
+        crate::agents::write_grants(home, "calendar", &own).unwrap();
+        assert_eq!(send(Vec::new(), "calendar"), Some(Action::Deny));
+        assert_eq!(send(Vec::new(), "main"), None);
     }
 
     #[test]

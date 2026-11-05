@@ -285,10 +285,18 @@ struct TeamCommands: Commands {
             .accessibilityLabel(shell.language == .fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)").accessibilityIdentifier("menu-quit")
         }
         CommandMenu(L10n.ui(.go, shell.language)) {
-            ForEach(GoMenu.entries) { entry in
+            // Rebuilt whenever the store's agents change (the shell republishes them).
+            let agents = shell.store.agents
+            let loading = GoMenu.loading(agents: agents)
+            ForEach(GoMenu.entries(agents: agents)) { entry in
                 switch entry {
                 case .item(let item):
-                    goButton(item)
+                    goButton(item, loading: loading)
+                case .addAgent:
+                    Button(L10n.ui(.addAgentMenu, shell.language)) { shell.beginAddAgent() }
+                        .disabled(loading || !windows.hasMainWindow || !shell.canAddAgents)
+                        .accessibilityLabel(L10n.ui(.addAgentMenu, shell.language))
+                        .accessibilityIdentifier("menu-go-add-agent")
                 case .separator:
                     Divider()
                 }
@@ -361,15 +369,17 @@ struct TeamCommands: Commands {
         }
     }
 
-    /// One Go item: the agent shortcuts are ⌘1–⌘5; a Records page has none.
-    /// Every item is disabled while the main window is closed.
+    /// One Go item: the agents that exist get ⌘1…; a Records page has none.
+    /// Every item is disabled while the main window is closed, and an agent
+    /// item while the agents load.
     @ViewBuilder
-    private func goButton(_ item: GoMenuItem) -> some View {
+    private func goButton(_ item: GoMenuItem, loading: Bool) -> some View {
         let title = GoMenu.title(for: item, language: shell.language)
+        let isAgent: Bool = { if case .agent = item.route { return true } else { return false } }()
         let button = Button(title) {
             GoMenu.select(item, hasMainWindow: windows.hasMainWindow, in: shell)
         }
-        .disabled(!windows.hasMainWindow)
+        .disabled(!windows.hasMainWindow || (isAgent && loading))
         .accessibilityLabel(title)
         .accessibilityIdentifier("menu-go-\(item.id)")
         if let shortcut = item.shortcut, let key = shortcut.last {

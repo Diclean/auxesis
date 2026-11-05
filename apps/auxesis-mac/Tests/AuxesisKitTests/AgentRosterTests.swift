@@ -54,6 +54,20 @@ import Testing
         store.stop()
     }
 
+    func testTheChiefsWorksWithLineNamesOnlyTheAgentsThatExist() {
+        let alone = TeamMember.roster([agent("main", shown: "Aux")])
+        XCTAssertEqual(TeamMember.worksWithLine(alone, .en), "Add Mail, Calendar, Clients or Documents when you need them.")
+        XCTAssertEqual(TeamMember.worksWithLine(alone, .fr), "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin.")
+
+        let two = TeamMember.roster([agent("calendar"), agent("main", shown: "Aux"), agent("mail", shown: "Post")])
+        XCTAssertEqual(TeamMember.worksWithLine(two, .en), "Aux hands work to Post and Calendar.")
+        XCTAssertEqual(TeamMember.worksWithLine(two, .fr), "Aux confie du travail à Post et Calendar.")
+
+        let four = TeamMember.roster(["main", "mail", "calendar", "clients", "documents"].map { agent($0) })
+        XCTAssertEqual(TeamMember.worksWithLine(four, .en), "Aux hands work to Mail, Calendar, Clients and Documents.")
+        XCTAssertEqual(TeamMember.worksWithLine(four, .fr), "Aux confie du travail à Mail, Calendar, Clients et Documents.")
+    }
+
     func testThePausedBannerCountsNoAgents() {
         for language in [Language.en, .fr] {
             let body = L10n.ui(.stoppedBody, language)

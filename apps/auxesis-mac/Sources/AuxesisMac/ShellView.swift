@@ -62,6 +62,8 @@ struct ShellView: View {
                 .environmentObject(shell)
                 .themed()
         }
+        // "Add an agent", from the agents list or Go ▸ Add an Agent….
+        .sheet(item: $shell.addingAgent) { model in AgentTemplatesSheet(model: model).themed() }
         .sheet(isPresented: $shell.shortcutHelpOpen) {
             KeyboardShortcutsSheet(language: shell.language)
                 .themed()

@@ -1986,6 +1986,10 @@
       "en" : "Aux works alone until you add an agent. Each one gets only the access listed here.",
       "fr" : "Aux travaille seul tant que vous n’ajoutez pas d’agent. Chacun ne reçoit que les accès indiqués ici."
     },
+    "addAgentMenu" : {
+      "en" : "Add an Agent…",
+      "fr" : "Ajouter un agent…"
+    },
     "agentIdle" : {
       "en" : "Idle",
       "fr" : "Inactif"
@@ -3197,6 +3201,10 @@
     "leftMac" : {
       "en" : "Left this Mac",
       "fr" : "Sorti de ce Mac"
+    },
+    "listAnd" : {
+      "en" : "and",
+      "fr" : "et"
     },
     "loadFailed" : {
       "en" : "Couldn't load this.",
@@ -4726,9 +4734,13 @@
       "en" : "Aux hands it work and gets back only the result.",
       "fr" : "Aux lui confie du travail et ne reçoit que le résultat."
     },
+    "worksWithNone" : {
+      "en" : "Add Mail, Calendar, Clients or Documents when you need them.",
+      "fr" : "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin."
+    },
     "worksWithTeam" : {
-      "en" : "Mail, Calendar, Clients and Documents.",
-      "fr" : "Mail, Calendrier, Clients et Documents."
+      "en" : "Aux hands work to %@.",
+      "fr" : "Aux confie du travail à %@."
     },
     "workshop" : {
       "en" : "Workshop",
@@ -4747,7 +4759,5 @@
       "fr" : "Vous : "
     }
   },
-  "uiMissingFrench" : [
-
-  ]
+  "uiMissingFrench" : []
 }

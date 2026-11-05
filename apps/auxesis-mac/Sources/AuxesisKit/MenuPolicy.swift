@@ -1,15 +1,18 @@
 import Foundation
 
-/// One Go-menu destination: an agent conversation (⌘1–⌘5) or a Records page
-/// (no shortcut). The title is not stored here; it comes from `L10n` so EN and
-/// FR stay in the app's one copy table.
+/// One Go-menu destination: an agent conversation (⌘1…) or a Records page
+/// (no shortcut). A page title comes from `L10n` so EN and FR stay in the
+/// app's one copy table; an agent item carries the name the sidebar shows.
 public struct GoMenuItem: Equatable, Identifiable {
     public let route: ShellModel.Route
     public let shortcut: String?
+    /// The agent's shown name (`display_name`, else its brand name).
+    public let name: String?
 
-    public init(route: ShellModel.Route, shortcut: String? = nil) {
+    public init(route: ShellModel.Route, shortcut: String? = nil, name: String? = nil) {
         self.route = route
         self.shortcut = shortcut
+        self.name = name
     }
 
     public var id: String { GoMenu.identifier(for: route) }
@@ -17,11 +20,14 @@ public struct GoMenuItem: Equatable, Identifiable {
 
 public enum GoMenuEntry: Equatable, Identifiable {
     case item(GoMenuItem)
+    /// "Add an Agent…": opens the same sheet as the agents list.
+    case addAgent
     case separator
 
     public var id: String {
         switch self {
         case .item(let item): return item.id
+        case .addAgent: return "add-agent"
         case .separator: return "separator"
         }
     }
@@ -32,24 +38,41 @@ public enum GoMenuEntry: Equatable, Identifiable {
     }
 }
 
-/// The Go menu, in menu order. The five items above the separator are
-/// the sidebar's order — Aux, then the four built-in agents — with ⌘1–⌘5. The
-/// v5 shell's Records pages sit below it with no shortcut: they are pages, not
-/// conversations, and never steal a key from an agent.
+/// The Go menu, in menu order. Above the separator: the agents that exist,
+/// in the sidebar's order, the first nine with ⌘1–⌘9, then "Add an Agent…"
+/// while a template is left. Below it: the Records pages, with no shortcut —
+/// they are pages, not conversations, and never steal a key from an agent.
+/// Until the daemon has listed its agents the menu shows the chief alone and
+/// keeps its agent items disabled, so no shortcut can reach a missing agent.
 public enum GoMenu {
-    public static let agentItems: [GoMenuItem] = TeamMember.all.enumerated().map { index, member in
-        GoMenuItem(route: .agent(member.id), shortcut: "⌘\(index + 1)")
+    /// The daemon has not listed its agents yet (an install always has the chief).
+    public static func loading(agents: [Agent]) -> Bool { agents.isEmpty }
+
+    public static func agentItems(agents: [Agent]) -> [GoMenuItem] {
+        let members = loading(agents: agents) ? [TeamMember.main] : TeamMember.roster(agents)
+        return members.enumerated().map { index, member in
+            GoMenuItem(route: .agent(member.id), shortcut: index < 9 ? "⌘\(index + 1)" : nil, name: member.name)
+        }
+    }
+
+    /// A built-in template is not an agent yet.
+    public static func canAddAgent(agents: [Agent]) -> Bool {
+        let ids = Set(agents.map(\.id))
+        return !loading(agents: agents) && TeamMember.domain.contains { !ids.contains($0.id) }
     }
 
     public static let recordItems: [GoMenuItem] = ShellModel.recordsMenu
         .flatMap { $0 }
         .map { GoMenuItem(route: $0) }
 
-    public static let entries: [GoMenuEntry] =
-        agentItems.map(GoMenuEntry.item) + [.separator] + recordItems.map(GoMenuEntry.item)
+    /// While loading, "Add an Agent…" stays in place, disabled.
+    public static func entries(agents: [Agent]) -> [GoMenuEntry] {
+        let add: [GoMenuEntry] = loading(agents: agents) || canAddAgent(agents: agents) ? [.addAgent] : []
+        return agentItems(agents: agents).map(GoMenuEntry.item) + add + [.separator] + recordItems.map(GoMenuEntry.item)
+    }
 
     public static func title(for item: GoMenuItem, language: Language) -> String {
-        title(for: item.route, language: language)
+        item.name ?? title(for: item.route, language: language)
     }
 
     public static func title(for route: ShellModel.Route, language: Language) -> String {

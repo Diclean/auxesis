@@ -42,7 +42,7 @@ struct ProfileInspector: View {
                         }
                     }
                     heading(copy(.worksWith))
-                    paragraph(member.role == .chief ? copy(.worksWithTeam) : copy(.worksWithAux))
+                    paragraph(member.role == .chief ? TeamMember.worksWithLine(shell.roster, language) : copy(.worksWithAux))
                     memorySection(copy)
                     heading(copy(.skills))
                     paragraph(skillsLine(copy))

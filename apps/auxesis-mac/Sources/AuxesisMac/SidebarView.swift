@@ -243,7 +243,7 @@ struct AgentSelectionList: View {
                             Label(copy(.addAgent), systemImage: "plus")
                         }
                         .buttonStyle(.plain)
-                        .accessibilityIdentifier("agent-selection-add")
+                        .accessibilityLabel(copy(.addAgent)).accessibilityIdentifier("agent-selection-add")
                     }
                     if !workingOnly {
                         Section {

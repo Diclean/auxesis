@@ -1220,6 +1220,11 @@ mod tests {
             _ = judge.judge("ls") => panic!("the provider never answers"),
             _ = sent.notified() => {}
         }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while store.lock().unwrap().reservation_count().unwrap() > 0 {
+            assert!(std::time::Instant::now() < deadline, "unsettled");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let store = store.lock().unwrap();
         assert_eq!(
             store.reservation_count().unwrap(),

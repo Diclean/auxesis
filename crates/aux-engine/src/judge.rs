@@ -23,7 +23,7 @@ use aux_providers::{
     ChatMessage, ChatProvider, ChatRequest, ChatResponse, ChatRole, GatedChat, SafeMessage,
 };
 use aux_store::{Store, StoreHandle};
-use kernel_core::budget::{Budgets, PriceTable, Reservation, UsageActual};
+use kernel_core::budget::{Budgets, PriceTable};
 use kernel_core::privacy::{admit_call, Destination, ModeFn, PathId, PrivacyMode};
 use kernel_privacy::safetext::Gate;
 use kernel_privacy::NameDictionary;
@@ -98,6 +98,11 @@ pub struct JudgeBudget {
     pub prices: PriceTable,
 }
 
+/// A judge reservation not yet settled. Dropped unsettled (the judge future
+/// cancelled while the provider already had the prompt), it settles the
+/// reserved estimate, prompt plus the full answer cap.
+type Held = crate::HeldReservation<'static, Arc<Mutex<Store>>>;
+
 impl JudgeBudget {
     /// Reserve the judge's prompt plus its answer cap, the same atomic
     /// admission as a chat round. An unlimited agent's caps admit it, so its
@@ -106,7 +111,7 @@ impl JudgeBudget {
         &self,
         provider: &dyn ChatProvider,
         request: &mut ChatRequest,
-    ) -> Result<Reservation, crate::ChatError> {
+    ) -> Result<Held, crate::ChatError> {
         let store = StoreHandle::Shared(Arc::clone(&self.store));
         let caps = self.budgets.caps_for(&self.agent);
         let day = store
@@ -127,7 +132,7 @@ impl JudgeBudget {
             let cap = u32::try_from(reservation.estimate.tokens_out).unwrap_or(u32::MAX);
             request.max_tokens = Some(cap.min(JUDGE_MAX_TOKENS));
         }
-        Ok(reservation)
+        Ok(Held::new(Arc::clone(&self.store), reservation))
     }
 
     /// Settle what the call cost: the provider's counts, or the estimate when
@@ -136,7 +141,7 @@ impl JudgeBudget {
     fn settle(
         &self,
         provider: &dyn ChatProvider,
-        reservation: &Reservation,
+        reservation: Held,
         request: &ChatRequest,
         response: Option<&ChatResponse>,
     ) -> Result<(), crate::ChatError> {
@@ -145,7 +150,7 @@ impl JudgeBudget {
         let empty = ChatResponse::assistant("");
         let answered = response.unwrap_or(&empty);
         let actual = crate::engine::usage_actual(request, answered, model, &self.prices);
-        store.with(|store| store.settle_reservation(reservation, &actual))?;
+        reservation.settle(&actual)?;
         // INFER-COST-1: the judge's brain call row, index 0 (rounds count from 1).
         let Some(response) = response else {
             return Ok(());
@@ -165,52 +170,6 @@ impl JudgeBudget {
             tracing::warn!(error = %err, "could not record the judge call's token counts");
         }
         Ok(())
-    }
-}
-
-/// A judge reservation not yet settled. Settled explicitly on every normal
-/// exit; dropped unsettled (the judge future cancelled while the provider
-/// already had the prompt), it settles the reserved estimate, prompt plus the
-/// full answer cap, synchronously, so spend the provider may bill is never
-/// released as headroom.
-struct Pending<'b> {
-    budget: &'b JudgeBudget,
-    reservation: Option<Reservation>,
-}
-
-impl Pending<'_> {
-    fn settle(
-        mut self,
-        provider: &dyn ChatProvider,
-        request: &ChatRequest,
-        response: Option<&ChatResponse>,
-    ) -> Result<(), crate::ChatError> {
-        match self.reservation.take() {
-            Some(reservation) => self
-                .budget
-                .settle(provider, &reservation, request, response),
-            None => Ok(()),
-        }
-    }
-}
-
-impl Drop for Pending<'_> {
-    fn drop(&mut self) {
-        let Some(reservation) = self.reservation.take() else {
-            return;
-        };
-        let reserved = reservation.estimate;
-        let actual = UsageActual {
-            tokens_in: reserved.tokens_in,
-            tokens_in_estimated: true,
-            tokens_out: reserved.tokens_out,
-            tokens_out_estimated: true,
-            usd_cents: reserved.usd_cents,
-        };
-        let store = StoreHandle::Shared(Arc::clone(&self.budget.store));
-        if let Err(err) = store.with(|store| store.settle_reservation(&reservation, &actual)) {
-            tracing::warn!(error = %err, "could not settle a cancelled judge call");
-        }
     }
 }
 
@@ -339,14 +298,13 @@ impl ShellJudge {
         };
         // Dropped before the explicit settle (the turn cancelled mid-call),
         // the guard settles the whole reserved estimate.
-        let pending = Pending {
-            budget: &self.budget,
-            reservation: Some(reservation),
-        };
         let gated = GatedChat::new(provider, Arc::clone(&self.mode));
         let outcome = tokio::time::timeout(self.timeout, gated.complete(&request)).await;
         let response = outcome.as_ref().ok().and_then(|done| done.as_ref().ok());
-        if let Err(err) = pending.settle(provider, &request, response) {
+        if let Err(err) = self
+            .budget
+            .settle(provider, reservation, &request, response)
+        {
             tracing::warn!(error = %err, "could not settle the judge call");
             return Verdict::Failed("budget");
         }

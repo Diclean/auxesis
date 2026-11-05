@@ -426,11 +426,13 @@ impl Store {
                 audit_error: None,
             }));
         }
-        // A reservation from a process that died mid-call must not block the
-        // cap forever: expired rows are ignored below and swept here.
+        // An older plain reservation of a process that died mid-call is
+        // ignored below and swept here past its TTL. A held one (`unsettled`)
+        // never expires: its call may be billed, so it counts until settled.
         tx.execute(
             "DELETE FROM usage_reservations
-             WHERE agent = ?1 AND expires_at <= datetime('now', 'localtime')",
+             WHERE agent = ?1 AND expires_at <= datetime('now', 'localtime')
+               AND unsettled IS NULL",
             [agent],
         )?;
         let (recorded_in, recorded_out, recorded_usd) = day_totals_tx(&tx, agent, day)?;
@@ -441,7 +443,7 @@ impl Store {
                     COALESCE(SUM(usd_cents), 0)
              FROM usage_reservations
              WHERE agent = ?1 AND at >= ?2 AND at < date(?2, '+1 day')
-               AND expires_at > datetime('now', 'localtime')",
+               AND (expires_at > datetime('now', 'localtime') OR unsettled IS NOT NULL)",
             rusqlite::params![agent, day],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
@@ -506,10 +508,15 @@ impl Store {
         }
 
         let ttl = format!("+{} seconds", RESERVATION_TTL.as_secs());
+        // Held from the start, with what settling it needs once this process
+        // is gone (see `settle_abandoned_reservations`).
+        let unsettled =
+            serde_json::json!({ "caps": caps, "run_id": run_id, "usd": estimate.usd_cents });
         tx.execute(
-            "INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out, usd_cents)
-             VALUES (?1, ?2, datetime('now', 'localtime', ?3), ?4, ?5, ?6)",
-            rusqlite::params![agent, day, ttl, tokens_in, tokens_out, usd_cents],
+            "INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out, usd_cents,
+                 unsettled)
+             VALUES (?1, ?2, datetime('now', 'localtime', ?3), ?4, ?5, ?6, ?7)",
+            rusqlite::params![agent, day, ttl, tokens_in, tokens_out, usd_cents, unsettled.to_string()],
         )?;
         let id = tx.last_insert_rowid();
         tx.commit()?;
@@ -653,6 +660,70 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Raise held reservation `id` to `actual` where that is more, so the cap
+    /// counts, and a later settle of the row records, the most its call is
+    /// known to have spent, even once this process is gone.
+    pub fn raise_held_reservation(&self, id: i64, actual: &UsageActual) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE usage_reservations SET tokens_in = MAX(tokens_in, ?2),
+                 tokens_out = MAX(tokens_out, ?3), unsettled = json_set(unsettled, '$.usd',
+                     MAX(COALESCE(json_extract(unsettled, '$.usd'), 0), ?4))
+             WHERE id = ?1 AND unsettled IS NOT NULL",
+            rusqlite::params![id, actual.tokens_in, actual.tokens_out, actual.usd_cents],
+        )?;
+        Ok(())
+    }
+
+    /// Settle the held reservations a stopped process left: rows past their
+    /// TTL (a live call settles well within it) and not in `skip`, each at the
+    /// most its call is known to have spent (its reserve, or more once
+    /// raised), through [`Store::settle_reservation`], so once. The daemon
+    /// runs it at start and every minute. Returns how many settled and how
+    /// many failed; a failed one stays held for the next pass.
+    pub fn settle_abandoned_reservations(
+        &self,
+        skip: &[i64],
+    ) -> Result<(usize, usize), StoreError> {
+        let mut rows = self
+            .conn
+            .prepare(
+                "SELECT id, agent, at, tokens_in, tokens_out, unsettled FROM usage_reservations
+                 WHERE unsettled IS NOT NULL AND expires_at <= datetime('now', 'localtime')",
+            )?
+            .query_map([], |row| {
+                let amounts = (row.get(3)?, row.get(4)?);
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, amounts, row.get(5)?))
+            })?
+            .collect::<Result<Vec<(i64, String, String, (u64, u64), String)>, _>>()?;
+        rows.retain(|row| !skip.contains(&row.0));
+        let mut failed = 0;
+        for (id, agent, day, (tokens_in, tokens_out), held) in rows.iter().cloned() {
+            let held: serde_json::Value = serde_json::from_str(&held).unwrap_or_default();
+            let usd_cents = held["usd"].as_u64().unwrap_or(0);
+            let reservation = Reservation {
+                id,
+                agent,
+                day,
+                estimate: UsageTotals {
+                    tokens_in,
+                    tokens_out,
+                    usd_cents,
+                },
+                caps: serde_json::from_value(held["caps"].clone()).unwrap_or_default(),
+                run_id: held["run_id"].as_str().map(str::to_string),
+            };
+            let actual = UsageActual {
+                tokens_in,
+                tokens_in_estimated: true,
+                tokens_out,
+                tokens_out_estimated: true,
+                usd_cents,
+            };
+            failed += usize::from(self.settle_reservation(&reservation, &actual).is_err());
+        }
+        Ok((rows.len() - failed, failed))
     }
 
     /// Drop a reservation without recording usage.
@@ -1997,11 +2068,11 @@ mod tests {
             ReserveOutcome::Denied(_)
         ));
 
-        // Backdate the stale reservation past its TTL.
+        // Backdate the stale reservation past its TTL, as a row from before v39.
         store_a
             .conn
             .execute(
-                "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'",
+                "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00', unsettled = NULL",
                 [],
             )
             .unwrap();
@@ -2019,6 +2090,44 @@ mod tests {
             store_b.reservation_count().unwrap(),
             1,
             "the expired row was swept, only the new reservation remains"
+        );
+    }
+
+    #[test]
+    fn a_held_reservation_outlives_its_ttl_until_a_start_settles_it_once_at_its_most() {
+        let store = Store::open_in_memory().unwrap();
+        let (caps, day) = (caps(Some(100), None), store.local_day().unwrap());
+        let reserved = store.try_reserve_for(Some("run-1"), "main", &day, &caps, &estimate(60, 0));
+        let ReserveOutcome::Reserved(held) = reserved.unwrap() else {
+            panic!("admitted");
+        };
+        // The call is known to have spent more than it reserved; its process
+        // dies and the TTL passes: still held at that amount, so 20 more no
+        // longer fit (60 + 20 would).
+        let known = UsageActual {
+            tokens_in: 90,
+            tokens_out: 7,
+            usd_cents: 3,
+            ..UsageActual::default()
+        };
+        store.raise_held_reservation(held.id, &known).unwrap();
+        let expire = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+        store.conn.execute(expire, []).unwrap();
+        let next = store.try_reserve("main", &day, &caps, &estimate(20, 0));
+        assert!(matches!(next.unwrap(), ReserveOutcome::Denied(_)));
+        // A row a job here still owes is left; a start charges the rest at
+        // the most known, once.
+        assert_eq!(
+            store.settle_abandoned_reservations(&[held.id]).unwrap(),
+            (0, 0)
+        );
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (1, 0));
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (0, 0));
+        assert_eq!(store.reservation_count().unwrap(), 0);
+        let totals = store.usage_totals("main", &day).unwrap();
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out, totals.usd_cents),
+            (90, 7, 3)
         );
     }
 

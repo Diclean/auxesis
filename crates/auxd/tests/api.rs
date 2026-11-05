@@ -5395,9 +5395,16 @@ async fn a_partial_request_head_is_disconnected_after_the_header_timeout() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_silent_socket_is_disconnected_after_the_header_timeout() {
     let mut t = TestApi::start_with(|_| timeout_options()).await;
-    let mut stream = tokio::net::TcpStream::connect(t.addr).await.unwrap();
-
+    // Anchor the clock before `connect`: the server arms its header timer
+    // when it first polls the accepted socket, and it cannot accept before
+    // the handshake that `connect` starts. A loaded runner may keep this task
+    // from resuming right after `connect` returns, and that delay only makes
+    // the measured wait longer, never shorter, so an immediate close still
+    // fails.
     let started = tokio::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(t.addr).await.unwrap();
+    let connected = tokio::time::Instant::now();
+
     let bytes = drain_until_closed(&mut stream, SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN)
         .await
         .expect("a socket that never sends a byte must be closed at the header timeout");
@@ -5406,14 +5413,12 @@ async fn a_silent_socket_is_disconnected_after_the_header_timeout() {
         "a silent socket must not be answered: {:?}",
         String::from_utf8_lossy(&bytes)
     );
-    // Allow for the server having armed its timer a few milliseconds before
-    // this test's clock started; an immediate close is still a failure.
     assert!(
         started.elapsed() >= SLOW_CLIENT_TIMEOUT.saturating_sub(Duration::from_millis(50)),
         "the silent socket was closed before the header timeout: {:?}",
         started.elapsed()
     );
-    assert!(started.elapsed() <= SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN);
+    assert!(connected.elapsed() <= SLOW_CLIENT_TIMEOUT + CLOSE_MARGIN);
 
     t.stop();
 }
@@ -5432,14 +5437,19 @@ async fn a_full_house_of_silent_sockets_does_not_lock_out_a_real_request() {
     .await;
 
     let mut silent = Vec::with_capacity(api::MAX_CONNECTIONS);
+    // Anchor before the fill: the server cannot accept, and so cannot arm a
+    // silent socket's header timer, before this instant. A slot can therefore
+    // only free at or after `started + header_timeout`, however long the fill
+    // itself takes.
+    let started = tokio::time::Instant::now();
     for _ in 0..api::MAX_CONNECTIONS {
         silent.push(tokio::net::TcpStream::connect(t.addr).await.unwrap());
     }
-    // Give the accept loop time to take the slots. Even if it has not, these
-    // connects were queued before the real request, so it still waits.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let started = tokio::time::Instant::now();
+    // The silent connects are queued before the real request even if the
+    // accept loop has not caught up: the listener hands connections over in
+    // order, and every accepted one holds a slot until its header timeout.
+    let requested = tokio::time::Instant::now();
     let response = tokio::task::spawn_blocking({
         let addr = t.addr;
         let token = t.token.clone();
@@ -5457,6 +5467,7 @@ async fn a_full_house_of_silent_sockets_does_not_lock_out_a_real_request() {
     .await
     .expect("the real request must not hang");
     let elapsed = started.elapsed();
+    let waited = requested.elapsed();
 
     assert_eq!(response.status, 200, "body: {}", response.body);
     assert!(
@@ -5464,15 +5475,17 @@ async fn a_full_house_of_silent_sockets_does_not_lock_out_a_real_request() {
         "body: {}",
         response.body
     );
-    // All 64 slots were taken when it arrived, so it cannot have been
-    // answered before at least one of them timed out.
+    // Every silent socket was queued before this request, so the accept loop
+    // must take all 64 (holding every slot) before it can reach this one. It
+    // can only be accepted after one of them timed out: at least
+    // `header_timeout` after the clock anchored before the fill.
     assert!(
-        elapsed >= header_timeout / 2,
+        elapsed >= header_timeout.saturating_sub(Duration::from_millis(50)),
         "the real request was answered before a slot could free: {elapsed:?}"
     );
     assert!(
-        elapsed <= header_timeout + Duration::from_secs(2),
-        "the real request waited too long: {elapsed:?}"
+        waited <= header_timeout + Duration::from_secs(2),
+        "the real request waited too long: {waited:?}"
     );
 
     drop(silent);

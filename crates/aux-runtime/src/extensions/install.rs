@@ -19,6 +19,8 @@ use super::{extensions_dir, hex, install_dir, valid_name};
 const ENV_FILE: &str = ".env";
 /// Upper bound on a `.env` read: one line per key, never bulk data.
 const MAX_ENV_BYTES: u64 = 4 * 1024 * 1024;
+/// Upper bound on an installed `entry.toml` read.
+const MAX_ENTRY_BYTES: u64 = 256 * 1024;
 
 /// How an install runs.
 #[derive(Debug, Clone, Copy)]
@@ -310,27 +312,46 @@ pub async fn install(
     // Defence in depth: the install path must stay under the extensions root
     // before anything is created or removed.
     ensure_within(&parent, &dir)?;
-    std::fs::create_dir_all(&parent)?;
-    set_mode(&parent, 0o700)?;
-    if dir.exists() {
-        // A previous install may be read-only; make it removable first.
-        make_writable_tree(&dir)?;
-        std::fs::remove_dir_all(&dir)?;
+    let handle = kernel_core::SandboxHome::open(home)?;
+    handle.create_dir_all(Path::new("extensions"))?;
+    let rel_dir = Path::new("extensions").join(format!("{}@{}", entry.name, entry.version));
+    match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(InstallError::Unpack(format!(
+                "{} is a symbolic link",
+                dir.display()
+            )));
+        }
+        Ok(_) => {
+            // A previous install may be read-only; make it removable first.
+            make_writable_tree(&dir)?;
+            std::fs::remove_dir_all(&dir)?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
     }
-    std::fs::create_dir_all(&dir)?;
-    set_mode(&dir, 0o700)?;
+    let _ = handle.create_dir(&rel_dir)?;
 
     // Everything after the tree exists is one fallible step: on any failure the
     // partial install is cleaned up and a cleanup failure is reported, never
     // swallowed.
     let setup = (|| -> Result<(), InstallError> {
-        unpack(entry, &dir, &bytes)?;
-        std::fs::create_dir_all(dir.join("work"))?;
-        set_mode(&dir.join("work"), 0o700)?;
+        unpack(entry, &handle, &rel_dir, &dir, &bytes)?;
+        // A tarball entry may have put a regular file at `work`: `create_dir`
+        // reports that as "already exists", so check the type without
+        // following a link.
+        let work = dir.join("work");
+        let _ = handle.create_dir(&rel_dir.join("work"))?;
+        if !std::fs::symlink_metadata(&work).is_ok_and(|meta| meta.is_dir()) {
+            return Err(InstallError::Unpack(format!(
+                "{} is not a directory",
+                work.display()
+            )));
+        }
         // Copy the verified entry in, so `verify` and `remove` can read it back
         // without the catalog.
         let text = toml::to_string(entry).map_err(|err| InstallError::Unpack(err.to_string()))?;
-        std::fs::write(dir.join("entry.toml"), text)?;
+        handle.write_atomic(&rel_dir.join("entry.toml"), text.as_bytes(), 0o600)?;
         Ok(())
     })();
     if let Err(err) = setup {
@@ -369,8 +390,16 @@ fn discard_partial_install(dir: &Path, err: InstallError) -> InstallError {
     }
 }
 
-/// Unpack the verified bytes into `dir`.
-fn unpack(entry: &Entry, dir: &Path, bytes: &[u8]) -> Result<(), InstallError> {
+/// Unpack the verified bytes into `dir`. A binary goes through the verified
+/// home handle, so a link planted in the install tree is refused, never
+/// followed; a tarball is extracted into the real `dir` just created.
+fn unpack(
+    entry: &Entry,
+    handle: &kernel_core::SandboxHome,
+    rel_dir: &Path,
+    dir: &Path,
+    bytes: &[u8],
+) -> Result<(), InstallError> {
     match entry.source.kind {
         SourceType::Binary => {
             let relative = Path::new(&entry.run.command);
@@ -379,15 +408,11 @@ fn unpack(entry: &Entry, dir: &Path, bytes: &[u8]) -> Result<(), InstallError> {
                     .components()
                     .all(|c| matches!(c, Component::Normal(_)))
             {
-                dir.join(relative)
+                rel_dir.join(relative)
             } else {
-                dir.join("server")
+                rel_dir.join("server")
             };
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&target, bytes)?;
-            set_mode(&target, 0o755)?;
+            handle.write_atomic(&target, bytes, 0o755)?;
             Ok(())
         }
         SourceType::Npm | SourceType::Uv => unpack_tarball(dir, bytes),
@@ -558,6 +583,7 @@ fn safe_relative(path: &Path) -> Result<PathBuf, InstallError> {
 /// Load one installed extension by name, preferring the highest version.
 pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
     let root = extensions_dir(home);
+    let handle = kernel_core::SandboxHome::open_existing(home).ok()?;
     let mut best: Option<InstalledExtension> = None;
     let entries = std::fs::read_dir(&root).ok()?;
     for entry in entries.flatten() {
@@ -569,8 +595,10 @@ pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
         if dir_name != name {
             continue;
         }
-        let text = std::fs::read_to_string(dir.join("entry.toml")).ok();
-        let Some(text) = text else { continue };
+        let rel = Path::new("extensions").join(&file_name).join("entry.toml");
+        let Some(text) = super::read_text_at(&handle, &rel, MAX_ENTRY_BYTES) else {
+            continue;
+        };
         let Ok(parsed) = toml::from_str::<Entry>(&text) else {
             continue;
         };
@@ -895,6 +923,32 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(!extensions_dir(home.path()).join("demo@1.0.0").exists());
         assert!(load_installed(home.path(), "demo").is_none());
+    }
+
+    /// `entry.toml` is read through the verified handle: a link is not
+    /// followed and a FIFO does not block (10 s bound).
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_fifo_entry_toml_is_skipped_without_blocking() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = extensions_dir(home.path()).join("demo@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("entry.toml");
+        let outside = home.path().join("outside.toml");
+        let entry = binary_entry("demo", b"x", "1.0.0");
+        std::fs::write(&outside, toml::to_string(&entry).unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        assert!(load_installed(home.path(), "demo").is_none());
+
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (moved, (sent, got)) = (home.path().to_path_buf(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(load_installed(&moved, "demo").is_none()));
+        let skipped = got
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("entry.toml blocked");
+        assert!(skipped);
     }
 
     #[test]

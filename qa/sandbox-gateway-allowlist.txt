@@ -60,12 +60,8 @@ crates/aux-engine/src/layout.rs | fs::rename( | WO-07 one-time move of the legac
 # reviewed debt for the SandboxHome gateway follow-up.
 crates/aux-runtime/src/extensions/catalog.rs | fs::create_dir_all( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/catalog.rs | fs::write( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
-crates/aux-runtime/src/extensions/install.rs | fs::create_dir_all( | extension install tree under ~/.auxesis/extensions, 0700; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/install.rs | fs::remove_dir_all( | removing the extension install tree on remove/reinstall; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/install.rs | fs::remove_file( | removing the per-extension state file on remove; pending the SandboxHome gateway follow-up
-crates/aux-runtime/src/extensions/install.rs | fs::write( | sha256-verified extension bytes and its entry.toml under ~/.auxesis/extensions, 0700; pending the SandboxHome gateway follow-up
-crates/aux-runtime/src/extensions/mount.rs | fs::create_dir_all( | extension state/ and mounts.json under ~/.auxesis/extensions, 0700; pending the SandboxHome gateway follow-up
-crates/aux-runtime/src/extensions/mount.rs | fs::write( | extension state and mount table under ~/.auxesis/extensions, 0600; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/scenarios.rs | fs::create_dir_all( | test-only fixture catalog and installs live in TempDir homes
 crates/aux-runtime/src/extensions/scenarios.rs | fs::write( | test-only fixture catalog, scripts and .env canaries live in TempDir homes
 crates/aux-runtime/src/extensions/session.rs | "HOME" | sets the sandboxed child's private HOME to its own work dir; not a home read

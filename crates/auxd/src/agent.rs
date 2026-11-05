@@ -135,10 +135,22 @@ pub fn state(home: &Path, agent: &str) -> AgentState {
 /// an error (fail closed): a default would drop its tools allowlist. A link or
 /// a FIFO is refused at once, never followed nor waited on.
 pub fn config(home: &Path, agent: &str) -> Result<AgentConfig, AgentError> {
+    config_with(home, agent, |_| {})
+}
+
+/// [`config`], with a seam that runs just before each sidecar open. The tests
+/// use it to remove a file between the path check and the fd open; production
+/// passes a no-op.
+fn config_with(
+    home: &Path,
+    agent: &str,
+    before_open: impl Fn(&Path),
+) -> Result<AgentConfig, AgentError> {
     let dir = agent_dir(home, agent);
     let seen = |name: &str| std::fs::symlink_metadata(dir.join(name)).is_ok();
     let (current_seen, legacy_seen) = (seen(AGENT_CONFIG_FILE), seen(LEGACY_AGENT_CONFIG_FILE));
     let read = |name| {
+        before_open(&dir.join(name));
         read_agent_file(home, agent, name, MAX_AGENT_CONFIG_BYTES)
             .map_err(|err| AgentError::Config(err.to_string()))
     };
@@ -553,6 +565,34 @@ mod tests {
         let path = Path::new("agent.toml");
         assert!(missing_sidecar(path, true).is_err());
         assert!(missing_sidecar(path, false).is_ok());
+    }
+
+    /// The same vanish, through the whole `config` body: the file is removed
+    /// at the seam (after the path check, before the open), with and without a
+    /// legacy `dot.toml` present. Both are `AgentError::Config`, and the legacy
+    /// file is never handed over to.
+    #[test]
+    fn a_seen_sidecar_gone_at_the_open_fails_closed_through_config() {
+        for with_legacy in [false, true] {
+            let dir = tempdir().unwrap();
+            let agent = dir_of(dir.path(), "scout");
+            std::fs::create_dir_all(&agent).unwrap();
+            let path = agent.join(AGENT_CONFIG_FILE);
+            std::fs::write(&path, "tools = [\"read_file\"]\n").unwrap();
+            if with_legacy {
+                std::fs::write(agent.join(LEGACY_AGENT_CONFIG_FILE), "tools = []\n").unwrap();
+            }
+            let vanished = path.clone();
+            let result = config_with(dir.path(), "scout", |opening| {
+                if opening == vanished.as_path() {
+                    std::fs::remove_file(&vanished).unwrap();
+                }
+            });
+            assert!(
+                matches!(result, Err(AgentError::Config(_))),
+                "legacy={with_legacy}: {result:?}"
+            );
+        }
     }
 
     #[test]

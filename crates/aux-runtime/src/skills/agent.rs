@@ -368,9 +368,10 @@ enum ReadError {
     Io(std::io::Error),
 }
 
-/// Read at most [`MAX_AGENT_BYTES`] through the kernel safe open: the agent
-/// directory as a handle, then the leaf (`O_NOFOLLOW | O_NONBLOCK`, `fstat`),
-/// so a link or FIFO swapped in after any path check is refused at once.
+/// Read at most [`MAX_AGENT_BYTES`] through the kernel safe open: the agent's
+/// home directory as a handle, then `agents/<name>/<file>` relative to it
+/// (every component `O_NOFOLLOW`, the leaf `O_NONBLOCK` too, `fstat`), so a
+/// symlinked agent directory, a link or a FIFO is refused at once.
 fn read_bounded(path: &Path) -> Result<Vec<u8>, ReadError> {
     read_bounded_with(path, || {})
 }
@@ -379,7 +380,22 @@ fn read_bounded_with(path: &Path, before_open: impl FnOnce()) -> Result<Vec<u8>,
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
     };
-    let home = match kernel_core::SandboxHome::open_existing(dir) {
+    let Some(agents) = dir.parent() else {
+        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+    };
+    let Some(agent) = dir.file_name() else {
+        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+    };
+    if agents.file_name() != Some(std::ffi::OsStr::new("agents")) {
+        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+    }
+    let Some(home_dir) = agents.parent() else {
+        return Err(ReadError::Io(std::io::ErrorKind::InvalidInput.into()));
+    };
+    // The file's path below the home is `agents/<name>/<file>`; walking it
+    // component by component is what refuses a symlinked agent directory.
+    let rel = Path::new("agents").join(agent).join(name);
+    let home = match kernel_core::SandboxHome::open_existing(home_dir) {
         Ok(home) => home,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(ReadError::NotFound),
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -388,13 +404,17 @@ fn read_bounded_with(path: &Path, before_open: impl FnOnce()) -> Result<Vec<u8>,
         Err(err) => return Err(ReadError::Io(err)),
     };
     before_open();
-    let file = match home.open_read_existing(Path::new(name), MAX_AGENT_BYTES) {
+    let file = match home.open_read_existing(&rel, MAX_AGENT_BYTES) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(ReadError::NotFound),
         Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
             return Err(ReadError::TooLarge)
         }
-        Err(err) if err.raw_os_error() == Some(libc::ELOOP) => return Err(ReadError::Symlink),
+        // On Linux a symlinked directory component reports ELOOP on openat;
+        // on some filesystems/platforms it is ENOTDIR. Both are a refusal.
+        Err(err) if matches!(err.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) => {
+            return Err(ReadError::Symlink)
+        }
         Err(err) => return Err(ReadError::Io(err)),
     };
     let mut bytes = Vec::new();
@@ -444,7 +464,7 @@ mod tests {
     #[test]
     fn chief_skills_use_all_tools_by_default_but_respect_an_empty_ceiling() {
         let home = tempfile::tempdir().unwrap();
-        let dir = home.path().join("main");
+        let dir = home.path().join("agents").join("main");
         std::fs::create_dir_all(&dir).unwrap();
         assert!(load_agent(&dir).unwrap().allows("mail.send"));
         std::fs::write(dir.join("agent.toml"), "tools = []\n").unwrap();
@@ -458,7 +478,7 @@ mod tests {
     #[test]
     fn loads_agent_md_front_matter() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(
             &agent_dir,
@@ -504,7 +524,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(
             &agent_dir,
@@ -550,7 +570,7 @@ mod tests {
     #[test]
     fn unknown_key_fails_to_load() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(
             &agent_dir,
@@ -564,7 +584,7 @@ mod tests {
     #[test]
     fn name_must_match_the_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(&agent_dir, "agent.md", "---\nname: other\n---\n");
         assert!(load_agent(&agent_dir).is_err());
@@ -573,7 +593,7 @@ mod tests {
     #[test]
     fn agent_toml_tools_are_read_and_win_over_a_legacy_dot_toml() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(&agent_dir, "soul.md", "legacy body");
         write(&agent_dir, "dot.toml", "tools = [\"gmail.send\"]\n");
@@ -589,7 +609,7 @@ mod tests {
     #[test]
     fn agent_md_wins_over_soul_and_dot_toml() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(&agent_dir, "soul.md", "legacy body");
         write(
@@ -611,7 +631,7 @@ mod tests {
     #[test]
     fn falls_back_to_soul_and_dot_toml() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         write(&agent_dir, "soul.md", "legacy body");
         write(
@@ -630,7 +650,7 @@ mod tests {
     #[test]
     fn missing_agent_files_yields_an_empty_legacy_agent() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         let agent = load_agent(&agent_dir).unwrap();
         assert_eq!(agent.source, AgentSource::Legacy);
@@ -641,7 +661,7 @@ mod tests {
     #[test]
     fn oversized_agent_md_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         let mut file = fs::File::create(agent_dir.join("agent.md")).unwrap();
         file.write_all(b"---\nname: assistant\n---\n").unwrap();
@@ -655,7 +675,7 @@ mod tests {
     fn symlinked_agent_soul_and_sidecar_are_refused() {
         use std::os::unix::fs::symlink;
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
 
         fs::write(
@@ -680,13 +700,58 @@ mod tests {
         assert!(err.reason.contains("symbolic link"), "{err}");
     }
 
+    /// A symlinked `agents/<name>` directory is refused with the sandbox guard
+    /// off too: the loader opens the home, then `agents` and `<name>` with
+    /// `O_NOFOLLOW`. The test binary may itself run under the guard, so the
+    /// case runs in a child with `AUXESIS_SANDBOX` removed and the OS user's
+    /// real `HOME` (the loader still gets a temp home path, never the real
+    /// one).
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_agent_directory_is_refused_with_the_guard_off() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "skills::agent::tests::a_symlinked_agent_directory_is_refused_with_the_guard_off_child",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env_remove("AUXESIS_SANDBOX")
+            .env(
+                "HOME",
+                kernel_core::real_user_home().expect("the OS user home"),
+            )
+            .output()
+            .expect("spawn the guard-off child");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the guard-off child did not pass: {stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "spawned by the guard-off parent with AUXESIS_SANDBOX removed"]
+    fn a_symlinked_agent_directory_is_refused_with_the_guard_off_child() {
+        let home = tempfile::tempdir().unwrap();
+        let real = home.path().join("agents").join("real");
+        fs::create_dir_all(&real).unwrap();
+        write(&real, "agent.md", "---\nname: scout\n---\nbody\n");
+        std::os::unix::fs::symlink(&real, home.path().join("agents").join("scout")).unwrap();
+
+        let err = load_agent(&home.path().join("agents").join("scout")).unwrap_err();
+        assert!(err.reason.contains("symbolic link"), "{err}");
+    }
+
     /// A link or FIFO swapped in before the open is refused at once (10 s bound).
     #[cfg(unix)]
     #[test]
     fn a_link_or_fifo_swapped_in_before_the_open_is_refused() {
         use std::{sync::mpsc, time::Duration};
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         let path = agent_dir.join("agent.md");
         for kind in ["link", "fifo"] {
@@ -718,7 +783,7 @@ mod tests {
     #[test]
     fn oversized_soul_and_sidecar_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(&agent_dir).unwrap();
         fs::write(
             agent_dir.join("soul.md"),

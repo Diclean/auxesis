@@ -18,7 +18,6 @@ use kernel_broker::ToolRegistry;
 use kernel_mcp::{McpTool, McpTransport};
 use serde::{Deserialize, Serialize};
 
-use super::extensions_dir;
 use super::install::{load_installed, InstalledExtension};
 use super::ledger;
 use super::session::{session_for, verify_identity, ExtensionSession, SessionOptions};
@@ -111,52 +110,49 @@ struct MountTable {
     agents: BTreeMap<String, Vec<String>>,
 }
 
-fn state_path(home: &Path, name: &str) -> PathBuf {
-    extensions_dir(home)
+/// The most bytes one extension's state row may hold.
+const MAX_STATE_BYTES: u64 = 256 * 1024;
+/// The most bytes the mount table may hold.
+const MAX_MOUNTS_BYTES: u64 = 1024 * 1024;
+
+fn state_rel(name: &str) -> PathBuf {
+    Path::new("extensions")
         .join("state")
         .join(format!("{name}.json"))
 }
 
-fn mounts_path(home: &Path) -> PathBuf {
-    extensions_dir(home).join("mounts.json")
+fn mounts_rel() -> PathBuf {
+    Path::new("extensions").join("mounts.json")
 }
 
-/// Persist one extension's state (0600).
+/// Persist one extension's state (`0600`) through the verified home handle:
+/// a private temp file, fsync, then a rename in the verified parent. A link
+/// planted at the destination is replaced, never followed.
 pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
-    let path = state_path(home, &state.name);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        super::install::set_mode(parent, 0o700)?;
-    }
     let text = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
-    std::fs::write(&path, text)?;
-    super::install::set_mode(&path, 0o600)?;
-    Ok(())
+    let handle = kernel_core::SandboxHome::open(home)?;
+    handle.write_atomic(&state_rel(&state.name), text.as_bytes(), 0o600)
 }
 
-/// Load one extension's state, when it exists.
+/// Load one extension's state, when it exists and reads safely.
 pub fn load_state(home: &Path, name: &str) -> Option<ExtensionState> {
-    let text = std::fs::read_to_string(state_path(home, name)).ok()?;
+    let handle = kernel_core::SandboxHome::open_existing(home).ok()?;
+    let text = super::read_text_at(&handle, &state_rel(name), MAX_STATE_BYTES)?;
     serde_json::from_str(&text).ok()
 }
 
 fn load_mounts(home: &Path) -> MountTable {
-    std::fs::read_to_string(mounts_path(home))
+    kernel_core::SandboxHome::open_existing(home)
         .ok()
+        .and_then(|handle| super::read_text_at(&handle, &mounts_rel(), MAX_MOUNTS_BYTES))
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
 }
 
 fn store_mounts(home: &Path, mounts: &MountTable) -> std::io::Result<()> {
-    let path = mounts_path(home);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        super::install::set_mode(parent, 0o700)?;
-    }
     let text = serde_json::to_string_pretty(mounts).map_err(std::io::Error::other)?;
-    std::fs::write(&path, text)?;
-    super::install::set_mode(&path, 0o600)?;
-    Ok(())
+    let handle = kernel_core::SandboxHome::open(home)?;
+    handle.write_atomic(&mounts_rel(), text.as_bytes(), 0o600)
 }
 
 /// The `host:port` allowlist of an entry, in the form the state pins.
@@ -593,6 +589,67 @@ mod tests {
         assert_eq!(mounted_extensions(home.path(), "alice"), vec!["demo"]);
         unmount(home.path(), "demo", "alice").unwrap();
         assert!(!is_mounted(home.path(), "demo", "alice"));
+    }
+
+    /// A FIFO at `mounts.json` is refused by the read and replaced by the
+    /// atomic write, both under a 10 s bound so a regression fails instead of
+    /// hanging.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_mounts_json_never_blocks_and_is_replaced() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("extensions").join("mounts.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+
+        let moved = home.path().to_path_buf();
+        let (sent, got) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mounts = load_mounts(&moved);
+            sent.send((mounts.agents.is_empty(), store_mounts(&moved, &mounts)))
+        });
+        let (empty, written) = got
+            .recv_timeout(Duration::from_secs(10))
+            .expect("mounts.json blocked");
+        assert!(empty, "a FIFO reads as no mounts");
+        assert!(written.is_ok(), "{:?}", written.err());
+        assert!(std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_file());
+    }
+
+    /// A link at `mounts.json` is never followed: the target keeps its bytes
+    /// and its mode. With the sandbox guard on the home scan refuses the
+    /// planted link; with it off the atomic rename replaces the link itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_at_mounts_json_is_never_overwritten_or_chmodded() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let target = home.path().join("elsewhere.json");
+        std::fs::write(&target, b"keep").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let path = home.path().join("extensions").join("mounts.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let result = store_mounts(home.path(), &MountTable::default());
+        if kernel_core::sandbox_guard_active() {
+            assert!(result.is_err(), "the guard refuses the planted link");
+        } else {
+            result.expect("the atomic write replaces the link");
+            assert!(std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_file());
+        }
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
     }
 
     #[test]

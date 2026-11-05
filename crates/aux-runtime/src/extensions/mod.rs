@@ -37,6 +37,7 @@ pub mod session;
 #[cfg(test)]
 mod scenarios;
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub use catalog::{
@@ -85,6 +86,24 @@ pub fn install_dir(home: &Path, name: &str, version: &str) -> PathBuf {
 /// `~/.auxesis/catalog/` — the verified on-disk catalog cache (0700).
 pub fn catalog_cache_dir(home: &Path) -> PathBuf {
     home.join("catalog")
+}
+
+/// Read a bounded UTF-8 file below `home` through its verified handle: every
+/// component `O_NOFOLLOW`, the leaf `O_NONBLOCK`, a regular file only, never
+/// created. `None` covers a missing or unusable file (link, FIFO, oversized,
+/// not UTF-8), so a caller's fail-closed default applies.
+pub(crate) fn read_text_at(
+    handle: &kernel_core::SandboxHome,
+    rel: &Path,
+    max: u64,
+) -> Option<String> {
+    let file = handle.open_read_existing(rel, max).ok()?;
+    let mut bytes = Vec::new();
+    file.take(max + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > max {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Decode a 32-byte Ed25519 public key, or `None` when the bytes are not a

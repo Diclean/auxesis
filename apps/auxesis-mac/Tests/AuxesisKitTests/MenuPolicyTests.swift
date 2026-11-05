@@ -106,6 +106,98 @@ import XCTest
         XCTAssertEqual(digits.map(\.display), (1...9).map { "⌘\($0)" }, "⌘1…⌘9 belong to the agents")
     }
 
+    /// Every view chord is read from a table. A raw `.keyboardShortcut` in a
+    /// view is a chord the collision test below cannot see, so only the one
+    /// bridge in `AuxesisMacApp.swift` may spell one out.
+    func testEveryViewShortcutIsReadFromATable() throws {
+        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let sources = tests.deletingLastPathComponent()
+            .appendingPathComponent("Sources/AuxesisMac", isDirectory: true)
+        let files = FileManager.default.enumerator(
+            at: sources,
+            includingPropertiesForKeys: nil
+        )?.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+        XCTAssertFalse(files.isEmpty, "found no app sources at \(sources.path)")
+        var offenders: [String] = []
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (index, line) in text.components(separatedBy: .newlines).enumerated() {
+                guard line.contains(".keyboardShortcut("), file.lastPathComponent != "AuxesisMacApp.swift" else { continue }
+                offenders.append("\(file.lastPathComponent):\(index + 1)")
+            }
+        }
+        XCTAssertTrue(offenders.isEmpty, "bind these through the shortcut table: \(offenders)")
+    }
+
+    /// In-view chords may repeat across views (only the focused one fires), but
+    /// none may shadow a menu-bar chord unless the table says it is deliberate.
+    func testNoViewChordShadowsAMenuChordUnlessItIsTheSameAction() {
+        // Deliberate overlaps, each with its reason:
+        // - sendProposal is the same action: the proposal card's button and the
+        //   menu item both call `shell.sendProposal`.
+        // - sendMessage: while the composer has focus it owns ⌘↩; the menu's
+        //   Send proposal needs a selected waiting card and is disabled otherwise,
+        //   so the two never fire together.
+        let allowed: [ViewAction: MenuAction] = [
+            .sendProposal: .sendProposal,
+            .sendMessage: .sendProposal,
+        ]
+        for view in ViewShortcutTable.all {
+            guard let chord = view.key?.chord else { continue }
+            for menu in MenuShortcutTable.menu
+            where menu.key == chord.key && menu.modifiers == chord.modifiers {
+                XCTAssertEqual(allowed[view.action], menu.action,
+                               "\(view.action.rawValue) shadows menu \(menu.action.rawValue)")
+            }
+        }
+    }
+
+    /// The help sheet is the table's copy, row by row, in both languages.
+    func testEveryHelpSheetRowMatchesItsTableEntryInEnglishAndFrench() {
+        for language in [Language.en, .fr] {
+            let agents = allFive
+            let agentTitles = Set(GoMenu.agentItems(agents: agents).map { GoMenu.title(for: $0, language: language) })
+            for row in MenuShortcuts.menu(agents: agents, language: language) {
+                guard let binding = MenuShortcutTable.menu.first(where: { $0.display == row.keys }) else {
+                    XCTFail("no menu table row prints \(row.keys)")
+                    continue
+                }
+                if let title = binding.title(language) {
+                    XCTAssertEqual(row.title, title, "\(language) \(row.keys)")
+                } else {
+                    XCTAssertTrue(agentTitles.contains(row.title), "\(language) \(row.keys) is not an agent title")
+                }
+            }
+            for row in MenuShortcuts.inView(language: language) {
+                guard let binding = ViewShortcutTable.help.first(where: { $0.display == row.keys }),
+                      let copy = binding.help else {
+                    XCTFail("no in-view table row prints \(row.keys)")
+                    continue
+                }
+                XCTAssertEqual(row.title, copy.text(language), "\(language) \(row.keys)")
+            }
+        }
+    }
+
+    func testViewTableKeepsTheChordsViewsBoundByHand() {
+        XCTAssertEqual(ViewShortcutTable.binding(for: .editClient).display, "⌘E")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .saveClient).display, "⌘S")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .cancelClientEdit).display, "Esc")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .cancelSend).display, "⌘Z")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .sendProposal).display, "⌘↩")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .sendMessage).display, "⌘↩")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .dismissSheet).display, "Esc")
+        XCTAssertEqual(ViewShortcutTable.binding(for: .confirmSheet).display, "↩")
+    }
+
+    func testTheInViewHelpRowsKeepTheirCopy() {
+        XCTAssertEqual(MenuShortcuts.inView(language: .en).map(\.keys), ["E", "↑ / ↓ · J / K", "↩", "Esc"])
+        XCTAssertEqual(MenuShortcuts.inView(language: .en).map(\.title),
+                       ["Edit proposal", "Move through waiting items", "Open selected row", "Leave editing"])
+        XCTAssertEqual(MenuShortcuts.inView(language: .fr).map(\.title),
+                       ["Modifier la proposition", "Parcourir les éléments en attente", "Ouvrir la ligne choisie", "Quitter la modification"])
+    }
+
     func testAddAnAgentWhileItsSheetIsOpenKeepsTheOpenSheet() {
         let shell = makeShell()
         XCTAssertTrue(shell.canAddAgents)

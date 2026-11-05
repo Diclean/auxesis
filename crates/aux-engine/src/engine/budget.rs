@@ -117,36 +117,136 @@ pub(crate) fn request_model<'r>(
         .or_else(|| provider.model())
 }
 
-static UNPRICED_MODEL_NOTICE: std::sync::Once = std::sync::Once::new();
+/// Models already warned about as unpriced, keyed by model and UTC day: one
+/// warning per model per day, not one per process.
+static UNPRICED_MODEL_NOTICES: std::sync::Mutex<Vec<(String, u64)>> =
+    std::sync::Mutex::new(Vec::new());
 
 fn notice_unpriced_model(model: Option<&str>) {
-    UNPRICED_MODEL_NOTICE.call_once(|| {
-        tracing::warn!(
-            model = model.unwrap_or("<unreported>"),
-            "no price table entry for this model: the daily usd_cents cap cannot bind; \
-             the token caps are the effective ones (add [prices.models.<model>] to config.toml)"
-        );
-    });
+    let model = model.unwrap_or("<unreported>");
+    let day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() / 86_400);
+    let mut seen = kernel_core::lock_recover(&UNPRICED_MODEL_NOTICES);
+    seen.retain(|(_, seen_day)| *seen_day == day);
+    if seen.iter().any(|(seen_model, _)| seen_model == model) {
+        return;
+    }
+    seen.push((model.to_string(), day));
+    tracing::warn!(
+        model,
+        "no price for this model in [prices] or the bundled catalog: the daily usd_cents \
+         cap cannot be checked, so calls to it are refused while a money cap applies \
+         (add [prices.models.<model>] to config.toml)"
+    );
 }
 
-fn priced_cents(prices: &PriceTable, model: Option<&str>, tokens_in: u64, tokens_out: u64) -> u64 {
-    match model {
-        Some(model) if prices.price(model).is_some() => {
-            prices.usd_cents_for(Some(model), tokens_in, tokens_out)
+/// The bundled catalog's list prices, in whole cents per million tokens
+/// rounded up, for every model id that carries both prices. When two
+/// providers list the same id, the higher price wins.
+fn catalog_prices() -> &'static PriceTable {
+    static PRICES: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
+    PRICES.get_or_init(|| {
+        let mut table = PriceTable {
+            models: Default::default(),
+        };
+        let cents = |usd: f64| (usd * 100.0 - 1e-6).ceil().max(0.0) as u64;
+        for row in aux_providers::Catalog::bundled().rows() {
+            let (Some(input), Some(output)) = (row.input_usd_mtok, row.output_usd_mtok) else {
+                continue;
+            };
+            let entry = table.models.entry(row.id.clone()).or_default();
+            entry.input_cents_per_million = entry.input_cents_per_million.max(cents(input));
+            entry.output_cents_per_million = entry.output_cents_per_million.max(cents(output));
         }
-        _ => {
-            notice_unpriced_model(model);
-            0
-        }
+        table
+    })
+}
+
+/// The price of `model`. A price the owner set in `[prices]` wins; otherwise
+/// the higher of the built-in default and the catalog list price, so a stale
+/// built-in can never undercount the money cap. `None` means unpriced.
+fn model_price(
+    prices: &PriceTable,
+    model: Option<&str>,
+) -> Option<kernel_core::budget::ModelPrice> {
+    static BUILT_IN: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
+    let model = model?;
+    let configured = prices.price(model).copied();
+    let built_in = BUILT_IN
+        .get_or_init(PriceTable::default)
+        .price(model)
+        .copied();
+    match (configured, catalog_prices().price(model).copied()) {
+        (Some(owner), _) if configured != built_in => Some(owner),
+        (Some(a), Some(b)) => Some(kernel_core::budget::ModelPrice {
+            input_cents_per_million: a.input_cents_per_million.max(b.input_cents_per_million),
+            output_cents_per_million: a.output_cents_per_million.max(b.output_cents_per_million),
+        }),
+        (configured, catalog) => configured.or(catalog),
     }
 }
 
+/// Cents for one call, rounded up; `0` when the model is unpriced (an
+/// unpriced call is refused before it starts while a money cap applies).
+fn priced_cents(prices: &PriceTable, model: Option<&str>, tokens_in: u64, tokens_out: u64) -> u64 {
+    let Some(price) = model_price(prices, model) else {
+        return 0;
+    };
+    let numerator = tokens_in as u128 * price.input_cents_per_million as u128
+        + tokens_out as u128 * price.output_cents_per_million as u128;
+    numerator.div_ceil(1_000_000).min(u64::MAX as u128) as u64
+}
+
+/// The provider-reported cost in cents. A missing, zero, negative or
+/// non-finite cost is treated as "not reported", so the price table decides:
+/// a gateway that reports `0` must not make the money cap inert.
 fn provider_cost_cents(usage: Option<aux_providers::Usage>) -> Option<u64> {
     let cost = usage?.cost_usd?;
     if !cost.is_finite() || cost <= 0.0 {
-        return Some(0);
+        return None;
     }
     Some((cost * 100.0).ceil().min(u64::MAX as f64) as u64)
+}
+
+/// True when the bundled catalog marks `model` as billed by subscription.
+fn catalog_subscription(model: &str) -> bool {
+    aux_providers::Catalog::bundled()
+        .rows()
+        .iter()
+        .any(|row| row.id == model && row.billing == Some(aux_providers::Billing::Subscription))
+}
+
+/// A call whose model has no price cannot be checked against the money cap:
+/// it would reserve 0 cents, so concurrent calls could all pass the cap. While
+/// a money cap applies (every capped agent has one), such a call is refused,
+/// on a loopback endpoint too (a local forwarder can reach a paid service).
+///
+/// Two calls run unpriced: a model the catalog marks as billed by
+/// subscription, sent to the trusted subscription backend itself (0 cents
+/// per call); and an in-process adapter that names neither a model nor an
+/// endpoint host (every network adapter names both).
+fn unpriced_under_money_cap(
+    caps: &kernel_core::budget::BudgetCaps,
+    prices: &PriceTable,
+    provider: &dyn ChatProvider,
+    model: Option<&str>,
+) -> Option<String> {
+    if caps.limit(UsageKind::UsdCents).is_none() || model_price(prices, model).is_some() {
+        return None;
+    }
+    let in_process = model.is_none() && provider.endpoint_hosts().is_empty();
+    let subscription = provider.subscription_billed() && model.is_some_and(catalog_subscription);
+    if in_process || subscription {
+        return None;
+    }
+    notice_unpriced_model(model);
+    let model = model.unwrap_or("<unreported>");
+    Some(format!(
+        "model {model} has no price; add [prices.models.\"{model}\"] with \
+         input_cents_per_million and output_cents_per_million to config.toml \
+         (0 and 0 if this model really runs on this Mac)"
+    ))
 }
 
 pub(super) fn estimate_tokens(text: &str) -> u64 {
@@ -295,6 +395,20 @@ impl<'a> ChatSession<'a> {
             }
             return Ok(None);
         }
+        let model = request_model(self.provider, request);
+        if let Some(message) = unpriced_under_money_cap(&caps, self.prices, self.provider, model) {
+            let denial = Denial {
+                agent: self.agent.clone(),
+                day: self.current_day()?,
+                reason: DenialReason::LedgerUnavailable { message },
+                audit_error: None,
+            };
+            let denial = self.store.with(|store| audit_denial(store, denial));
+            return Err(ChatError::BudgetDenied {
+                reason: denial.reason_text(),
+            });
+        }
+
         // The budget day is the Mac's local day at *check* time, not at
         // session start: a turn that crosses midnight starts enforcing the
         // new day on its next provider call.
@@ -1433,6 +1547,228 @@ mod tests {
         assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
         assert!(err.to_string().contains("tokens_in"), "{err}");
         assert_eq!(provider.request_count(), 0, "no provider call may happen");
+    }
+
+    fn wide_token_caps(usd_cents: u64) -> Budgets {
+        let mut budgets = Budgets::default();
+        budgets.default.tokens_in = Some(10_000_000);
+        budgets.default.tokens_out = Some(10_000_000);
+        budgets.default.usd_cents = Some(usd_cents);
+        budgets
+    }
+
+    fn reported(prompt: u64, completion: u64, cost_usd: Option<f64>) -> ChatResponse {
+        ChatResponse::assistant("done").with_usage(aux_providers::Usage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            cost_usd,
+            cached_prompt_tokens: None,
+        })
+    }
+
+    fn usd_spent(harness: &Harness) -> u64 {
+        let day = harness.store().local_day().unwrap();
+        harness
+            .store()
+            .usage_totals("main", &day)
+            .unwrap()
+            .usd_cents
+    }
+
+    #[tokio::test]
+    async fn a_zero_reported_cost_still_charges_from_the_price_table() {
+        let mut harness = Harness::new();
+        harness.prices.models.insert(
+            "priced-model".to_string(),
+            kernel_core::budget::ModelPrice {
+                input_cents_per_million: 100,
+                output_cents_per_million: 100,
+            },
+        );
+        let provider = FakeProvider::repeating("fake", reported(399_600, 400, Some(0.0)))
+            .with_model("priced-model");
+        let budgets = wide_token_caps(1_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(
+            usd_spent(&harness),
+            40,
+            "a reported 0 falls back to [prices]"
+        );
+    }
+
+    #[tokio::test]
+    async fn deepseek_chat_settles_its_catalog_price() {
+        // No [prices] entry: the bundled catalog lists deepseek-chat at
+        // 0.27 / 1.10 USD per million tokens.
+        let harness = Harness::new();
+        assert!(harness.prices.price("deepseek-chat").is_none());
+        let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+            .with_model("deepseek-chat");
+        let budgets = wide_token_caps(10_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(usd_spent(&harness), 27 + 110);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_model_under_a_money_only_cap_is_refused() {
+        let harness = Harness::new();
+        let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"))
+            .with_model("unpriced-model");
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        let err = session.send("hello").await.unwrap_err();
+
+        assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+        assert!(err.to_string().contains("unpriced-model"), "{err}");
+        assert_eq!(provider.request_count(), 0, "no provider call may happen");
+        assert_eq!(harness.store().event_count("budget.denied").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_model_is_refused_even_when_token_caps_also_bind() {
+        let harness = Harness::new();
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"))
+            .with_model("unpriced-model");
+        let budgets = wide_token_caps(100);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        let err = session.send("hello").await.unwrap_err();
+
+        assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("[prices.models.\"unpriced-model\"]"),
+            "{err}"
+        );
+        assert_eq!(provider.request_count(), 0, "no provider call may happen");
+        assert_eq!(
+            harness.store().reservation_count().unwrap(),
+            0,
+            "nothing reserved"
+        );
+        assert_eq!(usd_spent(&harness), 0);
+    }
+
+    #[test]
+    fn every_bundled_catalog_model_is_priced_or_billed_by_subscription() {
+        // A new catalog row without either would be refused under the money cap.
+        for row in aux_providers::Catalog::bundled().rows() {
+            assert!(
+                catalog_prices().price(&row.id).is_some() || catalog_subscription(&row.id),
+                "{}/{} has no price and no billing = \"subscription\"",
+                row.provider,
+                row.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_catalog_price_wins_over_a_stale_built_in_but_not_over_the_owner() {
+        let flash = |prices: &PriceTable| model_price(prices, Some("deepseek-flash")).unwrap();
+        let shipped = flash(&PriceTable::default());
+        assert!(shipped.input_cents_per_million >= 30, "{shipped:?}");
+        assert!(shipped.output_cents_per_million >= 120, "{shipped:?}");
+        let mut owner = PriceTable::default();
+        let set = kernel_core::budget::ModelPrice {
+            input_cents_per_million: 10,
+            output_cents_per_million: 10,
+        };
+        owner.models.insert("deepseek-flash".to_string(), set);
+        assert_eq!(flash(&owner), set, "an explicit [prices] entry wins");
+    }
+
+    #[tokio::test]
+    async fn deepseek_flash_runs_under_the_default_money_cap() {
+        // The owner's brain with the default caps, with the shipped [prices]
+        // and with an owner table that left it out: the catalog price binds.
+        for prices in [
+            PriceTable::default(),
+            PriceTable {
+                models: Default::default(),
+            },
+        ] {
+            let mut harness = Harness::new();
+            harness.prices = prices;
+            let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+                .with_model("deepseek-flash");
+            let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+
+            session.send("hello").await.unwrap();
+
+            assert_eq!(provider.request_count(), 1);
+            assert_eq!(usd_spent(&harness), 30 + 120);
+        }
+    }
+
+    /// An OpenAI-compatible brain at `base` sending `model`; never called.
+    fn wire(base: &str, model: &str, local: bool) -> aux_providers::OpenAiCompat {
+        let config = aux_providers::ProviderConfig {
+            disable_thinking: false,
+            id: "brain".to_string(),
+            base_url: base.to_string(),
+            model: model.to_string(),
+            key_user: None,
+            kind: aux_providers::ProviderKind::OpenAiCompat,
+        };
+        let provider = aux_providers::OpenAiCompat::with_key(&config, None).unwrap();
+        if local {
+            provider.local_runtime()
+        } else {
+            provider
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_call_is_refused_on_a_paid_endpoint_and_on_loopback() {
+        // A paid endpoint sending a subscription model id, and a loopback
+        // forwarder serving an unpriced model: both refused before any call.
+        for provider in [
+            wire("https://paid.example/v1", "gpt-oss:120b-cloud", false),
+            wire("http://127.0.0.1:9/v1", "llama3.2", true),
+        ] {
+            let harness = Harness::new();
+            let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+            let mut session =
+                harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+            let err = session.send("hello").await.unwrap_err();
+
+            assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+            assert!(err.to_string().contains("[prices.models."), "{err}");
+            assert_eq!(harness.store().reservation_count().unwrap(), 0);
+            assert_eq!(harness.store().event_count("budget.denied").unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn a_subscription_model_passes_only_on_the_subscription_backend() {
+        let caps = kernel_core::budget::BudgetCaps::conservative_default();
+        let prices = PriceTable::default();
+        let check = |provider: &dyn ChatProvider| {
+            unpriced_under_money_cap(&caps, &prices, provider, provider.model())
+        };
+        assert_eq!(
+            check(&wire("https://ollama.com/v1", "gpt-oss:120b-cloud", false)),
+            None
+        );
+        assert!(check(&wire("https://ollama.com/v1", "not-in-catalog", false)).is_some());
+        assert!(check(&wire(
+            "https://paid.example/v1",
+            "gpt-oss:120b-cloud",
+            false
+        ))
+        .is_some());
     }
 
     #[tokio::test]

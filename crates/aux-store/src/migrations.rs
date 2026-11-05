@@ -1084,6 +1084,11 @@ pub(crate) const MIGRATION_V37_CONTACTS_TIME_ZONE: &str =
     "ALTER TABLE contacts ADD COLUMN time_zone TEXT;";
 pub(crate) const MIGRATION_V37_PARTY_TIME_ZONE: &str =
     "ALTER TABLE party ADD COLUMN time_zone TEXT;";
+/// A reservation also holds the money it may spend, so concurrent calls
+/// cannot each fit under the daily money cap and together cross it. Rows
+/// written before this column existed hold no money.
+pub(crate) const MIGRATION_V38_RESERVED_USD: &str =
+    "ALTER TABLE usage_reservations ADD COLUMN usd_cents INTEGER NOT NULL DEFAULT 0;";
 
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
 ///
@@ -1471,6 +1476,9 @@ impl Store {
             // The client's own zone, on the contacts index and on the card.
             self.apply_v37()?;
         }
+        if version < 38 {
+            self.apply_v38()?;
+        }
         // v15 is unreleased, but a store written by a pre-release draft may
         // already exist with the old non-unique wire index and duplicate wire
         // names. Repair it in place (idempotent: the fast path is a pragma
@@ -1646,6 +1654,30 @@ impl Store {
                 [37_i64.to_string()],
             )?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply v38: reservations gain `usd_cents`. The `ALTER` is guarded by a
+    /// pragma read under the write lock, so a concurrent open cannot run it
+    /// twice (the v7/v13 pattern).
+    fn apply_v38(&mut self) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('usage_reservations') WHERE name = 'usd_cents'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has == 0 {
+            tx.execute_batch(MIGRATION_V38_RESERVED_USD)?;
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [38_i64.to_string()],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1971,6 +2003,47 @@ mod tests {
         assert_eq!(
             Store::open(&path).unwrap().schema_version().unwrap(),
             SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn v37_store_upgrades_to_v38_and_keeps_its_reservations() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        {
+            let store = Store::open(&path).unwrap();
+            // The store a pre-v38 process left: a live reservation and no
+            // money column yet.
+            store
+                .conn
+                .execute_batch(
+                    "ALTER TABLE usage_reservations DROP COLUMN usd_cents;
+                     INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out)
+                     VALUES ('main', '2026-10-03', '2999-01-01 00:00:00', 7, 9);
+                     UPDATE meta SET value = '37' WHERE key = 'schema_version';",
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        let row: (String, i64, i64, i64) = store
+            .conn
+            .query_row(
+                "SELECT agent, tokens_in, tokens_out, usd_cents FROM usage_reservations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("main".to_string(), 7, 9, 0),
+            "the old row holds no money"
+        );
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().schema_version().unwrap(),
+            SCHEMA_VERSION,
+            "reopening is idempotent: the ALTER does not run twice"
         );
     }
 

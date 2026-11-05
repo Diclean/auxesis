@@ -153,7 +153,7 @@ impl Sandbox {
             format!(
                 "version = 1\ndefault_agent = \"main\"\n\n[privacy]\nmode = \"private\"\n\n\
                  [[providers]]\nid = \"local\"\nbase_url = \"{}/v1\"\n\
-                 model = \"test-model\"\nkind = \"openai-compat\"\n",
+                 model = \"test-model\"\nkind = \"openai-compat\"\n\n[prices.models.\"test-model\"]\ninput_cents_per_million = 1\noutput_cents_per_million = 1\n",
                 provider.uri
             ),
         )

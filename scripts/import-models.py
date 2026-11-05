@@ -22,6 +22,23 @@ import json
 import sys
 from pathlib import Path
 
+# Providers billed by a flat subscription: the cost of one call is known to be
+# 0 cents, so these rows carry `billing = "subscription"`. The app honours it
+# only on the provider's own endpoint (https://ollama.com). A row without a
+# price is never assumed to be a subscription.
+SUBSCRIPTION_PROVIDERS = {"ollama-cloud"}
+
+# Official list prices that models.dev lacks, in USD per million tokens, with
+# where and when they were read. The peak-hour, cache-miss rate is used.
+PRICE_OVERRIDES = {
+    ("deepseek", "deepseek-flash"): (
+        0.3,
+        1.2,
+        "https://api-docs.deepseek.com/quick_start/pricing, read 2026-11-04 "
+        "(peak hours, input cache miss / output)",
+    ),
+}
+
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "catalog" / "models.dev.json"
 OUTPUT = ROOT / "catalog" / "models.toml"
@@ -64,10 +81,16 @@ def main() -> int:
                 fields.append(("context", int(limit["context"])))
             if limit.get("output") is not None:
                 fields.append(("output", int(limit["output"])))
+            override = PRICE_OVERRIDES.get((provider_id, model_id))
+            if override is not None:
+                cost = {"input": override[0], "output": override[1]}
+                lines.append(f"# Price: {override[2]}.")
             if cost.get("input") is not None:
                 fields.append(("input_usd_mtok", float(cost["input"])))
             if cost.get("output") is not None:
                 fields.append(("output_usd_mtok", float(cost["output"])))
+            if provider_id in SUBSCRIPTION_PROVIDERS:
+                fields.append(("billing", "subscription"))
 
             lines.append("[[model]]")
             for key, value in fields:

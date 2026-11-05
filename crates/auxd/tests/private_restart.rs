@@ -176,7 +176,7 @@ fn a_private_thread_resumed_by_a_new_process_resends_tokens_never_values() {
     let (dir, home) = home();
     let config = format!(
         "version = 1\ndefault_agent = \"main\"\n\n[privacy]\nmode = \"private\"\n\n\
-         [[providers]]\nid = \"local\"\nbase_url = \"{uri}/v1\"\nmodel = \"test-model\"\nkind = \"openai-compat\"\n"
+         [[providers]]\nid = \"local\"\nbase_url = \"{uri}/v1\"\nmodel = \"test-model\"\nkind = \"openai-compat\"\n\n[prices.models.\"test-model\"]\ninput_cents_per_million = 1\noutput_cents_per_million = 1\n"
     );
     std::fs::write(config_path(&home), config).unwrap();
 

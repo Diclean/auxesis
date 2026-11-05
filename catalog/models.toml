@@ -41,6 +41,7 @@ output = 8192
 input_usd_mtok = 0.27
 output_usd_mtok = 1.1
 
+# Price: https://api-docs.deepseek.com/quick_start/pricing, read 2026-11-04 (peak hours, input cache miss / output).
 [[model]]
 provider = "deepseek"
 id = "deepseek-flash"
@@ -48,6 +49,8 @@ tools = true
 structured_output = true
 context = 128000
 output = 8192
+input_usd_mtok = 0.3
+output_usd_mtok = 1.2
 
 [[model]]
 provider = "ollama-cloud"
@@ -56,6 +59,7 @@ tools = true
 structured_output = false
 context = 128000
 output = 8192
+billing = "subscription"
 
 [[model]]
 provider = "ollama-cloud"
@@ -64,6 +68,7 @@ tools = true
 structured_output = false
 context = 128000
 output = 32768
+billing = "subscription"
 
 [[model]]
 provider = "ollama-cloud"
@@ -72,3 +77,4 @@ tools = true
 structured_output = false
 context = 256000
 output = 32768
+billing = "subscription"

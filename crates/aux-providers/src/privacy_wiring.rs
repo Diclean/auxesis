@@ -80,6 +80,10 @@ impl ChatProvider for GatedChat<'_> {
     fn on_this_mac(&self) -> bool {
         self.inner.on_this_mac()
     }
+
+    fn subscription_billed(&self) -> bool {
+        self.inner.subscription_billed()
+    }
 }
 
 #[cfg(test)]

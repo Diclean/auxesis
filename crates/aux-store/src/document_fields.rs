@@ -1641,13 +1641,13 @@ mod tests {
         ] {
             assert!(columns.contains(&column.to_string()), "missing {column}");
         }
-        // v24–v37 add delegation usage, private tokens, CRM direction,
+        // v24–v38 add delegation usage, private tokens, CRM direction,
         // extracted text and its backfill/search/erasure indexes, timeline
         // taint, the seeded note counter, the sticky per-session Private
-        // mark, the usage provider cleanup, the mail draft claim states and
-        // the client's own time zone.
+        // mark, the usage provider cleanup, the mail draft claim states, the
+        // client's own time zone and the money a reservation holds.
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 37);
+        assert_eq!(SCHEMA_VERSION, 38);
     }
 
     #[test]

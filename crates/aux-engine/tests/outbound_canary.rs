@@ -20,7 +20,20 @@ use aux_providers::config::{ProviderConfig, ProviderKind};
 use aux_providers::{ChatProvider, OpenAiCompat};
 use aux_store::{Store, StoreHandle};
 use kernel_broker::ToolRegistry;
-use kernel_core::budget::{Budgets, PriceTable};
+use kernel_core::budget::{Budgets, ModelPrice, PriceTable};
+
+/// The money cap refuses an unpriced model, so the test brain carries a price.
+fn canary_prices() -> PriceTable {
+    let mut prices = PriceTable::default();
+    prices.models.insert(
+        "canary-model".to_string(),
+        ModelPrice {
+            input_cents_per_million: 1,
+            output_cents_per_million: 1,
+        },
+    );
+    prices
+}
 use kernel_core::ContextConfig;
 use serde_json::{json, Value};
 use std::sync::{Mutex, RwLock};
@@ -62,7 +75,7 @@ impl Harness {
             store: Arc::new(Mutex::new(Store::open_in_memory().unwrap())),
             registry: Arc::new(RwLock::new(ToolRegistry::with_defaults())),
             budgets: Budgets::default(),
-            prices: PriceTable::default(),
+            prices: canary_prices(),
         }
     }
 
@@ -489,7 +502,7 @@ async fn a_private_turn_keeps_its_text_only_in_the_chat_history_and_the_next_tur
     mount_reply(&server).await;
     let provider = provider(&server);
     let budgets = Budgets::default();
-    let prices = PriceTable::default();
+    let prices = canary_prices();
     let repro = "Dis bonjour à Camille Exemple, camille@exemple.fr.";
 
     let mut first = private_session(&provider, &store, &home, &budgets, &prices, None, repro);

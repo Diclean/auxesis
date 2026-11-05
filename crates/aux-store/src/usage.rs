@@ -798,6 +798,16 @@ impl Store {
         &self,
         skip: &[i64],
     ) -> Result<(usize, usize), StoreError> {
+        self.settle_abandoned_reservations_until(skip, &|| false)
+    }
+
+    /// [`Store::settle_abandoned_reservations`], but it asks `stop` before each
+    /// row and ends the pass (rows left stay held) once that says so.
+    pub fn settle_abandoned_reservations_until(
+        &self,
+        skip: &[i64],
+        stop: &dyn Fn() -> bool,
+    ) -> Result<(usize, usize), StoreError> {
         let mut rows = self
             .conn
             .prepare(
@@ -810,8 +820,11 @@ impl Store {
             })?
             .collect::<Result<Vec<(i64, String, String, (u64, u64), String)>, _>>()?;
         rows.retain(|row| !skip.contains(&row.0));
-        let mut failed = 0;
+        let (mut settled, mut failed) = (0, 0);
         for (id, agent, day, (tokens_in, tokens_out), held) in rows.iter().cloned() {
+            if stop() {
+                return Ok((settled, failed));
+            }
             let held: serde_json::Value = serde_json::from_str(&held).unwrap_or_default();
             let usd_cents = held["usd"].as_u64().unwrap_or(0);
             let reservation = Reservation {
@@ -833,12 +846,16 @@ impl Store {
                 tokens_out_estimated: true,
                 usd_cents,
             };
-            failed += usize::from(self.settle_held(&reservation, &actual, true).is_err());
+            let failure = self.settle_held(&reservation, &actual, true).is_err();
+            (settled, failed) = (
+                settled + usize::from(!failure),
+                failed + usize::from(failure),
+            );
         }
         // A prune that fails keeps its claims for the next pass; it never
         // costs a settle.
         let _ = self.prune_reconciled_claims();
-        Ok((rows.len() - failed, failed))
+        Ok((settled, failed))
     }
 
     /// Delete up to [`PRUNE_BATCH`] consumed reconcile claims, consumed at
@@ -2230,6 +2247,27 @@ mod tests {
             1,
             "the expired row was swept, only the new reservation remains"
         );
+    }
+
+    #[test]
+    fn a_stop_ends_the_abandoned_pass_between_rows_and_leaves_the_rest_held() {
+        let store = Store::open_in_memory().unwrap();
+        let (caps, day) = (caps(Some(100), None), store.local_day().unwrap());
+        for _ in 0..3 {
+            let reserved = store.try_reserve_for(None, "main", &day, &caps, &estimate(10, 0));
+            assert!(matches!(reserved.unwrap(), ReserveOutcome::Reserved(_)));
+        }
+        let expire = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+        store.conn.execute(expire, []).unwrap();
+        let asks = std::cell::Cell::new(0);
+        let stop = || {
+            asks.set(asks.get() + 1);
+            asks.get() > 1 // stopped while the second row is next
+        };
+        let first = store.settle_abandoned_reservations_until(&[], &stop);
+        assert_eq!(first.unwrap(), (1, 0));
+        assert_eq!(store.reservation_count().unwrap(), 2, "the rest stay held");
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (2, 0));
     }
 
     #[test]

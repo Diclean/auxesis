@@ -39,10 +39,14 @@ use tracing_subscriber::EnvFilter;
 /// uninstall` / `launchctl bootout` / Ctrl-C are never blocked by a run.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// How long shutdown waits for the budget settle worker to end. A retry
-/// mid-statement when the process exits is a use-after-free in SQLCipher's
-/// exit hook; a reservation it leaves unsettled stays held for the next start.
-const SETTLE_STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long shutdown waits, once, for the budget settle worker to end: over
+/// the store's busy timeout (5 s, which a settle blocked on the database can
+/// spend) and the worker's 1 s to record what it owes. A retry mid-statement
+/// when the process exits is a use-after-free in SQLCipher's exit hook.
+const SETTLE_STOP_BOUND: std::time::Duration = std::time::Duration::from_secs(7);
+
+/// How many such waits before shutdown gives up on the worker and aborts.
+const SETTLE_STOP_TRIES: u32 = 3;
 
 #[derive(Debug, Parser)]
 #[command(name = "auxd", version, about = "Auxesis daemon")]
@@ -84,10 +88,25 @@ fn main() -> ExitCode {
         // Never await a blocking job on shutdown: give the runtime a short
         // grace, then abandon it and let the process exit.
         runtime.shutdown_timeout(SHUTDOWN_GRACE);
-        // After the runtime, so a call it abandoned has handed over its
-        // reservation; no settle statement is in flight at exit.
-        if !aux_engine::stop_settle_worker(SETTLE_STOP_BOUND) {
-            eprintln!("auxd: the budget settle worker did not stop in time");
+        // After the runtime's grace, so a call it abandoned has handed over
+        // its reservation. This covers the settle worker, and no settle
+        // starts on any thread once it is asked to stop; a settle already
+        // running on a runtime thread the grace abandoned is not waited for.
+        // A worker that is still mid-statement is waited for again: it ends
+        // at its next check, within the busy timeout. Exiting normally with
+        // it running is the use-after-free, so past the tries the process
+        // aborts instead (no exit hooks run; its rows stay held, and the next
+        // start's reconcile settles them once their TTL has passed).
+        let ended = (0..SETTLE_STOP_TRIES).any(|_| {
+            let ended = aux_engine::stop_settle_worker(SETTLE_STOP_BOUND);
+            if !ended {
+                eprintln!("auxd: waiting for the budget settle worker to end");
+            }
+            ended
+        });
+        if !ended {
+            eprintln!("auxd: the budget settle worker did not end; aborting");
+            std::process::abort();
         }
     });
     match result {

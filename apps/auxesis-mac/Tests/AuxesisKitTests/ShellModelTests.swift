@@ -243,6 +243,24 @@ import Testing
         XCTAssertEqual(shell.selectedWaitingApproval?.id, ask.id, "back on the page, the card is on screen again")
     }
 
+    func testMenuProposalActionsAreOffWhileASheetCoversTheWaitingPage() {
+        let (shell, _) = makeShell()
+        guard let ask = approval(shell, "ap-camille") else { return XCTFail("fixture approval") }
+        shell.go(.waiting)
+        shell.store.focus(ask.id)
+        XCTAssertEqual(shell.selectedWaitingApproval?.id, ask.id)
+
+        shell.shortcutHelpOpen = true
+        XCTAssertNil(shell.selectedWaitingApproval, "Keyboard Shortcuts covers the card")
+        shell.shortcutHelpOpen = false
+
+        shell.settingsTab = ShellModel.SettingsTab.allCases.first
+        XCTAssertNil(shell.selectedWaitingApproval, "Settings covers the card")
+        shell.settingsTab = nil
+
+        XCTAssertEqual(shell.selectedWaitingApproval?.id, ask.id, "with no sheet, the card is on screen again")
+    }
+
     func testDelegationOpenAndReturnKeepsTheRow() {
         let (shell, _) = makeShell()
         shell.open(agent: "mail", fromDelegation: "dl-5")

@@ -3487,10 +3487,48 @@ async fn activity_usage_and_jobs_mirror_the_cli() {
     t.stop();
 }
 
+/// WO-BUD-6: an old `agent.md` budget key no longer changes the caps. The
+/// `[budgets.*]` section of config.toml is the only source.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_md_budget_key_does_not_change_the_configured_caps() {
+    let mut t = TestApi::start_with(|home| {
+        let config = FAKE_CONFIG.replace(
+            "[[providers]]",
+            "[budgets.agents.main]\nusd_cents = 4321\n\n[[providers]]",
+        );
+        std::fs::write(config_path(home), config).unwrap();
+        let agent_dir = home.join("agents").join("main");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("agent.md"),
+            "---\nname: main\nbudget: { daily_usd: 0.01 }\n---\nBe brief.\n",
+        )
+        .unwrap();
+        fast_options()
+    })
+    .await;
+
+    // The old key does not stop the agent from loading.
+    let agent = get_auth(&t, "/v1/agents/main").await;
+    assert_eq!(agent.status, 200, "body: {}", agent.body);
+    assert_eq!(agent.json()["name"], "main");
+
+    // The cap is the configured 4321 cents, never the removed 1-cent key.
+    let usage = get_auth(&t, "/v1/usage?agent=main&period=day").await;
+    assert_eq!(usage.status, 200, "body: {}", usage.body);
+    let usage = usage.json();
+    assert_eq!(usage["agents"][0]["agent"], "main");
+    assert_eq!(
+        usage["agents"][0]["caps"]["usd_cents"], 4321,
+        "agent.md must not set the cap: {usage}"
+    );
+
+    t.stop();
+}
+
 // ---------------------------------------------------------------------------
 // sanitized errors
 // ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn error_bodies_never_leak_paths_tokens_or_keys() {
     let dir = tempfile::tempdir().unwrap();

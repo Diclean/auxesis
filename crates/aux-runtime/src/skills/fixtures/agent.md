@@ -2,7 +2,6 @@
 name: assistant
 brain: cloud
 default_mode: private
-budget: { daily_usd: 2.00 }
 channels: [mac, telegram]
 tools:
   - google.calendar.list_events

@@ -19,6 +19,7 @@ use super::{extensions_dir, hex, install_dir, valid_name};
 const ENV_FILE: &str = ".env";
 /// Upper bound on a `.env` read: one line per key, never bulk data.
 const MAX_ENV_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_ENTRY_BYTES: u64 = 256 * 1024;
 
 /// How an install runs.
 #[derive(Debug, Clone, Copy)]
@@ -116,6 +117,27 @@ pub(crate) fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
     {
         let _ = (path, mode);
     }
+    Ok(())
+}
+
+pub(crate) fn force_private_dir(
+    handle: &kernel_core::SandboxHome,
+    rel: &Path,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+            .open(handle.real_path()?.join(rel))?;
+        if unsafe { libc::fchmod(file.as_raw_fd(), 0o700) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (handle, rel);
     Ok(())
 }
 
@@ -310,27 +332,55 @@ pub async fn install(
     // Defence in depth: the install path must stay under the extensions root
     // before anything is created or removed.
     ensure_within(&parent, &dir)?;
-    std::fs::create_dir_all(&parent)?;
-    set_mode(&parent, 0o700)?;
-    if dir.exists() {
-        // A previous install may be read-only; make it removable first.
-        make_writable_tree(&dir)?;
-        std::fs::remove_dir_all(&dir)?;
+    let handle = kernel_core::SandboxHome::open(home)?;
+    handle.create_dir_all(Path::new("extensions"))?;
+    force_private_dir(&handle, Path::new("extensions"))?;
+    let rel_dir = Path::new("extensions").join(format!("{}@{}", entry.name, entry.version));
+    match std::fs::symlink_metadata(&dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(InstallError::Unpack(format!(
+                "{} is a symbolic link",
+                dir.display()
+            )));
+        }
+        Ok(_) => {
+            make_writable_tree(&dir)?;
+            std::fs::remove_dir_all(&dir)?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
     }
-    std::fs::create_dir_all(&dir)?;
-    set_mode(&dir, 0o700)?;
+    if !handle.create_dir(&rel_dir)? {
+        return Err(InstallError::Unpack(format!(
+            "{} already exists",
+            dir.display()
+        )));
+    }
+    if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
+        return Err(InstallError::Unpack(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
 
     // Everything after the tree exists is one fallible step: on any failure the
     // partial install is cleaned up and a cleanup failure is reported, never
     // swallowed.
     let setup = (|| -> Result<(), InstallError> {
-        unpack(entry, &dir, &bytes)?;
-        std::fs::create_dir_all(dir.join("work"))?;
-        set_mode(&dir.join("work"), 0o700)?;
+        unpack(entry, &handle, &rel_dir, &dir, &bytes)?;
+        let work = dir.join("work");
+        let _ = handle.create_dir(&rel_dir.join("work"))?;
+        if !std::fs::symlink_metadata(&work).is_ok_and(|meta| meta.is_dir()) {
+            return Err(InstallError::Unpack(format!(
+                "{} is not a directory",
+                work.display()
+            )));
+        }
+        force_private_dir(&handle, &rel_dir.join("work"))?;
         // Copy the verified entry in, so `verify` and `remove` can read it back
         // without the catalog.
         let text = toml::to_string(entry).map_err(|err| InstallError::Unpack(err.to_string()))?;
-        std::fs::write(dir.join("entry.toml"), text)?;
+        handle.write_atomic(&rel_dir.join("entry.toml"), text.as_bytes(), 0o600)?;
         Ok(())
     })();
     if let Err(err) = setup {
@@ -369,8 +419,13 @@ fn discard_partial_install(dir: &Path, err: InstallError) -> InstallError {
     }
 }
 
-/// Unpack the verified bytes into `dir`.
-fn unpack(entry: &Entry, dir: &Path, bytes: &[u8]) -> Result<(), InstallError> {
+fn unpack(
+    entry: &Entry,
+    handle: &kernel_core::SandboxHome,
+    rel_dir: &Path,
+    dir: &Path,
+    bytes: &[u8],
+) -> Result<(), InstallError> {
     match entry.source.kind {
         SourceType::Binary => {
             let relative = Path::new(&entry.run.command);
@@ -379,15 +434,11 @@ fn unpack(entry: &Entry, dir: &Path, bytes: &[u8]) -> Result<(), InstallError> {
                     .components()
                     .all(|c| matches!(c, Component::Normal(_)))
             {
-                dir.join(relative)
+                rel_dir.join(relative)
             } else {
-                dir.join("server")
+                rel_dir.join("server")
             };
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&target, bytes)?;
-            set_mode(&target, 0o755)?;
+            handle.write_atomic(&target, bytes, 0o755)?;
             Ok(())
         }
         SourceType::Npm | SourceType::Uv => unpack_tarball(dir, bytes),
@@ -558,6 +609,7 @@ fn safe_relative(path: &Path) -> Result<PathBuf, InstallError> {
 /// Load one installed extension by name, preferring the highest version.
 pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
     let root = extensions_dir(home);
+    let handle = kernel_core::SandboxHome::open_existing(home).ok()?;
     let mut best: Option<InstalledExtension> = None;
     let entries = std::fs::read_dir(&root).ok()?;
     for entry in entries.flatten() {
@@ -569,8 +621,11 @@ pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
         if dir_name != name {
             continue;
         }
-        let text = std::fs::read_to_string(dir.join("entry.toml")).ok();
-        let Some(text) = text else { continue };
+        let rel = Path::new("extensions").join(&file_name).join("entry.toml");
+        let super::ReadAt::Text(text) = super::read_text_at_checked(&handle, &rel, MAX_ENTRY_BYTES)
+        else {
+            continue;
+        };
         let Ok(parsed) = toml::from_str::<Entry>(&text) else {
             continue;
         };

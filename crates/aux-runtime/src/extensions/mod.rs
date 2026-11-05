@@ -37,6 +37,7 @@ pub mod session;
 #[cfg(test)]
 mod scenarios;
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub use catalog::{
@@ -85,6 +86,32 @@ pub fn install_dir(home: &Path, name: &str, version: &str) -> PathBuf {
 /// `~/.auxesis/catalog/` — the verified on-disk catalog cache (0700).
 pub fn catalog_cache_dir(home: &Path) -> PathBuf {
     home.join("catalog")
+}
+
+pub(crate) enum ReadAt {
+    Absent,
+    Unreadable,
+    Text(String),
+}
+
+pub(crate) fn read_text_at_checked(
+    handle: &kernel_core::SandboxHome,
+    rel: &Path,
+    max: u64,
+) -> ReadAt {
+    let file = match handle.open_read_existing(rel, max) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return ReadAt::Absent,
+        Err(_) => return ReadAt::Unreadable,
+    };
+    let mut bytes = Vec::new();
+    if file.take(max + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > max {
+        return ReadAt::Unreadable;
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => ReadAt::Text(text),
+        Err(_) => ReadAt::Unreadable,
+    }
 }
 
 /// Decode a 32-byte Ed25519 public key, or `None` when the bytes are not a

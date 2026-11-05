@@ -96,7 +96,7 @@ mod tests {
 
     fn setup(skills: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, LoadedAgent) {
         let dir = tempfile::tempdir().unwrap();
-        let agent_dir = dir.path().join("assistant");
+        let agent_dir = dir.path().join("agents").join("assistant");
         fs::create_dir_all(agent_dir.join("skills")).unwrap();
         fs::write(agent_dir.join("agent.md"), AGENT_MD).unwrap();
         for (name, text) in skills {

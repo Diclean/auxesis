@@ -18,7 +18,6 @@ use kernel_broker::ToolRegistry;
 use kernel_mcp::{McpTool, McpTransport};
 use serde::{Deserialize, Serialize};
 
-use super::extensions_dir;
 use super::install::{load_installed, InstalledExtension};
 use super::ledger;
 use super::session::{session_for, verify_identity, ExtensionSession, SessionOptions};
@@ -78,6 +77,8 @@ pub enum MountError {
     /// The agent name is empty.
     #[error("agent name is empty")]
     InvalidAgent,
+    #[error("extensions/mounts.json is unreadable; refusing to change mounts")]
+    MountsUnreadable,
     /// Filesystem failure.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -111,52 +112,74 @@ struct MountTable {
     agents: BTreeMap<String, Vec<String>>,
 }
 
-fn state_path(home: &Path, name: &str) -> PathBuf {
-    extensions_dir(home)
+const MAX_STATE_BYTES: u64 = 256 * 1024;
+const MAX_MOUNTS_BYTES: u64 = 1024 * 1024;
+
+fn state_rel(name: &str) -> PathBuf {
+    Path::new("extensions")
         .join("state")
         .join(format!("{name}.json"))
 }
 
-fn mounts_path(home: &Path) -> PathBuf {
-    extensions_dir(home).join("mounts.json")
+fn mounts_rel() -> PathBuf {
+    Path::new("extensions").join("mounts.json")
 }
 
-/// Persist one extension's state (0600).
 pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
-    let path = state_path(home, &state.name);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        super::install::set_mode(parent, 0o700)?;
-    }
     let text = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
-    std::fs::write(&path, text)?;
-    super::install::set_mode(&path, 0o600)?;
-    Ok(())
+    let handle = kernel_core::SandboxHome::open(home)?;
+    let dirs = Path::new("extensions/state");
+    handle.create_dir_all(dirs)?;
+    super::install::force_private_dir(&handle, dirs)?;
+    handle.write_atomic(&state_rel(&state.name), text.as_bytes(), 0o600)
 }
 
-/// Load one extension's state, when it exists.
+fn read_state(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io::Error> {
+    let handle = match kernel_core::SandboxHome::open_existing(home) {
+        Ok(handle) => handle,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(std::io::ErrorKind::InvalidData.into()),
+    };
+    match super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES) {
+        super::ReadAt::Absent => Ok(None),
+        super::ReadAt::Unreadable => Err(std::io::ErrorKind::InvalidData.into()),
+        super::ReadAt::Text(text) => serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData)),
+    }
+}
+
 pub fn load_state(home: &Path, name: &str) -> Option<ExtensionState> {
-    let text = std::fs::read_to_string(state_path(home, name)).ok()?;
-    serde_json::from_str(&text).ok()
+    read_state(home, name).ok().flatten()
 }
 
-fn load_mounts(home: &Path) -> MountTable {
-    std::fs::read_to_string(mounts_path(home))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+pub fn is_frozen(home: &Path, name: &str) -> bool {
+    match read_state(home, name) {
+        Ok(None) => false,
+        Ok(Some(state)) => state.frozen,
+        Err(_) => true,
+    }
+}
+
+fn load_mounts(home: &Path) -> Result<MountTable, MountError> {
+    let handle = match kernel_core::SandboxHome::open_existing(home) {
+        Ok(handle) => handle,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(MountTable::default()),
+        Err(err) => return Err(err.into()),
+    };
+    match super::read_text_at_checked(&handle, &mounts_rel(), MAX_MOUNTS_BYTES) {
+        super::ReadAt::Absent => Ok(MountTable::default()),
+        super::ReadAt::Unreadable => Err(MountError::MountsUnreadable),
+        super::ReadAt::Text(text) => {
+            serde_json::from_str(&text).map_err(|_| MountError::MountsUnreadable)
+        }
+    }
 }
 
 fn store_mounts(home: &Path, mounts: &MountTable) -> std::io::Result<()> {
-    let path = mounts_path(home);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        super::install::set_mode(parent, 0o700)?;
-    }
     let text = serde_json::to_string_pretty(mounts).map_err(std::io::Error::other)?;
-    std::fs::write(&path, text)?;
-    super::install::set_mode(&path, 0o600)?;
-    Ok(())
+    let handle = kernel_core::SandboxHome::open(home)?;
+    handle.write_atomic(&mounts_rel(), text.as_bytes(), 0o600)
 }
 
 /// The `host:port` allowlist of an entry, in the form the state pins.
@@ -295,7 +318,7 @@ pub fn mount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
     if !may_mount_in_mode(&installed.entry, current_mode(home)) {
         return Err(MountError::PrivateMode(name.to_owned()));
     }
-    let mut mounts = load_mounts(home);
+    let mut mounts = load_mounts(home)?;
     let list = mounts.agents.entry(agent.to_owned()).or_default();
     if !list.iter().any(|entry| entry == name) {
         list.push(name.to_owned());
@@ -311,7 +334,7 @@ pub fn mount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
 
 /// Unmount `name` from `agent`.
 pub fn unmount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
-    let mut mounts = load_mounts(home);
+    let mut mounts = load_mounts(home)?;
     if let Some(list) = mounts.agents.get_mut(agent) {
         list.retain(|entry| entry != name);
         if list.is_empty() {
@@ -330,18 +353,21 @@ pub fn unmount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
 /// Whether `name` is mounted for `agent`.
 pub fn is_mounted(home: &Path, name: &str, agent: &str) -> bool {
     load_mounts(home)
-        .agents
-        .get(agent)
-        .map(|list| list.iter().any(|entry| entry == name))
+        .ok()
+        .and_then(|mounts| {
+            mounts
+                .agents
+                .get(agent)
+                .map(|list| list.iter().any(|entry| entry == name))
+        })
         .unwrap_or(false)
 }
 
 /// Every extension mounted for `agent`, sorted.
 pub fn mounted_extensions(home: &Path, agent: &str) -> Vec<String> {
     let mut list = load_mounts(home)
-        .agents
-        .get(agent)
-        .cloned()
+        .ok()
+        .and_then(|mounts| mounts.agents.get(agent).cloned())
         .unwrap_or_default();
     list.sort();
     list
@@ -349,7 +375,7 @@ pub fn mounted_extensions(home: &Path, agent: &str) -> Vec<String> {
 
 /// Drop `name` from every agent's mount list.
 pub fn remove_from_all_mounts(home: &Path, name: &str) -> std::io::Result<()> {
-    let mut mounts = load_mounts(home);
+    let mut mounts = load_mounts(home).map_err(|err| std::io::Error::other(err.to_string()))?;
     let mut changed = false;
     for list in mounts.agents.values_mut() {
         let before = list.len();
@@ -361,13 +387,6 @@ pub fn remove_from_all_mounts(home: &Path, name: &str) -> std::io::Result<()> {
         store_mounts(home, &mounts)?;
     }
     Ok(())
-}
-
-/// Whether the extension is frozen.
-pub fn is_frozen(home: &Path, name: &str) -> bool {
-    load_state(home, name)
-        .map(|state| state.frozen)
-        .unwrap_or(false)
 }
 
 /// Freeze `name`: unmount everywhere, persist the flag and write the Ledger row.
@@ -443,7 +462,7 @@ impl ExtensionHost {
     /// Start every mounted, unfrozen extension and verify its identity.
     pub async fn start(home: &Path) -> Self {
         let mut host = Self::empty(home);
-        let mounts = load_mounts(home);
+        let mounts = load_mounts(home).unwrap_or_default();
         let names: Vec<String> = mounts
             .agents
             .values()
@@ -593,6 +612,16 @@ mod tests {
         assert_eq!(mounted_extensions(home.path(), "alice"), vec!["demo"]);
         unmount(home.path(), "demo", "alice").unwrap();
         assert!(!is_mounted(home.path(), "demo", "alice"));
+    }
+
+    #[test]
+    fn an_unreadable_mounts_json_is_never_overwritten() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("extensions").join("mounts.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not json").unwrap();
+        assert!(unmount(home.path(), "demo", "alice").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"not json");
     }
 
     #[test]

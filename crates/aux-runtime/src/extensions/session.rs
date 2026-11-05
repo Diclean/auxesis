@@ -737,10 +737,8 @@ pub async fn pin_extension(
     let session = session_for(home, installed, &SessionOptions { allow_loopback }).await?;
     let pins = pinned_tools(&session.tools);
     // A reinstall re-pins the tools but never clears a freeze: only the owner's
-    // `aux ext verify --accept` does that.
-    let frozen = super::mount::load_state(home, &installed.name)
-        .map(|state| state.frozen)
-        .unwrap_or(false);
+    // `aux ext verify --accept` does that. An unreadable row counts as frozen.
+    let frozen = super::mount::is_frozen(home, &installed.name);
     let state = ExtensionState {
         name: installed.name.clone(),
         version: installed.version.clone(),

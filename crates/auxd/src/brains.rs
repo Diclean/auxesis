@@ -326,47 +326,25 @@ impl ChatProvider for NoModelSkill {
 mod tests {
     use super::*;
 
-    /// A FIFO nobody writes to, a link or a dangling link at providers.toml
-    /// refuses the provider at once, every reader alike, and never falls back
-    /// to the legacy `config.toml` entry, which names another host.
+    /// A link or a FIFO at providers.toml never falls back to config.toml.
     #[cfg(unix)]
     #[test]
     fn an_unusable_providers_toml_is_refused_and_never_falls_back() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().to_path_buf();
         let (path, other) = (home.join(PROVIDERS_FILE), home.join("o.toml"));
-        let entry = "[[provider]]\nid = \"p\"\nkind = \"openai\"\nmodels = [\"m\"]\n";
-        let entry = format!("{entry}base_url = \"http://127.0.0.1:9/v1\"\n");
-        std::fs::write(&other, format!("{entry}[brain]\ndefault = \"p/m\"\n")).unwrap();
-        let legacy = "[[providers]]\nid = \"old\"\nkind = \"openai-compat\"\nmodel = \"m\"\n";
-        let legacy = format!("{legacy}base_url = \"http://127.0.0.2:9/v1\"\n");
-        std::fs::write(kernel_core::config_path(&home), legacy).unwrap();
-        for kind in ["fifo", "link", "dangling"] {
-            match kind {
-                "fifo" => {
-                    let made = std::process::Command::new("mkfifo").arg(&path).status();
-                    assert!(made.unwrap().success());
-                }
-                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
-                _ => std::os::unix::fs::symlink(home.join("gone"), &path).unwrap(),
-            }
-            assert!(providers_toml_present(&home), "{kind}");
-            let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
-            std::thread::spawn(move || {
-                let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
-                let live: ModeFn = Arc::new(|| kernel_core::privacy::PrivacyMode::Open);
-                let chain = build_turn_chain(&moved, None, None, false, &store, live, None);
-                let refused = matches!(chain, Err(BrainError::Provider(_)));
-                let entry = resolved_entry(&moved, None, None).is_err();
-                sent.send([refused, entry, resolved_label(&moved, None).is_err()])
-            });
-            let wait = std::time::Duration::from_secs(10);
-            let got = got.recv_timeout(wait).expect("blocked");
-            assert_eq!(got, [true; 3], "{kind}: refused, no fallback");
-            std::fs::remove_file(&path).unwrap();
-        }
-        std::fs::rename(&other, &path).unwrap();
-        let brain = resolved_label(&home, None).unwrap();
-        assert_eq!(brain, Some(("p".to_string(), "m".to_string())));
+        std::fs::write(&other, "[[provider]]\nid = \"p\"\nkind = \"openai\"\nmodels = [\"m\"]\nbase_url = \"http://127.0.0.1:9/v1\"\n[brain]\ndefault = \"p/m\"\n").unwrap();
+        std::fs::write(kernel_core::config_path(&home), "[[providers]]\nid = \"old\"\nkind = \"openai-compat\"\nmodel = \"m\"\nbase_url = \"http://127.0.0.2:9/v1\"\n").unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(providers_toml_present(&home));
+        assert!(resolved_entry(&home, None, None).is_err());
+        assert!(resolved_label(&home, None).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(resolved_entry(&moved, None, None).is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
     }
 }

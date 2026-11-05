@@ -24,7 +24,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aux_engine::{agent_dir, default_soul, soul_path, MAX_SOUL_BYTES};
+use aux_engine::{agent_dir, default_soul, MAX_SOUL_BYTES};
 use aux_providers::provider_name_is_key_shaped;
 use serde::{Deserialize, Serialize};
 
@@ -128,31 +128,33 @@ pub fn state(home: &Path, agent: &str) -> AgentState {
     }
 }
 
-/// The sidecar a read should use: `agent.toml`, or the legacy `dot.toml` while
-/// nothing is at `agent.toml`. A link there counts (it is then refused), never
-/// passed over for the other file. Writes always use `agent.toml`.
-fn config_read_path(home: &Path, agent: &str) -> PathBuf {
-    let current = agent_dir(home, agent).join(AGENT_CONFIG_FILE);
-    let legacy = agent_dir(home, agent).join(LEGACY_AGENT_CONFIG_FILE);
-    let there = |path: &Path| std::fs::symlink_metadata(path).is_ok();
-    if !there(&current) && there(&legacy) {
-        legacy
-    } else {
-        current
-    }
-}
-
 /// Read the sidecar; a missing file yields defaults.
 ///
-/// A present-but-unusable file is an error (fail closed): silently ignoring
-/// it would drop a tools allowlist. It is read as the soul is read, so a link
-/// or a FIFO there is refused at once, never followed nor waited on.
+/// `agent.toml` is opened first, by fd; only a `NotFound` there tries the
+/// legacy `dot.toml`. A file seen by the path check but gone at that open is
+/// an error (fail closed): a default would drop its tools allowlist. A link or
+/// a FIFO is refused at once, never followed nor waited on.
 pub fn config(home: &Path, agent: &str) -> Result<AgentConfig, AgentError> {
-    let path = config_read_path(home, agent);
-    let name = path.file_name().unwrap_or_default();
-    let read = read_agent_file(home, agent, name, MAX_AGENT_CONFIG_BYTES);
-    let Some(text) = read.map_err(|err| AgentError::Config(err.to_string()))? else {
-        return Ok(AgentConfig::default());
+    let dir = agent_dir(home, agent);
+    let seen = |name: &str| std::fs::symlink_metadata(dir.join(name)).is_ok();
+    let (current_seen, legacy_seen) = (seen(AGENT_CONFIG_FILE), seen(LEGACY_AGENT_CONFIG_FILE));
+    let read = |name| {
+        read_agent_file(home, agent, name, MAX_AGENT_CONFIG_BYTES)
+            .map_err(|err| AgentError::Config(err.to_string()))
+    };
+    let current = read(AGENT_CONFIG_FILE)?;
+    let legacy = match current {
+        Some(_) => None,
+        None => read(LEGACY_AGENT_CONFIG_FILE)?,
+    };
+    let (path, text) = match (current, legacy) {
+        (Some(text), _) => (dir.join(AGENT_CONFIG_FILE), text),
+        (None, Some(text)) => (dir.join(LEGACY_AGENT_CONFIG_FILE), text),
+        (None, None) => {
+            missing_sidecar(&dir.join(AGENT_CONFIG_FILE), current_seen)?;
+            missing_sidecar(&dir.join(LEGACY_AGENT_CONFIG_FILE), legacy_seen)?;
+            return Ok(AgentConfig::default());
+        }
     };
     let mut config: AgentConfig = toml::from_str(&text).map_err(|err| {
         let file = path.display().to_string();
@@ -174,6 +176,14 @@ pub fn config(home: &Path, agent: &str) -> Result<AgentConfig, AgentError> {
         config.provider = None;
     }
     Ok(config)
+}
+
+/// The path choice saw a sidecar the fd open then did not find: fail closed.
+fn missing_sidecar(path: &Path, seen: bool) -> Result<(), AgentError> {
+    if !seen {
+        return Ok(());
+    }
+    Err(AgentError::Config(format!("{} vanished", path.display())))
 }
 
 /// Write the sidecar atomically (`0600`, last writer wins under the lock).
@@ -206,26 +216,18 @@ pub fn read_soul(home: &Path, agent: &str) -> Option<String> {
 /// Read an agent's soul through the verified home handle, or `None` when no soul
 /// file exists.
 fn read_soul_checked(home: &Path, agent: &str) -> Result<Option<String>, AgentError> {
-    let soul = soul_path(home, agent);
-    let name = soul.file_name().unwrap_or_default();
-    read_agent_file(home, agent, name, MAX_SOUL_BYTES)
+    read_agent_file(home, agent, "soul.md", MAX_SOUL_BYTES)
 }
 
 /// Read the file `name` of an agent's directory through the verified home
-/// handle, or `None` when it does not exist.
-///
-/// The read is fd-relative: `agents`, then the agent
-/// directory, then `name` — every component opened with `O_NOFOLLOW`
-/// (`O_DIRECTORY` for the directories), so a symlinked agent directory or file
-/// is refused instead of followed, and the leaf additionally with
-/// `O_NONBLOCK` so a FIFO can never block the daemon. The final descriptor is
-/// `fstat`ed: it must be a regular file owned by this process's uid, and the
-/// read is bounded to `max` + 1 bytes, so an oversized file is
-/// refused rather than silently truncated.
+/// handle, or `None` when missing. Every component is opened with `O_NOFOLLOW`
+/// (`O_DIRECTORY` for directories), the leaf with `O_NONBLOCK` too, so a
+/// symlink or FIFO is refused; the fd is `fstat`ed (regular, owned by this
+/// uid) and the read is bounded to `max` + 1, so an oversized file is refused.
 fn read_agent_file(
     home: &Path,
     agent: &str,
-    name: &std::ffi::OsStr,
+    name: &str,
     max: u64,
 ) -> Result<Option<String>, AgentError> {
     let path = agent_dir(home, agent).join(name);
@@ -386,6 +388,7 @@ fn write_private_atomically(home: &Path, rel: &Path, bytes: &[u8]) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aux_engine::soul_path;
     use tempfile::tempdir;
 
     #[test]
@@ -513,9 +516,7 @@ mod tests {
         ));
     }
 
-    /// A FIFO nobody writes to, a link or a dangling link at agent.toml fails
-    /// closed at once: never a wait, never followed, never passed over for the
-    /// legacy dot.toml nor read as no file (which would drop the allowlist).
+    /// A link, a dangling link or a FIFO at agent.toml fails closed at once.
     #[cfg(unix)]
     #[test]
     fn a_fifo_or_linked_sidecar_fails_closed_at_once() {
@@ -525,23 +526,29 @@ mod tests {
         let path = agent.join(AGENT_CONFIG_FILE);
         let other = agent.join(LEGACY_AGENT_CONFIG_FILE);
         std::fs::write(&other, "tools = [\"read_file\"]\n").unwrap();
-        for kind in ["fifo", "link", "dangling"] {
-            match kind {
-                "fifo" => {
-                    let made = std::process::Command::new("mkfifo").arg(&path).status();
-                    assert!(made.unwrap().success());
-                }
-                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
-                _ => std::os::unix::fs::symlink(agent.join("gone"), &path).unwrap(),
-            }
-            let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
-            std::thread::spawn(move || sent.send(config(&home, "scout").is_err()));
-            let wait = std::time::Duration::from_secs(10);
-            assert!(got.recv_timeout(wait).expect("blocked"), "{kind}");
-            std::fs::remove_file(&path).unwrap();
-        }
-        let tools = config(dir.path(), "scout").unwrap().tools.unwrap();
-        assert_eq!(tools, ["read_file"], "dot.toml is read");
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(config(dir.path(), "scout").is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(agent.join("gone"), &path).unwrap();
+        assert!(config(dir.path(), "scout").is_err());
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(config(&home, "scout").is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
+        std::fs::remove_file(&path).unwrap();
+        assert!(config(dir.path(), "scout").unwrap().tools.is_some());
+    }
+
+    /// A sidecar seen by the path check but missing at the fd open fails
+    /// closed instead of reading as defaults (which would drop the allowlist).
+    #[test]
+    fn a_seen_sidecar_that_vanished_fails_closed() {
+        let path = Path::new("agent.toml");
+        assert!(missing_sidecar(path, true).is_err());
+        assert!(missing_sidecar(path, false).is_ok());
     }
 
     #[test]

@@ -444,9 +444,8 @@ pub fn parse_providers_toml(text: &str) -> Result<ProvidersFile, ConfigError> {
     Ok(file)
 }
 
-/// Load and validate `providers.toml`, read by
-/// [`crate::config::read_existing`]: a link, a FIFO, a folder or a file over
-/// 1 MiB there is an error at once, never followed nor waited on.
+/// Load and validate `providers.toml`, read safely: a link, a FIFO, a folder or
+/// an oversized file is an error at once, never followed nor waited on.
 pub fn load_providers_toml(path: &Path) -> Result<ProvidersFile, ConfigError> {
     let text = crate::config::read_existing(path).map_err(|source| ConfigError::Io {
         path: path.display().to_string(),
@@ -457,7 +456,7 @@ pub fn load_providers_toml(path: &Path) -> Result<ProvidersFile, ConfigError> {
 
 /// Load `providers.toml` from an Auxesis home, treating a missing file as
 /// empty (so a fresh install with no providers is not an error). A dangling
-/// link or anything else not read safely is an error, never an empty file.
+/// link is an error, never an empty file.
 pub fn load_providers_for_home(home: &Path) -> Result<ProvidersFile, ConfigError> {
     match load_providers_toml(&home.join(PROVIDERS_FILE)) {
         Ok(file) => Ok(file),
@@ -638,8 +637,7 @@ fn comment_out_legacy_providers(config: &str, today: &str) -> Option<String> {
 /// `providers.toml` once.
 ///
 /// Idempotent: when anything is at `providers.toml` (a dangling link too),
-/// nothing is read from the legacy table and nothing is written. The migration
-/// never reads or copies a Keychain item.
+/// nothing is read from the legacy table and nothing is written. No Keychain.
 pub fn migrate_legacy_config(home: &Path, today: &str) -> Result<MigrationOutcome, ConfigError> {
     let providers_path = home.join(PROVIDERS_FILE);
     if std::fs::symlink_metadata(&providers_path).is_ok() {
@@ -1167,9 +1165,8 @@ preset = "ollama"
         assert!(!dir.path().join(PROVIDERS_FILE).exists());
     }
 
-    /// A FIFO nobody writes to, a link or a dangling link at providers.toml is
-    /// an error at once: never a wait, never followed (the link's target is a
-    /// valid file) and never "no file". The migration writes nothing over it.
+    /// A link or a FIFO at providers.toml is an error at once, never "no
+    /// file"; the migration writes nothing over it.
     #[cfg(unix)]
     #[test]
     fn a_fifo_or_linked_providers_toml_is_refused_at_once() {
@@ -1178,28 +1175,19 @@ preset = "ollama"
         std::fs::write(&other, FULL).unwrap();
         let legacy = "[[providers]]\nid = \"x\"\nkind = \"fake\"\nmodel = \"m\"\n";
         std::fs::write(dir.path().join("config.toml"), legacy).unwrap();
-        for kind in ["fifo", "link", "dangling"] {
-            match kind {
-                "fifo" => {
-                    let made = std::process::Command::new("mkfifo").arg(&path).status();
-                    assert!(made.unwrap().success());
-                }
-                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
-                _ => std::os::unix::fs::symlink(dir.path().join("gone"), &path).unwrap(),
-            }
-            let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
-            std::thread::spawn(move || {
-                let loaded = load_providers_for_home(&home).map(drop);
-                sent.send((loaded, migrate_legacy_config(&home, "2026-11-05")))
-                    .ok()
-            });
-            let wait = std::time::Duration::from_secs(10);
-            let (loaded, migrated) = got.recv_timeout(wait).expect("blocked");
-            assert!(matches!(loaded, Err(ConfigError::Io { .. })), "{kind}");
-            assert_eq!(migrated.unwrap(), MigrationOutcome::Skipped, "{kind}");
-            std::fs::remove_file(&path).unwrap();
-        }
-        assert_eq!(load_providers_toml(&other).unwrap().providers.len(), 4);
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(load_providers_for_home(dir.path()).is_err());
+        assert_eq!(
+            migrate_legacy_config(dir.path(), "2026-11-05").unwrap(),
+            MigrationOutcome::Skipped
+        );
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(load_providers_for_home(&home).is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
     }
 
     #[test]

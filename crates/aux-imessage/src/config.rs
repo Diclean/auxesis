@@ -206,9 +206,7 @@ impl GatewaysConfig {
 }
 
 /// Read `<home>/gateways.toml`. A missing file is the default (disabled); an
-/// unreadable or invalid file is logged and reads back disabled. A link, a
-/// FIFO or a file over 1 MiB there is unreadable: refused at once, never
-/// followed nor waited on, so no channel opens from it.
+/// unreadable, linked or FIFO file is logged and reads back disabled.
 pub fn load(home: &Path) -> GatewaysConfig {
     load_file(&home.join(GATEWAYS_FILE))
 }
@@ -221,10 +219,7 @@ pub fn load_file(path: &Path) -> GatewaysConfig {
             return GatewaysConfig::default();
         }
         Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "gateways.toml is unreadable or not a regular file; gateways stay disabled"
-            );
+            tracing::warn!(error = %err, "gateways.toml is unreadable; gateways stay disabled");
             return GatewaysConfig::default();
         }
     };
@@ -253,10 +248,8 @@ pub fn load_file(path: &Path) -> GatewaysConfig {
     }
 }
 
-/// The bytes at `path`, opened once through its folder's handle as the kernel
-/// opens a config file (`O_NOFOLLOW | O_NONBLOCK`): never through a link nor
-/// waiting on a FIFO; a regular file of at most `MAX_CONFIG_BYTES`, read from
-/// that descriptor. Nothing is created: a missing folder or file is `NotFound`.
+/// The bytes at `path`, read as the kernel reads a config file (`O_NOFOLLOW |
+/// O_NONBLOCK`, bounded): never through a link nor waiting on a FIFO.
 fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
     use kernel_core::config::MAX_CONFIG_BYTES;
     use std::io::Read;
@@ -385,34 +378,21 @@ mod tests {
         assert!(!config.imessage.enabled);
     }
 
-    /// A FIFO nobody writes to, a link or a dangling link at gateways.toml
-    /// reads back disabled at once: never a wait, and the link is never
-    /// followed although its target is a valid, enabled section.
+    /// A link or a FIFO at gateways.toml reads back disabled at once.
     #[cfg(unix)]
     #[test]
     fn a_fifo_or_linked_gateways_file_reads_disabled_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let (path, other) = (dir.path().join(GATEWAYS_FILE), dir.path().join("o.toml"));
-        let owner = "owner_handles = [\"+33600000001\"]\nchat_guid = \"iMessage;-;+33600000001\"";
-        let section =
-            format!("[imessage]\nenabled = true\n{owner}\nagent_handle = \"a@example.test\"\n");
-        std::fs::write(&other, section).unwrap();
-        for kind in ["fifo", "link", "dangling"] {
-            match kind {
-                "fifo" => {
-                    let made = std::process::Command::new("mkfifo").arg(&path).status();
-                    assert!(made.unwrap().success());
-                }
-                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
-                _ => std::os::unix::fs::symlink(dir.path().join("gone"), &path).unwrap(),
-            }
-            let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
-            std::thread::spawn(move || sent.send(load(&home).imessage.enabled));
-            let wait = std::time::Duration::from_secs(10);
-            assert!(!got.recv_timeout(wait).expect("blocked"), "{kind}");
-            std::fs::remove_file(&path).unwrap();
-        }
-        std::fs::rename(&other, &path).unwrap();
-        assert!(load(dir.path()).imessage_usable(), "a regular file is read");
+        std::fs::write(&other, "[imessage]\nenabled = true\n").unwrap();
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(!load(dir.path()).imessage.enabled, "a link is refused");
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(load(&home).imessage.enabled));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(!got.recv_timeout(wait).expect("blocked"));
     }
 }

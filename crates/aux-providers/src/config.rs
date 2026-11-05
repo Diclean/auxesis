@@ -441,12 +441,7 @@ pub fn read_existing(path: &Path) -> std::io::Result<String> {
         return Err(std::io::ErrorKind::InvalidInput.into());
     };
     let dir = kernel_core::SandboxHome::open_existing(dir)?;
-    let file = dir
-        .open_read_existing(Path::new(name), MAX_CONFIG_BYTES)
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => err,
-            kind => std::io::Error::new(kind, format!("not read, never via a link or pipe: {err}")),
-        })?;
+    let file = dir.open_read_existing(Path::new(name), MAX_CONFIG_BYTES)?;
     let mut text = String::new();
     file.take(MAX_CONFIG_BYTES + 1).read_to_string(&mut text)?;
     if text.len() as u64 > MAX_CONFIG_BYTES {

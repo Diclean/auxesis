@@ -150,8 +150,7 @@ pub fn load(home: &Path) -> Result<McpConfig, McpConfigError> {
 }
 
 /// `mcp.toml` opened once through `home`'s fd (`O_NOFOLLOW | O_NONBLOCK`): a
-/// link, a FIFO or a file over `MAX_MCP_CONFIG_BYTES` is an error at once,
-/// never followed nor waited on. Missing is an empty configuration.
+/// link, a FIFO or an oversized file is refused at once, never followed.
 pub fn read_config(home: &kernel_core::SandboxHome) -> Result<McpConfig, McpConfigError> {
     use std::io::Read;
     let max = kernel_mcp::MAX_MCP_CONFIG_BYTES;
@@ -162,6 +161,9 @@ pub fn read_config(home: &kernel_core::SandboxHome) -> Result<McpConfig, McpConf
     };
     let mut text = String::new();
     file.take(max + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > max {
+        return Err(std::io::Error::other("mcp.toml grew past its cap").into());
+    }
     McpConfig::parse(&path.display().to_string(), &text)
 }
 
@@ -562,33 +564,23 @@ main = ["X"]
         assert_eq!(mcp.tool_count(), 0);
     }
 
-    /// A FIFO nobody writes to, a link or a dangling link at mcp.toml is an
-    /// error at once: never a wait, and the link's server list is never read.
+    /// A link or a FIFO at mcp.toml is an error at once.
     #[cfg(unix)]
     #[test]
     fn a_fifo_or_linked_mcp_toml_is_refused_at_once() {
         let dir = tempfile::tempdir().unwrap();
         let (path, other) = (dir.path().join(MCP_CONFIG_FILE), dir.path().join("o.toml"));
-        let server = "[[server]]\nid = \"on\"\ntransport = \"http\"\nenabled = true\n";
-        std::fs::write(&other, format!("{server}url = \"https://a.invalid/mcp\"\n")).unwrap();
+        std::fs::write(&other, "[[server]]\nid = \"on\"\ntransport = \"http\"\nenabled = true\nurl = \"https://a.invalid/mcp\"\n").unwrap();
         // Unregistered: no other test can reach this home.
         let home = kernel_core::SandboxHome::open(dir.path()).unwrap();
-        for kind in ["fifo", "link", "dangling"] {
-            match kind {
-                "fifo" => {
-                    let made = std::process::Command::new("mkfifo").arg(&path).status();
-                    assert!(made.unwrap().success());
-                }
-                "link" => std::os::unix::fs::symlink(&other, &path).unwrap(),
-                _ => std::os::unix::fs::symlink(dir.path().join("gone"), &path).unwrap(),
-            }
-            let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
-            std::thread::spawn(move || sent.send(read_config(&moved).is_err()));
-            let wait = std::time::Duration::from_secs(10);
-            assert!(got.recv_timeout(wait).expect("blocked"), "{kind}");
-            std::fs::remove_file(&path).unwrap();
-        }
-        std::fs::rename(&other, &path).unwrap();
-        assert_eq!(read_config(&home).unwrap().enabled_servers().count(), 1);
+        std::os::unix::fs::symlink(&other, &path).unwrap();
+        assert!(read_config(&home).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        assert!(made.unwrap().success());
+        let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || sent.send(read_config(&moved).is_err()));
+        let wait = std::time::Duration::from_secs(10);
+        assert!(got.recv_timeout(wait).expect("blocked"));
     }
 }

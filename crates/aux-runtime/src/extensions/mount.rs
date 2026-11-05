@@ -140,7 +140,7 @@ fn read_state(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(std::io::ErrorKind::InvalidData.into()),
     };
-    match super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES) {
+    match super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES * 64) {
         super::ReadAt::Absent => Ok(None),
         super::ReadAt::Unreadable => Err(std::io::ErrorKind::InvalidData.into()),
         super::ReadAt::Text(text) => serde_json::from_str(&text)

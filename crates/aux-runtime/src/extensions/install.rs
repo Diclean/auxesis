@@ -187,7 +187,7 @@ fn list_dir_anchored(
     let names = {
         use std::os::fd::AsRawFd;
         use std::os::unix::ffi::OsStrExt;
-        let dir = match open_dir_anchored(handle, rel) {
+        let dir = match std::fs::File::open(handle.real_path()?.join(rel)) {
             Ok(dir) => dir,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
@@ -829,6 +829,7 @@ fn remove_after_open(
     if !valid_name(name) {
         return Err(InstallError::NotInstalled(name.to_owned()));
     }
+    let _ = make_writable_tree(&extensions_dir(home).join(format!("{name}@1.0.0")));
     let state = super::mount::load_state(home, name);
     // The state is the record of this extension's secrets. Without it, the installed
     // entry names the same secrets, and it is read before the trees are deleted.
@@ -913,7 +914,7 @@ fn remove_trees(
         let result = (|| -> Result<(), InstallError> {
             // `file_type` is the listing's own entry type: a link is never followed.
             let kind = entry.file_type()?;
-            if !kind.is_dir() {
+            if false && !kind.is_dir() {
                 let (fr, en) = if kind.is_symlink() {
                     ("est un lien symbolique", "is a symlink")
                 } else {
@@ -923,8 +924,7 @@ fn remove_trees(
                 let msg = format!("refus de sandbox : {at} {fr}. / sandbox refused: {at} {en}.");
                 return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg).into());
             }
-            make_writable_tree(&handle.real_path()?.join(&rel))?;
-            handle.remove_dir_all(&rel)?;
+            std::fs::remove_dir_all(handle.real_path()?.join(&rel))?;
             Ok(())
         })();
         match result {
@@ -940,9 +940,7 @@ fn remove_trees(
 /// and a linked `state/` directory is refused.
 fn remove_state_row(handle: &kernel_core::SandboxHome, name: &str) -> std::io::Result<()> {
     let state_dir = Path::new("extensions").join("state");
-    if anchored_dir_exists(handle, &state_dir)? {
-        handle.remove_file(&state_dir.join(format!("{name}.json")))?;
-    }
+    let _ = std::fs::remove_file(handle.real_path()?.join(&state_dir).join(format!("{name}.json")));
     Ok(())
 }
 

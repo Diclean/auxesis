@@ -107,7 +107,7 @@ final-status-level = "slow"
 # Tests that assert wall-clock time run alone and first: under parallel load
 # they failed on the clock, not on behaviour (about 60 s serial).
 [[profile.ci.overrides]]
-filter = 'test(/linear|scales|_seconds|times_out|expired|grace|approval_timeout/) | binary(perf)'
+filter = 'test(/linear|scales|_seconds|times_out|expired|grace|approval_timeout/)'
 threads-required = "num-test-threads"
 priority = 100
 
@@ -120,9 +120,11 @@ resource-limits = { max-threads = 1 }
 filter = 'test(/fork_bomb|process_bomb|memory_bomb|_limit_stops_|memory_watchdog/)'
 test-group = "resource-limits"
 
-# The longest tests start next, so they do not form a tail at the end.
+# The longest tests (property tests, about 3-5 min each) start next, so they
+# do not form a tail at the end. nextest refuses a binary() name that matches
+# no test binary: keep this list to binaries in this workspace.
 [[profile.ci.overrides]]
-filter = 'binary(prefix_key_glue) | binary(crm_property) | binary(crm_promote_property) | binary(norm_glyph_union) | binary(k10_gate_config) | binary(entity_encoded) | binary(registry_thread_local_drop)'
+filter = 'binary(crm_property) | binary(crm_promote_property)'
 priority = 50
 TOML
         chmod 0500 "$nextest_bin"

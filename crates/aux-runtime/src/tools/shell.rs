@@ -1748,7 +1748,7 @@ impl Drop for TreeReaper {
             marker_file: self.marker_file.take(),
         };
         if tokio::runtime::Handle::try_current().is_err() {
-            rest.retry();
+            late_retry_logged(&mut rest);
         } else {
             late_retry(rest);
         }

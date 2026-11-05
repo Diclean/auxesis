@@ -475,7 +475,7 @@ fn create_master(home: &Path, replace: bool) -> Result<Key, StoreError> {
 fn derive(master: &Key, info: &[u8]) -> Key {
     let (mut prk, hkdf) = Hkdf::<Sha256>::extract(Some(HKDF_SALT), master.expose());
     // The pseudorandom key is the root of every derived key: wipe the copy here.
-    // The `Hkdf` value itself is not wipeable: hkdf 0.12 keeps its HMAC state (keyed
+    // The `Hkdf` value itself is not wipeable: hkdf 0.13 keeps its HMAC state (keyed
     // by the same PRK) in a private field, with no zeroizing accessor. It is dropped
     // when this function returns.
     prk.as_mut_slice().zeroize();

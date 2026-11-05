@@ -13,9 +13,9 @@ kernel-broker.workspace = true
 blake3 = "1"
 getrandom = "0.4"
 # One master.key, HKDF-SHA256-derived store and vault keys. `hkdf` is
-# the RustCrypto construction already in the lock file (0.12.4); `sha2` is its
-# hash (0.10.9, already used elsewhere in the workspace).
-hkdf = "0.12"
+# the RustCrypto construction and `sha2` its hash. They move together: hkdf
+# 0.13 takes the sha2 0.11 digest traits (its hmac 0.13 is the kernel's).
+hkdf = "0.13"
 sha2 = "0.11"
 libc = "0.2"
 rusqlite.workspace = true

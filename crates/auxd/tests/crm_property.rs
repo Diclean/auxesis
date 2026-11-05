@@ -265,92 +265,175 @@ fn a_name_outside_message_content_is_a_leak() {
     );
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(200))]
+/// The total case count, spread over [`SHARDS`] test functions so the test
+/// runner takes them in parallel: every shard draws its own random cases from
+/// the same generator, and all of them run the one property below.
+const CASES: u32 = 200;
+/// How many test functions share [`CASES`].
+const SHARDS: u32 = 4;
+// The shards add up to exactly `CASES`.
+const _: () = assert!(CASES.is_multiple_of(SHARDS));
 
-    #[test]
-    fn every_crm_writes_address_and_phone_are_tokenised_in_the_next_provider_call(
-        (a, a2, b, c) in scenario(),
-    ) {
-        // A private home: the turn is gated, so an address must become a token.
+/// A private home with its store already created: the master key minted and
+/// the schema migrated (about a second per open in a debug build). Built once
+/// per shard; each case gets a byte copy, so it still starts from a fresh,
+/// empty store of its own.
+fn template_home() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // A private home: the turn is gated, so an address must become a token.
+    std::fs::write(
+        kernel_core::config_path(&home),
+        "version = 1\n\n[privacy]\nmode = \"private\"\n",
+    )
+    .unwrap();
+    drop(aux_store::Store::open(&home.join("store.db")).unwrap());
+    dir
+}
+
+/// Copy `from` to `to` recursively, keeping each entry's permissions.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type().unwrap();
+        assert!(
+            !kind.is_symlink(),
+            "unexpected symlink in the template home"
+        );
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+    std::fs::set_permissions(to, std::fs::metadata(from).unwrap().permissions()).unwrap();
+}
+
+/// Run [`CASES`] / [`SHARDS`] cases of the property. A failure is shrunk and
+/// saved to `crm_property.proptest-regressions` like the macro form, and the
+/// saved seeds replay first in every shard.
+fn run_shard() {
+    let template = template_home();
+    let config = ProptestConfig {
+        source_file: Some(file!()),
+        ..ProptestConfig::with_cases(CASES / SHARDS)
+    };
+    let mut runner = proptest::test_runner::TestRunner::new(config);
+    let outcome = runner.run(&scenario(), |(a, a2, b, c)| {
+        // A fresh home per case, copied from the template before any write.
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(
-            kernel_core::config_path(&home),
-            "version = 1\n\n[privacy]\nmode = \"private\"\n",
-        )
-        .unwrap();
-
-        // The store stays open across the writes; the runner reads it fresh.
-        let store = aux_store::Store::open(&home.join("store.db")).unwrap();
-        let crm = Crm::new(&store);
-        let provider = Arc::new(FakeProvider::echo("fake"));
-        let runner = EngineTurnRunner::new(&home)
-            .with_provider(Arc::clone(&provider) as Arc<dyn ChatProvider>);
-        // The fixed prompt before any party exists: what a name may match
-        // without being a leak.
-        let baseline = run_request(&runner, &provider, "Bonjour.");
-        let turn = |message: &str| scanned(&run_request(&runner, &provider, message), &baseline);
-
-        // Create `a`, then a turn over its names and identifiers.
-        let a_party = crm.create(person(&a)).unwrap();
-        let body = turn(&message_with(&secrets(&a)));
-        prop_assert!(body.iter().any(|text| text.contains('⟦')), "not masked: {body:?}");
-        prop_assert!(
-            leaked(&body, &hidden(&a)).is_empty(),
-            "create leaked {:?}: {body:?}",
-            leaked(&body, &hidden(&a))
-        );
-
-        // Update `a`'s names (the same address and number), then a turn.
-        let updated = NewParty {
-            display_name: a2.0.clone(),
-            name_variants: a2.1.clone(),
-            ..person(&a)
-        };
-        crm.update(a_party.id, updated).unwrap();
-        let body = turn(&message_with(&secrets(&a2)));
-        prop_assert!(
-            leaked(&body, &hidden(&a2)).is_empty(),
-            "update leaked {:?}: {body:?}",
-            leaked(&body, &hidden(&a2))
-        );
-
-        // Create `b` and merge `a` into it: the target absorbs `a`'s names and
-        // identifiers, so both must be masked.
-        let b_party = crm.create(person(&b)).unwrap();
-        crm.merge(a_party.id, b_party.id).unwrap();
-        let mut merged = secrets(&a2);
-        merged.extend(secrets(&b));
-        let body = turn(&message_with(&merged));
-        let merged = [hidden(&a2), hidden(&b)].concat();
-        prop_assert!(
-            leaked(&body, &merged).is_empty(),
-            "merge leaked {:?}: {body:?}",
-            leaked(&body, &merged)
-        );
-
-        // Create `c` and archive it: its names leave the index. The store's
-        // `crm` source must no longer hold `c`'s address, while a turn over the
-        // live `b` is still masked.
-        let c_party = crm.create(person(&c)).unwrap();
-        crm.archive(c_party.id).unwrap();
-        let crm_emails: Vec<String> = store
-            .contacts()
-            .unwrap()
-            .into_iter()
-            .filter(|record| record.source == CRM_CONTACT_SOURCE)
-            .flat_map(|record| record.emails)
-            .collect();
-        prop_assert!(
-            !crm_emails.contains(&c.2),
-            "an archived party is still in the index: {crm_emails:?}"
-        );
-        let body = turn(&message_with(&secrets(&b)));
-        prop_assert!(
-            leaked(&body, &hidden(&b)).is_empty(),
-            "archive broke the live index: {body:?}"
-        );
+        copy_tree(&template.path().join("home"), &home);
+        crm_writes_are_tokenised(&home, &a, &a2, &b, &c)
+    });
+    if let Err(failure) = outcome {
+        panic!("{failure}\n{runner}");
     }
+}
+
+#[test]
+fn every_crm_writes_address_and_phone_are_tokenised_in_the_next_provider_call_1() {
+    run_shard();
+}
+
+#[test]
+fn every_crm_writes_address_and_phone_are_tokenised_in_the_next_provider_call_2() {
+    run_shard();
+}
+
+#[test]
+fn every_crm_writes_address_and_phone_are_tokenised_in_the_next_provider_call_3() {
+    run_shard();
+}
+
+#[test]
+fn every_crm_writes_address_and_phone_are_tokenised_in_the_next_provider_call_4() {
+    run_shard();
+}
+
+/// The property for one case over the private `home`.
+fn crm_writes_are_tokenised(
+    home: &std::path::Path,
+    a: &PartyCase,
+    a2: &PartyCase,
+    b: &PartyCase,
+    c: &PartyCase,
+) -> Result<(), TestCaseError> {
+    // The store stays open across the writes; the runner reads it fresh.
+    let store = aux_store::Store::open(&home.join("store.db")).unwrap();
+    let crm = Crm::new(&store);
+    let provider = Arc::new(FakeProvider::echo("fake"));
+    let runner =
+        EngineTurnRunner::new(home).with_provider(Arc::clone(&provider) as Arc<dyn ChatProvider>);
+    // The fixed prompt before any party exists: what a name may match
+    // without being a leak.
+    let baseline = run_request(&runner, &provider, "Bonjour.");
+    let turn = |message: &str| scanned(&run_request(&runner, &provider, message), &baseline);
+
+    // Create `a`, then a turn over its names and identifiers.
+    let a_party = crm.create(person(a)).unwrap();
+    let body = turn(&message_with(&secrets(a)));
+    prop_assert!(
+        body.iter().any(|text| text.contains('⟦')),
+        "not masked: {body:?}"
+    );
+    prop_assert!(
+        leaked(&body, &hidden(a)).is_empty(),
+        "create leaked {:?}: {body:?}",
+        leaked(&body, &hidden(a))
+    );
+
+    // Update `a`'s names (the same address and number), then a turn.
+    let updated = NewParty {
+        display_name: a2.0.clone(),
+        name_variants: a2.1.clone(),
+        ..person(a)
+    };
+    crm.update(a_party.id, updated).unwrap();
+    let body = turn(&message_with(&secrets(a2)));
+    prop_assert!(
+        leaked(&body, &hidden(a2)).is_empty(),
+        "update leaked {:?}: {body:?}",
+        leaked(&body, &hidden(a2))
+    );
+
+    // Create `b` and merge `a` into it: the target absorbs `a`'s names and
+    // identifiers, so both must be masked.
+    let b_party = crm.create(person(b)).unwrap();
+    crm.merge(a_party.id, b_party.id).unwrap();
+    let mut merged = secrets(a2);
+    merged.extend(secrets(b));
+    let body = turn(&message_with(&merged));
+    let merged = [hidden(a2), hidden(b)].concat();
+    prop_assert!(
+        leaked(&body, &merged).is_empty(),
+        "merge leaked {:?}: {body:?}",
+        leaked(&body, &merged)
+    );
+
+    // Create `c` and archive it: its names leave the index. The store's
+    // `crm` source must no longer hold `c`'s address, while a turn over the
+    // live `b` is still masked.
+    let c_party = crm.create(person(c)).unwrap();
+    crm.archive(c_party.id).unwrap();
+    let crm_emails: Vec<String> = store
+        .contacts()
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.source == CRM_CONTACT_SOURCE)
+        .flat_map(|record| record.emails)
+        .collect();
+    prop_assert!(
+        !crm_emails.contains(&c.2),
+        "an archived party is still in the index: {crm_emails:?}"
+    );
+    let body = turn(&message_with(&secrets(b)));
+    prop_assert!(
+        leaked(&body, &hidden(b)).is_empty(),
+        "archive broke the live index: {body:?}"
+    );
+    Ok(())
 }

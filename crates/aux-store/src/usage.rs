@@ -742,13 +742,15 @@ impl Store {
         Ok(())
     }
 
-    /// Raise held reservation `id` to `actual` where that is more, so the cap
-    /// counts, and a later settle of the row records, the most its call is
-    /// known to have spent, even once this process is gone.
+    /// Raise held reservation `id` to `actual` where that is more, so the caps
+    /// count (money as well as tokens), and a later settle of the row records,
+    /// the most its call is known to have spent, even once this process is
+    /// gone. A lower amount never lowers what the row holds.
     pub fn raise_held_reservation(&self, id: i64, actual: &UsageActual) -> Result<(), StoreError> {
         self.conn.execute(
             "UPDATE usage_reservations SET tokens_in = MAX(tokens_in, ?2),
-                 tokens_out = MAX(tokens_out, ?3), unsettled = json_set(unsettled, '$.usd',
+                 tokens_out = MAX(tokens_out, ?3), usd_cents = MAX(usd_cents, ?4),
+                 unsettled = json_set(unsettled, '$.usd',
                      MAX(COALESCE(json_extract(unsettled, '$.usd'), 0), ?4))
              WHERE id = ?1 AND unsettled IS NOT NULL",
             rusqlite::params![id, actual.tokens_in, actual.tokens_out, actual.usd_cents],
@@ -2211,6 +2213,51 @@ mod tests {
             (totals.tokens_in, totals.tokens_out, totals.usd_cents),
             (90, 7, 3)
         );
+    }
+
+    #[test]
+    fn a_raised_held_reservation_holds_its_raised_money_until_it_settles() {
+        let store = Store::open_in_memory().unwrap();
+        let day = store.local_day().unwrap();
+        let mut caps = caps(None, None);
+        caps.usd_cents = Some(100);
+        let mut money = estimate(1, 1);
+        money.usd_cents = 30;
+        let reserved = store.try_reserve("main", &day, &caps, &money);
+        let ReserveOutcome::Reserved(held) = reserved.unwrap() else {
+            panic!("admitted");
+        };
+        let denied = || match store.try_reserve("main", &day, &caps, &money).unwrap() {
+            ReserveOutcome::Denied(denial) => denial.reason,
+            other => panic!("30 more cents must not fit, got {other:?}"),
+        };
+        let money_cap = |spent, reserved| DenialReason::CapExceeded {
+            kind: UsageKind::UsdCents,
+            spent,
+            reserved,
+            limit: 100,
+        };
+        // The call is known to have spent 80 cents, more than the 30 it
+        // reserved: before it settles the cap holds the 80, so 30 more no
+        // longer fit (beside the 30 they would).
+        let known = UsageActual {
+            tokens_in: 1,
+            tokens_out: 1,
+            usd_cents: 80,
+            ..UsageActual::default()
+        };
+        store.raise_held_reservation(held.id, &known).unwrap();
+        assert_eq!(denied(), money_cap(0, 80));
+        // A lower amount never lowers what the row holds.
+        let lower = UsageActual {
+            usd_cents: 10,
+            ..known
+        };
+        store.raise_held_reservation(held.id, &lower).unwrap();
+        assert_eq!(denied(), money_cap(0, 80));
+        // The settle moves the 80 from held to spent, once.
+        store.settle_reservation(&held, &known).unwrap();
+        assert_eq!(denied(), money_cap(80, 0));
     }
 
     #[test]

@@ -1172,7 +1172,9 @@ mod tests {
             libc::proc_pidinfo(
                 pid,
                 libc::PROC_PIDTBSDINFO,
-                0,
+                // Non-zero `arg`: with 0, a zombie fails with ESRCH, so this
+                // could never see one.
+                1,
                 info.as_mut_ptr().cast(),
                 size,
             )

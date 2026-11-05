@@ -223,31 +223,45 @@ fn gmail_draft_approval_check(arguments: &serde_json::Value) -> Result<(), Appro
     Ok(())
 }
 
-/// The configured mail accounts, as `(id, address)`.
+/// The configured mail accounts, as `(id, address)`, for the card of `tool`.
 ///
 /// The card must name the address a mail leaves from, so the accounts come
-/// from the same `[connectors.mail]` table the mail tool sends with.
-pub(crate) fn mail_accounts(home: &Path) -> approval_preview::Accounts {
-    let Ok(text) = std::fs::read_to_string(kernel_core::config_path(home)) else {
-        return Vec::new();
+/// from the same `[connectors.mail]` table the mail tool sends with. No
+/// config.toml, or no table, is no account: the card still asks, its From
+/// unknown. A config.toml that is there but cannot be read safely or parsed
+/// (a FIFO, a symlink, a broken table) refuses the card of a tool that
+/// carries mail, never shows it without its sender. Another card names no
+/// sender and still asks.
+pub(crate) fn mail_accounts(home: &Path, tool: &str) -> Result<approval_preview::Accounts, String> {
+    match configured_accounts(home) {
+        None if approval_preview::carries_mail(tool) => Err(
+            "config.toml cannot be read, so the card cannot name the sending account: refusing"
+                .to_string(),
+        ),
+        read => Ok(read.unwrap_or_default()),
+    }
+}
+
+/// The `[connectors.mail]` accounts, read once through the home's verified
+/// directory fd; `None` when config.toml is there but cannot be read or parsed.
+fn configured_accounts(home: &Path) -> Option<approval_preview::Accounts> {
+    let read = kernel_core::SandboxHome::open_existing(home)
+        .map_err(kernel_core::ConfigError::from)
+        .and_then(|home| aux_engine::config::read_config_text(&home));
+    let text = match read {
+        Ok(text) => text,
+        Err(kernel_core::ConfigError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Some(Vec::new())
+        }
+        Err(_) => return None,
     };
-    let Ok(value) = toml::from_str::<toml::Value>(&text) else {
-        return Vec::new();
-    };
+    let value = toml::from_str::<toml::Value>(&text).ok()?;
     let Some(mail) = value.get("connectors").and_then(|c| c.get("mail")) else {
-        return Vec::new();
+        return Some(Vec::new());
     };
-    let Ok(text) = toml::to_string(mail) else {
-        return Vec::new();
-    };
-    let Ok(config) = aux_mail::MailConfig::from_toml(&text) else {
-        return Vec::new();
-    };
-    config
-        .accounts
-        .iter()
-        .map(|account| (account.id.clone(), account.email.clone()))
-        .collect()
+    let config = aux_mail::MailConfig::from_toml(&toml::to_string(mail).ok()?).ok()?;
+    let accounts = config.accounts.iter();
+    Some(accounts.map(|a| (a.id.clone(), a.email.clone())).collect())
 }
 
 /// One pending approval: everything the app's `Approval` JSON needs, plus the
@@ -1021,7 +1035,7 @@ impl Approver for ApiApprover {
         // The card the owner reads: a short title, the fields of the action
         // and the text it carries, built here, in the daemon, once. A case
         // that cannot be shown whole is refused, never shortened.
-        let accounts = mail_accounts(&self.home);
+        let accounts = mail_accounts(&self.home, &request.tool).map_err(ApproverError)?;
         let card = approval_preview::build_checked(
             &request.tool,
             &request.arguments,
@@ -1833,6 +1847,73 @@ mod tests {
         };
         assert!(approver.decide(&request).await.is_err());
         assert!(registry.list_pending().is_empty());
+    }
+
+    /// A config.toml that is there but cannot be read safely (a FIFO nobody
+    /// writes to, a symlink) refuses a send's card at once: the card could not
+    /// name the account the mail leaves from. A card that names no sender
+    /// still asks, and the other `[connectors.mail]` readers mount nothing,
+    /// at once too.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreadable_config_refuses_a_send_card_at_once() {
+        let registry = ApprovalRegistry::new(Duration::from_millis(500));
+        let (events, _keep) = broadcast::channel(16);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().to_path_buf();
+        let (config, mailed) = (kernel_core::config_path(&home), home.join("mail.toml"));
+        mail_home(&home);
+        std::fs::rename(&config, &mailed).unwrap();
+        let approver = Arc::new(ApiApprover::new(registry.clone(), home.clone(), events, 1));
+        let send = ApprovalRequest {
+            agent: "clients".to_string(),
+            tool: "mail_send".to_string(),
+            risk: Risk::High,
+            arguments: serde_json::json!({ "to": ["a@example.test"], "subject": "Hi", "body": "Hello" }),
+            tainted: false,
+            taint_source: None,
+            web_approval: None,
+            unsandboxed: false,
+            networked: false,
+        };
+        for kind in ["fifo", "symlink"] {
+            if kind == "fifo" {
+                let made = std::process::Command::new("mkfifo").arg(&config).status();
+                assert!(made.unwrap().success());
+            } else {
+                std::os::unix::fs::symlink(&mailed, &config).unwrap();
+            }
+            let (approver, send) = (Arc::clone(&approver), send.clone());
+            let decided = tokio::spawn(async move { approver.decide(&send).await });
+            let decided = tokio::time::timeout(Duration::from_secs(10), decided).await;
+            let err = decided.expect("the card blocked").unwrap().unwrap_err();
+            assert!(err.0.contains("cannot be read"), "{kind}: {err:?}");
+            assert!(registry.list_pending().is_empty(), "{kind}: no card");
+            let (moved, (sent, got)) = (home.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || {
+                let none = crate::crm::mail_config(&moved).is_none()
+                    && crate::local_brief::mail_config(&moved).is_none()
+                    && super::super::turn::load_mail_config(&moved).is_none();
+                sent.send((none, mail_accounts(&moved, "shell")))
+            });
+            let (none, shell) = got.recv_timeout(Duration::from_secs(10)).expect("blocked");
+            assert!(none, "{kind}: no mail config");
+            assert_eq!(shell, Ok(Vec::new()), "{kind}: no sender to name, it asks");
+            std::fs::remove_file(&config).unwrap();
+        }
+        // No config, or no table, is no account: the card asks, From unknown.
+        assert_eq!(mail_accounts(&home, "mail_send"), Ok(Vec::new()));
+        for broken in [
+            "not = [toml",
+            "[[connectors.mail.accounts]]\nid = \"Bad\"\n",
+        ] {
+            std::fs::write(&config, broken).unwrap();
+            assert!(mail_accounts(&home, "skill__x").is_err(), "{broken}");
+        }
+        std::fs::rename(&mailed, &config).unwrap();
+        let work = ("work".to_string(), "owner@example.test".to_string());
+        assert_eq!(mail_accounts(&home, "mail_send"), Ok(vec![work]));
+        assert!(crate::crm::mail_config(&home).is_some());
     }
 
     #[test]

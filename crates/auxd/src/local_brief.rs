@@ -62,11 +62,13 @@ impl LocalBriefSource {
     }
 }
 
-/// The configured `[connectors.mail]` accounts, or `None` when there is none
+/// The configured `[connectors.mail]` accounts, or `None` when there is none,
+/// the config cannot be read safely (a FIFO, a symlink: at once, never a wait)
 /// or the table does not parse. The loopback check and the dial share this one
 /// parse, so they cannot disagree about the host.
-fn mail_config(home: &Path) -> Option<aux_mail::MailConfig> {
-    let text = std::fs::read_to_string(kernel_core::config_path(home)).ok()?;
+pub(crate) fn mail_config(home: &Path) -> Option<aux_mail::MailConfig> {
+    let home = kernel_core::SandboxHome::open_existing(home).ok()?;
+    let text = aux_engine::config::read_config_text(&home).ok()?;
     let value: toml::Value = toml::from_str(&text).ok()?;
     let mail = toml::to_string(value.get("connectors")?.get("mail")?).ok()?;
     let config = aux_mail::MailConfig::from_toml(&mail).ok()?;

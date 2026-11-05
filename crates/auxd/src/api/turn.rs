@@ -2868,10 +2868,11 @@ fn mail_mounted(
 ///
 /// The kernel `Config` does not model the connector table, so the text is
 /// parsed once here and handed to the mail crate's strict parser. A config
-/// that cannot be read or parsed yields `None`, so mail tools simply do not
-/// mount.
-fn load_mail_config(home: &Path) -> Option<aux_mail::MailConfig> {
-    let text = std::fs::read_to_string(config_path(home)).ok()?;
+/// that cannot be read safely (a FIFO, a symlink: at once, never a wait) or
+/// parsed yields `None`, so mail tools simply do not mount.
+pub(super) fn load_mail_config(home: &Path) -> Option<aux_mail::MailConfig> {
+    let home = kernel_core::SandboxHome::open_existing(home).ok()?;
+    let text = aux_engine::config::read_config_text(&home).ok()?;
     let value: toml::Value = toml::from_str(&text).ok()?;
     let mail = value.get("connectors")?.get("mail")?;
     let text = toml::to_string(mail).ok()?;

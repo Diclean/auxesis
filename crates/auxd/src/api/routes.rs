@@ -1857,16 +1857,17 @@ async fn resolve_approval(
                     (pending.tool, original)
                 })
                 .unwrap_or_default();
-            let accounts = super::approval::mail_accounts(&state.home);
+            let accounts = super::approval::mail_accounts(&state.home, &tool);
             let home = state.home.clone();
             let shown = super::approval::approval_preview::build_edit_checked(
                 &tool,
                 &original,
                 &edited,
-                &accounts,
+                accounts.as_deref().unwrap_or_default(),
                 &|text| error::scrub_preview(&home, text, usize::MAX),
             );
-            if let Err(reason) = shown {
+            // An unreadable config refuses a mail edit, as it refuses the card.
+            if let Err(reason) = accounts.and(shown) {
                 return error::error_response(
                     StatusCode::CONFLICT,
                     "edited_card_unshowable",
@@ -2548,9 +2549,9 @@ async fn settings_update(State(state): State<Arc<ApiState>>, body: Bytes) -> Res
         kernel_core::with_config_lock(&home, || {
             crate::api::load_config_verified(&home).map_err(|err| err.to_string())?;
             let handle = kernel_core::SandboxHome::open(&home).map_err(|err| err.to_string())?;
-            let real = handle.real_path().map_err(|err| err.to_string())?;
-            let path = real.join("config.toml");
-            let original = std::fs::read_to_string(&path).map_err(|err| err.to_string())?;
+            // Read through the handle that writes: never a symlink nor a FIFO.
+            let original =
+                aux_engine::config::read_config_text(&handle).map_err(|err| err.to_string())?;
             let mut value: toml::Value = toml::from_str(&original).map_err(|err| {
                 kernel_core::redact_toml_error(&err, "config.toml", &original)
                     .message()

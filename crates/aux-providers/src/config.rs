@@ -396,13 +396,38 @@ pub fn parse_providers_with_env(
     Ok(providers)
 }
 
-/// Load and validate `[[providers]]` entries from a TOML config file.
+/// Load and validate `[[providers]]` entries from a TOML config file, read by
+/// `read_existing`: a FIFO or a symlink there is an error at once.
 pub fn load_providers(path: &Path) -> Result<Vec<ProviderConfig>, ConfigError> {
-    let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Io {
+    let text = read_existing(path).map_err(|source| ConfigError::Io {
         path: path.display().to_string(),
         source,
     })?;
     parse_providers(&text)
+}
+
+/// The text of the config file at `path`, opened once as the app's config
+/// loader opens it: through its folder's verified handle (the kernel's
+/// `O_NOFOLLOW | O_NONBLOCK` open), so never through a symlink nor waiting on
+/// a FIFO; a regular file of at most `MAX_CONFIG_BYTES`, read from that
+/// descriptor. Nothing is created: a missing folder or file is `NotFound`.
+/// (This crate sits below `aux-engine`, whose `read_config_text` adds an
+/// owner check.)
+pub(crate) fn read_existing(path: &Path) -> std::io::Result<String> {
+    use kernel_core::config::MAX_CONFIG_BYTES;
+    use std::io::Read;
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    };
+    let dir = kernel_core::SandboxHome::open_existing(dir)?;
+    let file = dir.open_read_existing(Path::new(name), MAX_CONFIG_BYTES)?;
+    let mut text = String::new();
+    file.take(MAX_CONFIG_BYTES + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_CONFIG_BYTES {
+        let over = "the config file is over the size limit";
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, over));
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -928,6 +953,40 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = load_providers(&dir.path().join("missing.toml")).unwrap_err();
         assert!(matches!(err, ConfigError::Io { .. }), "got {err:?}");
+    }
+
+    /// A FIFO nobody writes to or a symlink at config.toml is an error at
+    /// once, never a wait, for the providers load and the legacy migration.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_or_symlinked_config_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, other) = (dir.path().join("config.toml"), dir.path().join("o.toml"));
+        std::fs::write(&other, minimal_toml("openai-compat")).unwrap();
+        for kind in ["fifo", "symlink"] {
+            if kind == "fifo" {
+                let made = std::process::Command::new("mkfifo").arg(&path).status();
+                assert!(made.unwrap().success());
+            } else {
+                std::os::unix::fs::symlink(&other, &path).unwrap();
+            }
+            let (home, (sent, got)) = (dir.path().to_path_buf(), std::sync::mpsc::channel());
+            std::thread::spawn(move || {
+                let loaded = load_providers(&home.join("config.toml")).map(drop);
+                sent.send((loaded, crate::migrate_legacy_config(&home, "2026-11-05")))
+                    .ok()
+            });
+            let wait = std::time::Duration::from_secs(10);
+            let (loaded, migrated) = got.recv_timeout(wait).expect("blocked");
+            assert!(matches!(loaded, Err(ConfigError::Io { .. })), "{kind}");
+            assert!(migrated.is_err(), "{kind}");
+            std::fs::remove_file(&path).unwrap();
+        }
+        assert!(
+            !dir.path().join("providers.toml").exists(),
+            "nothing migrated"
+        );
+        assert_eq!(load_providers(&other).unwrap().len(), 1);
     }
 
     #[test]

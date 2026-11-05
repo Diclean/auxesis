@@ -642,7 +642,7 @@ pub fn migrate_legacy_config(home: &Path, today: &str) -> Result<MigrationOutcom
         return Ok(MigrationOutcome::Skipped);
     }
     let config_path = home.join("config.toml");
-    let text = match std::fs::read_to_string(&config_path) {
+    let text = match crate::config::read_existing(&config_path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Ok(MigrationOutcome::Skipped)

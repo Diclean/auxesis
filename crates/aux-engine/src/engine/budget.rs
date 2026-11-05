@@ -163,9 +163,29 @@ fn catalog_prices() -> &'static PriceTable {
     })
 }
 
-/// The price of `model`. A price the owner set in `[prices]` wins; otherwise
-/// the higher of the built-in default and the catalog list price, so a stale
-/// built-in can never undercount the money cap. `None` means unpriced.
+/// True when the owner wrote `model`'s entry in `[prices.models]` themselves.
+///
+/// The parsed table holds exactly the entries of `config.toml` when the file
+/// has a `[prices.models]` section, and the built-in table when it has none.
+/// A new `config.toml` is written with every built-in entry, so a table that
+/// still holds every built-in model id may be that generated copy: there an
+/// entry equal to its built-in value could be the generator's and is not
+/// treated as explicit. Any other entry in the table is the owner's.
+fn owner_set(prices: &PriceTable, built_in: &PriceTable, model: &str) -> bool {
+    let Some(configured) = prices.price(model) else {
+        return false;
+    };
+    let generated_shape = built_in
+        .models
+        .keys()
+        .all(|id| prices.models.contains_key(id));
+    !generated_shape || built_in.price(model) != Some(configured)
+}
+
+/// The price of `model`. A price the owner set in `[prices]` wins, even when
+/// it equals the built-in default; otherwise the higher of the built-in
+/// default and the catalog list price, so a stale built-in can never
+/// undercount the money cap. `None` means unpriced.
 fn model_price(
     prices: &PriceTable,
     model: Option<&str>,
@@ -173,12 +193,9 @@ fn model_price(
     static BUILT_IN: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
     let model = model?;
     let configured = prices.price(model).copied();
-    let built_in = BUILT_IN
-        .get_or_init(PriceTable::default)
-        .price(model)
-        .copied();
+    let explicit = owner_set(prices, BUILT_IN.get_or_init(PriceTable::default), model);
     match (configured, catalog_prices().price(model).copied()) {
-        (Some(owner), _) if configured != built_in => Some(owner),
+        (Some(owner), _) if explicit => Some(owner),
         (Some(a), Some(b)) => Some(kernel_core::budget::ModelPrice {
             input_cents_per_million: a.input_cents_per_million.max(b.input_cents_per_million),
             output_cents_per_million: a.output_cents_per_million.max(b.output_cents_per_million),
@@ -1686,6 +1703,45 @@ mod tests {
         };
         owner.models.insert("deepseek-flash".to_string(), set);
         assert_eq!(flash(&owner), set, "an explicit [prices] entry wins");
+    }
+
+    #[test]
+    fn an_owner_price_equal_to_the_built_in_wins_over_a_higher_catalog_price() {
+        let model = "deepseek-flash";
+        let built_in = *PriceTable::default().price(model).unwrap();
+        let catalog = *catalog_prices().price(model).unwrap();
+        assert!(
+            catalog.input_cents_per_million > built_in.input_cents_per_million
+                && catalog.output_cents_per_million > built_in.output_cents_per_million,
+            "the catalog must list a higher price for this test: {catalog:?} vs {built_in:?}"
+        );
+        let text = format!(
+            "[prices.models.{model}]\ninput_cents_per_million = {}\noutput_cents_per_million = {}\n",
+            built_in.input_cents_per_million, built_in.output_cents_per_million
+        );
+        let config: kernel_core::Config = toml::from_str(&text).unwrap();
+        assert_eq!(
+            model_price(&config.prices, Some(model)),
+            Some(built_in),
+            "the owner's explicit entry wins even when it equals the built-in"
+        );
+    }
+
+    #[test]
+    fn a_generated_config_keeps_the_catalog_price_over_stale_built_ins() {
+        // A new config.toml carries every built-in entry; reading it back must
+        // not turn those copies into owner prices below the catalog.
+        let text = toml::to_string_pretty(&kernel_core::Config::default()).unwrap();
+        let config: kernel_core::Config = toml::from_str(&text).unwrap();
+        for model in PriceTable::default().models.keys() {
+            assert_eq!(
+                model_price(&config.prices, Some(model)),
+                model_price(&PriceTable::default(), Some(model)),
+                "{model}"
+            );
+        }
+        let flash = model_price(&config.prices, Some("deepseek-flash")).unwrap();
+        assert!(flash.input_cents_per_million >= 30, "{flash:?}");
     }
 
     #[tokio::test]

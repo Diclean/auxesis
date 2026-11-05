@@ -52,6 +52,16 @@ output = 8192
 input_usd_mtok = 0.3
 output_usd_mtok = 1.2
 
+# Price: https://platform.minimax.io/docs/pricing/overview, read 2026-11-05 (MiniMax-M3.1-Flash standard input / output).
+[[model]]
+provider = "minimax"
+id = "minimax-m3.1-flash"
+tools = true
+structured_output = false
+context = 1000000
+input_usd_mtok = 0.15
+output_usd_mtok = 0.6
+
 [[model]]
 provider = "ollama-cloud"
 id = "deepseek-v3.1:671b-cloud"

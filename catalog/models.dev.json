@@ -39,6 +39,14 @@
         }
       }
     },
+    "minimax": {
+      "models": {
+        "minimax-m3.1-flash": {
+          "tool_call": true,
+          "limit": { "context": 1000000 }
+        }
+      }
+    },
     "ollama-cloud": {
       "models": {
         "deepseek-v3.1:671b-cloud": {

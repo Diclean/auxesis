@@ -37,6 +37,12 @@ PRICE_OVERRIDES = {
         "https://api-docs.deepseek.com/quick_start/pricing, read 2026-11-04 "
         "(peak hours, input cache miss / output)",
     ),
+    ("minimax", "minimax-m3.1-flash"): (
+        0.15,
+        0.60,
+        "https://platform.minimax.io/docs/pricing/overview, read 2026-11-05 "
+        "(MiniMax-M3.1-Flash standard input / output)",
+    ),
 }
 
 ROOT = Path(__file__).resolve().parent.parent

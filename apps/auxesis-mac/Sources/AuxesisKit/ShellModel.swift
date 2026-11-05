@@ -639,12 +639,22 @@ public final class ShellModel: ObservableObject {
     }
 
     /// The approval selected in Waiting for you, if it is still actionable.
+    /// A sheet (Settings, Add an Agent, Keyboard Shortcuts) covers the window.
+    public var sheetPresented: Bool {
+        settingsTab != nil || addingAgent != nil || shortcutHelpOpen
+    }
+
     public var selectedWaitingApproval: Approval? {
         // ⌘Return sends only what is on screen: the Waiting for you page shows
         // each pending body whole; from any other page the focused item is
         // unseen, so the shortcut does nothing.
+        // A conversation or a sheet opened from the Waiting page covers it
+        // while the route stays .waiting: the card is then unseen, so no menu
+        // action (Send, Edit, Not now) may act on it.
         guard !stopped,
               route == .waiting,
+              !conversationPresented,
+              !sheetPresented,
               let id = store.focusedApprovalId,
               let approval = store.approvals.first(where: { $0.id == id }),
               approval.state.isPending,

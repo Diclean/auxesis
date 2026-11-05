@@ -11,7 +11,7 @@ aes-gcm = "0.10"
 kernel-core.workspace = true
 kernel-broker.workspace = true
 blake3 = "1"
-getrandom = "0.3"
+getrandom = "0.4"
 # One master.key, HKDF-SHA256-derived store and vault keys. `hkdf` is
 # the RustCrypto construction already in the lock file (0.12.4); `sha2` is its
 # hash (0.10.9, already used elsewhere in the workspace).

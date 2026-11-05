@@ -5,15 +5,19 @@ import Foundation
 /// app's one copy table; an agent item carries the name the sidebar shows.
 public struct GoMenuItem: Equatable, Identifiable {
     public let route: ShellModel.Route
-    public let shortcut: String?
+    /// The one table row behind the item's chord, if it has one.
+    public let binding: MenuShortcutBinding?
     /// The agent's shown name (`display_name`, else its brand name).
     public let name: String?
 
-    public init(route: ShellModel.Route, shortcut: String? = nil, name: String? = nil) {
+    public init(route: ShellModel.Route, binding: MenuShortcutBinding? = nil, name: String? = nil) {
         self.route = route
-        self.shortcut = shortcut
+        self.binding = binding
         self.name = name
     }
+
+    /// The chord as the menu bar and the help sheet print it, e.g. "⌘1".
+    public var shortcut: String? { binding?.display }
 
     public var id: String { GoMenu.identifier(for: route) }
 }
@@ -51,7 +55,7 @@ public enum GoMenu {
     public static func agentItems(agents: [Agent]) -> [GoMenuItem] {
         let members = loading(agents: agents) ? [TeamMember.main] : TeamMember.roster(agents)
         return members.enumerated().map { index, member in
-            GoMenuItem(route: .agent(member.id), shortcut: index < 9 ? "⌘\(index + 1)" : nil, name: member.name)
+            GoMenuItem(route: .agent(member.id), binding: MenuShortcutTable.agent(index + 1), name: member.name)
         }
     }
 
@@ -124,35 +128,205 @@ public enum GoMenu {
     }
 }
 
+/// Which modifier keys a menu binding holds, printed in macOS's order.
+public struct MenuShortcutModifiers: OptionSet, Hashable {
+    public let rawValue: UInt8
+
+    public init(rawValue: UInt8) { self.rawValue = rawValue }
+
+    public static let control = MenuShortcutModifiers(rawValue: 1 << 0)
+    public static let option = MenuShortcutModifiers(rawValue: 1 << 1)
+    public static let shift = MenuShortcutModifiers(rawValue: 1 << 2)
+    public static let command = MenuShortcutModifiers(rawValue: 1 << 3)
+
+    /// "⌃⌥⇧⌘": the order the menu bar prints the symbols in.
+    public var symbols: String {
+        (contains(.control) ? "⌃" : "")
+            + (contains(.option) ? "⌥" : "")
+            + (contains(.shift) ? "⇧" : "")
+            + (contains(.command) ? "⌘" : "")
+    }
+}
+
+/// Every action the menu bar can bind. The raw value is the stable action id
+/// the app and the tests use; the declaration order is the menu order.
+public enum MenuAction: String, CaseIterable {
+    case newConversation = "new-conversation"
+    case settings
+    case quit
+    case goAgent1 = "go-agent-1"
+    case goAgent2 = "go-agent-2"
+    case goAgent3 = "go-agent-3"
+    case goAgent4 = "go-agent-4"
+    case goAgent5 = "go-agent-5"
+    case goAgent6 = "go-agent-6"
+    case goAgent7 = "go-agent-7"
+    case goAgent8 = "go-agent-8"
+    case goAgent9 = "go-agent-9"
+    case toggleSidebar = "toggle-sidebar"
+    case askAux = "ask-aux"
+    case sendProposal = "send-proposal"
+    case notNow = "not-now"
+    case togglePanel = "toggle-panel"
+    case back
+    case stopAll = "stop-all"
+    case find
+
+    /// ⌘1…⌘9, in order.
+    public static let goAgents: [MenuAction] = [
+        .goAgent1, .goAgent2, .goAgent3, .goAgent4, .goAgent5,
+        .goAgent6, .goAgent7, .goAgent8, .goAgent9,
+    ]
+
+    /// 1…9 for an agent digit, `nil` for every other action.
+    public var agentSlot: Int? {
+        Self.goAgents.firstIndex(of: self).map { $0 + 1 }
+    }
+}
+
+/// One row of the menu-bar shortcut table: an action id, its key and its
+/// modifiers. This is the only place the app's menu chords are written down.
+public struct MenuShortcutBinding: Equatable, Hashable {
+    public let action: MenuAction
+    public let key: Character
+    public let modifiers: MenuShortcutModifiers
+
+    public init(action: MenuAction, key: Character, modifiers: MenuShortcutModifiers) {
+        self.action = action
+        self.key = key
+        self.modifiers = modifiers
+    }
+
+    /// "⌘N", "⌃⌘S", "⌘↩": what the menu bar and the help sheet show.
+    public var display: String {
+        modifiers.symbols + (key == "\r" ? "↩" : String(key).uppercased())
+    }
+}
+
+/// The one list of the menu bar's chords. `TeamCommands` binds these rows and
+/// `MenuShortcuts.menu` prints them, so the help sheet cannot drift from the
+/// real menu. Agent digits are listed once here; `GoMenu` fills them with the
+/// agents that exist.
+public enum MenuShortcutTable {
+    public static func binding(for action: MenuAction) -> MenuShortcutBinding {
+        switch action {
+        case .newConversation:
+            return MenuShortcutBinding(action: action, key: "n", modifiers: .command)
+        case .settings:
+            return MenuShortcutBinding(action: action, key: ",", modifiers: .command)
+        case .quit:
+            return MenuShortcutBinding(action: action, key: "q", modifiers: .command)
+        case .goAgent1:
+            return MenuShortcutBinding(action: action, key: "1", modifiers: .command)
+        case .goAgent2:
+            return MenuShortcutBinding(action: action, key: "2", modifiers: .command)
+        case .goAgent3:
+            return MenuShortcutBinding(action: action, key: "3", modifiers: .command)
+        case .goAgent4:
+            return MenuShortcutBinding(action: action, key: "4", modifiers: .command)
+        case .goAgent5:
+            return MenuShortcutBinding(action: action, key: "5", modifiers: .command)
+        case .goAgent6:
+            return MenuShortcutBinding(action: action, key: "6", modifiers: .command)
+        case .goAgent7:
+            return MenuShortcutBinding(action: action, key: "7", modifiers: .command)
+        case .goAgent8:
+            return MenuShortcutBinding(action: action, key: "8", modifiers: .command)
+        case .goAgent9:
+            return MenuShortcutBinding(action: action, key: "9", modifiers: .command)
+        case .toggleSidebar:
+            return MenuShortcutBinding(action: action, key: "s", modifiers: [.control, .command])
+        case .askAux:
+            return MenuShortcutBinding(action: action, key: "k", modifiers: .command)
+        case .sendProposal:
+            return MenuShortcutBinding(action: action, key: "\r", modifiers: .command)
+        case .notNow:
+            return MenuShortcutBinding(action: action, key: "d", modifiers: .command)
+        case .togglePanel:
+            return MenuShortcutBinding(action: action, key: "i", modifiers: [.option, .command])
+        case .back:
+            return MenuShortcutBinding(action: action, key: "[", modifiers: .command)
+        case .stopAll:
+            return MenuShortcutBinding(action: action, key: ".", modifiers: .command)
+        case .find:
+            return MenuShortcutBinding(action: action, key: "f", modifiers: .command)
+        }
+    }
+
+    /// Every menu-bar row, in menu order.
+    public static var menu: [MenuShortcutBinding] {
+        MenuAction.allCases.map { binding(for: $0) }
+    }
+
+    /// The digit row for 1…9; `nil` beyond nine agents.
+    public static func agent(_ slot: Int) -> MenuShortcutBinding? {
+        guard MenuAction.goAgents.indices.contains(slot - 1) else { return nil }
+        return binding(for: MenuAction.goAgents[slot - 1])
+    }
+}
+
 /// One line of Help ▸ Keyboard Shortcuts.
 public struct MenuShortcut: Equatable {
     public let title: String
     public let keys: String
 }
 
-/// The shortcuts the app really binds, for the help sheet. `menu` mirrors
-/// the menu bar (`TeamCommands`): ⌘1… belong to the Go menu's agents alone,
-/// and the Records pages have no shortcut. `inView` are keys a view handles.
+/// The shortcuts the app really binds, for the help sheet. Every row comes
+/// from `MenuShortcutTable`, including ⌘1…⌘9, which belong to the Go menu's
+/// agents alone; the Records pages have no shortcut. `inView` are keys a view
+/// handles.
 public enum MenuShortcuts {
     public static func menu(agents: [Agent], language: Language) -> [MenuShortcut] {
-        let fr = language == .fr
-        let go = GoMenu.agentItems(agents: agents).compactMap { item in
+        let agentRows = GoMenu.agentItems(agents: agents).compactMap { item in
             item.shortcut.map { MenuShortcut(title: GoMenu.title(for: item, language: language), keys: $0) }
         }
-        return [
-            MenuShortcut(title: L10n.ui(.newConversation, language), keys: "⌘N"),
-            MenuShortcut(title: L10n.ui(.settings, language) + "…", keys: "⌘,"),
-            MenuShortcut(title: fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)", keys: "⌘Q"),
-        ] + go + [
-            MenuShortcut(title: fr ? "Afficher ou masquer la barre latérale" : "Show or hide sidebar", keys: "⌃⌘S"),
-            MenuShortcut(title: fr ? "Demander à Aux…" : "Ask Aux…", keys: "⌘K"),
-            MenuShortcut(title: fr ? "Envoyer la proposition" : "Send proposal", keys: "⌘↩"),
-            MenuShortcut(title: L10n.ui(.apNotNow, language), keys: "⌘D"),
-            MenuShortcut(title: L10n.ui(.panelToggle, language), keys: "⌥⌘I"),
-            MenuShortcut(title: L10n.ui(.back, language), keys: "⌘["),
-            MenuShortcut(title: L10n.ui(.stopAll, language) + " / " + L10n.ui(.resume, language), keys: "⌘."),
-            MenuShortcut(title: fr ? "Rechercher" : "Find", keys: "⌘F"),
-        ]
+        var rows: [MenuShortcut] = []
+        var addedAgents = false
+        for binding in MenuShortcutTable.menu {
+            if binding.action.agentSlot != nil {
+                // All nine digits share one place in the menu; the live roster
+                // decides which of them exist.
+                if !addedAgents {
+                    rows += agentRows
+                    addedAgents = true
+                }
+                continue
+            }
+            guard let title = title(for: binding.action, language: language) else { continue }
+            rows.append(MenuShortcut(title: title, keys: binding.display))
+        }
+        return rows
+    }
+
+    private static func title(for action: MenuAction, language: Language) -> String? {
+        let fr = language == .fr
+        switch action {
+        case .newConversation:
+            return L10n.ui(.newConversation, language)
+        case .settings:
+            return L10n.ui(.settings, language) + "…"
+        case .quit:
+            return fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)"
+        case .goAgent1, .goAgent2, .goAgent3, .goAgent4, .goAgent5,
+             .goAgent6, .goAgent7, .goAgent8, .goAgent9:
+            return nil
+        case .toggleSidebar:
+            return fr ? "Afficher ou masquer la barre latérale" : "Show or hide sidebar"
+        case .askAux:
+            return fr ? "Demander à Aux…" : "Ask Aux…"
+        case .sendProposal:
+            return fr ? "Envoyer la proposition" : "Send proposal"
+        case .notNow:
+            return L10n.ui(.apNotNow, language)
+        case .togglePanel:
+            return L10n.ui(.panelToggle, language)
+        case .back:
+            return L10n.ui(.back, language)
+        case .stopAll:
+            return L10n.ui(.stopAll, language) + " / " + L10n.ui(.resume, language)
+        case .find:
+            return fr ? "Rechercher" : "Find"
+        }
     }
 
     public static func inView(language: Language) -> [MenuShortcut] {

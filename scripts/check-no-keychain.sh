@@ -111,14 +111,17 @@ filter = 'test(/linear|scales|_seconds|times_out|expired|grace|approval_timeout/
 threads-required = "num-test-threads"
 priority = 100
 
-# Bomb and resource-limit tests run one at a time: a fork bomb, a 600 MB
-# allocation or a CPU spin next to them starves the rest of the suite.
+# Bomb and resource-limit tests each run alone: process limits count every
+# process the user runs, and a fork bomb, a 600 MB allocation or a CPU spin
+# starves its neighbours. threads-required takes every test slot; the group
+# also keeps them from overlapping each other.
 [test-groups]
 resource-limits = { max-threads = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(/fork_bomb|process_bomb|memory_bomb|_limit_stops_|memory_watchdog/)'
 test-group = "resource-limits"
+threads-required = "num-test-threads"
 
 # The longest tests (property tests, about 3-5 min each) start next, so they
 # do not form a tail at the end. nextest refuses a binary() name that matches

@@ -148,6 +148,9 @@ refused "a cargo-nextest with the wrong hash" AUX_NEXTEST_BIN="$work/nx/impostor
 cp "$work/nxcfg" "$work/nxcfg.clean"
 grep -qx 'retries = 0' "$work/nxcfg.clean" || fail "the generated config must set retries = 0"
 grep -q 'default-filter' "$work/nxcfg.clean" && fail "the generated config must not set a default filter"
+# Bomb and resource-limit tests must run alone, not only one at a time.
+awk '/^\[\[profile\.ci\.overrides\]\]/{f=""} /^filter = .*fork_bomb.*memory_bomb.*_limit_stops_/{f=1} f && /^threads-required = "num-test-threads"$/{ok=1} END{exit !ok}' "$work/nxcfg.clean" \
+  || fail "the bomb and resource-limit override must set threads-required = \"num-test-threads\""
 hostile="$work/hostile"
 mkdir -p "$hostile/scripts/lib" "$hostile/.config"
 cp "$root/scripts/check-no-keychain.sh" "$hostile/scripts/"

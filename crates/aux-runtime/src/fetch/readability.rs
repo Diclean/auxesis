@@ -12,14 +12,13 @@
 //! attributes, its inline style or a simple `<style>` rule ([`Sheet`]).
 
 use super::dom::{Dom, Handle, NodeData};
-use html5ever::parse_document;
 use html5ever::tendril::{StrTendril, Tendril, TendrilSink};
 use html5ever::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
-use html5ever::{Attribute, ExpandedName, QualName};
+use html5ever::{ns, parse_document, Attribute, ExpandedName, QualName};
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 /// Text pulled out of one HTML document.
@@ -132,9 +131,7 @@ fn depth_exceeds(root: &Handle, deadline: &Deadline, mode: Mode) -> bool {
                 continue;
             }
         }
-        for child in node.children.borrow().iter() {
-            stack.push((child.clone(), depth + 1));
-        }
+        stack.extend(node.children().map(|child| (child, depth + 1)));
     }
     false
 }
@@ -150,11 +147,7 @@ const MAX_DOM_DEPTH: usize = 512;
 fn dismantle(root: &Handle) {
     let mut stack = vec![root.clone()];
     while let Some(node) = stack.pop() {
-        let children = std::mem::take(&mut *node.children.borrow_mut());
-        for child in children {
-            child.parent.set(None);
-            stack.push(child);
-        }
+        stack.extend(node.take_children());
     }
 }
 
@@ -228,18 +221,10 @@ fn is_paragraph(tag: &str) -> bool {
 /// render it. The article's *own* header and footer sit inside the chosen
 /// container (a parent other than `body`), so they are kept.
 fn is_site_chrome(node: &Handle) -> bool {
-    if !matches!(tag_name(node), Some("header" | "footer")) {
-        return false;
-    }
-    // `parent` is a `Cell<Option<Weak<_>>>`: borrow it out and put it back
-    // (single-threaded walker; no concurrent mutation).
-    let parent = node.parent.take();
-    let site = parent
-        .as_ref()
-        .and_then(|weak| weak.upgrade())
-        .is_some_and(|parent| tag_name(&parent) == Some("body"));
-    node.parent.set(parent);
-    site
+    matches!(tag_name(node), Some("header" | "footer"))
+        && node
+            .parent()
+            .is_some_and(|parent| tag_name(&parent) == Some("body"))
 }
 
 /// True when a walker must not descend into `node`: an element that never
@@ -485,7 +470,7 @@ impl Sheet {
             if tag_name(&node) == Some("style") {
                 sheet.read(&clean(&raw_text(&node, deadline)), deadline);
             }
-            stack.extend(node.children.borrow().iter().cloned());
+            stack.extend(node.children());
         }
         sheet
     }
@@ -563,12 +548,16 @@ fn selects(compound: &str, tag: &str, id: &str, classes: &HashSet<&str>) -> bool
 /// formatting element against the whole active-formatting list with zero sink
 /// calls), so no counter of sink work can bound them (RV3-01: 60 s of CPU on
 /// a 512 KiB page at 1.15 % of [`MAX_PARSE_WORK`]). The deadline is checked
-/// before every feed chunk and at every walker node.
+/// before every feed chunk, inside the parse by the sink ([`Budget`]), and at
+/// every walker node.
 ///
 /// A single `parser.process()` call cannot be interrupted, and the adaptive
 /// controller reacts only to the *previous* chunk, so a chunk that crosses
 /// the deadline is bounded by [`PARSE_CHUNK_MAX_BYTES`], not by what the
-/// controller has measured. The real per-fetch CPU contract is therefore:
+/// controller has measured. Inside that chunk the sink reads the clock
+/// before every costly step and once the deadline passes it stops building
+/// the tree, so the rest of the chunk costs only html5ever's own work. The
+/// real per-fetch CPU contract is therefore:
 ///
 /// **worst case = [`EXTRACT_WALL_BUDGET`] + the cost of one capped chunk +
 /// the linear teardown**, with no compounding. All three terms are measured
@@ -576,7 +565,7 @@ fn selects(compound: &str, tag: &str, id: &str, classes: &HashSet<&str>) -> bool
 /// then a `</i>` tail) costs 0.096-0.112 s of CPU end to end across runs,
 /// with a worst single 512 B chunk of 77-82 ms; the old 4096 B ceiling cost
 /// 601 ms for one such chunk and 0.613 s in total. The matrix's worst shape
-/// (220 shapes) is 0.405-0.409 s across runs. The fetch path intersects this
+/// (224 shapes) is 0.404-0.409 s across runs. The fetch path intersects this
 /// budget with its own timeout (see [`extract_readable_before`]).
 pub(crate) const EXTRACT_WALL_BUDGET: Duration = Duration::from_millis(400);
 
@@ -602,13 +591,24 @@ impl Deadline {
 /// predict which tags the tree builder will actually open (self-closing HTML
 /// tags still nest, implied `html`/`body`/`tbody` nodes appear), so two
 /// rounds of pre-scan were each defeated by a new tag shape. [`BoundedDom`]
-/// charges every node/name/comparison step the tree builder performs against
-/// it, and [`parse`] stops feeding input once it is spent.
+/// charges every sink call against it, in proportion to the work the call
+/// does, before the work runs; once it is spent the sink stops building the
+/// tree and [`parse`] stops feeding input.
 ///
 /// This budget is a **secondary** guard: it only sees work that reaches the
 /// sink. Paths that stay inside html5ever (RV3-01's Noah's Ark walk) are
 /// bounded by [`EXTRACT_WALL_BUDGET`] instead.
 const MAX_PARSE_WORK: usize = 20_000_000;
+
+/// The sink reads the clock each time this many units of work have been
+/// charged since the last read, and before any single step that costs more.
+/// One unit is a step of a few nanoseconds, so after the deadline passes
+/// the tree stops growing within microseconds, while the clock is read about
+/// once per 4096 cheap steps.
+const CLOCK_CHECK_UNITS: usize = 4096;
+
+/// Text bytes per unit of work: appending text copies it.
+const TEXT_BYTES_PER_UNIT: usize = 64;
 
 /// Initial size of the parser feed chunks. The size adapts between
 /// [`PARSE_CHUNK_MIN_BYTES`] and [`PARSE_CHUNK_MAX_BYTES`] based on the
@@ -649,24 +649,113 @@ const PARSE_CHUNK_TARGET: Duration = Duration::from_millis(10);
 /// stack costs charges per stack element.
 const PARSE_CHUNK_WORK_TARGET: usize = 1_000_000;
 
-/// A [`TreeSink`] that delegates to our [`Dom`] while charging every step
-/// against a shared [`MAX_PARSE_WORK`] budget.
-///
-/// The charged steps are the ones html5ever performs through the sink: the
-/// button-scope `<p>` search calls [`TreeSink::elem_name`] once per open
-/// element, and the adoption agency / formatting reconstruction call
-/// [`TreeSink::same_node`] and [`TreeSink::create_element`] per step.
-/// html5ever also has super-linear paths that never reach the sink;
-/// this counter cannot see them, and [`EXTRACT_WALL_BUDGET`] is responsible
-/// for bounding them.
-struct BoundedDom {
-    inner: Dom,
-    work: Arc<AtomicUsize>,
+/// The parse's shared work budget and deadline. [`BoundedDom`] charges each
+/// sink call to it before the call's work runs; [`parse`] reads it between
+/// chunks.
+struct Budget {
+    deadline: Deadline,
+    /// Units of sink work charged so far.
+    work: Cell<usize>,
+    /// The work count at which the next charge reads the clock.
+    clock_check_at: Cell<usize>,
+    /// Set once the work passed [`MAX_PARSE_WORK`] or the deadline passed.
+    /// From then on the sink leaves the tree as it is.
+    spent: Cell<bool>,
 }
 
-impl BoundedDom {
-    fn charge(&self) {
-        self.work.fetch_add(1, Ordering::Relaxed);
+impl Budget {
+    fn new(deadline: Deadline) -> Budget {
+        Budget {
+            deadline,
+            work: Cell::new(0),
+            clock_check_at: Cell::new(0),
+            spent: Cell::new(false),
+        }
+    }
+
+    /// Charge `units` of work and answer whether that work may run: false
+    /// once the work budget or the deadline is spent. The clock is read when
+    /// the work count reaches the next check, so a step of more than
+    /// [`CLOCK_CHECK_UNITS`] units always reads it before it runs.
+    fn charge(&self, units: usize) -> bool {
+        let work = self.work.get().saturating_add(units);
+        self.work.set(work);
+        if self.spent.get() {
+            return false;
+        }
+        if work > MAX_PARSE_WORK {
+            self.spent.set(true);
+            return false;
+        }
+        if work >= self.clock_check_at.get() {
+            self.clock_check_at
+                .set(work.saturating_add(CLOCK_CHECK_UNITS));
+            if self.deadline.expired() {
+                self.spent.set(true);
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Stop building the tree, whatever the counts say.
+    fn stop(&self) {
+        self.spent.set(true);
+    }
+
+    fn spent(&self) -> bool {
+        self.spent.get()
+    }
+
+    fn work(&self) -> usize {
+        self.work.get()
+    }
+
+    /// Units left before [`MAX_PARSE_WORK`].
+    fn remaining(&self) -> usize {
+        MAX_PARSE_WORK.saturating_sub(self.work.get())
+    }
+}
+
+/// A [`TreeSink`] that delegates to our [`Dom`] while charging every call to
+/// a shared [`Budget`], in proportion to the work the call does: one unit
+/// per call, plus one per attribute an element brings or a merge looks at,
+/// one per child a reparent moves, and one per [`TEXT_BYTES_PER_UNIT`] bytes
+/// of text appended. The charge comes first, so a costly call is refused,
+/// not run, once the budget or the deadline is spent.
+///
+/// The calls that change the tree are no-ops from then on. html5ever never
+/// reads the tree back, so it parses on unaware, and the tree stays as it was
+/// at the stop, which [`parse`] reports as truncated. The calls that answer
+/// html5ever (`elem_name`, `same_node`, ...) or hand it a node always run:
+/// each is one cheap step, and a wrong answer could break the tree builder's
+/// own invariants.
+///
+/// The steps that cost per call are the ones html5ever performs through the
+/// sink: the button-scope `<p>` search calls [`TreeSink::elem_name`] once per
+/// open element, and the adoption agency / formatting reconstruction call
+/// [`TreeSink::same_node`] and [`TreeSink::create_element`] per step.
+/// html5ever also has super-linear paths that never reach the sink; this
+/// counter cannot see them, and [`EXTRACT_WALL_BUDGET`] is responsible for
+/// bounding them.
+struct BoundedDom {
+    inner: Dom,
+    budget: Rc<Budget>,
+}
+
+/// Units of work to append `child`: one, plus the text it copies.
+fn append_cost(child: &NodeOrText<Handle>) -> usize {
+    match child {
+        NodeOrText::AppendText(text) => 1 + text.len() / TEXT_BYTES_PER_UNIT,
+        NodeOrText::AppendNode(_) => 1,
+    }
+}
+
+/// How many attributes `node` holds.
+fn attr_count(node: &Handle) -> usize {
+    match &node.data {
+        NodeData::Element { attrs, .. } => attrs.borrow().len(),
+        _ => 0,
     }
 }
 
@@ -683,36 +772,41 @@ impl TreeSink for BoundedDom {
     }
 
     fn parse_error(&self, msg: Cow<'static, str>) {
+        self.budget.charge(1);
         self.inner.parse_error(msg);
     }
 
     fn get_document(&self) -> Handle {
+        self.budget.charge(1);
         self.inner.get_document()
     }
 
     fn elem_name<'a>(&'a self, target: &'a Handle) -> ExpandedName<'a> {
-        self.charge();
+        self.budget.charge(1);
         self.inner.elem_name(target)
     }
 
     fn create_element(&self, name: QualName, attrs: Vec<Attribute>, flags: ElementFlags) -> Handle {
-        self.charge();
+        // The tree builder copies the attributes of each element it
+        // reconstructs or adopts.
+        self.budget.charge(1 + attrs.len());
         self.inner.create_element(name, attrs, flags)
     }
 
     fn create_comment(&self, text: StrTendril) -> Handle {
-        self.charge();
+        self.budget.charge(1);
         self.inner.create_comment(text)
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Handle {
-        self.charge();
+        self.budget.charge(1);
         self.inner.create_pi(target, data)
     }
 
     fn append(&self, parent: &Handle, child: NodeOrText<Handle>) {
-        self.charge();
-        self.inner.append(parent, child);
+        if self.budget.charge(append_cost(&child)) {
+            self.inner.append(parent, child);
+        }
     }
 
     fn append_based_on_parent_node(
@@ -721,9 +815,10 @@ impl TreeSink for BoundedDom {
         prev_element: &Handle,
         child: NodeOrText<Handle>,
     ) {
-        self.charge();
-        self.inner
-            .append_based_on_parent_node(element, prev_element, child);
+        if self.budget.charge(append_cost(&child)) {
+            self.inner
+                .append_based_on_parent_node(element, prev_element, child);
+        }
     }
 
     fn append_doctype_to_document(
@@ -732,57 +827,124 @@ impl TreeSink for BoundedDom {
         public_id: StrTendril,
         system_id: StrTendril,
     ) {
-        self.inner
-            .append_doctype_to_document(name, public_id, system_id);
+        if self.budget.charge(1) {
+            self.inner
+                .append_doctype_to_document(name, public_id, system_id);
+        }
+    }
+
+    fn mark_script_already_started(&self, node: &Handle) {
+        self.budget.charge(1);
+        self.inner.mark_script_already_started(node);
+    }
+
+    fn pop(&self, node: &Handle) {
+        self.budget.charge(1);
+        self.inner.pop(node);
     }
 
     fn get_template_contents(&self, target: &Handle) -> Handle {
+        self.budget.charge(1);
         self.inner.get_template_contents(target)
     }
 
     fn same_node(&self, x: &Handle, y: &Handle) -> bool {
-        self.charge();
+        self.budget.charge(1);
         self.inner.same_node(x, y)
     }
 
     fn set_quirks_mode(&self, mode: QuirksMode) {
+        self.budget.charge(1);
         self.inner.set_quirks_mode(mode);
     }
 
     fn append_before_sibling(&self, sibling: &Handle, new_node: NodeOrText<Handle>) {
-        self.charge();
-        self.inner.append_before_sibling(sibling, new_node);
+        if self.budget.charge(append_cost(&new_node)) {
+            self.inner.append_before_sibling(sibling, new_node);
+        }
     }
 
     fn add_attrs_if_missing(&self, target: &Handle, attrs: Vec<Attribute>) {
-        self.inner.add_attrs_if_missing(target, attrs);
+        // The merge looks at every present attribute and every new one.
+        if self.budget.charge(1 + attr_count(target) + attrs.len()) {
+            self.inner.add_attrs_if_missing(target, attrs);
+        }
+    }
+
+    fn associate_with_form(
+        &self,
+        target: &Handle,
+        form: &Handle,
+        nodes: (&Handle, Option<&Handle>),
+    ) {
+        self.budget.charge(1);
+        self.inner.associate_with_form(target, form, nodes);
     }
 
     fn remove_from_parent(&self, target: &Handle) {
-        self.inner.remove_from_parent(target);
+        if self.budget.charge(1) {
+            self.inner.remove_from_parent(target);
+        }
     }
 
     fn reparent_children(&self, node: &Handle, new_parent: &Handle) {
-        self.charge();
-        self.inner.reparent_children(node, new_parent);
+        // One unit per child moved, counted first. The count stops where the
+        // charge would refuse the move anyway.
+        let limit = if self.budget.spent() {
+            0
+        } else {
+            self.budget.remaining() + 1
+        };
+        let children = node.children().take(limit).count();
+        if self.budget.charge(1 + children) {
+            self.inner.reparent_children(node, new_parent);
+        }
     }
 
     fn is_mathml_annotation_xml_integration_point(&self, target: &Handle) -> bool {
+        self.budget.charge(1);
         self.inner
             .is_mathml_annotation_xml_integration_point(target)
+    }
+
+    fn set_current_line(&self, line_number: u64) {
+        self.budget.charge(1);
+        self.inner.set_current_line(line_number);
+    }
+
+    fn allow_declarative_shadow_roots(&self, intended_parent: &Handle) -> bool {
+        self.budget.charge(1);
+        self.inner.allow_declarative_shadow_roots(intended_parent)
+    }
+
+    fn attach_declarative_shadow(
+        &self,
+        location: &Handle,
+        template: &Handle,
+        attrs: &[Attribute],
+    ) -> bool {
+        self.budget.charge(1);
+        self.inner
+            .attach_declarative_shadow(location, template, attrs)
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(&self, option: &Handle) {
+        self.budget.charge(1);
+        self.inner
+            .maybe_clone_an_option_into_selectedcontent(option);
     }
 }
 
 /// Parse `html`. The second return is `true` when the parse was stopped early
-/// by the [`EXTRACT_WALL_BUDGET`] deadline or the [`MAX_PARSE_WORK`] budget;
-/// the DOM holds whatever the parser built before then, and the caller must
-/// report the result as truncated.
+/// by the [`EXTRACT_WALL_BUDGET`] deadline or the [`MAX_PARSE_WORK`] budget,
+/// between chunks or inside one; the DOM holds whatever the parser built
+/// before then, and the caller must report the result as truncated.
 fn parse(html: &[u8], deadline: &Deadline) -> (Dom, bool) {
-    let work = Arc::new(AtomicUsize::new(0));
+    let budget = Rc::new(Budget::new(*deadline));
     let mut parser = parse_document(
         BoundedDom {
             inner: Dom::default(),
-            work: work.clone(),
+            budget: budget.clone(),
         },
         Default::default(),
     )
@@ -791,7 +953,8 @@ fn parse(html: &[u8], deadline: &Deadline) -> (Dom, bool) {
     // Feed the input in chunks and check the deadline and the work budget
     // before each one. A single `process` call cannot be interrupted, so a
     // chunk that crosses the deadline costs at most one
-    // [`PARSE_CHUNK_MAX_BYTES`] chunk; the controller cannot make that chunk
+    // [`PARSE_CHUNK_MAX_BYTES`] chunk of html5ever's own work; the sink stops
+    // building the tree inside it. The controller cannot make that chunk
     // smaller retroactively, only the next one. The chunk size adapts to the
     // measured duration and charged work of the previous chunk because
     // html5ever's cost per byte can grow with the state it has already built
@@ -802,15 +965,18 @@ fn parse(html: &[u8], deadline: &Deadline) -> (Dom, bool) {
     let mut chunk = PARSE_CHUNK_BYTES;
     let mut fed = 0;
     while fed < html.len() {
-        if deadline.expired() || work.load(Ordering::Relaxed) > MAX_PARSE_WORK {
+        if budget.spent() || deadline.expired() {
+            // `finish` still runs the end of the parse; with the budget
+            // stopped it leaves the tree as it is.
+            budget.stop();
             return (parser.finish(), true);
         }
         let end = (fed + chunk).min(html.len());
         let started = Instant::now();
-        let charged_before = work.load(Ordering::Relaxed);
+        let charged_before = budget.work();
         parser.process(Tendril::from_slice(&html[fed..end]));
         let cost = started.elapsed();
-        let charged = work.load(Ordering::Relaxed).saturating_sub(charged_before);
+        let charged = budget.work().saturating_sub(charged_before);
         fed = end;
         if cost > PARSE_CHUNK_TARGET || charged > PARSE_CHUNK_WORK_TARGET {
             chunk = (chunk / 2).max(PARSE_CHUNK_MIN_BYTES);
@@ -818,7 +984,9 @@ fn parse(html: &[u8], deadline: &Deadline) -> (Dom, bool) {
             chunk = (chunk + chunk / 2).min(PARSE_CHUNK_MAX_BYTES);
         }
     }
-    (parser.finish(), false)
+    // The last chunk or the end of the parse may have spent the budget.
+    let dom = parser.finish();
+    (dom, budget.spent())
 }
 
 fn tag_name(node: &Handle) -> Option<&str> {
@@ -846,8 +1014,46 @@ fn find_first(node: &Handle, tag: &str, depth: usize, deadline: &Deadline) -> Op
     if depth >= MAX_DOM_DEPTH || deadline.expired() {
         return None;
     }
-    for child in node.children.borrow().iter() {
-        if let Some(found) = find_first(child, tag, depth + 1, deadline) {
+    for child in node.children() {
+        if let Some(found) = find_first(&child, tag, depth + 1, deadline) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The first `tag` element under `node` that the renderer would show: the
+/// search does not look inside the elements it drops ([`is_dropped`]), so a
+/// heading inside a `<form>`, a `<dialog>` or an `<svg>` is never a title.
+fn find_heading(node: &Handle, tag: &str, depth: usize, deadline: &Deadline) -> Option<Handle> {
+    let name = tag_name(node);
+    if name == Some(tag) {
+        return Some(node.clone());
+    }
+    if name.is_some_and(is_dropped) || depth >= MAX_DOM_DEPTH || deadline.expired() {
+        return None;
+    }
+    for child in node.children() {
+        if let Some(found) = find_heading(&child, tag, depth + 1, deadline) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The page's `<title>`: the first one in the HTML namespace. An SVG
+/// `<title>` is an icon's tooltip, which the renderer drops with its `<svg>`.
+fn find_title(node: &Handle, depth: usize, deadline: &Deadline) -> Option<Handle> {
+    if let NodeData::Element { name, .. } = &node.data {
+        if name.ns == ns!(html) && &*name.local == "title" {
+            return Some(node.clone());
+        }
+    }
+    if depth >= MAX_DOM_DEPTH || deadline.expired() {
+        return None;
+    }
+    for child in node.children() {
+        if let Some(found) = find_title(&child, depth + 1, deadline) {
             return Some(found);
         }
     }
@@ -890,8 +1096,8 @@ fn scan(node: &Handle, best: &mut Best, depth: usize, deadline: &Deadline) -> St
                 return Stats::default();
             }
             let mut stats = Stats::default();
-            for child in node.children.borrow().iter() {
-                let child_stats = scan(child, best, depth + 1, deadline);
+            for child in node.children() {
+                let child_stats = scan(&child, best, depth + 1, deadline);
                 stats.chars += child_stats.chars;
                 stats.paragraphs += child_stats.paragraphs;
                 stats.link_chars += child_stats.link_chars;
@@ -994,7 +1200,7 @@ fn choose_root(document: &Handle, deadline: &Deadline) -> Handle {
 }
 
 fn title_of(document: &Handle, root: &Handle, deadline: &Deadline) -> String {
-    if let Some(found) = find_first(document, "title", 0, deadline) {
+    if let Some(found) = find_title(document, 0, deadline) {
         let title = normalize(&raw_text(&found, deadline));
         if !title.is_empty() {
             return truncate_title(title);
@@ -1005,16 +1211,18 @@ fn title_of(document: &Handle, root: &Handle, deadline: &Deadline) -> String {
     // `<h1>` anywhere in the document, so a headline in a sibling (or in an
     // in-article `<header>`) is still used. Searching the container first
     // keeps a site-logo `<h1>` in chrome from beating the article's `<h2>`.
+    // A heading reads as the renderer reads it: nothing the renderer drops
+    // reaches the title.
     for tag in ["h1", "h2", "h3", "h4", "h5", "h6"] {
-        if let Some(found) = find_first(root, tag, 0, deadline) {
-            let title = normalize(&raw_text(&found, deadline));
+        if let Some(found) = find_heading(root, tag, 0, deadline) {
+            let title = normalize(&heading_text(&found, deadline));
             if !title.is_empty() {
                 return truncate_title(title);
             }
         }
     }
-    if let Some(found) = find_first(document, "h1", 0, deadline) {
-        let title = normalize(&raw_text(&found, deadline));
+    if let Some(found) = find_heading(document, "h1", 0, deadline) {
+        let title = normalize(&heading_text(&found, deadline));
         if !title.is_empty() {
             return truncate_title(title);
         }
@@ -1030,23 +1238,41 @@ fn truncate_title(title: String) -> String {
     title.chars().take(MAX_TITLE_CHARS).collect()
 }
 
-/// Text of one node's subtree, ignoring the drop list: used for `<title>`
-/// (which the renderer drops) and `<h1>` fallbacks.
+/// All the text of one node's subtree, ignoring the drop list: used for a
+/// `<title>` and a `<style>`, which the renderer drops and which hold only
+/// text.
 fn raw_text(node: &Handle, deadline: &Deadline) -> String {
     let mut out = String::new();
-    collect_all_text(node, &mut out, 0, deadline);
+    collect_text(node, &mut out, false, 0, deadline);
     out
 }
 
-fn collect_all_text(node: &Handle, out: &mut String, depth: usize, deadline: &Deadline) {
+/// A heading's text for the title, without what the renderer drops inside
+/// it: no `<script>`, `<style>`, `<template>` or other [`DROPPED`] element.
+fn heading_text(node: &Handle, deadline: &Deadline) -> String {
+    let mut out = String::new();
+    collect_text(node, &mut out, true, 0, deadline);
+    out
+}
+
+fn collect_text(
+    node: &Handle,
+    out: &mut String,
+    skip_dropped: bool,
+    depth: usize,
+    deadline: &Deadline,
+) {
     if depth > MAX_DOM_DEPTH || deadline.expired() {
         return;
     }
     match &node.data {
         NodeData::Text { contents } => out.push_str(&contents.borrow()),
         NodeData::Element { .. } => {
-            for child in node.children.borrow().iter() {
-                collect_all_text(child, out, depth + 1, deadline);
+            if skip_dropped && tag_name(node).is_some_and(is_dropped) {
+                return;
+            }
+            for child in node.children() {
+                collect_text(&child, out, skip_dropped, depth + 1, deadline);
             }
         }
         _ => {}
@@ -1120,8 +1346,8 @@ fn render_into(
             } else if block {
                 ensure_paragraph(out);
             }
-            for child in node.children.borrow().iter() {
-                render_into(child, out, depth + 1, deadline, mode, paint);
+            for child in node.children() {
+                render_into(&child, out, depth + 1, deadline, mode, paint);
             }
             if matches!(tag, "td" | "th") {
                 out.push_str(" | ");
@@ -1174,6 +1400,7 @@ fn normalize(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use html5ever::LocalName;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1837,8 +2064,7 @@ mod tests {
         let mut stack = vec![(root.clone(), 0)];
         while let Some((node, depth)) = stack.pop() {
             deepest = deepest.max(depth);
-            let children = node.children.borrow();
-            stack.extend(children.iter().map(|child| (child.clone(), depth + 1)));
+            stack.extend(node.children().map(|child| (child, depth + 1)));
             if let NodeData::Element {
                 template_contents: Some(contents),
                 ..
@@ -1901,8 +2127,8 @@ mod tests {
     #[test]
     fn template_contents_are_never_page_text() {
         // A template's contents are a fragment of their own, outside the
-        // tree's children: no walker reads them, not even the title fallback
-        // that ignores the drop list, and not inside a table either.
+        // tree's children: no walker reads them, not even the title fallback,
+        // and not inside a table either.
         let html = "<body><h1>Real headline<template>TEMPLATE-TITLE</template></h1>\
                     <main><p>The one paragraph that matters on this page.</p>\
                     <template><p>TEMPLATE-BODY</p><template>TEMPLATE-NESTED</template></template>\
@@ -1923,7 +2149,7 @@ mod tests {
                 let text = contents.borrow();
                 assert!(!text.contains("TEMPLATE"), "{:?}", &text[..]);
             }
-            stack.extend(node.children.borrow().iter().cloned());
+            stack.extend(node.children());
         }
         dismantle(&dom.document);
     }
@@ -1938,6 +2164,321 @@ mod tests {
                 format!(r#"<meta http-equiv="Content-Type" content="{content}"><p>Body text.</p>"#);
             assert_eq!(extract_readable(html.as_bytes()).text, "Body text.");
             assert_eq!(extract_body_text(html.as_bytes()).text, "Body text.");
+        }
+    }
+
+    #[test]
+    fn title_from_a_heading_leaves_out_what_the_renderer_drops() {
+        // No `<title>`: the heading fallback reads a heading the way the
+        // renderer does, so script, style, a button or an icon's SVG inside
+        // it never reaches the title, and a heading inside an element the
+        // renderer drops is no title at all.
+        let html = "<h1>Hello<script>secret()</script><style>.x{}</style></h1>";
+        assert_eq!(extract_readable(html.as_bytes()).title, "Hello");
+        assert_eq!(extract_body_text(html.as_bytes()).title, "Hello");
+        let html = "<h1><svg><title>Link icon</title></svg>Real \
+                    <button>Share</button>headline</h1>";
+        assert_eq!(extract_readable(html.as_bytes()).title, "Real headline");
+        let article = "<main><p>The body of the article, long enough to be chosen \
+                       as the container by the scorer.</p></main>";
+        for chrome in [
+            "<dialog><h1>Accept cookies</h1></dialog>",
+            "<form><h1>Sign in</h1></form>",
+        ] {
+            let html = format!("<body>{chrome}{article}</body>");
+            assert_eq!(extract_readable(html.as_bytes()).title, "", "{chrome}");
+        }
+    }
+
+    /// A deadline plus this is the most a hostile page may take in a debug
+    /// build on a shared CI runner: the rest of one chunk, the walkers'
+    /// stop and the teardown.
+    const SLACK: Duration = Duration::from_millis(600);
+
+    /// A budgeted sink over an empty tree, and its budget.
+    fn bounded(deadline: Deadline) -> (BoundedDom, Rc<Budget>) {
+        let budget = Rc::new(Budget::new(deadline));
+        let sink = BoundedDom {
+            inner: Dom::default(),
+            budget: budget.clone(),
+        };
+        (sink, budget)
+    }
+
+    /// `count` attributes named `{prefix}0`, `{prefix}1`, ...
+    fn attributes(prefix: &str, count: usize) -> Vec<Attribute> {
+        (0..count)
+            .map(|i| Attribute {
+                name: QualName::new(None, ns!(), LocalName::from(format!("{prefix}{i}"))),
+                value: StrTendril::from_slice("1"),
+            })
+            .collect()
+    }
+
+    fn html_name(tag: &str) -> QualName {
+        QualName::new(None, ns!(html), LocalName::from(tag))
+    }
+
+    /// A new HTML element with `attrs` attributes, made by `sink`.
+    fn element(sink: &impl TreeSink<Handle = Handle>, tag: &str, attrs: usize) -> Handle {
+        sink.create_element(
+            html_name(tag),
+            attributes("a", attrs),
+            ElementFlags::default(),
+        )
+    }
+
+    #[test]
+    fn every_sink_call_is_charged_for_the_work_it_does() {
+        let (sink, budget) = bounded(unhurried());
+        let charged = |since: usize| budget.work() - since;
+        let parent = element(&sink, "div", 0);
+        let children: Vec<Handle> = (0..1000).map(|_| element(&sink, "br", 0)).collect();
+        let since = budget.work();
+        for child in &children {
+            sink.append(&parent, NodeOrText::AppendNode(child.clone()));
+        }
+        assert_eq!(charged(since), 1000, "one unit per append");
+        // A move in a wide sibling list is one unit wherever it lands.
+        let since = budget.work();
+        sink.remove_from_parent(&children[0]);
+        sink.append_before_sibling(&children[1], NodeOrText::AppendNode(children[0].clone()));
+        assert_eq!(charged(since), 2);
+        // Text costs a unit per `TEXT_BYTES_PER_UNIT` bytes it copies.
+        let since = budget.work();
+        let text = "x".repeat(10 * TEXT_BYTES_PER_UNIT);
+        sink.append(
+            &parent,
+            NodeOrText::AppendText(StrTendril::from_slice(&text)),
+        );
+        assert_eq!(charged(since), 11);
+        // A reparent costs a unit per child it moves.
+        let new_parent = element(&sink, "b", 0);
+        let since = budget.work();
+        sink.reparent_children(&parent, &new_parent);
+        assert_eq!(charged(since), 1 + 1001);
+        assert_eq!(parent.children().count(), 0);
+        assert_eq!(new_parent.children().count(), 1001);
+        // An element costs a unit per attribute it brings, a merge a unit per
+        // attribute present and per attribute merged.
+        let since = budget.work();
+        let body = element(&sink, "body", 300);
+        assert_eq!(charged(since), 1 + 300);
+        let since = budget.work();
+        sink.add_attrs_if_missing(&body, attributes("b", 50));
+        sink.add_attrs_if_missing(&body, attributes("a", 10));
+        assert_eq!(charged(since), (1 + 300 + 50) + (1 + 350 + 10));
+        assert_eq!(attr_count(&body), 350);
+        assert!(!budget.spent());
+    }
+
+    #[test]
+    fn a_spent_budget_leaves_the_tree_as_it_is() {
+        // Once the budget is spent, every call that would change the tree is
+        // a no-op, while the calls html5ever reads answers from still answer.
+        let (sink, budget) = bounded(unhurried());
+        let root = element(&sink, "html", 1);
+        let parent = element(&sink, "div", 0);
+        let child = element(&sink, "p", 0);
+        sink.append(&root, NodeOrText::AppendNode(parent.clone()));
+        sink.append(&parent, NodeOrText::AppendNode(child.clone()));
+        budget.stop();
+        let late = element(&sink, "b", 0);
+        sink.append(&parent, NodeOrText::AppendNode(late.clone()));
+        sink.append(
+            &parent,
+            NodeOrText::AppendText(StrTendril::from_slice("late")),
+        );
+        sink.append_before_sibling(&child, NodeOrText::AppendNode(late.clone()));
+        sink.append_based_on_parent_node(&child, &parent, NodeOrText::AppendNode(late.clone()));
+        sink.remove_from_parent(&child);
+        sink.reparent_children(&parent, &late);
+        sink.add_attrs_if_missing(&root, attributes("late", 3));
+        let kept: Vec<Handle> = parent.children().collect();
+        assert_eq!(kept.len(), 1);
+        assert!(Rc::ptr_eq(&kept[0], &child));
+        assert!(late.parent().is_none());
+        assert_eq!(late.children().count(), 0);
+        assert_eq!(attr_count(&root), 1);
+        assert_eq!(&**sink.elem_name(&late).local, "b");
+        assert!(sink.same_node(&child, &child));
+        assert!(!sink.same_node(&child, &late));
+    }
+
+    #[test]
+    fn a_costly_step_reads_the_clock_before_it_runs() {
+        // The deadline passes while the work budget has room. A cheap step
+        // soon after the last clock read runs; a step that costs more than
+        // `CLOCK_CHECK_UNITS` reads the clock first and is refused.
+        let dom = Dom::default();
+        let parent = element(&dom, "div", 0);
+        for _ in 0..2 * CLOCK_CHECK_UNITS {
+            dom.append(&parent, NodeOrText::AppendNode(element(&dom, "br", 0)));
+        }
+        let new_parent = element(&dom, "b", 0);
+        let budget = Rc::new(Budget::new(Deadline {
+            limit: Instant::now(),
+        }));
+        // As if the clock had just been read.
+        budget.clock_check_at.set(CLOCK_CHECK_UNITS);
+        let sink = BoundedDom {
+            inner: dom,
+            budget: budget.clone(),
+        };
+        sink.append(
+            &new_parent,
+            NodeOrText::AppendText(StrTendril::from_slice("x")),
+        );
+        assert!(!budget.spent());
+        assert_eq!(new_parent.children().count(), 1);
+        sink.reparent_children(&parent, &new_parent);
+        assert!(budget.spent(), "the reparent did not read the clock");
+        assert_eq!(parent.children().count(), 2 * CLOCK_CHECK_UNITS);
+        assert_eq!(new_parent.children().count(), 1);
+    }
+
+    #[test]
+    fn moves_in_a_wide_sibling_list_take_one_step() {
+        // Detach every child of a 50k-wide list from the front, then put
+        // each back before the current first child: the far end from where a
+        // vector would search and shift (quadratic, seconds). Each move is
+        // one unit and one constant step.
+        const WIDE: usize = 50_000;
+        let (sink, budget) = bounded(unhurried());
+        let parent = element(&sink, "div", 0);
+        let children: Vec<Handle> = (0..WIDE).map(|_| element(&sink, "br", 0)).collect();
+        for child in &children {
+            sink.append(&parent, NodeOrText::AppendNode(child.clone()));
+        }
+        let anchor = element(&sink, "hr", 0);
+        let started = Instant::now();
+        let since = budget.work();
+        for child in &children {
+            sink.remove_from_parent(child);
+        }
+        assert_eq!(parent.children().count(), 0);
+        sink.append(&parent, NodeOrText::AppendNode(anchor.clone()));
+        let mut first = anchor.clone();
+        for child in &children {
+            sink.append_before_sibling(&first, NodeOrText::AppendNode(child.clone()));
+            first = child.clone();
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(budget.work() - since, 2 * WIDE + 1);
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "{WIDE} moves at the front took {elapsed:?}"
+        );
+        let order: Vec<Handle> = parent.children().collect();
+        assert_eq!(order.len(), WIDE + 1);
+        assert!(order
+            .iter()
+            .zip(children.iter().rev())
+            .all(|(a, b)| Rc::ptr_eq(a, b)));
+        assert!(Rc::ptr_eq(&order[WIDE], &anchor));
+    }
+
+    #[test]
+    fn a_100k_wide_tree_parses_and_drops_without_overflowing_the_stack() {
+        // Siblings own each other in a chain; dropping the chain must not
+        // recurse either.
+        on_a_small_stack(|| {
+            let (dom, aborted) = parse("<br>".repeat(100_000).as_bytes(), &unhurried());
+            assert!(!aborted, "the work budget cut a linear parse");
+            let body = body_of(&dom.document, &unhurried());
+            assert_eq!(body.children().count(), 100_000);
+            drop(body);
+            drop(dom);
+        });
+    }
+
+    /// Late `<html>` and `<body>` tags to the parse cap, each bringing one
+    /// new attribute, which is merged into a list that grows each time: the
+    /// merges are quadratic.
+    fn attribute_merge_flood() -> Vec<u8> {
+        let mut html = b"<body><p>First paragraph.</p>".to_vec();
+        let mut i = 0u32;
+        while html.len() < kernel_net::MAX_PARSE_BYTES {
+            html.extend_from_slice(format!("<html a{i}=1><body b{i}=1>").as_bytes());
+            i += 1;
+        }
+        html
+    }
+
+    #[test]
+    fn attribute_merges_into_html_and_body_are_charged_and_cut() {
+        // The charges stop the merges within the deadline, and the result
+        // says truncated.
+        let html = attribute_merge_flood();
+        for mail in [false, true] {
+            let started = Instant::now();
+            let readable = if mail {
+                extract_body_text(&html)
+            } else {
+                extract_readable(&html)
+            };
+            let elapsed = started.elapsed();
+            assert!(readable.truncated, "mail {mail}: not cut");
+            assert!(
+                elapsed < EXTRACT_WALL_BUDGET + SLACK,
+                "mail {mail}: took {elapsed:?}"
+            );
+        }
+    }
+
+    /// Hostile floods for the sink's tree moves, about `limit` bytes each:
+    /// nodes foster-parented before an open table, a block adopted out of
+    /// its formatting element again and again, and an adoption that moves a
+    /// wide child list each time. Each page ends with `KEPT`.
+    fn move_floods(limit: usize) -> Vec<(&'static str, Vec<u8>)> {
+        let flood = |head: &str, unit: &str, tail: &str| {
+            let mut html = head.as_bytes().to_vec();
+            while html.len() + unit.len() + tail.len() <= limit {
+                html.extend_from_slice(unit.as_bytes());
+            }
+            html.extend_from_slice(tail.as_bytes());
+            html
+        };
+        let wide = format!("<b><div>{}</b></div></b>", "<br>".repeat(1000));
+        vec![
+            (
+                "foster",
+                flood("<body><table>", "<b>x</b><i>y</i>", "</table><p>KEPT</p>"),
+            ),
+            (
+                "adopt",
+                flood(
+                    "<body><main>",
+                    "<b><div>y</b></div></b>",
+                    "<p>KEPT</p></main>",
+                ),
+            ),
+            (
+                "reparent",
+                flood("<body><main>", &wide, "<p>KEPT</p></main>"),
+            ),
+        ]
+    }
+
+    #[test]
+    fn foster_parenting_and_adoption_floods_stay_cheap() {
+        // Each move is one step now, so these floods are linear. At a size a
+        // debug build parses well inside the deadline the whole page reads;
+        // at the parse cap they finish within the deadline plus slack.
+        for (name, html) in move_floods(32 * 1024) {
+            let mail = extract_body_text(&html);
+            assert!(!mail.truncated, "{name}");
+            let tail = &mail.text[mail.text.len().saturating_sub(40)..];
+            assert!(mail.text.ends_with("KEPT"), "{name}: {tail:?}");
+        }
+        for (name, html) in move_floods(kernel_net::MAX_PARSE_BYTES) {
+            let started = Instant::now();
+            let _ = extract_readable(&html);
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < EXTRACT_WALL_BUDGET + SLACK,
+                "{name} took {elapsed:?}"
+            );
         }
     }
 
@@ -2167,6 +2708,17 @@ mod tests {
                 format!("rv4-01-deep-stack-{tag}-tail"),
                 deep_stack_then_end_tag_tail(end.as_bytes()),
             ));
+        }
+
+        // The sink's costly steps (PR #78 round 2): attribute merges into
+        // `<html>`/`<body>`, and the tree moves of foster parenting and the
+        // adoption agency.
+        let mut merges = attribute_merge_flood();
+        merges.truncate(kernel_net::MAX_PARSE_BYTES);
+        shapes.push(("attr-merge-html-body".to_string(), merges));
+        for (name, mut html) in move_floods(kernel_net::MAX_PARSE_BYTES + 8192) {
+            html.truncate(kernel_net::MAX_PARSE_BYTES);
+            shapes.push((format!("move-flood-{name}"), html));
         }
 
         shapes
@@ -2461,3 +3013,6 @@ mod proptests {
         }
     }
 }
+
+#[cfg(test)]
+mod parity;

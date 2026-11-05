@@ -3,16 +3,26 @@
 //!
 //! It replaces `markup5ever_rcdom`, which its authors publish as an
 //! unofficial test DOM, not for production. It keeps only what the walkers
-//! read: element names and attributes, text, and the tree (children and a
-//! weak parent link). Comments, doctypes and processing instructions keep
-//! their place in the tree but not their content.
+//! read: element names and attributes, text, and the tree. Comments,
+//! doctypes and processing instructions keep their place in the tree but not
+//! their content.
+//!
+//! A node's children are a linked list: a node holds its first child and its
+//! next sibling (strong links), and its parent, its previous sibling and its
+//! last child (weak links). Appending, inserting before a sibling and
+//! detaching therefore take a few steps however many siblings a node has.
+//! Two sink steps cost more, in proportion to what they touch:
+//! [`TreeSink::reparent_children`] walks the children it moves and
+//! [`TreeSink::add_attrs_if_missing`] the attributes it compares. The
+//! budgeted sink in `readability.rs` charges that work before it runs.
 //!
 //! Three properties hold for hostile pages:
 //! - A `<template>`'s contents are a fragment of their own, never children
 //!   of the element, so no walker reads them as page text.
 //! - Dropping a tree is iterative ([`Node`]'s `Drop`): a page nested 100k
-//!   deep cannot overflow the stack.
-//! - No sink method panics. Where html5ever's trait promises an element, a
+//!   deep, or 100k siblings wide, cannot overflow the stack.
+//! - No sink method panics. The links sit in `Cell`s that are only taken and
+//!   put back, never borrowed. Where html5ever's trait promises an element, a
 //!   template or a parent that is not there, the sink answers a blank name or
 //!   a detached fragment, or leaves the node out of the tree.
 
@@ -48,76 +58,165 @@ pub(super) enum NodeData {
 /// One node of the tree.
 pub(super) struct Node {
     /// `None` for the document, a template's contents or a detached node.
-    pub(super) parent: Cell<Option<Weak<Node>>>,
-    pub(super) children: RefCell<Vec<Handle>>,
+    parent: Cell<Option<Weak<Node>>>,
+    previous_sibling: Cell<Option<Weak<Node>>>,
+    next_sibling: Cell<Option<Handle>>,
+    first_child: Cell<Option<Handle>>,
+    last_child: Cell<Option<Weak<Node>>>,
     pub(super) data: NodeData,
+}
+
+/// A copy of a strong link; the link stays in place.
+fn strong(link: &Cell<Option<Handle>>) -> Option<Handle> {
+    let node = link.take();
+    link.set(node.clone());
+    node
+}
+
+/// The node behind a weak link, while it is alive; the link stays in place.
+fn weak(link: &Cell<Option<Weak<Node>>>) -> Option<Handle> {
+    let target = link.take();
+    let node = target.as_ref().and_then(Weak::upgrade);
+    link.set(target);
+    node
 }
 
 impl Node {
     fn new(data: NodeData) -> Handle {
         Rc::new(Node {
             parent: Cell::new(None),
-            children: RefCell::new(Vec::new()),
+            previous_sibling: Cell::new(None),
+            next_sibling: Cell::new(None),
+            first_child: Cell::new(None),
+            last_child: Cell::new(None),
             data,
         })
     }
 
     /// The parent, while it is alive.
-    fn parent(&self) -> Option<Handle> {
-        let weak = self.parent.take();
-        let parent = weak.as_ref().and_then(Weak::upgrade);
-        self.parent.set(weak);
-        parent
+    pub(super) fn parent(&self) -> Option<Handle> {
+        weak(&self.parent)
     }
 
-    /// Move out the nodes this one owns: its children and its template
-    /// contents.
-    fn take_owned(&mut self) -> Vec<Handle> {
-        let mut owned = std::mem::take(self.children.get_mut());
-        if let NodeData::Element {
-            template_contents, ..
-        } = &mut self.data
-        {
-            owned.extend(template_contents.take());
+    /// The children, first to last.
+    pub(super) fn children(&self) -> Children {
+        Children {
+            next: strong(&self.first_child),
         }
-        owned
+    }
+
+    /// Unlink every child and hand them back, first to last, each with no
+    /// parent and no siblings left.
+    pub(super) fn take_children(&self) -> Vec<Handle> {
+        self.last_child.set(None);
+        let mut children = Vec::new();
+        let mut next = self.first_child.take();
+        while let Some(child) = next {
+            next = child.next_sibling.take();
+            child.previous_sibling.set(None);
+            child.parent.set(None);
+            children.push(child);
+        }
+        children
+    }
+
+    /// Move out the nodes this one owns: its first child, its next sibling
+    /// and its template contents.
+    fn take_owned(&mut self) -> [Option<Handle>; 3] {
+        let template = match &mut self.data {
+            NodeData::Element {
+                template_contents, ..
+            } => template_contents.take(),
+            _ => None,
+        };
+        [
+            self.first_child.get_mut().take(),
+            self.next_sibling.get_mut().take(),
+            template,
+        ]
     }
 }
 
 impl Drop for Node {
-    /// Free the subtree with an explicit stack, never by recursion. A node
-    /// still held elsewhere keeps its own subtree; it is freed the same way
-    /// when its last holder drops it.
+    /// Free the subtree and the later siblings with an explicit stack, never
+    /// by recursion. A node still held elsewhere keeps what it owns; that is
+    /// freed the same way when its last holder drops it.
     fn drop(&mut self) {
-        let mut stack = self.take_owned();
+        let mut stack: Vec<Handle> = self.take_owned().into_iter().flatten().collect();
         while let Some(node) = stack.pop() {
             if let Ok(mut node) = Rc::try_unwrap(node) {
                 // `node` drops at the end of this block with nothing left to
                 // own, so its own `drop` does not descend.
-                stack.extend(node.take_owned());
+                stack.extend(node.take_owned().into_iter().flatten());
             }
         }
     }
 }
 
-/// `child`'s live parent and its index there, searched from the end: the
-/// tree builder works next to the nodes it added last.
-fn parent_and_index(child: &Handle) -> Option<(Handle, usize)> {
-    let parent = child.parent()?;
-    let index = parent
-        .children
-        .borrow()
-        .iter()
-        .rposition(|node| Rc::ptr_eq(node, child))?;
-    Some((parent, index))
+/// The children of a node, first to last ([`Node::children`]).
+pub(super) struct Children {
+    next: Option<Handle>,
 }
 
-/// Take `node` out of its parent's children.
-fn detach(node: &Handle) {
-    if let Some((parent, index)) = parent_and_index(node) {
-        parent.children.borrow_mut().remove(index);
+impl Iterator for Children {
+    type Item = Handle;
+
+    fn next(&mut self) -> Option<Handle> {
+        let node = self.next.take()?;
+        self.next = strong(&node.next_sibling);
+        Some(node)
     }
-    node.parent.set(None);
+}
+
+/// Take `node` out of its parent's children: its neighbours link to each
+/// other, and it keeps no parent and no siblings.
+fn detach(node: &Handle) {
+    let parent = node.parent.take().and_then(|parent| parent.upgrade());
+    let previous = node
+        .previous_sibling
+        .take()
+        .and_then(|previous| previous.upgrade());
+    let next = node.next_sibling.take();
+    if let Some(next) = &next {
+        next.previous_sibling
+            .set(previous.as_ref().map(Rc::downgrade));
+    } else if let Some(parent) = &parent {
+        parent.last_child.set(previous.as_ref().map(Rc::downgrade));
+    }
+    if let Some(previous) = &previous {
+        previous.next_sibling.set(next);
+    } else if let Some(parent) = &parent {
+        parent.first_child.set(next);
+    }
+}
+
+/// Link `child`, which has no parent and no siblings, as `parent`'s last
+/// child.
+fn push_child(parent: &Handle, child: Handle) {
+    let last = weak(&parent.last_child);
+    child.parent.set(Some(Rc::downgrade(parent)));
+    child.previous_sibling.set(last.as_ref().map(Rc::downgrade));
+    parent.last_child.set(Some(Rc::downgrade(&child)));
+    match last {
+        Some(last) => last.next_sibling.set(Some(child)),
+        None => parent.first_child.set(Some(child)),
+    }
+}
+
+/// Link `child`, which has no parent and no siblings, right before
+/// `sibling`, a child of `parent`.
+fn insert_before(parent: &Handle, sibling: &Handle, child: Handle) {
+    let previous = weak(&sibling.previous_sibling);
+    child.parent.set(Some(Rc::downgrade(parent)));
+    child
+        .previous_sibling
+        .set(previous.as_ref().map(Rc::downgrade));
+    child.next_sibling.set(Some(sibling.clone()));
+    sibling.previous_sibling.set(Some(Rc::downgrade(&child)));
+    match previous {
+        Some(previous) => previous.next_sibling.set(Some(child)),
+        None => parent.first_child.set(Some(child)),
+    }
 }
 
 /// Add `text` to `node` when it is a text node.
@@ -201,8 +300,7 @@ impl TreeSink for Dom {
     fn append(&self, parent: &Handle, child: NodeOrText<Handle>) {
         let child = match child {
             NodeOrText::AppendText(text) => {
-                let last = parent.children.borrow().last().cloned();
-                if last.is_some_and(|last| merge_text(&last, &text)) {
+                if weak(&parent.last_child).is_some_and(|last| merge_text(&last, &text)) {
                     return;
                 }
                 text_node(text)
@@ -214,8 +312,7 @@ impl TreeSink for Dom {
                 node
             }
         };
-        child.parent.set(Some(Rc::downgrade(parent)));
-        parent.children.borrow_mut().push(child);
+        push_child(parent, child);
     }
 
     fn append_based_on_parent_node(
@@ -259,27 +356,24 @@ impl TreeSink for Dom {
 
     fn append_before_sibling(&self, sibling: &Handle, new_node: NodeOrText<Handle>) {
         if let NodeOrText::AppendNode(node) = &new_node {
-            // "`new_node` may have an old parent": take it out first, so the
-            // index below is where it goes.
+            // "`new_node` may have an old parent": take it out first, so it
+            // is not linked twice.
             detach(node);
         }
-        let Some((parent, index)) = parent_and_index(sibling) else {
+        let Some(parent) = sibling.parent() else {
             return;
         };
         let child = match new_node {
             NodeOrText::AppendNode(node) => node,
             NodeOrText::AppendText(text) => {
-                let previous = index
-                    .checked_sub(1)
-                    .and_then(|before| parent.children.borrow().get(before).cloned());
+                let previous = weak(&sibling.previous_sibling);
                 if previous.is_some_and(|previous| merge_text(&previous, &text)) {
                     return;
                 }
                 text_node(text)
             }
         };
-        child.parent.set(Some(Rc::downgrade(&parent)));
-        parent.children.borrow_mut().insert(index, child);
+        insert_before(&parent, sibling, child);
     }
 
     fn add_attrs_if_missing(&self, target: &Handle, attrs: Vec<Attribute>) {
@@ -287,8 +381,14 @@ impl TreeSink for Dom {
             return;
         };
         let mut present = present.borrow_mut();
-        let names: HashSet<QualName> = present.iter().map(|attr| attr.name.clone()).collect();
-        present.extend(attrs.into_iter().filter(|attr| !names.contains(&attr.name)));
+        let missing: Vec<Attribute> = {
+            let names: HashSet<&QualName> = present.iter().map(|attr| &attr.name).collect();
+            attrs
+                .into_iter()
+                .filter(|attr| !names.contains(&attr.name))
+                .collect()
+        };
+        present.extend(missing);
     }
 
     fn remove_from_parent(&self, target: &Handle) {
@@ -296,11 +396,9 @@ impl TreeSink for Dom {
     }
 
     fn reparent_children(&self, node: &Handle, new_parent: &Handle) {
-        let children = std::mem::take(&mut *node.children.borrow_mut());
-        for child in &children {
-            child.parent.set(Some(Rc::downgrade(new_parent)));
+        for child in node.take_children() {
+            push_child(new_parent, child);
         }
-        new_parent.children.borrow_mut().extend(children);
     }
 
     fn is_mathml_annotation_xml_integration_point(&self, target: &Handle) -> bool {

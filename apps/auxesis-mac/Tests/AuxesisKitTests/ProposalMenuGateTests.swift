@@ -158,7 +158,7 @@ import XCTest
 
     /// Lines that call an action which sends, approves, edits or dismisses an approval.
     private nonisolated static func approvalCalls(in body: String) -> [String] {
-        let actions = ["sendProposal", "sendEdited", "approve", "undo", "notNow", "beginEdit", "cancelEdit", "reopen", "resolve", "deny"]
+        let actions = ["sendProposal", "sendEdited", "approve", "undo", "notNow", "beginEdit", "cancelEdit", "reopen", "resolve", "deny", "answer"]
         return body.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { line in actions.contains { line.contains(".\($0)(") } }

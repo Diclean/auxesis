@@ -56,6 +56,13 @@ fn home_with_server(mode: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     );
     std::fs::write(home.join("mcp.toml"), owner_approved(&server, token)).unwrap();
     write_mode(&home, mode);
+    // The chief `main` has no blanket MCP access: the owner grants this tool.
+    let mut chief = auxd::agents::grants(&home, "main").unwrap();
+    chief.can_do.push(aux_runtime::grants::DoGrant {
+        skill: "mcp__fake__CRM_LOOKUP".to_string(),
+        level: aux_runtime::grants::ActionLevel::Auto,
+    });
+    auxd::agents::write_grants(&home, "main", &chief).unwrap();
     (dir, home, tmp)
 }
 
@@ -84,8 +91,8 @@ fn write_mode(home: &Path, mode: &str) {
     std::fs::write(
         kernel_core::config_path(home),
         format!(
-            "version = 1\n\n[privacy]\nmode = \"{mode}\"\n\n[[rules]]\ndot = \"main\"\n\
-             tool = \"mcp__fake__CRM_LOOKUP\"\naction = \"allow\"\n"
+            "version = 1\ndefault_agent = \"main\"\n\n[privacy]\nmode = \"{mode}\"\n\n\
+             [[rules]]\ndot = \"main\"\ntool = \"mcp__fake__CRM_LOOKUP\"\naction = \"allow\"\n"
         ),
     )
     .unwrap();

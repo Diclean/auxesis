@@ -12,6 +12,131 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use thiserror::Error;
 
+/// The text of a new `config.toml`: the kernel's defaults with `main` as the
+/// chief. Every path that creates the file starts from it. A new file with no
+/// `default_agent` would read as an older install, whose chief is `aux`.
+pub fn new_config_text() -> Result<String, toml::ser::Error> {
+    let config = kernel_core::Config {
+        default_agent: aux_runtime::grants::CHIEF_AGENT.to_string(),
+        ..kernel_core::Config::default()
+    };
+    toml::to_string_pretty(&config)
+}
+
+/// Create an app default only when this home has no config; never rewrite an
+/// existing installation. An explicit `default_agent`, or an older install's
+/// file without one, stays exactly as it is. The file is the one under the
+/// verified home's real path, and it must be a regular file this user owns.
+pub fn bootstrap_config(home: &kernel_core::SandboxHome) -> Result<(), kernel_core::ConfigError> {
+    ensure_config_file(&home.real_path()?.join("config.toml"))
+}
+
+/// Load the config of `home`, creating it first with [`bootstrap_config`].
+///
+/// The app loads through this or [`load_or_create`], never through the
+/// kernel's own load-or-create: that one writes the kernel's defaults, whose
+/// chief is `aux`, into a new home (the workspace `clippy.toml` refuses it).
+#[allow(clippy::disallowed_methods)]
+pub fn load_or_create_verified(
+    home: &kernel_core::SandboxHome,
+) -> Result<Config, kernel_core::ConfigError> {
+    bootstrap_config(home)?;
+    Config::load_or_create_verified(home)
+}
+
+/// [`load_or_create_verified`] for a config file given by path, as the
+/// kernel's path-based load takes it: a missing file is published from
+/// [`new_config_text`], and only a regular file this user owns is loaded.
+#[allow(clippy::disallowed_methods)]
+pub fn load_or_create(path: &Path) -> Result<Config, kernel_core::ConfigError> {
+    ensure_config_file(path)?;
+    Config::load_or_create(path)
+}
+
+/// Publish `path` from [`new_config_text`] when nothing is there, then accept
+/// what is there only as a regular file this user owns.
+fn ensure_config_file(path: &Path) -> Result<(), kernel_core::ConfigError> {
+    match std::fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            publish_new(path, new_config_text()?.as_bytes())?;
+        }
+        Err(err) => return Err(err.into()),
+        Ok(_) => {}
+    }
+    Ok(check_config_file(path)?)
+}
+
+/// Write `data` to a unique temp file beside `path` (0600, synced), then
+/// hard-link it to `path` and drop the temp name. The link fails when `path`
+/// exists, so the file appears complete or not at all, and an existing file
+/// or symlink is never replaced: a process that loses the race keeps the
+/// winner's file.
+fn publish_new(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let next = NEXT.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_file_name(format!(".{name}.new.{}.{stamp}.{next}", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    let linked = file
+        .write_all(data)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::hard_link(&temp, path));
+    drop(file);
+    // The temp name goes either way: once linked, `path` holds the bytes.
+    let _ = std::fs::remove_file(&temp);
+    match linked {
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
+}
+
+/// Refuse a `config.toml` that must not be loaded, without following it: a
+/// symlink (it can name an older install's file elsewhere), anything but a
+/// regular file, or a file another user owns.
+fn check_config_file(path: &Path) -> std::io::Result<()> {
+    if !check_config_owner(path)?.is_file() {
+        return Err(refusal(path, "it is not a regular file"));
+    }
+    Ok(())
+}
+
+/// Refuse a symlink at `path` (it can name another install's file) or a file
+/// another user owns, without following it; return what is there.
+fn check_config_owner(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(refusal(path, "it is a symlink, not a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: `geteuid` has no preconditions and cannot fail.
+        if meta.uid() != unsafe { libc::geteuid() } {
+            return Err(refusal(path, "another user owns it"));
+        }
+    }
+    Ok(meta)
+}
+
+fn refusal(path: &Path, why: &str) -> std::io::Error {
+    let message = format!("refusing {}: {why}", path.display());
+    std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
+}
+
 /// Why no provider could be selected.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ProviderSelectError {
@@ -189,7 +314,8 @@ pub fn load_rules(path: &Path) -> Result<Vec<Rule>, RulesError> {
 /// lock, so writers in other processes are serialized too.
 static APPEND_RULE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Append one `[[rules]]` entry to `path`, creating the file when missing.
+/// Append one `[[rules]]` entry to `path`, creating the file when missing
+/// (from [`new_config_text`], as every new config starts).
 ///
 /// Existing content is preserved byte for byte; the new rule is appended
 /// last, so it wins under the broker's last-match-wins evaluation.
@@ -214,9 +340,17 @@ pub fn append_rule(path: &Path, rule: &Rule) -> Result<(), RulesError> {
         .map_err(|source| RulesError::Serialize { source })?;
     let _guard = kernel_core::lock_recover(&APPEND_RULE_LOCK);
 
+    // Never follow a symlink or edit another user's file. A special file
+    // keeps the read below, as before: a stalled read only holds this lock.
+    match check_config_owner(path) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(RulesError::Io(err)),
+        _ => {}
+    }
     let mut text = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            new_config_text().map_err(|source| RulesError::Serialize { source })?
+        }
         Err(err) => return Err(RulesError::Io(err)),
     };
     if !text.is_empty() {
@@ -551,6 +685,129 @@ mod tests {
             load_rules(&path).unwrap(),
             vec![Rule::new("axis", "read_file", Action::Allow)]
         );
+        // It starts as every new config does: `main` is the chief.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let config: Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_agent, "main", "{text}");
+    }
+
+    /// A new config names `main` as its chief, whichever load creates it; an
+    /// existing file is never rewritten, so an explicit `aux` and an older
+    /// install's file without the key both stay exactly as they were.
+    #[test]
+    fn a_new_config_names_main_and_an_existing_one_is_kept_byte_for_byte() {
+        let existing = [
+            "version = 1\ndefault_agent = \"aux\"\n",
+            "version = 1\n\n[privacy]\nmode = \"open\"\n",
+        ];
+        for verified in [false, true] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let load = |path: &Path| {
+                if verified {
+                    let home = kernel_core::verified_home_or_verify(path.parent().unwrap());
+                    load_or_create_verified(&home.unwrap())
+                } else {
+                    load_or_create(path)
+                }
+            };
+            let config = load(&path).unwrap();
+            assert_eq!(config.default_agent, "main", "verified: {verified}");
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("default_agent = \"main\""), "{text}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "verified: {verified}");
+            }
+
+            for before in existing {
+                std::fs::write(&path, before).unwrap();
+                load(&path).unwrap();
+                append_rule(&path, &Rule::new("main", "shell", Action::Allow)).unwrap();
+                // Kept as it was; the rule is only added after it.
+                let after = std::fs::read_to_string(&path).unwrap();
+                assert!(after.starts_with(before), "{after}");
+                let raw: toml::Table = toml::from_str(&after).unwrap();
+                let named = raw.get("default_agent").and_then(|value| value.as_str());
+                let expected = before.contains("default_agent").then_some("aux");
+                assert_eq!(named, expected, "{after}");
+            }
+        }
+    }
+
+    /// Racing first creates on an empty home, by path and through the verified
+    /// handle: the file appears complete or not at all, so every loser loads
+    /// the winner's file and every load names `main`. No temp file is left.
+    #[test]
+    fn racing_first_creates_all_load_a_complete_config_naming_main() {
+        const LOADERS: usize = 8;
+        for round in 0..50 {
+            let dir = tempdir().unwrap();
+            let verified = kernel_core::verified_home_or_verify(dir.path()).unwrap();
+            let path = dir.path().join("config.toml");
+            let start = std::sync::Barrier::new(LOADERS);
+            std::thread::scope(|scope| {
+                for loader in 0..LOADERS {
+                    let (start, verified, path) = (&start, &verified, &path);
+                    scope.spawn(move || {
+                        start.wait();
+                        let config = if loader % 2 == 0 {
+                            load_or_create(path)
+                        } else {
+                            load_or_create_verified(verified)
+                        };
+                        let config = config.unwrap_or_else(|err| panic!("round {round}: {err}"));
+                        assert_eq!(config.default_agent, "main", "round {round}, {loader}");
+                    });
+                }
+            });
+            let names: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            let temp = names
+                .iter()
+                .any(|name| name.starts_with(".config.toml.new"));
+            assert!(!temp, "round {round}: {names:?}");
+        }
+    }
+
+    /// A `config.toml` that is a symlink is refused by every entry point and
+    /// never followed: not to create a dangling link's target, and not to load
+    /// an older install's file (no `default_agent`), which would read as `aux`.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_config_is_refused_never_followed() {
+        let legacy = "version = 1\n\n[privacy]\nmode = \"open\"\n";
+        for dangling in [true, false] {
+            let dir = tempdir().unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let verified = kernel_core::verified_home_or_verify(&home).unwrap();
+            let target = dir.path().join("legacy.toml");
+            if !dangling {
+                std::fs::write(&target, legacy).unwrap();
+            }
+            let path = home.join("config.toml");
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+
+            let err = load_or_create(&path).unwrap_err();
+            assert!(err.to_string().contains("symlink"), "{err}");
+            assert!(load_or_create_verified(&verified).is_err());
+            assert!(bootstrap_config(&verified).is_err());
+            let rule = Rule::new("main", "shell", Action::Allow);
+            assert!(append_rule(&path, &rule).is_err());
+
+            let link = std::fs::symlink_metadata(&path).unwrap();
+            assert!(link.file_type().is_symlink(), "the link was replaced");
+            if dangling {
+                assert!(!target.exists(), "the symlink target was created");
+            } else {
+                assert_eq!(std::fs::read_to_string(&target).unwrap(), legacy);
+            }
+        }
     }
 
     #[test]

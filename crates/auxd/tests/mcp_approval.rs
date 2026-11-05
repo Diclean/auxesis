@@ -238,7 +238,7 @@ async fn a_hand_edited_enabled_http_server_waits_for_approval() {
     .unwrap();
     // Run the daemon's real startup path: it builds the runtime from
     // `mcp.toml` before serving, which is where a hand edit must be refused.
-    let config = kernel_core::Config::load_or_create(&kernel_core::config_path(&home)).unwrap();
+    let config = aux_engine::config::load_or_create(&kernel_core::config_path(&home)).unwrap();
     let sandbox = aux_engine::shell_sandbox(&config.shell);
     let runtime = auxd::mcp::start(&home, &config.web, &sandbox).await;
     let mcp = std::sync::Arc::new(std::sync::RwLock::new(runtime));
@@ -678,7 +678,7 @@ async fn a_pack_never_approves_an_existing_server_outside_its_read_only_tools() 
     .unwrap();
     let _catalog = EnvVar::set("AUXESIS_MCP_CATALOG", &catalog);
     // Run the daemon's real startup path so the pending server has a status.
-    let config = kernel_core::Config::load_or_create(&kernel_core::config_path(&home)).unwrap();
+    let config = aux_engine::config::load_or_create(&kernel_core::config_path(&home)).unwrap();
     let sandbox = aux_engine::shell_sandbox(&config.shell);
     let runtime = auxd::mcp::start(&home, &config.web, &sandbox).await;
     let mcp = std::sync::Arc::new(std::sync::RwLock::new(runtime));

@@ -168,6 +168,8 @@ impl MailApi for FakeMail {
 }
 
 /// A temp home with `mode`, an optional agent tool grant, and optional rules.
+/// Its chief is `main`, the agent these turns run as: on a home whose chief
+/// is `aux`, `main` gets no mail tool `aux` lacks.
 fn home_with(
     mode: &str,
     agent_tools: Option<&[&str]>,
@@ -176,7 +178,8 @@ fn home_with(
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let mut config = format!("version = 1\n\n[privacy]\nmode = \"{mode}\"\n");
+    let mut config =
+        format!("version = 1\ndefault_agent = \"main\"\n\n[privacy]\nmode = \"{mode}\"\n");
     for rule in rules {
         config.push_str(&format!(
             "\n[[rules]]\ndot = \"main\"\ntool = \"{rule}\"\naction = \"allow\"\n"
@@ -233,7 +236,8 @@ fn mail_tools_are_invisible_without_a_grant() {
     let runner = EngineTurnRunner::new(&home)
         .with_provider(Arc::clone(&provider) as Arc<dyn ChatProvider>)
         .with_mail(Arc::new(FakeMail::new(false)));
-    runner.run_turn("main", None, "bonjour", None).unwrap();
+    // An added agent with no tools list and no grants of its own.
+    runner.run_turn("scout", None, "bonjour", None).unwrap();
 
     let requests = provider.requests();
     let tools = serde_json::to_string(&requests[0].tools).unwrap();

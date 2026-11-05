@@ -527,10 +527,7 @@ async fn agents_endpoint_reports_live_state_and_threads() {
         .iter()
         .map(|agent| agent["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        vec!["axis", "calendar", "clients", "documents", "mail", "main"]
-    );
+    assert_eq!(names, vec!["axis", "main"]);
 
     let main_agent = agents
         .as_array()
@@ -1125,7 +1122,7 @@ fn copy_model_tree(source: &Path, target: &Path) {
     }
 }
 
-async fn private_egress_e2e(deep: bool) {
+async fn private_egress_e2e(deep: bool, agent: &str) {
     let provider = Arc::new(FakeProvider::echo("fakey"));
     let selected = Arc::clone(&provider);
     let mut t = TestApi::start_with(move |home| {
@@ -1148,11 +1145,11 @@ async fn private_egress_e2e(deep: bool) {
     .await;
 
     let input = format!(
-        "Check these synthetic details: email {E2E_EMAIL}; phone {E2E_PHONE}; IBAN {E2E_IBAN}; health phrase {E2E_HEALTH}."
+        "Note these synthetic details: contact {E2E_EMAIL}; phone {E2E_PHONE}; IBAN {E2E_IBAN}; health phrase {E2E_HEALTH}."
     );
     let response = post_auth(
         &t,
-        "/v1/threads/notes/messages",
+        &format!("/v1/threads/{agent}/messages"),
         &serde_json::json!({"content": input}).to_string(),
     )
     .await;
@@ -1187,10 +1184,13 @@ async fn private_egress_e2e(deep: bool) {
         .and_then(|message| message["content"].as_str())
         .expect("owner-visible assistant reply");
     for value in [E2E_EMAIL, E2E_PHONE, E2E_IBAN, E2E_HEALTH] {
-        assert!(reply.contains(value), "owner reply was not rehydrated");
+        assert!(
+            reply.contains(value),
+            "owner reply was not rehydrated: {reply}"
+        );
     }
 
-    let receipts = get_auth(&t, "/v1/receipts?agent=notes&limit=10").await;
+    let receipts = get_auth(&t, &format!("/v1/receipts?agent={agent}&limit=10")).await;
     assert_eq!(receipts.status, 200, "body: {}", receipts.body);
     let receipts = receipts.json();
     let receipt = receipts
@@ -1223,13 +1223,20 @@ async fn private_egress_e2e(deep: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn private_api_turn_masks_each_value_before_the_fake_provider() {
-    private_egress_e2e(false).await;
+    private_egress_e2e(false, "notes").await;
+}
+
+/// The chief has every access, and its text is still
+/// tokenised before the provider and rehydrated for the owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn private_chief_turn_masks_each_value_before_the_fake_provider() {
+    private_egress_e2e(false, "main").await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires AUX_E2E_MODEL_DIR with the public Deep model files"]
 async fn private_api_turn_masks_values_with_the_deep_model() {
-    private_egress_e2e(true).await;
+    private_egress_e2e(true, "notes").await;
 }
 
 /// An open-mode chief turn replaces a pasted IBAN with its
@@ -1984,6 +1991,7 @@ async fn an_edit_that_adds_a_bcc_to_a_mail_send_is_refused() {
         let workspace = aux_engine::workspace_dir(home, "main");
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(workspace.join("note.txt"), "hello note").unwrap();
+        std::fs::create_dir_all(home.join("agents/mail")).unwrap();
         ApiOptions {
             port: 0,
             event_poll: Duration::from_millis(25),

@@ -1,0 +1,7 @@
+# A new config.toml must name `main` as its chief. The kernel's own
+# load-or-create writes the kernel's defaults (chief `aux`), so a home it
+# creates reads as an older install. Load through aux_engine::config instead.
+disallowed-methods = [
+    { path = "kernel_core::Config::load_or_create", reason = "use aux_engine::config::load_or_create: a new config.toml must name `main` as its chief" },
+    { path = "kernel_core::Config::load_or_create_verified", reason = "use aux_engine::config::load_or_create_verified: a new config.toml must name `main` as its chief" },
+]

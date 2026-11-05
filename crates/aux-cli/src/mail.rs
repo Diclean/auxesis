@@ -268,22 +268,31 @@ fn set_mail_secret(home: &Path, account: &str, value: &str) -> Result<(), String
 }
 
 /// Append (or replace) one account in `[connectors.mail.accounts]`, preserving
-/// every other byte of `config.toml`.
+/// every other byte of `config.toml`. A home with no config gets the app's new
+/// one first, with `main` as the chief; an existing file is edited as it is.
 fn upsert_account_config(home: &Path, account: &MailAccount) -> Result<(), String> {
     let path = kernel_core::config_path(home);
     let replaced = kernel_core::with_config_lock(home, || -> Result<bool, String> {
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let handle = kernel_core::SandboxHome::open(home)
+            .map_err(|err| format!("opening {}: {err}", home.display()))?;
+        aux_engine::config::bootstrap_config(&handle)
+            .map_err(|err| format!("creating {}: {err}", path.display()))?;
+        // A file that exists but cannot be read is an error, never an empty
+        // config written over it.
+        let text = std::fs::read_to_string(&path)
+            .map_err(|err| format!("reading {}: {err}", path.display()))?;
         let mut document: toml_edit::DocumentMut =
             text.parse().map_err(|err: toml_edit::TomlError| {
                 let at = kernel_core::describe_toml_error("", &text, err.span(), err.message());
                 format!("parsing {}: {at}", path.display())
             })?;
         let account_toml = toml::to_string(account).map_err(|err| err.to_string())?;
-        let table: toml_edit::Table = account_toml
+        let mut table: toml_edit::Table = account_toml
             .parse::<toml_edit::DocumentMut>()
             .map_err(|err| format!("serializing the account: {err}"))?
             .as_table()
             .clone();
+        clear_positions(&mut table);
         let connectors = document
             .as_table_mut()
             .entry("connectors")
@@ -313,8 +322,6 @@ fn upsert_account_config(home: &Path, account: &MailAccount) -> Result<(), Strin
             accounts.push(table);
             false
         };
-        let handle = kernel_core::SandboxHome::open(home)
-            .map_err(|err| format!("opening {}: {err}", home.display()))?;
         handle
             .write_atomic(
                 Path::new("config.toml"),
@@ -329,6 +336,21 @@ fn upsert_account_config(home: &Path, account: &MailAccount) -> Result<(), Strin
         println!("Updated account `{}` in config.toml.", account.id);
     }
     Ok(())
+}
+
+/// Drop the document positions a table parsed on its own carries. Kept, they
+/// sort its sub-tables among the target file's tables, so `[...accounts.imap]`
+/// can land before its own `[[...accounts]]` and the file no longer parses.
+/// Cleared, every table is written where it is inserted.
+fn clear_positions(table: &mut toml_edit::Table) {
+    table.set_position(None);
+    for (_, item) in table.iter_mut() {
+        match item {
+            toml_edit::Item::Table(sub) => clear_positions(sub),
+            toml_edit::Item::ArrayOfTables(array) => array.iter_mut().for_each(clear_positions),
+            _ => {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +616,10 @@ mod tests {
         let text = std::fs::read_to_string(kernel_core::config_path(home)).unwrap();
         assert!(text.contains("[connectors.mail.accounts]"), "{text}");
         assert!(text.contains("host = \"imap.exemple.fr\""), "{text}");
+        // The home had no config: it gets the app's new one, which still
+        // parses with the account in it and names `main` the chief.
+        let config: kernel_core::Config = toml::from_str(&text).unwrap();
+        assert_eq!(config.default_agent, "main", "{text}");
         // A second call replaces, never duplicates.
         upsert_account_config(home, &account).unwrap();
         let text = std::fs::read_to_string(kernel_core::config_path(home)).unwrap();

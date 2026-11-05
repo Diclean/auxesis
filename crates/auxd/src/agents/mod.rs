@@ -236,18 +236,10 @@ pub fn seed_path(home: &Path) -> PathBuf {
     home.join("agents.toml")
 }
 
-/// The built-in five-agent seed, in sidebar order.
+/// The built-in seed: the chief alone. Mail, Calendar, Clients and Documents
+/// are templates the owner creates agents from.
 pub fn built_in_seed() -> Vec<AgentDef> {
-    let domain = |id: &str, name: &str, glyph: &str| AgentDef {
-        id: id.to_string(),
-        name: name.to_string(),
-        role: AgentRole::Domain,
-        glyph: glyph.to_string(),
-        brain: BrainRef::default(),
-        skills: Vec::new(),
-        grants: aux_runtime::grants::default_grants(id).expect("a seeded domain agent has grants"),
-    };
-    let mut agents = vec![AgentDef {
+    vec![AgentDef {
         id: CHIEF_AGENT.to_string(),
         name: "Aux".to_string(),
         role: AgentRole::Chief,
@@ -256,35 +248,53 @@ pub fn built_in_seed() -> Vec<AgentDef> {
         skills: Vec::new(),
         grants: aux_runtime::grants::default_grants(CHIEF_AGENT)
             .expect("the seeded chief has grants"),
-    }];
-    let names = [
-        ("mail", "Mail", "envelope"),
-        ("calendar", "Calendar", "calendar"),
-        ("clients", "Clients", "people"),
-        ("documents", "Documents", "receipt"),
-    ];
-    for (id, name, glyph) in names {
-        agents.push(domain(id, name, glyph));
-    }
-    debug_assert!(DOMAIN_AGENTS
-        .iter()
-        .all(|id| agents.iter().any(|agent| &agent.id == id)));
-    agents
+    }]
+}
+
+/// A starter template: the domain's shipped name, glyph, grants and files.
+pub fn template(id: &str) -> Option<AgentDef> {
+    let (name, glyph) = match id {
+        "mail" => ("Mail", "envelope"),
+        "calendar" => ("Calendar", "calendar"),
+        "clients" => ("Clients", "people"),
+        "documents" => ("Documents", "receipt"),
+        _ => return None,
+    };
+    Some(AgentDef {
+        id: id.to_string(),
+        name: name.to_string(),
+        role: AgentRole::Domain,
+        glyph: glyph.to_string(),
+        brain: BrainRef::default(),
+        skills: Vec::new(),
+        grants: aux_runtime::grants::default_grants(id)?,
+    })
 }
 
 /// Load the seed: `agents.toml` when present (strict), else the built-in five.
 pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
+    seed_for(home, chief_id(home))
+}
+
+/// [`seed`] for a chief already read from the config.
+fn seed_for(home: &Path, chief: &'static str) -> Result<Vec<AgentDef>, RegistryError> {
     let path = seed_path(home);
     let text = match read_private(home, Path::new("agents.toml")) {
         Ok(Some(text)) => text,
         Ok(None) => {
             let mut agents = built_in_seed();
-            // An older install keeps its chief, `aux`, exactly as before.
-            if chief_id(home) == LEGACY_CHIEF {
+            // An older install keeps its chief, `aux`, and its four domain
+            // agents exactly as before. Elsewhere a domain agent exists once
+            // it was created from its template (or an older daemon made it).
+            let legacy = chief == LEGACY_CHIEF;
+            if legacy {
                 agents[0].id = LEGACY_CHIEF.to_string();
                 agents[0].grants = aux_runtime::grants::default_grants(LEGACY_CHIEF)
                     .expect("the legacy chief has grants");
             }
+            let domains = DOMAIN_AGENTS.into_iter();
+            let present = domains.filter(|id| legacy || crate::agent::exists(home, id));
+            agents.extend(present.filter_map(template));
             return Ok(agents);
         }
         Err(err) => return Err(err),
@@ -321,14 +331,119 @@ pub fn seed(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
 }
 
 /// The full registry: the seed with each agent's `grants.toml` overlaid.
+/// No agent ever holds more than the chief: one that would (a template agent
+/// whose directory was made by hand, with the chief lowered) is capped.
 pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
-    let mut agents = seed(home)?;
+    let chief = chief_id(home);
+    let mut agents = seed_for(home, chief)?;
     for agent in &mut agents {
         if let Some(grants) = read_agent_grants(home, &agent.id)? {
             agent.grants = grants;
         }
     }
+    // Each ceiling as listed, before any cap. `main` is never capped here:
+    // its grants are the cap the other agents keep (on an older install, the
+    // four domain agents too); the run-time ceiling still holds it under the
+    // chief `aux` there.
+    let caps: Vec<(&str, AgentGrants)> = [CHIEF_AGENT, chief]
+        .into_iter()
+        .map(|id| (id, ceiling_grants(&agents, id)))
+        .collect();
+    for agent in &mut agents {
+        if agent.id == CHIEF_AGENT {
+            continue;
+        }
+        let over: Vec<&AgentGrants> = ceilings_for(chief, &agent.id)
+            .into_iter()
+            .filter_map(|id| caps.iter().find(|(cap, _)| *cap == id))
+            .map(|(_, grants)| grants)
+            .collect();
+        if over.iter().all(|cap| subset(&agent.grants, cap)) {
+            continue;
+        }
+        tracing::warn!(agent = %agent.id, "agent grants capped at the chief");
+        agent.grants = clamp_all(&agent.grants, &over);
+    }
     Ok(agents)
+}
+
+/// `grants` capped at each ceiling in turn. If that still exceeds one of
+/// them, only their `never`s remain.
+fn clamp_all(grants: &AgentGrants, caps: &[&AgentGrants]) -> AgentGrants {
+    let mut out = grants.clone();
+    for cap in caps {
+        out = clamp(&out, cap);
+    }
+    if caps.iter().all(|cap| subset(&out, cap)) {
+        return out;
+    }
+    let mut never: Vec<String> = Vec::new();
+    for denied in caps.iter().flat_map(|cap| &cap.never) {
+        if !never.contains(denied) {
+            never.push(denied.clone());
+        }
+    }
+    AgentGrants {
+        see: Vec::new(),
+        can_do: Vec::new(),
+        never,
+        egress_note: grants.egress_note.clone(),
+    }
+}
+
+/// `grants` capped at `chief`: each level at most the chief's, each chief
+/// skill below `auto` that `grants` lacks pinned `off`, every chief `never`
+/// kept. If that still exceeds the chief, only the chief's `never`s remain.
+fn clamp(grants: &AgentGrants, chief: &AgentGrants) -> AgentGrants {
+    let see = |level| match level {
+        AccessLevel::Off => 0,
+        AccessLevel::Ask => 1,
+        AccessLevel::Read => 2,
+    };
+    let act = |level| match level {
+        ActionLevel::Off => 0,
+        ActionLevel::Ask => 1,
+        ActionLevel::Auto => 2,
+    };
+    let mut out = grants.clone();
+    for grant in &mut out.see {
+        let own = chief.see.iter().filter(|own| own.scope == grant.scope);
+        let max = own.map(|own| own.level).min_by_key(|level| see(*level));
+        let max = max.unwrap_or(AccessLevel::Off);
+        if see(grant.level) > see(max) {
+            grant.level = max;
+        }
+    }
+    for grant in &mut out.can_do {
+        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
+        let max = own.map(|own| own.level).min_by_key(|level| act(*level));
+        let max = max.unwrap_or(ActionLevel::Off);
+        if act(grant.level) > act(max) {
+            grant.level = max;
+        }
+    }
+    for own in &chief.can_do {
+        if own.level != ActionLevel::Auto && !out.can_do.iter().any(|g| g.skill == own.skill) {
+            out.can_do.push(aux_runtime::grants::DoGrant {
+                skill: own.skill.clone(),
+                level: ActionLevel::Off,
+            });
+        }
+    }
+    for denied in &chief.never {
+        if !out.never.contains(denied) {
+            out.never.push(denied.clone());
+        }
+    }
+    if subset(&out, chief) {
+        return out;
+    }
+    AgentGrants {
+        see: Vec::new(),
+        can_do: Vec::new(),
+        never: chief.never.clone(),
+        egress_note: grants.egress_note.clone(),
+    }
 }
 
 /// One agent's definition, or `None`.
@@ -337,7 +452,8 @@ pub fn definition(home: &Path, id: &str) -> Result<Option<AgentDef>, RegistryErr
 }
 
 /// The chief: `aux` when `config.toml` names it (older installs; also the
-/// kernel default and an unreadable config), else `main`. No side effects.
+/// kernel default and an unreadable config), else `main`. A home with no
+/// config yet is a fresh install: `main`. No side effects.
 pub fn chief_id(home: &Path) -> &'static str {
     #[derive(Deserialize)]
     struct Head {
@@ -348,7 +464,8 @@ pub fn chief_id(home: &Path) -> &'static str {
         Ok(Some(text)) => toml::from_str::<Head>(&text)
             .ok()
             .map(|head| head.default_agent),
-        _ => Some(None),
+        Ok(None) => Some(Some(CHIEF_AGENT.to_string())),
+        Err(_) => None,
     };
     let fallback = || kernel_core::Config::default().default_agent;
     match named.map(|name| name.unwrap_or_else(fallback)) {
@@ -357,15 +474,45 @@ pub fn chief_id(home: &Path) -> &'static str {
     }
 }
 
-/// The ceiling every added agent stays under: the `main` chief's grants, or
-/// its shipped grants when this home does not list it (an older install).
-pub fn chief_grants(agents: &[AgentDef]) -> AgentGrants {
+/// The agents whose grants, tools lists and owner rules cap `agent`; none
+/// for the chief itself.
+///
+/// Every other agent stays under `main`, the shipped ceiling, as before. On
+/// an older install the chief is `aux`, so an added agent stays under `aux`
+/// too: it never gets a tool its actual chief lacks. The four domain agents
+/// `aux` hands work to keep their shipped access there.
+pub fn ceilings(home: &Path, agent: &str) -> Vec<&'static str> {
+    ceilings_for(chief_id(home), agent)
+}
+
+/// [`ceilings`] for a chief already read from the config.
+fn ceilings_for(chief: &'static str, agent: &str) -> Vec<&'static str> {
+    let mut ids = Vec::new();
+    if agent == chief {
+        return ids;
+    }
+    if agent != CHIEF_AGENT {
+        ids.push(CHIEF_AGENT);
+    }
+    if chief != CHIEF_AGENT && !DOMAIN_AGENTS.contains(&agent) {
+        ids.push(chief);
+    }
+    ids
+}
+
+/// The grants of one ceiling: its entry in `agents`, or its shipped grants
+/// when this home does not list it. An id with neither has no scoped access.
+pub fn ceiling_grants(agents: &[AgentDef], id: &str) -> AgentGrants {
     agents
         .iter()
-        .find(|agent| agent.id == CHIEF_AGENT)
+        .find(|agent| agent.id == id)
         .map(|agent| agent.grants.clone())
-        .unwrap_or_else(|| {
-            aux_runtime::grants::default_grants(CHIEF_AGENT).expect("the chief has grants")
+        .or_else(|| aux_runtime::grants::default_grants(id))
+        .unwrap_or_else(|| AgentGrants {
+            see: Vec::new(),
+            can_do: Vec::new(),
+            never: Vec::new(),
+            egress_note: String::new(),
         })
 }
 
@@ -418,7 +565,7 @@ const SHIPPED_FILES: [(&str, &str, &str); 9] = [
 /// True when `name` is a skill shipped inside `agent`'s directory.
 pub(crate) fn is_shipped_skill(agent: &str, name: &str) -> bool {
     SHIPPED_FILES.iter().any(|(shipped_agent, file, _)| {
-        *shipped_agent == agent
+        (*shipped_agent == agent || agent == CHIEF_AGENT)
             && file
                 .strip_prefix("skills/")
                 .and_then(|file| file.strip_suffix(".md"))
@@ -483,11 +630,31 @@ fn is_past_shipped_version(agent: &str, file: &str, bytes: &[u8]) -> bool {
 /// the current shipped text. A file the owner edited is kept, and the log
 /// says so.
 pub fn install_shipped_files(home: &Path) -> Result<Vec<PathBuf>, RegistryError> {
+    install_shipped_files_for(home, None)
+}
+
+/// [`install_shipped_files`] for one agent only (`Some(id)`), as at creation.
+/// The `main` chief, once its directory exists, also gets every shipped skill.
+pub fn install_shipped_files_for(
+    home: &Path,
+    only: Option<&str>,
+) -> Result<Vec<PathBuf>, RegistryError> {
     let agents = registry(home)?;
     let handle = SandboxHome::open(home).map_err(|err| RegistryError::Io(err.to_string()))?;
     let mut added = Vec::new();
-    for (agent, file, text) in SHIPPED_FILES {
-        if !agents.iter().any(|def| def.id == agent) {
+    let chief_skills = SHIPPED_FILES
+        .into_iter()
+        .filter(|(_, file, _)| file.starts_with("skills/"))
+        .map(|(from, file, text)| (CHIEF_AGENT, from, file, text));
+    let all = SHIPPED_FILES
+        .into_iter()
+        .map(|(agent, file, text)| (agent, agent, file, text));
+    for (agent, from, file, text) in all.chain(chief_skills) {
+        let skip_chief = agent == CHIEF_AGENT && !crate::agent::exists(home, CHIEF_AGENT);
+        if only.is_some_and(|only| only != agent)
+            || skip_chief
+            || !agents.iter().any(|def| def.id == agent)
+        {
             continue;
         }
         let rel = Path::new("agents").join(agent).join(file);
@@ -522,7 +689,7 @@ pub fn install_shipped_files(home: &Path) -> Result<Vec<PathBuf>, RegistryError>
         if on_disk == text {
             continue;
         }
-        if is_past_shipped_version(agent, file, on_disk.as_bytes()) {
+        if is_past_shipped_version(from, file, on_disk.as_bytes()) {
             handle
                 .write_atomic(&rel, text.as_bytes(), 0o600)
                 .map_err(|err| RegistryError::Io(format!("writing {}: {err}", rel.display())))?;
@@ -674,9 +841,17 @@ pub fn validate_grants(home: &Path, id: &str, proposed: &AgentGrants) -> Result<
         {
             return Err(RegistryError::ExceedsChief);
         }
-        return Ok(());
     }
-    if !subset(proposed, &chief_grants(&agents)) {
+    let chief = chief_id(home);
+    let mut caps = ceilings_for(chief, id);
+    // The chief of an older install stays under `main`'s grants, as before.
+    if id == chief && id != CHIEF_AGENT {
+        caps.push(CHIEF_AGENT);
+    }
+    if caps
+        .into_iter()
+        .any(|cap| !subset(proposed, &ceiling_grants(&agents, cap)))
+    {
         return Err(RegistryError::ExceedsChief);
     }
     Ok(())
@@ -1429,12 +1604,40 @@ mod tests {
         assert!(subset(&child, &chief));
     }
 
+    /// Break-It A: a template agent whose directory was made by hand (or by
+    /// an older daemon) is capped at a lowered chief on every reload.
+    #[test]
+    fn a_hand_made_template_directory_is_capped_at_the_chief() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let mut chief = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        let send = chief.can_do.iter_mut().find(|g| g.skill == "mail.send");
+        send.unwrap().level = ActionLevel::Off;
+        chief.see.retain(|g| g.scope != "documents");
+        write_grants(home, CHIEF_AGENT, &chief).unwrap();
+        for id in DOMAIN_AGENTS {
+            std::fs::create_dir_all(home.join("agents").join(id)).unwrap();
+        }
+        let agents = registry(home).unwrap();
+        let chief = ceiling_grants(&agents, CHIEF_AGENT);
+        for id in DOMAIN_AGENTS {
+            let agent = agents.iter().find(|a| a.id == id).expect("listed");
+            assert!(subset(&agent.grants, &chief), "{id}");
+        }
+        let mail = grants(home, "mail").unwrap();
+        assert!(mail.check_tool("mail", "mail_send").is_err());
+        assert!(mail.check_tool("mail", "mail_read").is_ok());
+    }
+
     #[test]
     fn an_older_install_keeps_aux_and_a_main_home_caps_every_agent() {
         let dir = tempdir().unwrap();
         let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
         assert_eq!(registry(home).unwrap()[0].id, LEGACY_CHIEF);
         std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        std::fs::create_dir_all(home.join("agents/mail")).unwrap();
         assert_eq!(registry(home).unwrap()[0].id, CHIEF_AGENT);
         let mut wider = aux_runtime::grants::default_grants("mail").unwrap();
         wider.can_do[0].skill = "payments.send".to_string();
@@ -1444,6 +1647,172 @@ mod tests {
         narrow.can_do.retain(|g| g.skill != "mail.read");
         let refused = write_grants(home, CHIEF_AGENT, &narrow);
         assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+    }
+
+    /// An older install's chief is `aux`: an added agent (and `main`, which
+    /// is not the chief there) stays under it as well as under `main`; the
+    /// four domain agents `aux` hands work to keep `main`'s cap only. A
+    /// `main` home is as before.
+    #[test]
+    fn every_agent_stays_under_the_chief_this_home_runs() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
+        assert!(ceilings(home, LEGACY_CHIEF).is_empty());
+        assert_eq!(ceilings(home, "scout"), [CHIEF_AGENT, LEGACY_CHIEF]);
+        assert_eq!(ceilings(home, CHIEF_AGENT), [LEGACY_CHIEF]);
+        for id in DOMAIN_AGENTS {
+            assert_eq!(ceilings(home, id), [CHIEF_AGENT], "{id}");
+        }
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        assert!(ceilings(home, CHIEF_AGENT).is_empty());
+        assert_eq!(ceilings(home, "scout"), [CHIEF_AGENT]);
+        assert_eq!(ceilings(home, LEGACY_CHIEF), [CHIEF_AGENT]);
+        for id in DOMAIN_AGENTS {
+            assert_eq!(ceilings(home, id), [CHIEF_AGENT], "{id}");
+        }
+    }
+
+    /// On an older install a child listed in `agents.toml` never holds a
+    /// tool the chief `aux` lacks: its grants are capped and a wider set is
+    /// refused. Mail keeps reading mail, and a `main` home is as before.
+    #[test]
+    fn a_child_of_the_legacy_chief_never_holds_mail() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        let seed = r#"
+[[agents]]
+id = "aux"
+name = "Aux"
+role = "chief"
+glyph = "aux"
+
+[[agents]]
+id = "mail"
+name = "Mail"
+role = "domain"
+glyph = "envelope"
+
+[[agents.grants.do]]
+skill = "mail.read"
+level = "auto"
+
+[[agents]]
+id = "scout"
+name = "Scout"
+role = "domain"
+glyph = "scout"
+
+[[agents.grants.do]]
+skill = "mail.read"
+level = "auto"
+"#;
+        std::fs::write(seed_path(home), seed).unwrap();
+        let reader = grants(home, "mail").unwrap();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
+        assert!(grants(home, LEGACY_CHIEF)
+            .unwrap()
+            .check_tool(LEGACY_CHIEF, "mail_read")
+            .is_err());
+        let scout = grants(home, "scout").unwrap();
+        assert!(scout.check_tool("scout", "mail_read").is_err());
+        let refused = validate_grants(home, "scout", &reader);
+        assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+        let mail = grants(home, "mail").unwrap();
+        assert!(mail.check_tool("mail", "mail_read").is_ok());
+        assert!(validate_grants(home, "mail", &reader).is_ok());
+
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let scout = grants(home, "scout").unwrap();
+        assert!(scout.check_tool("scout", "mail_read").is_ok());
+        assert!(validate_grants(home, "scout", &reader).is_ok());
+    }
+
+    /// Run one daemon path that can create `config.toml` on `home`.
+    fn create_config_through(path: &str, home: &Path) {
+        let config = kernel_core::config_path(home);
+        match path {
+            "daemon and API load" => {
+                crate::api::load_config_verified(home).unwrap();
+            }
+            "job load by path" => {
+                aux_engine::config::load_or_create(&config).unwrap();
+            }
+            "job load by handle" => {
+                let verified = kernel_core::verified_home_or_verify(home).unwrap();
+                aux_engine::config::load_or_create_verified(&verified).unwrap();
+            }
+            "always-allow rule" => {
+                let rule =
+                    kernel_broker::Rule::new("main", "read_file", kernel_broker::Action::Allow);
+                aux_engine::config::append_rule(&config, &rule).unwrap();
+            }
+            other => panic!("no daemon path named {other}"),
+        }
+    }
+
+    /// Each daemon path that can create `config.toml` names `main` the chief,
+    /// so a new home starts with the chief alone; a home whose config names
+    /// `aux` stays an older install.
+    #[test]
+    fn a_daemon_path_that_creates_the_config_names_main_the_chief() {
+        let paths = [
+            "daemon and API load",
+            "job load by path",
+            "job load by handle",
+            "always-allow rule",
+        ];
+        for name in paths {
+            let dir = tempdir().unwrap();
+            create_config_through(name, dir.path());
+            assert_eq!(chief_id(dir.path()), CHIEF_AGENT, "{name}");
+            let ids: Vec<String> = registry(dir.path())
+                .unwrap()
+                .into_iter()
+                .map(|agent| agent.id)
+                .collect();
+            assert_eq!(ids, [CHIEF_AGENT], "{name}");
+
+            let dir = tempdir().unwrap();
+            let older = "version = 1\ndefault_agent = \"aux\"\n";
+            std::fs::write(dir.path().join("config.toml"), older).unwrap();
+            create_config_through(name, dir.path());
+            assert_eq!(chief_id(dir.path()), LEGACY_CHIEF, "{name}");
+        }
+    }
+
+    /// The daemon paths racing on a fresh home, as a start that overlaps a job
+    /// or an always-allow click: every reader sees `main` as the chief, and
+    /// the roster is the chief alone.
+    #[test]
+    fn racing_daemon_paths_on_a_fresh_home_all_see_main_the_chief() {
+        let paths = [
+            "daemon and API load",
+            "job load by path",
+            "job load by handle",
+            "always-allow rule",
+        ];
+        for round in 0..20 {
+            let dir = tempdir().unwrap();
+            let home = dir.path();
+            let start = std::sync::Barrier::new(paths.len() * 2);
+            std::thread::scope(|scope| {
+                for name in paths.iter().chain(&paths) {
+                    let start = &start;
+                    scope.spawn(move || {
+                        start.wait();
+                        create_config_through(name, home);
+                        assert_eq!(chief_id(home), CHIEF_AGENT, "round {round}: {name}");
+                    });
+                }
+            });
+            let ids: Vec<String> = registry(home)
+                .unwrap()
+                .into_iter()
+                .map(|agent| agent.id)
+                .collect();
+            assert_eq!(ids, [CHIEF_AGENT], "round {round}");
+        }
     }
 
     fn calendar_file(home: &Path, file: &str) -> Option<Vec<u8>> {
@@ -1469,6 +1838,7 @@ mod tests {
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         let dir = tempdir().unwrap();
         let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
         install_shipped_files(home).unwrap();
         for agent in ["mail", "calendar"] {
             for sub in ["", "skills"] {
@@ -1498,6 +1868,7 @@ mod tests {
     fn a_fresh_home_gets_the_calendar_files_once() {
         let dir = tempdir().unwrap();
         let home = dir.path();
+        std::fs::create_dir_all(home.join("agents/calendar")).unwrap();
         let added = install_shipped_files(home).unwrap();
         assert_eq!(
             in_agent(&added, "calendar"),
@@ -1752,23 +2123,40 @@ mod tests {
     }
 
     #[test]
-    fn the_built_in_seed_has_the_chief_and_four_domains() {
+    fn the_built_in_seed_is_the_chief_and_the_domains_are_templates() {
         let seed = built_in_seed();
-        assert_eq!(seed.len(), 5);
-        assert_eq!(seed[0].id, CHIEF_AGENT);
+        assert_eq!(seed.len(), 1);
+        assert_eq!(
+            (seed[0].id.as_str(), seed[0].name.as_str()),
+            (CHIEF_AGENT, "Aux")
+        );
         assert_eq!(seed[0].role, AgentRole::Chief);
-        let ids: Vec<&str> = seed[1..].iter().map(|agent| agent.id.as_str()).collect();
-        assert_eq!(ids, DOMAIN_AGENTS);
-        for agent in &seed {
-            assert!(!agent.glyph.is_empty(), "{} has a glyph", agent.id);
+        for id in DOMAIN_AGENTS {
+            let template = template(id).unwrap();
+            assert!(!template.glyph.is_empty(), "{id} has a glyph");
+            assert!(
+                subset(&template.grants, &seed[0].grants),
+                "{id} fits the chief"
+            );
         }
+        // A `main` home lists only the chief until a template agent exists.
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        assert_eq!(registry(dir.path()).unwrap().len(), 1);
+        std::fs::create_dir_all(dir.path().join("agents/mail")).unwrap();
+        let ids: Vec<String> = registry(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(ids, [CHIEF_AGENT, "mail"]);
     }
 
     #[test]
-    fn a_missing_seed_file_uses_the_built_in_five() {
+    fn a_home_with_no_config_is_fresh_and_lists_the_chief_alone() {
         let dir = tempdir().unwrap();
         let registry = registry(dir.path()).unwrap();
-        assert_eq!(registry.len(), 5);
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]
@@ -1805,6 +2193,7 @@ model = "deepseek-chat"
     #[test]
     fn grants_overlay_round_trips_and_unknown_ids_are_unknown() {
         let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("agents/mail")).unwrap();
         let mut custom = aux_runtime::grants::default_grants("mail").unwrap();
         custom.egress_note = "stays local".to_string();
         write_grants(dir.path(), "mail", &custom).unwrap();
@@ -1819,6 +2208,7 @@ model = "deepseek-chat"
     #[test]
     fn memory_appends_lists_and_forgets_in_its_own_directory() {
         let dir = tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("agents/mail")).unwrap();
         assert!(memory(dir.path(), "mail").unwrap().is_empty());
         let first = append_memory(dir.path(), "mail", "Always sign as Camille").unwrap();
         append_memory(dir.path(), "mail", "Jonas is a client").unwrap();

@@ -911,6 +911,7 @@ async fn a_stale_grants_approval_is_refused_and_never_streams_allowed() {
     let provider = Arc::new(FakeProvider::scripted("fakey", vec![]));
     let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"");
     let mut t = TestApi::start_with(options(provider), &config).await;
+    std::fs::create_dir_all(t.home.join("agents/mail")).unwrap();
     // The chief has no blanket MCP access; the owner grants it explicitly.
     let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
     chief.can_do.push(aux_runtime::grants::DoGrant {
@@ -1182,7 +1183,7 @@ async fn a_builtin_tool_still_runs() {
     t.stop();
 }
 
-/// CHIEF-BASE-1: what the chief is denied, an agent is denied too, at run
+/// What the chief is denied, an agent is denied too, at run
 /// time and when the agent is created, whatever the agent's own rules say.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
@@ -1196,6 +1197,7 @@ async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
     let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"")
         + "\n[[rules]]\nagent = \"main\"\ntool = \"read_file\"\naction = \"deny\"\n";
     let mut t = TestApi::start_with(options(provider), &config).await;
+    std::fs::create_dir_all(t.home.join("agents/mail")).unwrap();
     let workspace = aux_engine::workspace_dir(&t.home, "mail");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(workspace.join("note.txt"), "builtin works").unwrap();
@@ -1215,6 +1217,67 @@ async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
     );
     assert!(!t.home.join("agents/scout").exists());
     t.stop();
+}
+
+/// On an older install the chief is `aux`, which may not read mail. An agent
+/// written on disk with `tools = ["mail_read"]` still cannot read mail when a
+/// turn runs for it, and an agent created through the API is held to what
+/// the owner denies `aux`. A `main` home lets both through, as before: there
+/// `aux` is not the chief and its rules cap nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_child_of_the_legacy_chief_gets_nothing_the_chief_lacks() {
+    for (chief, allowed) in [("aux", false), ("main", true)] {
+        let provider = Arc::new(FakeProvider::scripted(
+            "fakey",
+            vec![
+                tool_call("mail_read", json!({"account":"personal","uid":1})),
+                ChatResponse::assistant("done"),
+            ],
+        ));
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let tools: ToolRegistryHook = Arc::new(move |registry| {
+            let tool = TestTool::simple("mail_read", RAW_MAIL, Arc::clone(&flag));
+            registry.register_native(Box::new(tool));
+            registry.mark_read_only("mail_read");
+        });
+        let config = CONFIG.replace(
+            "default_agent = \"aux\"",
+            &format!("default_agent = \"{chief}\""),
+        ) + "\n[[rules]]\nagent = \"aux\"\ntool = \"read_file\"\naction = \"deny\"\n";
+        let options = ApiOptions {
+            tools: Some(tools),
+            ..options(provider)
+        };
+        let mut t = TestApi::start_with(options, &config).await;
+
+        let reader = t.home.join("agents/reader");
+        std::fs::create_dir_all(&reader).unwrap();
+        std::fs::write(reader.join("agent.toml"), "tools = [\"mail_read\"]\n").unwrap();
+        let sent = t.post(
+            "/v1/threads/reader/messages",
+            r#"{"content":"read my mail"}"#,
+        );
+        assert_eq!(sent.status, 200, "{chief}: {}", sent.body);
+        assert_eq!(ran.load(Ordering::SeqCst), allowed, "{chief}: mail read");
+        let messages = t.get("/v1/threads/reader/messages").body;
+        assert_eq!(messages.contains(RAW_MAIL), allowed, "{chief}: {messages}");
+
+        let scout = json!({"name": "scout", "tools": ["read_file"]});
+        let created = t.post("/v1/agents", &scout.to_string());
+        if allowed {
+            assert_eq!(created.status, 201, "{chief}: {}", created.body);
+        } else {
+            assert_eq!(created.status, 409, "{chief}: {}", created.body);
+            assert!(
+                created.body.contains("grant_exceeds_chief"),
+                "{}",
+                created.body
+            );
+            assert!(!t.home.join("agents/scout").exists());
+        }
+        t.stop();
+    }
 }
 
 /// ACT-FREE still binds the chief: with every access and `approvals = auto`,

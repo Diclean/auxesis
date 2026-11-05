@@ -6,7 +6,7 @@ use aux_notify::{system_notifier, Notification, Notifier, StopSwitchNotifier};
 use aux_store::Store;
 use clap::{Args, Subcommand};
 use kernel_core::privacy::{admit_call, Destination, PathId};
-use kernel_core::{auxesis_home, config_path, ensure_home, Config, Lang};
+use kernel_core::{auxesis_home, config_path, ensure_home, Lang};
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
@@ -67,7 +67,7 @@ fn configured_lang(home: &Path) -> Lang {
     if !path.is_file() {
         return Lang::from_env();
     }
-    Config::load_or_create(&path)
+    aux_engine::config::load_or_create(&path)
         .map(|config| config.ui.language)
         .unwrap_or_else(|_| Lang::from_env())
 }
@@ -490,7 +490,7 @@ impl Notifier for PrivacyGate<'_> {
 fn run_offline_inner() -> Result<String, Box<dyn std::error::Error>> {
     let home = auxesis_home();
     let verified = ensure_home(&home)?;
-    let config = Config::load_or_create_verified(&verified)?;
+    let config = aux_engine::config::load_or_create_verified(&verified)?;
     let store = Store::open_verified(&verified)?;
     // A sandbox command records instead of showing a banner; `system_notifier`
     // decides from the shared sandbox guard.

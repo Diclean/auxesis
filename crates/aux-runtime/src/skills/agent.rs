@@ -104,6 +104,9 @@ impl LoadedAgent {
     pub fn allows(&self, tool: &str) -> bool {
         let canonical = tool_map::canonical_name(tool).unwrap_or_else(|| tool.to_string());
         self.tools.contains(&canonical)
+            || (self.name == crate::grants::CHIEF_AGENT
+                && self.source == AgentSource::Legacy
+                && self.tools.iter().any(|tool| tool == "*"))
     }
 }
 
@@ -303,6 +306,7 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
                     format!("{sidecar_name} is unreadable: {}", err.message()),
                 )
             })?;
+            let unrestricted_chief = name == crate::grants::CHIEF_AGENT && sidecar.tools.is_none();
             let mut tools = Vec::new();
             for tool in sidecar.tools.unwrap_or_default() {
                 let canonical = tool_map::canonical_name(&tool).unwrap_or(tool);
@@ -310,8 +314,12 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
                     tools.push(canonical);
                 }
             }
+            if unrestricted_chief {
+                tools.push("*".into());
+            }
             tools
         }
+        Err(ReadError::NotFound) if name == crate::grants::CHIEF_AGENT => vec!["*".into()],
         Err(ReadError::NotFound) => Vec::new(),
         Err(ReadError::TooLarge) => {
             return Err(error(
@@ -420,6 +428,16 @@ fn string_list(value: &Value, key: &str, file: &str) -> Result<Vec<String>, Agen
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn chief_skills_use_all_tools_by_default_but_respect_an_empty_ceiling() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("main");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load_agent(&dir).unwrap().allows("mail.send"));
+        std::fs::write(dir.join("agent.toml"), "tools = []\n").unwrap();
+        assert!(!load_agent(&dir).unwrap().allows("mail.send"));
+    }
 
     fn write(dir: &Path, name: &str, contents: &str) {
         fs::write(dir.join(name), contents).unwrap();

@@ -318,6 +318,14 @@ api() {
     | curl "${args[@]}" "http://127.0.0.1:$PORT$path")" || HTTP_CODE="000"
 }
 
+# A fresh install has the chief alone; the owner creates a
+# domain agent from its template (POST /v1/agents {template}), as the app does.
+from_template() {
+  [ -d "$WORK/home/.auxesis/agents/$1" ] && return 0
+  api POST /v1/agents "{\"template\":\"$1\"}"
+  [ "$HTTP_CODE" = 201 ] || red "creating the $1 agent from its template returned HTTP $HTTP_CODE: $(head -c 300 "$WORK/resp.json")"
+}
+
 step_health() {
   STEP="health"
   api GET /v1/health
@@ -456,11 +464,13 @@ step_m2_brief() {
 
 # The agent the CLI runs skills as: `main`, open mode (the brief step already
 # switched the mode), the CRM tools, and the shipped log-interaction skill.
+# `main` is the chief: its tool list caps every agent, so it
+# also lists what the Calendar and Mail agents run in M4.
 step_m3_skill_setup() {
   STEP="m3-skill-setup"
   local agent_dir="$WORK/home/.auxesis/agents/main"
   mkdir -p "$agent_dir/skills"
-  printf -- '---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\ntools:\n  - crm.search\n  - crm.get\n  - crm.log_interaction\n  - docs.ingest\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nHero smoke assistant.\n' \
+  printf -- '---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\ntools:\n  - crm.search\n  - crm.get\n  - crm.log_interaction\n  - docs.ingest\n  - calendar.list_events\n  - calendar.create_event\n  - calendar.update_event\n  - reminders.list\n  - mail.list\n  - mail.search\n  - mail.thread\n  - mail.read\n  - mail.draft\n  - mail.send\n  - recall\n  - remember\n  - suggest_memory\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nHero smoke assistant.\n' \
     >"$agent_dir/agent.md"
   cp "$REPO_ROOT/crates/aux-runtime/src/skills/fixtures/skills/log-interaction.md" "$agent_dir/skills/log-interaction.md"
 }
@@ -530,8 +540,9 @@ step_m4_setup() {
   # A demo-world client (aux-fakemail world.json): fictional, known to the contacts.
   printf 'BEGIN:VCARD\nVERSION:3.0\nFN:%s\nORG:Blueharbor\nEMAIL:%s\nTZ:America/New_York\nEND:VCARD\n' "$INVITEE" "$INVITEE_EMAIL" >"$WORK/invitee.vcf"
   sbx "$AUX" contacts import "$WORK/invitee.vcf" >"$WORK/import2.log" 2>&1 || red "aux contacts import failed: $(cat "$WORK/import2.log")"
-  # The seeded Calendar agent owns send-invite: its shipped grants, and the
-  # agent.md + skill the daemon installed at start.
+  # The Calendar agent owns send-invite: made from its template, it gets its
+  # shipped grants, agent.md and skill.
+  from_template calendar
   local agent_dir="$WORK/home/.auxesis/agents/calendar"
   [ -f "$agent_dir/agent.md" ] || red "auxd did not install the Calendar agent.md"
   cmp -s "$agent_dir/skills/send-invite.md" "$REPO_ROOT/crates/aux-runtime/src/skills/fixtures/skills/send-invite.md" \
@@ -712,6 +723,7 @@ PY
 step_m4_followup() {
   STEP="m4-followup"
   local agent_dir="$WORK/home/.auxesis/agents/mail" before i check
+  from_template mail
   cmp -s "$agent_dir/skills/follow-up.md" "$REPO_ROOT/crates/auxd/src/agents/mail/skills/follow-up.md" \
     || red "auxd did not install the shipped follow-up skill"
   before="$(outbox_count)"
@@ -875,6 +887,15 @@ step_m6_setup() {
   # rule is exact (MCP tools never ride a wildcard).
   mkdir -p "$agent_dir"
   printf '[[do]]\nskill = "mcp"\nlevel = "auto"\n' >"$agent_dir/grants.toml"
+  # The chief caps every agent: it must cover the MCP bucket
+  # and list both fixture tools too. M6 is the last step, so the chief's
+  # overlay here changes no earlier one.
+  local chief_dir="$WORK/home/.auxesis/agents/main"
+  printf '[[do]]\nskill = "mcp"\nlevel = "auto"\n' >"$chief_dir/grants.toml"
+  sed "s|^  - docs.ingest\$|  - docs.ingest\\
+  - mcp__${M6_SERVER}__${M6_READ}\\
+  - mcp__${M6_SERVER}__${M6_WRITE}|" "$chief_dir/agent.md" >"$chief_dir/agent.md.tmp" && mv "$chief_dir/agent.md.tmp" "$chief_dir/agent.md"
+  grep -q "mcp__${M6_SERVER}__${M6_WRITE}" "$chief_dir/agent.md" || red "could not list the M6 tools for the chief"
   printf '\n[[rules]]\nagent = "%s"\ntool = "mcp__%s__%s"\naction = "allow"\n' \
     "$M6_AGENT" "$M6_SERVER" "$M6_READ" >>"$config"
 }

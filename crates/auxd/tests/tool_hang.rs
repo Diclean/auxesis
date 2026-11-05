@@ -114,7 +114,9 @@ fn rig(agent: &str) -> Rig {
          [[rules]]\nagent = \"aux\"\ntool = \"delegate\"\naction = \"allow\"\n"
     );
     std::fs::write(config_path(&home), config).unwrap();
-    kernel_core::Config::load_or_create(&config_path(&home)).unwrap();
+    // The agent the rig talks to exists, as if made from its template.
+    std::fs::create_dir_all(home.join("agents").join(agent)).unwrap();
+    aux_engine::config::load_or_create(&config_path(&home)).unwrap();
     let mail = "\n[connectors.mail]\n\n[[connectors.mail.accounts]]\nid = \"sim\"\n\
                 email = \"owner@mailsim.test\"\n\n[connectors.mail.accounts.imap]\n\
                 host = \"127.0.0.1\"\nport = 9\nsecurity = \"tls\"\n";

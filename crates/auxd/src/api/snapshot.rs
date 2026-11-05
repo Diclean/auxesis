@@ -125,6 +125,9 @@ pub struct ActivityJson {
 pub struct AgentJson {
     /// Agent name (directory name under `<home>/agents`).
     pub name: String,
+    /// Human-readable name, independent of the agent id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// An agent is enabled when it has no jobs or at least one enabled job.
     pub enabled: bool,
     /// Number of jobs owned by this agent.
@@ -537,6 +540,7 @@ pub fn agents_snapshot(home: &Path) -> anyhow::Result<Vec<AgentJson>> {
             });
         agents.push(AgentJson {
             name: clean_field(&name),
+            display_name: defs.get(&name).map(|def| clean_field(&def.name)),
             enabled: jobs_total == 0 || jobs_enabled > 0,
             jobs_total,
             jobs_enabled,
@@ -3062,19 +3066,7 @@ mod tests {
 
         let agents = agents_snapshot(&home).unwrap();
         let names: Vec<&str> = agents.iter().map(|agent| agent.name.as_str()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "axis",
-                "calendar",
-                "clients",
-                "documents",
-                "ghost",
-                "mail",
-                "main",
-                "notes"
-            ]
-        );
+        assert_eq!(names, vec!["axis", "ghost", "main", "notes"]);
 
         let main = agents.iter().find(|agent| agent.name == "main").unwrap();
         assert!(main.enabled);
@@ -3108,7 +3100,7 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(config_path(&home), "default_agent = \"main\"\n").unwrap();
         let agents = agents_snapshot(&home).unwrap();
-        assert_eq!(agents.len(), 5, "the chief main plus the four domains");
+        assert_eq!(agents.len(), 1, "the chief main alone");
         let main = agents.iter().find(|agent| agent.name == "main").unwrap();
         assert_eq!(main.usage_today.tokens_in, 0);
         assert_eq!(main.thread_id, None, "lazily created on first use");
@@ -3159,8 +3151,9 @@ mod tests {
             "[[provider]]\nid = \"deepseek\"\nkind = \"openai\"\nbase_url = \"https://api.deepseek.com/v1\"\nkey = \"env:AUX_KEY_DEEPSEEK\"\nmodels = [\"deepseek-chat\"]\n\n[brain]\ndefault = \"deepseek/deepseek-chat\"\n",
         )
         .unwrap();
+        std::fs::create_dir_all(home.join("agents/mail")).unwrap();
         let agents = agents_snapshot(&home).unwrap();
-        for name in ["aux", "mail", "calendar"] {
+        for name in ["main", "mail"] {
             let brain = agents
                 .iter()
                 .find(|agent| agent.name == name)

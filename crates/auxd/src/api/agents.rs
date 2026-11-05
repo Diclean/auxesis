@@ -79,6 +79,9 @@ fn default_true() -> bool {
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct CreateAgentRequest {
+    /// Template id (`mail`, `calendar`, `clients`, `documents`); the agent
+    /// takes the template's id, grants and shipped files.
+    pub template: Option<String>,
     /// Agent name (also its identity and directory name).
     pub name: Option<String>,
     /// Instructions written to `soul.md`.
@@ -184,6 +187,33 @@ pub struct ControlJson {
 // ---------------------------------------------------------------------------
 // handlers
 // ---------------------------------------------------------------------------
+
+/// `GET /v1/agent-templates`: the starter agents the owner can create, with
+/// the grants each would get and whether it already exists.
+pub async fn templates(State(state): State<Arc<ApiState>>) -> Response {
+    let home = state.home.clone();
+    let list = tokio::task::spawn_blocking(move || {
+        let ids = aux_runtime::grants::DOMAIN_AGENTS;
+        let json = |def: crate::agents::AgentDef| {
+            serde_json::json!({
+                "id": def.id,
+                "name": def.name,
+                "glyph": def.glyph,
+                "grants": crate::agents::grants_json(&def.grants),
+                "created": agent::exists(&home, &def.id),
+            })
+        };
+        ids.iter()
+            .filter_map(|id| crate::agents::template(id))
+            .map(json)
+            .collect::<Vec<_>>()
+    })
+    .await;
+    match list {
+        Ok(items) => Json(serde_json::json!({ "templates": items })).into_response(),
+        Err(_) => internal_error(),
+    }
+}
 
 /// `POST /v1/agents`.
 #[allow(clippy::result_large_err)]
@@ -390,11 +420,41 @@ pub async fn stop_all(State(state): State<Arc<ApiState>>) -> Response {
 pub(crate) fn create_sync(
     home: &Path,
     db_path: &Path,
-    request: CreateAgentRequest,
+    mut request: CreateAgentRequest,
 ) -> Result<(StatusCode, serde_json::Value), Response> {
     let _guard = kernel_core::lock_recover(crate::agents::grants_lock());
+    let template = request.template.take();
+    if let Some(id) = &template {
+        let refuse =
+            |code, message| error::error_response(StatusCode::BAD_REQUEST, code, message, None);
+        let def = crate::agents::template(id)
+            .ok_or_else(|| refuse("unknown_template", "there is no such agent template"))?;
+        if request.name.as_deref().is_some_and(|name| name != def.id) {
+            return Err(refuse(
+                "invalid_name",
+                "an agent made from a template keeps its id",
+            ));
+        }
+        crate::agents::validate_grants(home, &def.id, &def.grants).map_err(|err| match err {
+            crate::agents::RegistryError::ExceedsChief => crate::agents::exceeds_chief(),
+            _ => internal_error(),
+        })?;
+        request.name = Some(def.id);
+    }
     let validated = validate_create(home, request)?;
     let name = &validated.name;
+    // A template's id without `template` (any case) still gets the template's
+    // grants from the registry, so it passes the same ceiling check.
+    if template.is_none() {
+        if let Some(def) = crate::agents::template(&name.to_ascii_lowercase()) {
+            crate::agents::validate_grants(home, &def.id, &def.grants).map_err(
+                |err| match err {
+                    crate::agents::RegistryError::ExceedsChief => crate::agents::exceeds_chief(),
+                    _ => internal_error(),
+                },
+            )?;
+        }
+    }
     validate_tool_ceiling(home, name, &validated.config)?;
     let expected_soul = validated
         .instructions
@@ -406,6 +466,16 @@ pub(crate) fn create_sync(
         // leaves nothing behind (the directory is abandoned).
         let write = agent::write_soul(home, name, &expected_soul)
             .and_then(|()| agent::write_config(home, name, &validated.config));
+        // A template agent and the chief get their shipped files (skills).
+        let shipped = template.is_some() || name == aux_runtime::grants::CHIEF_AGENT;
+        let write = write.and_then(|()| {
+            if !shipped {
+                return Ok(());
+            }
+            crate::agents::install_shipped_files_for(home, Some(name))
+                .map(drop)
+                .map_err(|err| agent::AgentError::Io(err.to_string()))
+        });
         if let Err(err) = write {
             agent::abandon_dir(home, name);
             return Err(agent_write_failed(&err.to_string()));
@@ -683,42 +753,42 @@ fn validate_selection(
     Ok(config)
 }
 
-/// CHIEF-BASE-1: a tools list names only tools the chief may use (its
+/// A tools list names only tools the chief may use (its
 /// grants, its own tools list, its config deny rules). The run-time ceiling
-/// enforces the same every turn; this refuses early with a clear error.
+/// enforces the same every turn; this refuses early with a clear error. The
+/// chief is the one this home runs: on an older install an added agent stays
+/// under `aux` as well as under `main` ([`crate::agents::ceilings`]).
 #[allow(clippy::result_large_err)]
 fn validate_tool_ceiling(home: &Path, id: &str, config: &AgentConfig) -> Result<(), Response> {
-    use aux_runtime::grants::CHIEF_AGENT;
-    let chief_like = id == CHIEF_AGENT || id == crate::agents::chief_id(home);
-    let Some(tools) = config.tools.as_ref().filter(|_| !chief_like) else {
+    let caps = crate::agents::ceilings(home, id);
+    let Some(tools) = config.tools.as_ref().filter(|_| !caps.is_empty()) else {
         return Ok(());
     };
     let agents = crate::agents::registry(home).map_err(|_| internal_error())?;
-    let chief = crate::agents::chief_grants(&agents);
-    let chief_tools = agent::config(home, CHIEF_AGENT)
-        .map_err(|_| internal_error())?
-        .tools;
     let path = config_path(home);
     let rules = if path.exists() {
         aux_engine::config::load_rules(&path).map_err(|_| internal_error())?
     } else {
         Vec::new()
     };
-    let chief_rules: Vec<_> = rules
-        .into_iter()
-        .filter(|r| r.agent == CHIEF_AGENT)
-        .collect();
-    let refused = tools.iter().any(|tool| {
-        let denied = kernel_broker::matching_rule(&chief_rules, CHIEF_AGENT, tool, false)
-            .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
-        denied
-            || chief.check_tool(CHIEF_AGENT, tool).is_err()
-            || chief_tools
-                .as_ref()
-                .is_some_and(|list| !list.contains(tool))
-    });
-    if refused {
-        return Err(crate::agents::exceeds_chief());
+    for cap in caps {
+        let chief = crate::agents::ceiling_grants(&agents, cap);
+        let chief_tools = agent::config(home, cap)
+            .map_err(|_| internal_error())?
+            .tools;
+        let chief_rules: Vec<_> = rules.iter().filter(|r| r.agent == cap).cloned().collect();
+        let refused = tools.iter().any(|tool| {
+            let denied = kernel_broker::matching_rule(&chief_rules, cap, tool, false)
+                .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
+            denied
+                || chief.check_tool(cap, tool).is_err()
+                || chief_tools
+                    .as_ref()
+                    .is_some_and(|list| !list.contains(tool))
+        });
+        if refused {
+            return Err(crate::agents::exceeds_chief());
+        }
     }
     Ok(())
 }
@@ -1140,6 +1210,29 @@ kind = "openai-compat"
         assert_eq!(config.provider.as_deref(), Some("deepseek"));
         let events = aux_store::Store::open(&db).unwrap();
         assert_eq!(events.event_count("agent.created").unwrap(), 1);
+    }
+
+    /// On an older install the chief is `aux`, which may not read mail: a
+    /// tools list naming `mail_read` is refused when an agent is created or
+    /// changed, for an added agent and for `main` (not the chief there). Mail,
+    /// which `aux` hands work to, keeps it; a `main` home is as before.
+    #[test]
+    fn a_tools_list_is_held_to_the_chief_this_home_runs() {
+        let reader = AgentConfig {
+            tools: Some(vec!["mail_read".to_string()]),
+            ..AgentConfig::default()
+        };
+        let dir = home_with_config("version = 1\ndefault_agent = \"aux\"\n");
+        let home = dir.path();
+        for id in ["scout", "main"] {
+            let refused = validate_tool_ceiling(home, id, &reader).unwrap_err();
+            assert_eq!(refused.status(), StatusCode::CONFLICT, "{id}");
+        }
+        assert!(validate_tool_ceiling(home, "aux", &reader).is_ok());
+        assert!(validate_tool_ceiling(home, "mail", &reader).is_ok());
+
+        let dir = home_with_config("version = 1\ndefault_agent = \"main\"\n");
+        assert!(validate_tool_ceiling(dir.path(), "scout", &reader).is_ok());
     }
 
     #[test]

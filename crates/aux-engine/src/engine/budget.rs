@@ -147,7 +147,7 @@ const RETRY_CAP: Duration = Duration::from_millis(if cfg!(test) { 4 } else { 60_
 /// have spent; one write each, cut off once it passes. With a store lock
 /// wait before the first write and the store's busy timeout (5 s) in it, a
 /// stop call may take longer: the next one opens a new window.
-const RECORD_WINDOW: Duration = Duration::from_millis(if cfg!(test) { 100 } else { 1000 });
+const RECORD_WINDOW: Duration = Duration::from_millis(if cfg!(test) { 250 } else { 1000 });
 
 const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } else { 60_000 });
 
@@ -274,6 +274,7 @@ impl Budget {
             let waited = self.changed.wait_timeout(gate, left);
             gate = waited.unwrap_or_else(PoisonError::into_inner).0;
         }
+        gate.stop = Some(Instant::now()); // the window counts from here
         drop(gate);
         settler.stop(deadline.saturating_duration_since(Instant::now()))
     }
@@ -397,7 +398,8 @@ fn settle_jobs(queue: &mpsc::Receiver<Work>, budget: &Budget) {
 /// On a stop: record what each job the worker owes (those still in the queue
 /// too, and those an inline settle hands over until none runs) is known to
 /// have spent, in its held row, so the next start's reconcile counts that and
-/// not just the reserve. Within [`RECORD_WINDOW`] of the last stop call: the
+/// not just the reserve. Within [`RECORD_WINDOW`] of the last stop call (once
+/// no inline settle runs): the
 /// time check comes after the store's lock, whose wait may be long.
 fn record_owed(queue: &mpsc::Receiver<Work>, mut owed: Vec<Owed>, budget: &Budget) {
     loop {

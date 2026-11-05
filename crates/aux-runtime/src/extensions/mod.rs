@@ -203,6 +203,18 @@ mod tests {
         assert!(unhex("zz").is_none());
     }
 
+    /// Captured with sha2 0.10.9: the catalog, install and verify checks all
+    /// compare `hex(&Sha256::digest(..))` with a pinned hash, so an installed
+    /// extension still verifies after a sha2 upgrade.
+    #[test]
+    fn old_version_vector_extension_hash() {
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            hex(&Sha256::digest(b"fixed extension artifact\n")),
+            "22dfbd63cf3e0defa40148b9233793e808df71ca6ee704462181978dde18f1c0"
+        );
+    }
+
     #[test]
     fn the_placeholder_key_refuses_every_catalog() {
         assert_eq!(CATALOG_PUBKEY, [0u8; 32]);

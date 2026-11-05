@@ -45,7 +45,7 @@
 //! that only its owner can read. A symlink, another owner or a loose mode is
 //! refused, never followed or silently tightened. Every keyed connection wipes
 //! freed SQLCipher memory and keeps temporary data in memory. No key is logged
-//! or put in an error, and the in-memory copies are zeroized (aes-gcm 0.10
+//! or put in an error, and the in-memory copies are zeroized (aes-gcm 0.11
 //! keeps its expanded key schedule un-wiped; the window is one wrap or unwrap
 //! call).
 //!
@@ -54,7 +54,7 @@
 
 use super::StoreError;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce};
+use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
 use rusqlite::{params, Connection, ErrorCode, OpenFlags};
 use sha2::Sha256;
@@ -122,6 +122,12 @@ impl Key {
     pub fn expose(&self) -> &[u8] {
         &self.0[..]
     }
+
+    /// AES-256-GCM under this key. A `Key` is always 32 bytes, so the cipher
+    /// borrows it as an array: no copy and no length check that could fail.
+    fn cipher(&self) -> Aes256Gcm {
+        Aes256Gcm::new((&*self.0).into())
+    }
 }
 
 impl fmt::Debug for Key {
@@ -183,17 +189,29 @@ pub fn evidence_key(home: &Path) -> Result<Key, StoreError> {
 pub fn seal_evidence(key: &Key, name: &str, plain: &[u8]) -> Result<Vec<u8>, StoreError> {
     let mut nonce = [0u8; NONCE_LEN];
     random(&mut nonce)?;
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key.expose()));
+    seal_evidence_with_nonce(key, name, plain, &nonce)
+}
+
+/// [`seal_evidence`] under a given nonce. Production reaches it only through
+/// `seal_evidence`, with a fresh random nonce each time, so no nonce is reused
+/// under one key; the fixed-vector test calls it to pin the sealed bytes.
+fn seal_evidence_with_nonce(
+    key: &Key,
+    name: &str,
+    plain: &[u8],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>, StoreError> {
+    let cipher = key.cipher();
     let payload = Payload {
         msg: plain,
         aad: name.as_bytes(),
     };
     let sealed = cipher
-        .encrypt(Nonce::from_slice(&nonce), payload)
+        .encrypt(nonce.into(), payload)
         .map_err(|_| StoreError::KeyRejected)?;
     let mut out = Vec::with_capacity(EVIDENCE_MAGIC.len() + NONCE_LEN + sealed.len());
     out.extend_from_slice(EVIDENCE_MAGIC);
-    out.extend_from_slice(&nonce);
+    out.extend_from_slice(nonce);
     out.extend_from_slice(&sealed);
     Ok(out)
 }
@@ -206,12 +224,13 @@ pub fn open_evidence(key: &Key, name: &str, sealed: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let (nonce, msg) = body.split_at(NONCE_LEN);
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key.expose()));
+    let nonce: &[u8; NONCE_LEN] = nonce.try_into().ok()?;
+    let cipher = key.cipher();
     let payload = Payload {
         msg,
         aad: name.as_bytes(),
     };
-    cipher.decrypt(Nonce::from_slice(nonce), payload).ok()
+    cipher.decrypt(nonce.into(), payload).ok()
 }
 
 fn open_existing(path: &Path, flags: OpenFlags) -> Result<Connection, StoreError> {
@@ -816,10 +835,10 @@ fn read_kek(keys_dir: &Path) -> Result<Key, StoreError> {
 fn wrap_dek(kek: &Key, dek: &Key) -> Result<Vec<u8>, StoreError> {
     let mut nonce = [0u8; NONCE_LEN];
     random(&mut nonce)?;
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(kek.expose()));
+    let cipher = kek.cipher();
     let sealed = cipher
         .encrypt(
-            Nonce::from_slice(&nonce),
+            (&nonce).into(),
             Payload {
                 msg: dek.expose(),
                 aad: DEK_AAD,
@@ -841,11 +860,12 @@ fn unwrap_dek(kek: &Key, wrapped: &[u8]) -> Result<Key, StoreError> {
         return Err(StoreError::KeyRejected);
     }
     let (nonce, sealed) = body.split_at(NONCE_LEN);
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(kek.expose()));
+    let nonce: &[u8; NONCE_LEN] = nonce.try_into().map_err(|_| StoreError::KeyRejected)?;
+    let cipher = kek.cipher();
     let plain = Zeroizing::new(
         cipher
             .decrypt(
-                Nonce::from_slice(nonce),
+                nonce.into(),
                 Payload {
                     msg: sealed,
                     aad: DEK_AAD,
@@ -1974,6 +1994,82 @@ mod tests {
         let mut expect = [0u8; KEY_LEN];
         standard.expand(STORE_INFO, &mut expect).unwrap();
         assert_eq!(derive(&master, STORE_INFO).expose(), &expect[..]);
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// A home whose `master.key` is the fixed, fake test key `[7; 32]`.
+    fn fixed_master_home() -> tempfile::TempDir {
+        let dir = tempdir().unwrap();
+        write_key(&dir.path().join(MASTER_FILE), &[7; KEY_LEN]);
+        dir
+    }
+
+    /// Captured with sha2 0.10.9 and hkdf 0.12.4, and equal to an independent
+    /// RFC 5869 HKDF-SHA256: one master key derives the same store, vault and
+    /// evidence keys after an upgrade, so an existing store still opens.
+    #[test]
+    fn old_version_vectors_derive_the_same_keys() {
+        let home = fixed_master_home();
+        assert_eq!(
+            hex(store_key(home.path()).unwrap().expose()),
+            "ce2b3906a0a1dfac8ed8db5aa9a09c1e18b44975a5c309d108da8d90951d5084"
+        );
+        assert_eq!(
+            hex(vault_key(home.path()).unwrap().expose()),
+            "53656ecb9552e4ad9fd2fcc6013638222ec3bafb1908962e8ddad97710fce872"
+        );
+        assert_eq!(
+            hex(evidence_key(home.path()).unwrap().expose()),
+            "6697bfe550e72053eaaaad9f034e5fc5284b40dd7b185f8707bb4f93aa4670a0"
+        );
+    }
+
+    /// Captured with aes-gcm 0.10.3, and equal to an independent AES-256-GCM:
+    /// a blob sealed before an upgrade still opens, and the same key, name,
+    /// nonce and plaintext seal to the same bytes. A wrong name or a flipped
+    /// tag bit still fails closed.
+    #[test]
+    fn old_version_vectors_open_and_reseal_an_evidence_blob() {
+        const OLD: &str = "4155584556443031000102030405060708090a0be9cf59f9f43095e83597da226baaf9019a12ee8e285320ca2a316d8be2bb8963f93378bb3c8497ab66081f";
+        let home = fixed_master_home();
+        let key = evidence_key(home.path()).unwrap();
+        let plain = b"fixed evidence plaintext\0v1";
+        let name = "b4ec7c50c84a0fcacd46392624a67780958185f033792c073893b522cd65284e";
+        let nonce = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let old = unhex(OLD);
+        assert_eq!(open_evidence(&key, name, &old).as_deref(), Some(&plain[..]));
+        let sealed = seal_evidence_with_nonce(&key, name, plain, &nonce).unwrap();
+        assert_eq!(hex(&sealed), OLD);
+        assert_eq!(open_evidence(&key, "another-name", &old), None);
+        let mut tampered = old;
+        *tampered.last_mut().unwrap() ^= 1;
+        assert_eq!(open_evidence(&key, name, &tampered), None);
+    }
+
+    /// Captured with aes-gcm 0.10.3, and equal to an independent AES-256-GCM:
+    /// a data key wrapped in the old layout still unwraps for the one-time
+    /// migration, and a flipped nonce bit is refused.
+    #[test]
+    fn old_version_vector_unwraps_a_legacy_data_key() {
+        let kek = Key(Zeroizing::new([0x11; KEY_LEN]));
+        let old = unhex("41555844454b30310c0d0e0f10111213141516179efc9cb63bfca13e683f8e63fd1e93ba04a54a29086e328d20264290b4315ba9c47928f1d35bb98d822737d7b50b45f7");
+        assert_eq!(unwrap_dek(&kek, &old).unwrap().expose(), &[0x22; KEY_LEN]);
+        let mut tampered = old;
+        tampered[DEK_MAGIC.len()] ^= 1;
+        assert!(matches!(
+            unwrap_dek(&kek, &tampered),
+            Err(StoreError::KeyRejected)
+        ));
     }
 
     #[test]

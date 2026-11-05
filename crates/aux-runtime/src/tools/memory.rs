@@ -974,6 +974,44 @@ mod tests {
         assert!(!other_mirror.contains("note one"));
     }
 
+    /// Captured with sha2 0.10.9: the note mirror keeps its file name and its
+    /// recorded hash, and a suggestion keeps its fact key, across a sha2
+    /// upgrade (a changed hash would read as an outside edit of the mirror).
+    #[tokio::test]
+    async fn old_version_vectors_keep_mirror_names_and_fact_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        assert!(!sync_note_mirror(&store, dir.path(), "vector-agent").unwrap());
+        let name = "2b603fca26d7b458d888d0a59aee528837a716a091f12d37e4ff837237444803.md";
+        assert!(dir.path().join("memory").join(name).is_file());
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .memory_mirror_hash("vector-agent")
+                .unwrap()
+                .as_deref(),
+            Some("4d9aafc266b1d6aac1d718631cffae7dc627f7f019cf7c70ad9738459e747810")
+        );
+        let ctx = ToolCtx::new("vector-agent", ".").with_run_id(Some("run-1".into()));
+        SuggestMemoryTool::new(Arc::clone(&store))
+            .run(
+                &json!({"kind":"about_you","text":"Prefers green tea"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let pending = store
+            .lock()
+            .unwrap()
+            .pending_memory_suggestions("vector-agent", 10)
+            .unwrap();
+        assert_eq!(
+            pending[0].fact_key.as_deref(),
+            Some("owner.f10e5b96ad4f1ef773c4f42ac101363c38e8e6aa0a1354f9fc96fff56abf5ffd")
+        );
+    }
+
     #[tokio::test]
     async fn strict_schema_and_fts_operators_are_safe() {
         let (remember, recall) = tools();

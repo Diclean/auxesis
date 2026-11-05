@@ -140,3 +140,23 @@ fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
 pub fn check_totals(inv: &EInvoice) -> Vec<ValidationIssue> {
     inv.validation.issues.clone()
 }
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    /// Captured with sha2 0.10.9: a document keeps its content identity across
+    /// a sha2 upgrade. The second input is the aux-mail attachment fixture, so
+    /// a mail attachment and its registry document still share one name.
+    #[test]
+    fn old_version_vectors_keep_document_hashes() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"%PDF-1.4 fake invoice\r\n"),
+            "60d040d7f7d984714ed9110dc712f5a98a0456e00796718df568a225a29cf44e"
+        );
+    }
+}

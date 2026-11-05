@@ -45,7 +45,7 @@
 //! that only its owner can read. A symlink, another owner or a loose mode is
 //! refused, never followed or silently tightened. Every keyed connection wipes
 //! freed SQLCipher memory and keeps temporary data in memory. No key is logged
-//! or put in an error, and the in-memory copies are zeroized (aes-gcm 0.10
+//! or put in an error, and the in-memory copies are zeroized (aes-gcm 0.11
 //! keeps its expanded key schedule un-wiped; the window is one wrap or unwrap
 //! call).
 //!
@@ -54,7 +54,7 @@
 
 use super::StoreError;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce};
+use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
 use rusqlite::{params, Connection, ErrorCode, OpenFlags};
 use sha2::Sha256;
@@ -121,6 +121,12 @@ impl Key {
     /// The raw bytes. Callers must not log, print or persist them in the clear.
     pub fn expose(&self) -> &[u8] {
         &self.0[..]
+    }
+
+    /// AES-256-GCM under this key. A `Key` is always 32 bytes, so the cipher
+    /// borrows it as an array: no copy and no length check that could fail.
+    fn cipher(&self) -> Aes256Gcm {
+        Aes256Gcm::new((&*self.0).into())
     }
 }
 
@@ -195,13 +201,13 @@ fn seal_evidence_with_nonce(
     plain: &[u8],
     nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>, StoreError> {
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key.expose()));
+    let cipher = key.cipher();
     let payload = Payload {
         msg: plain,
         aad: name.as_bytes(),
     };
     let sealed = cipher
-        .encrypt(Nonce::from_slice(nonce), payload)
+        .encrypt(nonce.into(), payload)
         .map_err(|_| StoreError::KeyRejected)?;
     let mut out = Vec::with_capacity(EVIDENCE_MAGIC.len() + NONCE_LEN + sealed.len());
     out.extend_from_slice(EVIDENCE_MAGIC);
@@ -218,12 +224,13 @@ pub fn open_evidence(key: &Key, name: &str, sealed: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let (nonce, msg) = body.split_at(NONCE_LEN);
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(key.expose()));
+    let nonce: &[u8; NONCE_LEN] = nonce.try_into().ok()?;
+    let cipher = key.cipher();
     let payload = Payload {
         msg,
         aad: name.as_bytes(),
     };
-    cipher.decrypt(Nonce::from_slice(nonce), payload).ok()
+    cipher.decrypt(nonce.into(), payload).ok()
 }
 
 fn open_existing(path: &Path, flags: OpenFlags) -> Result<Connection, StoreError> {
@@ -828,10 +835,10 @@ fn read_kek(keys_dir: &Path) -> Result<Key, StoreError> {
 fn wrap_dek(kek: &Key, dek: &Key) -> Result<Vec<u8>, StoreError> {
     let mut nonce = [0u8; NONCE_LEN];
     random(&mut nonce)?;
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(kek.expose()));
+    let cipher = kek.cipher();
     let sealed = cipher
         .encrypt(
-            Nonce::from_slice(&nonce),
+            (&nonce).into(),
             Payload {
                 msg: dek.expose(),
                 aad: DEK_AAD,
@@ -853,11 +860,12 @@ fn unwrap_dek(kek: &Key, wrapped: &[u8]) -> Result<Key, StoreError> {
         return Err(StoreError::KeyRejected);
     }
     let (nonce, sealed) = body.split_at(NONCE_LEN);
-    let cipher = Aes256Gcm::new(AesKey::<Aes256Gcm>::from_slice(kek.expose()));
+    let nonce: &[u8; NONCE_LEN] = nonce.try_into().map_err(|_| StoreError::KeyRejected)?;
+    let cipher = kek.cipher();
     let plain = Zeroizing::new(
         cipher
             .decrypt(
-                Nonce::from_slice(nonce),
+                nonce.into(),
                 Payload {
                     msg: sealed,
                     aad: DEK_AAD,

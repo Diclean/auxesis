@@ -21,8 +21,11 @@
 //! (no inherited secrets; a fixed `PATH`), and they are killed by whole-tree
 //! sweep on timeout — by ppid walk, process group, session id and the
 //! per-call read-only marker descriptor, so a double-fork + `setsid()` orphan
-//! is reaped too. Output is captured to private files, sanitised (no terminal
-//! control sequences) and labelled, so a deliberately backgrounded process
+//! is reaped when a scan still sees it, and a process the call saw before it
+//! left every net is killed too. One that `setsid()`s *and* closes the marker
+//! before any scan is not detectable: the call can end clean while it runs.
+//! Output is captured to private files, sanitised and labelled, so a
+//! deliberately backgrounded process
 //! cannot stall the tool, spoof its framing, or hide the command's real
 //! output.
 
@@ -32,6 +35,7 @@ use kernel_broker::sanitize_text;
 use kernel_broker::ToolClass;
 use kernel_broker::{CancelToken, NativeTool, Risk, Tool, ToolCtx, ToolError, ToolOutput};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,6 +95,9 @@ pub struct ShellTool {
     /// and always runs both ([`ExitSteps::BOTH`]).
     #[cfg(test)]
     exit_steps: ExitSteps,
+    /// Tests only: answer `(pid, visibility)`; pid 0 means every pid.
+    #[cfg(test)]
+    sweep_visibility: Option<(i32, Visibility)>,
 }
 
 impl Default for ShellTool {
@@ -103,6 +110,8 @@ impl Default for ShellTool {
             sweep_time: MAX_SWEEP_TIME,
             #[cfg(test)]
             exit_steps: ExitSteps::BOTH,
+            #[cfg(test)]
+            sweep_visibility: None,
         }
     }
 }
@@ -530,7 +539,10 @@ fn pid_ppid_uid_start(pid: i32) -> Option<(i32, u32, u64)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(')')?;
     let mut fields = stat[close + 1..].split_whitespace();
-    let _state = fields.next()?;
+    // A zombie cannot fork; macOS reports it as `ESRCH`.
+    if fields.next()? == "Z" {
+        return None;
+    }
     let ppid: i32 = fields.next()?.parse().ok()?;
     // Start time (field 22 overall: 17 more fields after ppid) as clock
     // ticks; good enough for the "started before this call" filter.
@@ -544,35 +556,82 @@ fn pid_ppid_uid_start(_pid: i32) -> Option<(i32, u32, u64)> {
     None
 }
 
-/// True when `pid` is in the process listing but the kernel cannot describe
-/// it yet: `proc_pidinfo` fails with `ESRCH` (a zombie still answers, and a
-/// process we may not inspect fails with `EPERM`). That is a process still
-/// being created, for example a child forked by a command that has already
-/// exited but not yet scheduled on a loaded machine. Until it can be
-/// described, `getsid` fails on it too, so no scan can tell whether it
-/// belongs to the call; the sweep must not count such a pass as clean.
+/// What the kernel can say right now about a pid from the process listing.
+/// Only macOS reports zombies, unseen and unknown pids here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+enum Visibility {
+    /// Alive and described, whoever owns it.
+    Described,
+    /// Exited and not reaped yet; `orphan` when launchd is its parent.
+    Zombie { orphan: bool, parent: i32 },
+    /// Listed, yet not described even as a zombie: still being created (for
+    /// example a child forked by a command that has already exited, not yet
+    /// scheduled on a loaded machine), being torn down, or reaped since the
+    /// listing. `getsid` fails on it too, so no scan can tell whether it
+    /// belongs to the call.
+    Unseen,
+    /// `proc_pidinfo` failed with `ENOMEM`: stop at once and report it.
+    OutOfMemory,
+    /// Any answer but a full one or `ESRCH`: a short read, `EPERM` (this query
+    /// has no owner check, so only a security policy refuses it), `EIO` or
+    /// another errno. It says nothing about the pid, so it counts like `Unseen`.
+    Unknown,
+}
+
+/// `proc_bsdshortinfo` is the 64-byte struct `pid_visibility` asks for.
 #[cfg(target_os = "macos")]
-fn pid_not_yet_visible(pid: i32) -> bool {
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+const _: () = assert!(std::mem::size_of::<libc::proc_bsdshortinfo>() == 64);
+
+/// [`Visibility`] of a listed pid. `PROC_PIDT_SHORTBSDINFO` has no owner check
+/// in xnu, so it describes root and other-user processes too, which
+/// `PROC_PIDTBSDINFO` refuses with `EPERM`. It describes a zombie only when
+/// `arg` is non-zero: with `0` (what [`pid_ppid_uid_start`] passes) a zombie
+/// fails with `ESRCH` exactly like a process still being created.
+#[cfg(target_os = "macos")]
+fn pid_visibility(pid: i32) -> Visibility {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as i32;
     // SAFETY: `info` is a live, correctly sized buffer and `proc_pidinfo`
-    // writes at most `size` bytes into it; the contents are never read.
+    // writes at most `size` bytes into it.
     let n = unsafe {
         libc::proc_pidinfo(
             pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            1,
             info.as_mut_ptr().cast(),
             size,
         )
     };
-    n <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    // SAFETY: zeroed and at most partly overwritten, so fully initialised;
+    // any bytes are a valid value of this integer-only struct.
+    let info = unsafe { info.assume_init() };
+    let zombie = info.pbsi_status == libc::SZOMB;
+    visibility_of(n, size, errno, zombie, info.pbsi_ppid)
+}
+
+/// Sorts one `proc_pidinfo` answer: `n` of `size` bytes written, then
+/// `errno`; `zombie` and `ppid` count only in a full answer. Anything but a
+/// full answer or `ESRCH` fails closed. Pure, so tested on every OS.
+#[cfg(any(target_os = "macos", test))]
+fn visibility_of(n: i32, size: i32, errno: Option<i32>, zombie: bool, ppid: u32) -> Visibility {
+    match (n == size, zombie) {
+        (true, true) => Visibility::Zombie {
+            orphan: ppid == 1,
+            parent: ppid as i32,
+        },
+        (true, false) => Visibility::Described,
+        _ if n <= 0 && errno == Some(libc::ESRCH) => Visibility::Unseen,
+        _ if n <= 0 && errno == Some(libc::ENOMEM) => Visibility::OutOfMemory,
+        _ => Visibility::Unknown,
+    }
 }
 
 /// Linux lists a task under `/proc` only once it is fully created.
 #[cfg(not(target_os = "macos"))]
-fn pid_not_yet_visible(_pid: i32) -> bool {
-    false
+fn pid_visibility(_pid: i32) -> Visibility {
+    Visibility::Described
 }
 
 /// Identity of the read-only marker file every command inherits as an open
@@ -757,7 +816,7 @@ type StartLookup<'a> = &'a dyn Fn(i32) -> Option<(i32, u32, u64)>;
 
 /// A process seen during a scan, with the start time that proves it is the
 /// same process at signal time.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TrackedPid {
     pid: i32,
     start: u64,
@@ -788,6 +847,16 @@ impl TrackedPid {
             lookup(self.pid),
             Some((_, uid, start)) if uid == unsafe { libc::geteuid() } && start == self.start
         )
+    }
+}
+
+/// True when `parent` is a process the call already saw. A live parent is
+/// matched on pid and start time; a zombie keeps its pid reserved, so its pid
+/// alone is proof.
+fn parent_in_call(parent: i32, seen: &HashSet<TrackedPid>) -> bool {
+    match pid_ppid_uid_start(parent) {
+        Some((_, _, start)) => seen.contains(&TrackedPid { pid: parent, start }),
+        None => seen.iter().any(|tracked| tracked.pid == parent),
     }
 }
 
@@ -965,6 +1034,8 @@ enum Sweep {
     /// A cap was reached with this many processes still found and signalled;
     /// each may have forked between that scan and its SIGKILL.
     Incomplete(usize),
+    /// The kernel could not describe a process (`ENOMEM`).
+    Unavailable,
 }
 
 /// The two kill steps that run, in this order, when the command exits on its
@@ -1001,33 +1072,33 @@ impl ExitSteps {
 /// run under 8x `yes` CPU load): 8/50 and 10/50 iterations left a live child
 /// behind on unmodified main, 0/100 with this loop. A pass that finds
 /// nothing proves no live process is left in the session and none holds the
-/// marker, so nothing can fork anymore.
+/// marker, so nothing can fork anymore. An orphan zombie (launchd) costs one
+/// extra pass while it exists; a parented one only while its parent, seen by
+/// the call, may still hand children over.
 ///
-/// Returns [`Sweep::Incomplete`] when a cap was hit before a pass proved
-/// clean: the caller must not report success and must keep its reaper armed.
+/// Returns [`Sweep::Incomplete`] on a cap, or [`Sweep::Unavailable`] when the
+/// kernel cannot describe a process: report it and keep the reaper armed.
 fn sweep_leftovers(root: i32, marker: &Marker) -> Sweep {
     sweep_leftovers_with(
         root,
         marker,
-        &pid_ppid_uid_start,
+        &mut HashSet::new(),
         &|_pass| Vec::new(),
-        &|_pass, pid| pid_not_yet_visible(pid),
+        &|_pass, pid| pid_visibility(pid),
         MAX_SWEEP_PASSES,
         MAX_SWEEP_TIME,
     )
 }
 
-/// `extra_pids` is the test seam: pids injected into a given pass's scan,
-/// standing in for a child forked while the previous pass's kills were still
-/// landing. `not_yet_visible(pass, pid)` is the second seam, standing in for
-/// [`pid_not_yet_visible`]. `max_passes`/`max_time` are the production bound,
+/// `extra_pids` and `visibility(pass, pid)` are the test seams; `seen` holds
+/// the call's known processes and records every candidate found. Caps are
 /// lowered only by tests.
 fn sweep_leftovers_with(
     root: i32,
     marker: &Marker,
-    lookup: StartLookup<'_>,
+    seen: &mut HashSet<TrackedPid>,
     extra_pids: &dyn Fn(usize) -> Vec<i32>,
-    not_yet_visible: &dyn Fn(usize, i32) -> bool,
+    visibility: &dyn Fn(usize, i32) -> Visibility,
     max_passes: usize,
     max_time: Duration,
 ) -> Sweep {
@@ -1036,7 +1107,21 @@ fn sweep_leftovers_with(
         let started = std::time::Instant::now();
         let mut survivors = 0usize;
         let mut pending = false;
+        // Orphan zombies already charged a pass; a dead pid is dropped.
+        let mut counted_zombies = HashSet::new();
         for pass in 0..max_passes {
+            let mut hard_error = false;
+            counted_zombies.retain(|&pid| match visibility(pass, pid) {
+                Visibility::Zombie { orphan: true, .. } => true,
+                Visibility::OutOfMemory => {
+                    hard_error = true;
+                    true
+                }
+                _ => false,
+            });
+            if hard_error {
+                return Sweep::Unavailable;
+            }
             let all = all_pids();
             // An empty listing means the syscall failed (this process itself
             // is always in it): it must not count as a clean pass.
@@ -1047,12 +1132,27 @@ fn sweep_leftovers_with(
                     .chain(extra_pids(pass));
                 let mut found_any = false;
                 let mut signalled = 0usize;
+                // A seen process stays a candidate after leaving every net.
+                for tracked in seen.iter().copied().collect::<Vec<_>>() {
+                    if tracked.pid == root || !tracked.still_same(&pid_ppid_uid_start) {
+                        continue;
+                    }
+                    found_any = true;
+                    signalled = signalled.saturating_add(1);
+                    // SAFETY: libc `kill`; the pid was re-checked above.
+                    unsafe {
+                        libc::kill(tracked.pid, libc::SIGKILL);
+                    }
+                }
                 for pid in found {
                     found_any = true;
                     let Some(tracked) = TrackedPid::of(pid) else {
                         continue;
                     };
-                    if pid <= 1 || !tracked.still_same(lookup) {
+                    // A candidate found by the session/marker scan is part of
+                    // the call even if it escapes before the next pass.
+                    seen.insert(tracked);
+                    if pid <= 1 || !tracked.still_same(&pid_ppid_uid_start) {
                         continue;
                     }
                     signalled = signalled.saturating_add(1);
@@ -1064,16 +1164,41 @@ fn sweep_leftovers_with(
                     }
                 }
                 if !found_any {
-                    // An empty pass proves nothing while a listed process
-                    // cannot be described yet: it may be a child of the
-                    // exited command that the scheduler has not run, which
-                    // would then outlive the call. Wait for it to become
-                    // visible (or gone) and scan again.
+                    // An empty pass can miss a live process only if an
+                    // ancestor died during it (a fork past the listing, or a
+                    // child scanned under it). Traces: `Unseen` (reaped or
+                    // still being created), `OutOfMemory` (hard error), and
+                    // zombies. An orphan (parent launchd) costs one pass for
+                    // as long as it exists; a parented one only when its
+                    // parent was seen in the call. `Unknown` fails closed.
                     let own = std::process::id() as i32;
-                    let unseen = all
-                        .iter()
-                        .any(|&pid| pid > 1 && pid != own && not_yet_visible(pass, pid));
-                    if !unseen {
+                    let mut unsettled = false;
+                    let mut orphan_zombies = HashSet::new();
+                    for &pid in all.iter().filter(|&&pid| pid > 1 && pid != own) {
+                        match visibility(pass, pid) {
+                            Visibility::Unseen | Visibility::Unknown => unsettled = true,
+                            Visibility::OutOfMemory => return Sweep::Unavailable,
+                            Visibility::Zombie { orphan: true, .. } => {
+                                orphan_zombies.insert(pid);
+                            }
+                            Visibility::Zombie {
+                                orphan: false,
+                                parent,
+                            } => {
+                                if parent_in_call(parent, seen) {
+                                    unsettled = true;
+                                }
+                            }
+                            Visibility::Described => {}
+                        }
+                    }
+                    for pid in &orphan_zombies {
+                        if !counted_zombies.contains(pid) {
+                            unsettled = true;
+                        }
+                    }
+                    counted_zombies = orphan_zombies;
+                    if !unsettled {
                         return Sweep::Clean;
                     }
                     pending = true;
@@ -1096,7 +1221,7 @@ fn sweep_leftovers_with(
     }
     #[cfg(not(unix))]
     {
-        let _ = (root, marker, lookup, extra_pids, not_yet_visible);
+        let _ = (root, marker, seen, extra_pids, visibility);
         let _ = (max_passes, max_time);
         Sweep::Clean
     }
@@ -1416,6 +1541,11 @@ impl Tool for ShellTool {
         // group kill has run.
         let mut reaper = TreeReaper::new(child, marker);
         let cancel = ctx.cancel.clone();
+        // Processes the call already saw: scans, the exit look, and passes.
+        let mut seen_pids = HashSet::new();
+        if let Some(root) = child_pid {
+            seen_pids.extend(TrackedPid::of(root as i32));
+        }
 
         // Wait for the *direct child*: output goes to files, so a background
         // process holding stdout can no longer keep us waiting for EOF. A
@@ -1442,6 +1572,7 @@ impl Tool for ShellTool {
                         let full = ticks.is_multiple_of(FULL_SCAN_EVERY);
                         if let Some(root) = child_pid {
                             let tracked = tracked_pids(root as i32, &marker, launched_at, true);
+                            seen_pids.extend(tracked.iter().copied());
                             if tracked.len() > MAX_COMMAND_PROCESSES {
                                 break Stop::ProcessLimit;
                             }
@@ -1463,10 +1594,29 @@ impl Tool for ShellTool {
         match stop {
             Stop::Exited(result) => {
                 result?;
+                // One scan as the root exits: what it still sees stays a
+                // sweep candidate after it leaves every net.
+                if let Some(root) = child_pid {
+                    seen_pids.extend(tracked_pids(root as i32, &reaper.marker, launched_at, true));
+                }
                 #[cfg(not(test))]
                 let steps = ExitSteps::BOTH;
                 #[cfg(test)]
                 let steps = self.exit_steps;
+                #[cfg(test)]
+                let seam_visibility = self.sweep_visibility;
+                let visibility = |_pass: usize, pid: i32| -> Visibility {
+                    #[cfg(test)]
+                    if let Some((target, answer)) = seam_visibility {
+                        if target == 0 || target == pid {
+                            return answer;
+                        }
+                        if matches!(answer, Visibility::Zombie { .. }) {
+                            return Visibility::Described;
+                        }
+                    }
+                    pid_visibility(pid)
+                };
                 // Nothing a call started outlives it: first the whole group,
                 // pinned by the unreaped root (no process-table race), then
                 // the scan as the net for what left the group.
@@ -1476,9 +1626,9 @@ impl Tool for ShellTool {
                     Some(root) if steps.scan => sweep_leftovers_with(
                         root as i32,
                         &reaper.marker,
-                        &pid_ppid_uid_start,
+                        &mut seen_pids,
                         &|_pass| Vec::new(),
-                        &|_pass, pid| pid_not_yet_visible(pid),
+                        &visibility,
                         self.sweep_passes,
                         self.sweep_time,
                     ),
@@ -1493,10 +1643,13 @@ impl Tool for ShellTool {
                 let err = read_capture(&mut stderr_capture)?;
                 push_capture(&mut content, "stdout", &out);
                 push_capture(&mut content, "stderr", &err);
+                // A cleanup that could not prove the tree empty is a note next
+                // to the output, and the reaper stays armed so its `Drop`
+                // retries the sweep before the call returns. Only the
+                // command's own exit sets `is_error`: taint does not read it,
+                // and a command reported as failed after it ran is a command
+                // the model runs again.
                 if !group_empty {
-                    // Same rule as an incomplete sweep: never a plain
-                    // success, and the reaper stays armed.
-                    is_error = true;
                     let note = format!(
                         "[cleanup incomplete: the command's process group was not empty after {} ms]",
                         self.sweep_time.as_millis()
@@ -1504,17 +1657,18 @@ impl Tool for ShellTool {
                     push_section(&mut content, &note);
                 }
                 if let Sweep::Incomplete(survivors) = sweep {
-                    // The direct child exited 0, but the tree is not proven
-                    // clean: report it like a timeout, never as a plain
-                    // success, and keep the reaper armed so its `Drop` retries
-                    // the sweep before the call returns.
-                    is_error = true;
                     let note = format!(
                         "[cleanup incomplete: sweep hit its {}-pass/{} ms cap with {survivors} process(es) still signalled]",
                         self.sweep_passes,
                         self.sweep_time.as_millis()
                     );
                     push_section(&mut content, &note);
+                }
+                if matches!(sweep, Sweep::Unavailable) {
+                    // Not described, so not proven empty: a note, and the
+                    // reaper stays armed like a capped sweep.
+                    let note = "[cleanup incomplete: a process could not be described (ENOMEM)]";
+                    push_section(&mut content, note);
                 }
                 if !status.success() {
                     is_error = true;
@@ -2146,8 +2300,8 @@ mod tests {
     /// taint regression, one that keeps forking long-lived helpers — and
     /// checks afterwards that nothing is left: no live process in the
     /// command's session, no marker-holding orphan, and no writer file.
-    /// Only functions whose signatures are identical on main and on this
-    /// branch are used, so the same test measures both.
+    /// It calls the production functions directly, so it measures the shipped
+    /// sweep.
     ///
     /// macOS-only: zombie detection reads `proc_pidinfo`, and the reaping
     /// semantics under test (launchd adopting the orphan) are macOS's.
@@ -2160,19 +2314,7 @@ mod tests {
             /// True when `pid` is a zombie (dead, waiting to be reaped by
             /// launchd): it cannot run or fork, so it is not "left".
             fn is_zombie(pid: i32) -> bool {
-                const SZOMB: u32 = 5; // <sys/proc.h>
-                let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-                let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-                let n = unsafe {
-                    libc::proc_pidinfo(
-                        pid,
-                        libc::PROC_PIDTBSDINFO,
-                        0,
-                        info.as_mut_ptr().cast(),
-                        size,
-                    )
-                };
-                n == size && unsafe { info.assume_init() }.pbi_status == SZOMB
+                matches!(pid_visibility(pid), Visibility::Zombie { .. })
             }
             let me = unsafe { libc::geteuid() };
             let own = std::process::id() as i32;
@@ -2316,7 +2458,7 @@ mod tests {
         let sweep = sweep_leftovers_with(
             root_pid,
             &marker,
-            &pid_ppid_uid_start,
+            &mut HashSet::new(),
             &|pass| {
                 if pass < helper_pids.len() {
                     vec![helper_pids[pass]]
@@ -2324,7 +2466,7 @@ mod tests {
                     Vec::new()
                 }
             },
-            &|_pass, _pid| false,
+            &|_pass, _pid| Visibility::Described,
             MAX_SWEEP_PASSES,
             MAX_SWEEP_TIME,
         );
@@ -2397,9 +2539,15 @@ mod tests {
         let sweep = sweep_leftovers_with(
             root_pid,
             &marker,
-            &pid_ppid_uid_start,
+            &mut HashSet::new(),
             &|pass| if pass == 1 { vec![helper] } else { Vec::new() },
-            &|pass, pid| pass == 0 && pid == helper,
+            &|pass, pid| {
+                if pass == 0 && pid == helper {
+                    Visibility::Unseen
+                } else {
+                    Visibility::Described
+                }
+            },
             MAX_SWEEP_PASSES,
             MAX_SWEEP_TIME,
         );
@@ -2422,18 +2570,338 @@ mod tests {
     #[test]
     fn a_process_that_stays_unseen_makes_the_sweep_incomplete() {
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
-        let own = std::process::id() as i32;
         // No session has this id, so only the seam keeps the pass unclean.
         let sweep = sweep_leftovers_with(
             i32::MAX,
             &marker,
-            &pid_ppid_uid_start,
+            &mut HashSet::new(),
             &|_pass| Vec::new(),
-            &|_pass, pid| pid > 1 && pid != own,
+            &|_pass, _pid| Visibility::Unseen,
             3,
             MAX_SWEEP_TIME,
         );
         assert_eq!(sweep, Sweep::Incomplete(0));
+        // An answer that says nothing fails closed the same way: the sweep
+        // ends `Incomplete`, so the caller notes it and keeps its reaper armed.
+        let sweep = sweep_leftovers_with(
+            i32::MAX,
+            &marker,
+            &mut HashSet::new(),
+            &|_pass| Vec::new(),
+            &|_pass, _pid| Visibility::Unknown,
+            3,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::Incomplete(0));
+    }
+
+    /// Only a full answer or `ESRCH` says something about a listed pid: a
+    /// short read, `EPERM`/`EIO`/no errno is `Unknown`; `ENOMEM` is a hard stop.
+    #[test]
+    fn an_indeterminate_pid_answer_is_unknown() {
+        use Visibility::*;
+        let full = 64;
+        let z = |orphan, parent| Zombie { orphan, parent };
+        for (n, errno, dead, ppid, want) in [
+            (full, None, true, 1, z(true, 1)),
+            (full, None, true, 7, z(false, 7)),
+            (full, None, false, 1, Described),
+            (0, Some(libc::ESRCH), false, 0, Unseen),
+            (32, Some(libc::ESRCH), true, 1, Unknown),
+            (0, Some(libc::ENOMEM), false, 0, OutOfMemory),
+            (0, Some(libc::EPERM), false, 0, Unknown),
+            (0, Some(libc::EIO), false, 0, Unknown),
+            (0, None, false, 0, Unknown),
+        ] {
+            let got = visibility_of(n, full, errno, dead, ppid);
+            assert_eq!(got, want, "n {n}, errno {errno:?}");
+        }
+    }
+
+    /// `PROC_PIDT_SHORTBSDINFO` has no owner check, so it describes launchd and
+    /// other users' processes. pid 1 is the stable case; the old zero-`Unknown`
+    /// machine-wide check was flaky when another process came or went.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn other_users_processes_are_described_not_unknown() {
+        // pid 1 is launchd, owned by root.
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(pid_ppid_uid_start(1), None);
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            assert_eq!(errno, Some(libc::EPERM));
+        }
+        assert_eq!(pid_visibility(1), Visibility::Described);
+        // The raw kernel answer for launchd and this test process: a short
+        // read would turn every `Zombie`/`Described` answer into a guess.
+        for pid in [1, std::process::id() as i32] {
+            let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+            let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as i32;
+            let n = unsafe {
+                libc::proc_pidinfo(
+                    pid,
+                    libc::PROC_PIDT_SHORTBSDINFO,
+                    1,
+                    info.as_mut_ptr().cast(),
+                    size,
+                )
+            };
+            assert_eq!(n, 64, "pid {pid} was not described in full");
+        }
+    }
+
+    /// A real zombie: a child of this test process that has exited and stays
+    /// unreaped until drop. Its parent is alive and is not launchd, like most
+    /// zombies on a busy machine.
+    #[cfg(unix)]
+    struct HeldZombie(std::process::Child);
+
+    #[cfg(unix)]
+    impl HeldZombie {
+        fn new() -> Self {
+            let child = std::process::Command::new("true")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            wait_exited_unreaped(child.id() as i32).unwrap();
+            Self(child)
+        }
+
+        fn pid(&self) -> i32 {
+            self.0.id() as i32
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for HeldZombie {
+        fn drop(&mut self) {
+            let _ = self.0.wait();
+        }
+    }
+
+    /// A zombie anywhere on the machine is dead and cannot hide a process of
+    /// the call: a pass that finds nothing is clean. The seam makes every
+    /// other pid `Described`, so the machine cannot change the count.
+    #[cfg(unix)]
+    #[test]
+    fn an_unrelated_zombie_does_not_keep_the_sweep_going() {
+        let zombie = HeldZombie::new();
+        assert!(all_pids().contains(&zombie.pid()), "the zombie is listed");
+        #[cfg(target_os = "macos")]
+        {
+            assert!(matches!(
+                pid_visibility(zombie.pid()),
+                Visibility::Zombie { orphan: false, .. }
+            ));
+            // A zombie parent still matches the pid the call saw alive.
+            let mut seen = HashSet::new();
+            seen.insert(TrackedPid {
+                pid: zombie.pid(),
+                start: 0,
+            });
+            assert!(parent_in_call(zombie.pid(), &seen));
+        }
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let sweep = sweep_leftovers_with(
+            i32::MAX,
+            &marker,
+            &mut HashSet::new(),
+            &|pass| {
+                assert_eq!(pass, 0, "an unrelated zombie kept the sweep going");
+                Vec::new()
+            },
+            &|_pass, pid| match pid == zombie.pid() {
+                true => pid_visibility(pid),
+                false => Visibility::Described,
+            },
+            3,
+            MAX_SWEEP_TIME,
+        );
+        drop(zombie);
+        assert_eq!(sweep, Sweep::Clean);
+    }
+
+    /// The 2026-11-05 macOS CI failures end to end: an unrelated zombie must
+    /// not turn a command that exited 0 into an error or add a note. With one
+    /// pass allowed, keeping the pass open would hit the cap and add it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_zombie_elsewhere_does_not_fail_a_command_that_exited_zero() {
+        let zombie = HeldZombie::new();
+        let dir = tempdir().unwrap();
+        let mut tool = test_tool(DEFAULT_TIMEOUT);
+        tool.sweep_passes = 1;
+        tool.sweep_visibility = Some((
+            zombie.pid(),
+            Visibility::Zombie {
+                orphan: false,
+                parent: std::process::id() as i32,
+            },
+        ));
+        let out = tool
+            .run(&json!({"command": "echo hi"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        drop(zombie);
+        assert!(
+            !out.is_error && !out.content.contains("cleanup incomplete"),
+            "content: {}",
+            out.content
+        );
+        assert!(out.content.contains("hi"), "content: {}", out.content);
+
+        // `ENOMEM` is the same kind of note, never an error.
+        tool.sweep_visibility = Some((0, Visibility::OutOfMemory));
+        let out = tool
+            .run(&json!({"command": "echo hi"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        assert!(
+            !out.is_error && out.content.contains("a process could not be described"),
+            "content: {}",
+            out.content
+        );
+    }
+
+    /// A process of the call that dies during a pass may hand children to
+    /// launchd after they were scanned. While its zombie waits, the sweep scans
+    /// once more, and only once; a zombie whose parent was never part of the
+    /// call costs no pass. The seam injects a live helper on pass 1.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_orphan_zombie_costs_one_more_pass_and_a_parented_one_none() {
+        use std::process::Stdio;
+
+        struct KillOnDrop(Vec<std::process::Child>);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                for child in &mut self.0 {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+        let sleeper = || {
+            std::process::Command::new("sleep")
+                .arg("300")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        for orphan in [true, false] {
+            let mut children = KillOnDrop(vec![sleeper(), sleeper()]);
+            let stand_in = children.0[0].id() as i32;
+            let helper = children.0[1].id() as i32;
+            let passes = std::cell::Cell::new(0);
+            let sweep = sweep_leftovers_with(
+                i32::MAX,
+                &marker,
+                &mut HashSet::new(),
+                &|pass| {
+                    passes.set(pass + 1);
+                    if pass == 1 {
+                        vec![helper]
+                    } else {
+                        Vec::new()
+                    }
+                },
+                &|_pass, pid| {
+                    if pid == stand_in {
+                        Visibility::Zombie { orphan, parent: 0 }
+                    } else {
+                        Visibility::Described
+                    }
+                },
+                MAX_SWEEP_PASSES,
+                MAX_SWEEP_TIME,
+            );
+            assert_eq!(sweep, Sweep::Clean, "orphan: {orphan}");
+            if !orphan {
+                assert_eq!(passes.get(), 1, "a parented zombie cost a pass");
+                continue;
+            }
+            // Pass 0 counted the zombie, pass 1 killed the helper, and pass 2
+            // no longer counted it.
+            assert_eq!(passes.get(), 3);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while children.0[1].try_wait().unwrap().is_none() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "helper pid {helper} outlived the extra pass"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+
+    /// A `setsid()` child that writes its pid, holds the marker through the
+    /// call's exit scan, closes it, and (with `zombie`) leaves a zombie child
+    /// behind before sleeping. The root exits in ~0.05 s, before the first
+    /// 200 ms watchdog tick.
+    #[cfg(target_os = "macos")]
+    fn detached_child(extra: &str) -> String {
+        format!(
+            r#"/usr/bin/perl -MPOSIX -e '
+my $kid = fork(); exit 1 unless defined $kid;
+if ($kid == 0) {{
+  POSIX::setsid() or exit 2; open(my $fh, q(>), q(bg.pid)) or exit 3; print $fh $$; close $fh;
+  {extra}
+  select(undef, undef, undef, 1.0);
+  POSIX::close($_) for 3 .. 1023;
+  sleep 300; exit 0;
+}}
+for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} exit 0;
+'"#
+        )
+    }
+
+    /// Gone, or alive with the note (a note next to a dead child proves
+    /// nothing about the survivor).
+    #[cfg(target_os = "macos")]
+    async fn assert_detached_child_killed_or_reported(zombie: bool) {
+        let dir = tempdir().unwrap();
+        let mut tool = test_tool(Duration::from_secs(10));
+        tool.sweep_time = Duration::from_millis(300);
+        let fork = "my $z = fork(); exit 4 unless defined $z; exit 0 if $z == 0;";
+        let command = detached_child(if zombie { fork } else { "" });
+        let output = tool
+            .run(&json!({"command": command}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        let Some(pid) = bg_pid(dir.path()) else {
+            panic!(
+                "perl or the fork was refused: {}",
+                head(&output.content, 400)
+            );
+        };
+        let alive = pid_ppid_uid_start(pid).is_some();
+        // `gone_within` SIGKILLs at the limit, so a failure cannot leak it.
+        let gone = gone_within(pid, Duration::from_secs(1)).await;
+        let noted = output.content.contains("cleanup incomplete");
+        assert!(
+            gone || (noted && alive),
+            "detached pid {pid} alive: {alive}, note: {noted}: {}",
+            head(&output.content, 400)
+        );
+    }
+
+    /// Fast root, detached parent, zombie child: gone, or noted and alive.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_detached_parent_with_a_zombie_child_is_never_a_silent_clean() {
+        assert_detached_child_killed_or_reported(true).await;
+    }
+
+    /// Same tree without the zombie: the live detached process is killed or
+    /// reported, never silently left behind.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_live_detached_child_is_killed_or_reported() {
+        assert_detached_child_killed_or_reported(false).await;
     }
 
     /// A command that backgrounds a long sleeper and exits: the sleeper is
@@ -2482,11 +2950,14 @@ mod tests {
         )
     }
 
-    /// The pid a test command wrote to `bg.pid`.
+    /// The pid a test command wrote to `bg.pid`, if it could.
     #[cfg(unix)]
-    fn bg_pid(dir: &std::path::Path) -> i32 {
-        let raw = std::fs::read_to_string(dir.join("bg.pid")).unwrap();
-        raw.trim().parse::<i32>().unwrap()
+    fn bg_pid(dir: &std::path::Path) -> Option<i32> {
+        std::fs::read_to_string(dir.join("bg.pid"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     }
 
     /// Waits at most `limit` for `pid` to be gone. A process killed during the
@@ -2527,7 +2998,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let pid = bg_pid(dir.path());
+        let pid = bg_pid(dir.path()).expect("the test command did not report its child pid");
         assert!(
             gone_within(pid, Duration::from_secs(5)).await,
             "sleeper {pid} outlived the call: the group kill did not take it"
@@ -2554,7 +3025,7 @@ mod tests {
                 .run(&json!({ "command": escapee(leave) }), &ctx(dir.path()))
                 .await
                 .unwrap();
-            let pid = bg_pid(dir.path());
+            let pid = bg_pid(dir.path()).expect("the test command did not report its child pid");
             assert!(
                 gone_within(pid, Duration::from_secs(5)).await,
                 "{leave} child {pid} survived the call: the scan did not reap it"
@@ -2563,11 +3034,12 @@ mod tests {
         }
     }
 
-    /// SHELL-CLEANUP-1: a capped-out sweep must not report the direct child's
-    /// success, and the reaper must stay armed. The pass cap is forced to
-    /// zero, so only the still-armed reaper's `Drop` can kill a leftover the
-    /// group kill does not reach: a child that left the group, so a disarmed
-    /// reaper leaves it alive. Production caps are unchanged.
+    /// SHELL-CLEANUP-1: a capped-out sweep is reported, and the reaper must
+    /// stay armed. The pass cap is forced to zero, so only the still-armed
+    /// reaper's `Drop` can kill a leftover the group kill does not reach: a
+    /// child that left the group, so a disarmed reaper leaves it alive. The
+    /// command itself exited 0, so the report is a note, not an error.
+    /// Production caps are unchanged.
     #[cfg(unix)]
     #[tokio::test]
     async fn an_exhausted_leftover_sweep_is_reported_and_keeps_the_reaper_armed() {
@@ -2584,14 +3056,14 @@ mod tests {
 
         // The sweep ran zero passes; only the reaper still being armed can kill
         // what the command left behind.
-        let pid = bg_pid(dir.path());
+        let pid = bg_pid(dir.path()).expect("the test command did not report its child pid");
         assert!(
             gone_within(pid, Duration::from_secs(5)).await,
             "leftover pid {pid} survived the call: the reaper did not stay armed"
         );
         assert!(
-            output.is_error && output.content.contains("cleanup incomplete"),
-            "incomplete cleanup must not be reported as success: {}",
+            !output.is_error && output.content.contains("cleanup incomplete"),
+            "an incomplete cleanup is a note next to the command's exit 0: {}",
             head(&output.content, 400)
         );
     }

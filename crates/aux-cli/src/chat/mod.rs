@@ -692,6 +692,166 @@ mod tests {
         assert_eq!(send(&parts), None, "the chief may send");
     }
 
+    /// A scripted brain that asks for `calls` at once, then answers "done".
+    fn calling(name: &str, calls: &[(&str, serde_json::Value)]) -> aux_providers::FakeProvider {
+        let calls = calls
+            .iter()
+            .enumerate()
+            .map(|(i, (tool, args))| {
+                aux_providers::ToolCall::new(format!("call_{i}"), *tool, args.clone())
+            })
+            .collect();
+        aux_providers::FakeProvider::scripted(
+            name,
+            vec![
+                aux_providers::ChatResponse::new(
+                    aux_providers::ChatMessage::assistant_with_tool_calls("", calls),
+                ),
+                aux_providers::ChatResponse::assistant("done"),
+            ],
+        )
+    }
+
+    /// The `tool.decision` outcome of each call to `tool` in the store at `home`.
+    fn decisions(home: &Path, tool: &str) -> Vec<String> {
+        Store::open(&home.join("store.db"))
+            .unwrap()
+            .event_payloads("tool.decision")
+            .unwrap()
+            .iter()
+            .map(|raw| serde_json::from_str::<serde_json::Value>(raw).unwrap())
+            .filter(|row| row["tool"] == tool)
+            .map(|row| row["outcome"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// The text the brain got back for the first call (the tool result).
+    fn first_result(provider: &aux_providers::FakeProvider) -> String {
+        let requests = provider.requests();
+        let messages = &requests[1].messages;
+        let at = messages
+            .iter()
+            .position(|message| !message.tool_calls().is_empty())
+            .unwrap();
+        messages[at + 1].content().as_str().to_string()
+    }
+
+    /// An agent.md for `agent` listing `tools`, in the open mode.
+    fn list_tools(home: &Path, agent: &str, tools: &str) {
+        let agent_dir = aux_engine::agent_dir(home, agent);
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let md = format!("---\nname: {agent}\ndefault_mode: open\ntools: [{tools}]\n---\nAgent.\n");
+        std::fs::write(agent_dir.join("agent.md"), md).unwrap();
+    }
+
+    /// AGENT-CEILING-CHAT (seal #123 P3): `aux chat --agent mail` holds Mail
+    /// to its own tools list as the daemon does. Listing only `mail.read`
+    /// and `recall`, its `write_file` is denied before it runs, even with
+    /// every ask approved; listing `write_file` too, it runs. (`recall` is a
+    /// daemon tool: `aux chat` does not mount it.)
+    #[test]
+    fn a_session_holds_the_agent_to_its_tools_list() {
+        for (list, runs) in [
+            ("mail.read, recall", false),
+            ("mail.read, recall, write_file", true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            let config_file = kernel_core::config_path(&home);
+            std::fs::write(&config_file, "version = 1\nprivacy.mode = \"open\"\n").unwrap();
+            list_tools(&home, "mail", list);
+            let args = serde_json::json!({"path": "x.txt", "content": "x"});
+            let provider = calling("mail", &[("write_file", args)]);
+            let config = Config::default();
+            let mut parts = test_parts(&home, &config, &provider, live_from(&config_file));
+            parts.agent = "mail".to_string();
+            runtime().block_on(async {
+                let mut conversation = Conversation::start(&parts).unwrap();
+                conversation.send("write it").await.unwrap();
+            });
+            let written = aux_engine::workspace_dir(&home, "mail").join("x.txt");
+            assert_eq!(written.exists(), runs, "[{list}]");
+            let expected = if runs { "allowed" } else { "denied" };
+            assert_eq!(
+                decisions(&home, "write_file"),
+                vec![expected.to_string()],
+                "[{list}]"
+            );
+        }
+    }
+
+    /// The daemon's turn and `aux chat` give the same verdict, and the same
+    /// refusal text, for each (tools list, tool) pair.
+    #[test]
+    fn the_daemon_and_the_chat_hold_the_same_tools_ceiling() {
+        let table = [
+            ("mail.read, recall", "write_file", true),
+            ("mail.read, recall", "read_file", true),
+            ("read_file", "read_file", false),
+            ("read_file, write_file", "write_file", false),
+            ("read_file", "write_file", true),
+        ];
+        let args = serde_json::json!({"path": "x.txt", "content": "x"});
+        let owner = "[[rules]]\nagent = \"*\"\ntool = \"read_file\"\naction = \"allow\"\n\
+                     [[rules]]\nagent = \"*\"\ntool = \"write_file\"\naction = \"allow\"\n";
+        let home_for = |dir: &Path, list: &str| {
+            let home = dir.join("home");
+            std::fs::create_dir_all(&home).unwrap();
+            let text = format!(
+                "version = 1\nprivacy.mode = \"open\"\ndefault_agent = \"main\"\n\
+                 [[providers]]\nid = \"fakey\"\nbase_url = \"http://127.0.0.1:9/v1\"\n\
+                 model = \"m\"\nkind = \"fake\"\n{owner}"
+            );
+            std::fs::write(kernel_core::config_path(&home), text).unwrap();
+            list_tools(&home, "main", list);
+            home
+        };
+        for (list, tool, denied) in table {
+            let api_dir = tempfile::tempdir().unwrap();
+            let api_home = home_for(api_dir.path(), list);
+            use auxd::api::TurnRunner as _;
+            let api = Arc::new(calling("fakey", &[(tool, args.clone())]));
+            auxd::api::EngineTurnRunner::new(&api_home)
+                .with_provider(Arc::clone(&api) as Arc<dyn aux_providers::ChatProvider>)
+                .run_turn("main", None, "go", None)
+                .unwrap();
+
+            let cli_dir = tempfile::tempdir().unwrap();
+            let cli_home = home_for(cli_dir.path(), list);
+            let config_file = kernel_core::config_path(&cli_home);
+            let cli = calling("fakey", &[(tool, args.clone())]);
+            let config = Config::default();
+            let mut parts = test_parts(&cli_home, &config, &cli, live_from(&config_file));
+            parts.rules = aux_engine::load_rules(&config_file).unwrap();
+            runtime().block_on(async {
+                Conversation::start(&parts)
+                    .unwrap()
+                    .send("go")
+                    .await
+                    .unwrap();
+            });
+
+            let (api_verdict, cli_verdict) =
+                (decisions(&api_home, tool), decisions(&cli_home, tool));
+            let case = format!("[{list}] {tool}");
+            assert_eq!(api_verdict, cli_verdict, "{case}");
+            assert_eq!(
+                api_verdict == vec!["denied".to_string()],
+                denied,
+                "{case}: {api_verdict:?}"
+            );
+            if denied {
+                // The rule's index differs (the daemon holds more rules).
+                let text = |provider| {
+                    let result: String = first_result(provider);
+                    result.replace(|c: char| c.is_ascii_digit(), "")
+                };
+                assert_eq!(text(&api), text(&cli), "{case}");
+            }
+        }
+    }
+
     #[test]
     fn stop_is_honoured_before_a_turn_sends_anything() {
         let dir = tempfile::tempdir().unwrap();

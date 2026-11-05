@@ -186,10 +186,16 @@ pub fn shutdown_runtime(root: u32, grace: impl FnOnce()) {
 /// [`shutdown_runtime`] with the daemon's private process group:
 /// the sweep targets ppid-descendants *and* group members, so a forked child
 /// that reparented to launchd is still terminated.
-pub fn shutdown_everything(root: u32, group: Option<OwnedGroup>, grace: impl FnOnce()) {
+/// Returns what `grace` returned, once the post-grace sweep is done, so a
+/// caller that must abort still sweeps first.
+pub fn shutdown_everything<T>(
+    root: u32,
+    group: Option<OwnedGroup>,
+    grace: impl FnOnce() -> T,
+) -> T {
     let pgid = group.map(|group| group.pgid());
     terminate_targets(root, pgid);
-    grace();
+    let graced = grace();
     let deadline = Instant::now() + FINAL_SWEEP_BUDGET;
     let mut last_sighting = Instant::now();
     loop {
@@ -205,6 +211,7 @@ pub fn shutdown_everything(root: u32, group: Option<OwnedGroup>, grace: impl FnO
         }
         std::thread::sleep(FINAL_SWEEP_POLL);
     }
+    graced
 }
 
 /// Terminate the descendant tree plus (when owned) the process group.

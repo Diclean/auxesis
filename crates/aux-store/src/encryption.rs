@@ -2056,6 +2056,71 @@ mod tests {
         assert_eq!(open_evidence(&key, name, &tampered), None);
     }
 
+    /// The nonce `seal_evidence` wrote into a sealed blob.
+    fn nonce_of(sealed: &[u8]) -> [u8; NONCE_LEN] {
+        let body = sealed.strip_prefix(EVIDENCE_MAGIC).unwrap();
+        body[..NONCE_LEN].try_into().unwrap()
+    }
+
+    /// Sealing the same evidence twice under one key and name gives two
+    /// different blobs with two different nonces, and both still open.
+    #[test]
+    fn sealing_the_same_evidence_twice_uses_a_fresh_nonce() {
+        let home = fixed_master_home();
+        let key = evidence_key(home.path()).unwrap();
+        let plain = b"the same evidence, sealed twice";
+        let name = "b4ec7c50c84a0fcacd46392624a67780958185f033792c073893b522cd65284e";
+        let first = seal_evidence(&key, name, plain).unwrap();
+        let second = seal_evidence(&key, name, plain).unwrap();
+        assert_ne!(first, second);
+        assert_ne!(nonce_of(&first), nonce_of(&second));
+        assert_eq!(
+            open_evidence(&key, name, &first).as_deref(),
+            Some(&plain[..])
+        );
+        assert_eq!(
+            open_evidence(&key, name, &second).as_deref(),
+            Some(&plain[..])
+        );
+    }
+
+    /// Many seals under one key never repeat a nonce, whatever the plaintext.
+    /// The only way to pick a nonce is the private `seal_evidence_with_nonce`,
+    /// and every caller in the workspace goes through `seal_evidence`; this
+    /// pins the contract that the public path never hands one back twice.
+    #[test]
+    fn no_two_seals_under_one_key_share_a_nonce() {
+        let home = fixed_master_home();
+        let key = evidence_key(home.path()).unwrap();
+        let mut nonces = std::collections::HashSet::new();
+        for round in 0..256u32 {
+            let plain = format!("evidence {}", round % 4);
+            let sealed = seal_evidence(&key, "name", plain.as_bytes()).unwrap();
+            assert!(nonces.insert(nonce_of(&sealed)), "nonce reused at {round}");
+        }
+    }
+
+    /// Why a nonce must never be reused: under one nonce the sealed bytes of
+    /// two plaintexts XOR to the XOR of the plaintexts, which leaks both.
+    /// `seal_evidence_with_nonce` is private for this reason.
+    #[test]
+    fn a_reused_nonce_would_leak_the_plaintext_xor() {
+        let home = fixed_master_home();
+        let key = evidence_key(home.path()).unwrap();
+        let nonce = [7u8; NONCE_LEN];
+        let a = b"first secret....";
+        let b = b"other secret....";
+        let head = EVIDENCE_MAGIC.len() + NONCE_LEN;
+        let sa = seal_evidence_with_nonce(&key, "n", a, &nonce).unwrap();
+        let sb = seal_evidence_with_nonce(&key, "n", b, &nonce).unwrap();
+        for i in 0..a.len() {
+            assert_eq!(sa[head + i] ^ sb[head + i], a[i] ^ b[i]);
+        }
+        let fresh_a = seal_evidence(&key, "n", a).unwrap();
+        let fresh_b = seal_evidence(&key, "n", b).unwrap();
+        assert!((0..a.len()).any(|i| fresh_a[head + i] ^ fresh_b[head + i] != a[i] ^ b[i]));
+    }
+
     /// Captured with aes-gcm 0.10.3, and equal to an independent AES-256-GCM:
     /// a data key wrapped in the old layout still unwraps for the one-time
     /// migration, and a flipped nonce bit is refused.

@@ -455,6 +455,23 @@ mod tests {
             1,
             "the failed settle must leave one marker for this run"
         );
+        // The failed settle handed its held row to the process-wide settlement
+        // worker, which retries it for as long as the refusal stands. Lift the
+        // refusal and wait for that retry to land: a worker still running SQL
+        // when this process exits races SQLCipher's exit hook, which frees its
+        // state under the running statement (a SIGSEGV after the test passed).
+        aux_store::open_keyed(&db)
+            .unwrap()
+            .execute_batch("DROP TRIGGER refuse_usage;")
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while lock_store(&store).reservation_count().unwrap() != 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the worker never settled the held row"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]

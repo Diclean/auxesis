@@ -180,8 +180,18 @@ fn last_reply(messages: &[Value]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_saved_word_is_listed_and_its_forget_asks_before_the_client_gives_up() {
-    // The card waits as long as the client does: the reply still arrives.
-    let wait = Duration::from_secs(4);
+    // A turn's cards share one deadline: 9/10 of one card's wait, counted from
+    // the turn's start (the unit test
+    // `a_turn_card_stops_waiting_at_nine_tenths_of_the_timeout` pins the
+    // fraction). The brain asks for the forget twice, and the client gives up
+    // after two card waits: two cards that each waited the full timeout would
+    // always outlast it, while the shared deadline leaves the rest of the turn
+    // more than one card wait of room on a slow runner. (With one card and a
+    // client that waited one card, the rest of the turn had 1/10 of a card
+    // wait, and slow CI runners went past it.)
+    let wait = Duration::from_secs(8);
+    let two_waits = wait * 2;
+    let again = ToolCall::new("call-forget-again", "forget", json!({"id": 1}));
     let script = vec![
         call(
             "remember",
@@ -190,6 +200,7 @@ async fn a_saved_word_is_listed_and_its_forget_asks_before_the_client_gives_up()
         ChatResponse::assistant("OK"),
         call("recall", json!({"query": "KIWI-7731", "limit": 8})),
         call("forget", json!({"id": 1})),
+        ChatResponse::new(ChatMessage::assistant_with_tool_calls("", vec![again])),
         ChatResponse::assistant("Deleted."),
     ];
     let rig = Rig::new(script, wait);
@@ -202,14 +213,21 @@ async fn a_saved_word_is_listed_and_its_forget_asks_before_the_client_gives_up()
     );
 
     let text = "That code word was a test. Delete it from your memory.";
-    let (messages, took) = rig.send_to("aux", text, wait);
+    let (messages, took) = rig.send_to("aux", text, two_waits);
     let recalled = messages
         .iter()
         .find(|m| m["role"] == "tool" && m["content"].as_str().unwrap_or("").contains("KIWI"));
     let recalled = recalled.and_then(|m| m["content"].as_str()).unwrap_or("");
     assert!(recalled.contains("id=1"), "recall names the id: {recalled}");
-    assert!(took < wait, "the turn took {took:?}");
-    assert_eq!(rig.cards(), ["\"forget\""], "own memory only: still a card");
+    assert!(
+        took < two_waits,
+        "the turn took {took:?}, as long as two card waits"
+    );
+    assert_eq!(
+        rig.cards(),
+        ["\"forget\"", "\"forget\""],
+        "own memory only: still a card, each time"
+    );
     let reply = last_reply(&messages);
     assert!(reply.contains("got no answer in time"), "{reply}");
     assert_eq!(rig.memory().len(), 1, "the card expired: nothing deleted");

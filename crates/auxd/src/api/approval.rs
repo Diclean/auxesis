@@ -1467,7 +1467,9 @@ mod tests {
     /// card; one that fits is shown whole.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_send_too_long_for_the_card_is_refused_and_a_short_one_shown_whole() {
-        let registry = ApprovalRegistry::new(Duration::from_millis(50));
+        // The card stays open until the test answers it: no timer can close
+        // it before the test looks.
+        let registry = ApprovalRegistry::new(DEFAULT_APPROVAL_TIMEOUT);
         let (events, _keep) = broadcast::channel(16);
         let directory = tempfile::tempdir().unwrap();
         mail_home(directory.path());
@@ -1519,14 +1521,7 @@ mod tests {
             let (approver, body) = (Arc::clone(&approver), body.clone());
             tokio::spawn(async move { approver.decide(&send(body)).await })
         };
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        let card = loop {
-            if let Some(card) = registry.list_pending().pop() {
-                break card;
-            }
-            assert!(tokio::time::Instant::now() < deadline, "no card");
-            tokio::task::yield_now().await;
-        };
+        let card = wait_for_pending(&registry).await;
         // The card shows the text that leaves the Mac, whole: never the JSON.
         assert_eq!(card.card_body, body);
         assert_eq!(card.card_title, "Send mail to a@example.test");
@@ -1543,12 +1538,15 @@ mod tests {
         assert_eq!(edit["body"], body.as_str());
         assert!(card.card_body.contains("yyy"));
         assert!(!card.card_body.contains("{\""));
+        // The owner says no: nothing is sent.
+        registry.resolve(&card.id, Resolution::deny());
         assert!(!waiting.await.unwrap().unwrap().allow);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_phone_gets_only_the_fixed_phrase_for_a_waiting_approval() {
-        let registry = ApprovalRegistry::new(Duration::from_millis(200));
+        // The card stays open until the test answers it.
+        let registry = ApprovalRegistry::new(DEFAULT_APPROVAL_TIMEOUT);
         let phone = Arc::new(aux_notify::FakeNotifier::new());
         registry.set_phone_notifier(phone.clone());
         let (events, _keep) = broadcast::channel(16);
@@ -1570,14 +1568,7 @@ mod tests {
             networked: false,
         };
         let waiting = tokio::spawn(async move { approver.decide(&request).await });
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while phone.count() == 0 {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "no phone notice was sent"
-            );
-            tokio::task::yield_now().await;
-        }
+        wait_until("no phone notice was sent", || phone.count() > 0).await;
         let sent = phone.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].title, "Auxesis");
@@ -1608,6 +1599,7 @@ mod tests {
             frame.detail
         );
         assert_eq!(frame.preview.as_deref(), Some("Please pay by Friday."));
+        registry.resolve(&card.id, Resolution::deny());
         let _ = waiting.await;
     }
 
@@ -1641,14 +1633,7 @@ mod tests {
         };
         let waiting = tokio::spawn(async move { approver.decide(&request).await });
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while local.count() == 0 {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "no local approval notice was raised"
-            );
-            tokio::task::yield_now().await;
-        }
+        wait_until("no local approval notice was raised", || local.count() > 0).await;
         let sent = local.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(phone.count(), 0, "the phone is not the local channel");
@@ -1745,7 +1730,8 @@ mod tests {
     /// A long mail body is shown whole: the card scrolls, it never cuts.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_long_mail_body_is_shown_whole() {
-        let registry = ApprovalRegistry::new(Duration::from_millis(500));
+        // The card stays open until the test answers it.
+        let registry = ApprovalRegistry::new(DEFAULT_APPROVAL_TIMEOUT);
         let (events, _keep) = broadcast::channel(16);
         let directory = tempfile::tempdir().unwrap();
         mail_home(directory.path());
@@ -1766,12 +1752,15 @@ mod tests {
         let card = wait_for_pending(&registry).await;
         assert_eq!(card.card_body.len(), body.len());
         assert_eq!(card.card_body, body);
+        registry.resolve(&card.id, Resolution::deny());
         let _ = waiting.await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_burst_of_approvals_sends_one_phone_text() {
-        let registry = ApprovalRegistry::new(Duration::from_secs(5));
+        // All five cards must be open at once: none may close on a timer
+        // while a slow runner is still opening the others.
+        let registry = ApprovalRegistry::new(DEFAULT_APPROVAL_TIMEOUT);
         let phone = Arc::new(aux_notify::FakeNotifier::new());
         registry.set_phone_notifier(phone.clone());
         let (events, _keep) = broadcast::channel(64);
@@ -1794,14 +1783,10 @@ mod tests {
             };
             waiting.push(tokio::spawn(async move { approver.decide(&request).await }));
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while registry.list_pending().len() < 5 {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "approvals never opened"
-            );
-            tokio::task::yield_now().await;
-        }
+        wait_until("approvals never opened", || {
+            registry.list_pending().len() >= 5
+        })
+        .await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(phone.count(), 1, "{:?}", phone.sent());
         for task in waiting {
@@ -2007,7 +1992,7 @@ mod tests {
         let home = dir.path().join("home");
         std::fs::write(&home, "not a directory").unwrap();
         let registry = ApprovalRegistry::new(Duration::from_millis(30));
-        let (events, _ws) = broadcast::channel(16);
+        let (events, mut ws) = broadcast::channel(16);
         let approver = ApiApprover::new(Arc::clone(&registry), home, events, 3);
         let request = ApprovalRequest {
             agent: "main".to_string(),
@@ -2022,22 +2007,27 @@ mod tests {
         };
 
         let waiting = tokio::spawn(async move { approver.approve(&request).await });
-        let pending = wait_for_pending(&registry).await;
-
-        let value = serde_json::to_value(pending.frame()).unwrap();
+        // The card closes on its 30 ms timer, so read the frame it emitted:
+        // the channel keeps it, a slow runner cannot miss it.
+        let frame = next_frame(&mut ws).await;
+        assert_eq!(frame["type"], "approval.new");
+        let value = frame["approval"].clone();
         assert_eq!(
             value["audit_id"], 0,
             "an unwritable audit is the documented 0 sentinel: {value}"
         );
-        assert_eq!(value["id"], pending.id);
         // The app's `Approval` requires a `u64`: the degraded frame must
         // still deserialize.
-        let approval: AppApproval = serde_json::from_value(value).unwrap();
+        let approval: AppApproval = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(approval.audit_id, 0);
         assert!(
             !waiting.await.unwrap().unwrap(),
             "timeout still fails closed"
         );
+        // The expiry names the same card.
+        let resolved = next_frame(&mut ws).await;
+        assert_eq!(resolved["type"], "approval.resolved");
+        assert_eq!(resolved["id"], value["id"]);
     }
 
     #[tokio::test]
@@ -2227,6 +2217,52 @@ mod tests {
         assert_eq!(store.event_count("approval.answered").unwrap(), 1);
     }
 
+    /// A turn's card stops waiting at 9/10 of the approval timeout, counted
+    /// from the turn's start, so a client that waits as long as one card
+    /// still gets the reply. On a paused clock the wait is exact, whatever
+    /// the runner's load.
+    #[tokio::test(start_paused = true)]
+    async fn a_turn_card_stops_waiting_at_nine_tenths_of_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = ApprovalRegistry::new(DEFAULT_APPROVAL_TIMEOUT);
+        let (events, _ws) = broadcast::channel(16);
+        let approver = ApiApprover::new(Arc::clone(&registry), dir.path().into(), events, 3)
+            .with_turn_deadline();
+        let request = ApprovalRequest {
+            agent: "main".to_string(),
+            tool: "shell".to_string(),
+            risk: Risk::High,
+            arguments: serde_json::json!({"command": "ls"}),
+            tainted: false,
+            taint_source: None,
+            web_approval: None,
+            unsandboxed: false,
+            networked: false,
+        };
+
+        let started = tokio::time::Instant::now();
+        assert!(
+            !approver.approve(&request).await.unwrap(),
+            "no answer denies"
+        );
+        let waited = started.elapsed();
+        // The timer rounds its deadline up to the next millisecond.
+        let limit = DEFAULT_APPROVAL_TIMEOUT * 9 / 10 + Duration::from_millis(1);
+        assert!(waited <= limit, "the card waited {waited:?}, past 9/10");
+        assert!(
+            waited >= DEFAULT_APPROVAL_TIMEOUT / 2,
+            "the card waited only {waited:?}"
+        );
+        assert!(registry.list_pending().is_empty(), "the card is closed");
+    }
+
+    /// The longest a test waits for a card to open. Opening one scrubs its
+    /// text and writes its first audit row, which creates and migrates the
+    /// test's store: under a second on an idle machine, past 10 s on a busy
+    /// CI runner, close to a minute under heavy CPU load. It only bounds a
+    /// broken test.
+    const CARD_OPENS_WITHIN: Duration = Duration::from_secs(120);
+
     async fn wait_for_pending(registry: &ApprovalRegistry) -> PendingApproval {
         // The approval is registered by a task spawned on *this* test's
         // runtime, so the wait must yield to that runtime: a blocking
@@ -2234,7 +2270,7 @@ mod tests {
         // a many-test, many-core run (reproduced 100% with 16 libtest threads,
         // green with 4). Yield and keep a generous deadline so a loaded
         // machine cannot turn scheduling latency into a failure.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + CARD_OPENS_WITHIN;
         loop {
             if let Some(pending) = registry.list_pending().into_iter().next() {
                 return pending;
@@ -2245,6 +2281,25 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// Poll `done` every 10 ms, yielding to the runtime, until it holds or
+    /// [`CARD_OPENS_WITHIN`] is over; `missing` names what never came.
+    async fn wait_until(missing: &str, done: impl Fn() -> bool) {
+        let deadline = tokio::time::Instant::now() + CARD_OPENS_WITHIN;
+        while !done() {
+            assert!(tokio::time::Instant::now() < deadline, "{missing}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// The next live-event frame, within [`CARD_OPENS_WITHIN`].
+    async fn next_frame(ws: &mut broadcast::Receiver<String>) -> serde_json::Value {
+        let text = tokio::time::timeout(CARD_OPENS_WITHIN, ws.recv())
+            .await
+            .expect("no frame was published")
+            .expect("the event channel must still be open");
+        serde_json::from_str(&text).unwrap()
     }
 
     /// F6: a daemon that dies with a card pending, or mid-run, leaves its

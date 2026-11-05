@@ -74,7 +74,7 @@ pub use sessions::not_ever_private_session;
 pub use usage_calls::{UsageCall, UsageCallTotals};
 
 /// Current schema version. Bump when adding migrations.
-pub const SCHEMA_VERSION: i64 = 41;
+pub const SCHEMA_VERSION: i64 = 42;
 
 /// Maximum bytes in a memory item title (UTF-8 encoded).
 pub const MEMORY_TITLE_MAX_BYTES: usize = 1024;

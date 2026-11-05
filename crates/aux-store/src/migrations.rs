@@ -1117,6 +1117,13 @@ ALTER TABLE usage_reconciled ADD COLUMN consumed_at TEXT;
 UPDATE usage_reconciled SET claimed_at = datetime('now') WHERE claimed_at IS NULL;
 "#;
 
+/// v42: the prune of consumed reconcile claims filters on `consumed_at`; an
+/// index keeps it from scanning the whole table. Purely additive, idempotent.
+pub(crate) const MIGRATION_V42_CLAIM_CONSUMED_INDEX: &str = "
+CREATE INDEX IF NOT EXISTS idx_usage_reconciled_consumed_at
+    ON usage_reconciled(consumed_at);
+";
+
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
 ///
 /// A store created by this build has a unique `idx_mcp_tools_wire` and this is
@@ -1515,6 +1522,9 @@ impl Store {
         }
         if version < 41 {
             self.apply_v41()?;
+        }
+        if version < 42 {
+            self.apply_migration_with_version(MIGRATION_V42_CLAIM_CONSUMED_INDEX, 42)?;
         }
         // v15 is unreleased, but a store written by a pre-release draft may
         // already exist with the old non-unique wire index and duplicate wire
@@ -2089,6 +2099,79 @@ mod tests {
         );
     }
 
+    fn reconciled_index_exists(store: &Store) -> bool {
+        store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_index_list('usage_reconciled')
+                 WHERE name = 'idx_usage_reconciled_consumed_at'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    }
+
+    #[test]
+    fn fresh_store_indexes_consumed_claims_and_the_prune_uses_it() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(&dir.path().join("store.db")).unwrap();
+        assert!(reconciled_index_exists(&store));
+        let plan: Vec<String> = store
+            .conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                crate::usage::PRUNE_RECONCILED_SQL
+            ))
+            .unwrap()
+            .query_map(
+                rusqlite::params![crate::usage::retention_ago(), crate::usage::PRUNE_BATCH],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let plan = plan.join(" | ");
+        assert!(
+            plan.contains("idx_usage_reconciled_consumed_at") && !plan.contains("SCAN"),
+            "the prune must search the consumed_at index, got: {plan}"
+        );
+    }
+
+    #[test]
+    fn v41_store_upgrades_to_v42_and_gets_the_consumed_claims_index() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .conn
+                .execute_batch(
+                    "DROP INDEX idx_usage_reconciled_consumed_at;
+                     INSERT INTO usage_reconciled(reservation_id, tokens_in, tokens_out,
+                                                  usd_cents, claimed_at)
+                         VALUES (9, 1, 1, 0, datetime('now'));
+                     UPDATE meta SET value = '41' WHERE key = 'schema_version';",
+                )
+                .unwrap();
+            assert!(!reconciled_index_exists(&store));
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert!(reconciled_index_exists(&store));
+        let kept: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM usage_reconciled", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, 1, "the upgrade keeps the existing claim");
+        drop(store);
+        // A second open is a no-op.
+        let again = Store::open(&path).unwrap();
+        assert!(reconciled_index_exists(&again));
+    }
+
     #[test]
     fn v40_store_upgrades_to_v41_and_stamps_its_claims() {
         let dir = tempdir().unwrap();
@@ -2099,7 +2182,8 @@ mod tests {
             store
                 .conn
                 .execute_batch(
-                    "ALTER TABLE usage_reconciled DROP COLUMN claimed_at;
+                    "DROP INDEX idx_usage_reconciled_consumed_at;
+                     ALTER TABLE usage_reconciled DROP COLUMN claimed_at;
                      ALTER TABLE usage_reconciled DROP COLUMN consumed_at;
                      INSERT INTO usage_reconciled VALUES (7, 60, 9, 0);
                      UPDATE meta SET value = '40' WHERE key = 'schema_version';",

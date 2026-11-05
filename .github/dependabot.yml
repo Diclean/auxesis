@@ -11,8 +11,10 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      # html5ever and markup5ever_rcdom must share one markup5ever version,
-      # so they move together or not at all.
+      # html5ever and markup5ever share one version line; our own DOM
+      # (aux-runtime fetch/dom.rs) replaced markup5ever_rcdom in #78. The
+      # rcdom pattern stays only for the kernel's leftover edge until the
+      # next kernel release drops it.
       html-parser:
         patterns:
           - html5ever

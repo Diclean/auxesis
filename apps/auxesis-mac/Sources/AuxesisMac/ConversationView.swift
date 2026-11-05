@@ -582,7 +582,7 @@ struct Composer: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
-                .keyboardShortcut(.return, modifiers: .command)
+                .viewShortcut(.sendMessage)
                 .accessibilityLabel(copy(.send))
                 .accessibilityIdentifier("send")
             }

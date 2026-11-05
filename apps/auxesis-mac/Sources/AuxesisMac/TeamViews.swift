@@ -266,13 +266,13 @@ struct ApprovalProposalView: View {
                             Text(language == .fr ? "Envoi dans \(secondsLeft) s" : "Sending in \(secondsLeft) s")
                                 .font(.meta.monospacedDigit()).foregroundStyle(palette.ink2.color)
                             Button(language == .fr ? "Annuler l’envoi" : "Cancel send") { shell.undo(approval) }
-                                .buttonStyle(AuxButtonStyle()).keyboardShortcut("z", modifiers: .command)
+                                .buttonStyle(AuxButtonStyle()).viewShortcut(.cancelSend)
                                 .disabled(!shell.store.canAct(approval) || shell.stopped)
                                 .accessibilityLabel(language == .fr ? "Annuler l’envoi" : "Cancel send").accessibilityIdentifier("inbox-proposal-cancel-send-\(approval.id)")
                         } else {
                             Button(copy(.apSend)) { shell.sendProposal(approval) }
                             .buttonStyle(AuxButtonStyle(kind: .primary))
-                            .keyboardShortcut(.return, modifiers: .command)
+                            .viewShortcut(.sendProposal)
                             .disabled(!active || !shell.canSendProposal(approval))
                             .accessibilityLabel(copy(.apSend)).accessibilityIdentifier("inbox-proposal-send-\(approval.id)")
                             Button(copy(.apEdit)) { shell.beginEdit(approval) }

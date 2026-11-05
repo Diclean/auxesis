@@ -184,6 +184,15 @@ public enum MenuAction: String, CaseIterable {
     }
 }
 
+/// What one key prints as, before modifiers: "↩" for Return, "Esc" for Escape.
+private func printedKey(_ key: Character) -> String {
+    switch key {
+    case "\r": return "↩"
+    case "\u{1b}": return "Esc"
+    default: return String(key).uppercased()
+    }
+}
+
 /// One row of the menu-bar shortcut table: an action id, its key and its
 /// modifiers. This is the only place the app's menu chords are written down.
 public struct MenuShortcutBinding: Equatable, Hashable {
@@ -199,7 +208,40 @@ public struct MenuShortcutBinding: Equatable, Hashable {
 
     /// "⌘N", "⌃⌘S", "⌘↩": what the menu bar and the help sheet show.
     public var display: String {
-        modifiers.symbols + (key == "\r" ? "↩" : String(key).uppercased())
+        modifiers.symbols + printedKey(key)
+    }
+
+    /// The help sheet's EN/FR text for this action. Agent digits return `nil`:
+    /// `GoMenu` prints the live agent's name for those rows.
+    public func title(_ language: Language) -> String? {
+        let fr = language == .fr
+        switch action {
+        case .newConversation:
+            return L10n.ui(.newConversation, language)
+        case .settings:
+            return L10n.ui(.settings, language) + "…"
+        case .quit:
+            return fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)"
+        case .goAgent1, .goAgent2, .goAgent3, .goAgent4, .goAgent5,
+             .goAgent6, .goAgent7, .goAgent8, .goAgent9:
+            return nil
+        case .toggleSidebar:
+            return fr ? "Afficher ou masquer la barre latérale" : "Show or hide sidebar"
+        case .askAux:
+            return fr ? "Demander à Aux…" : "Ask Aux…"
+        case .sendProposal:
+            return fr ? "Envoyer la proposition" : "Send proposal"
+        case .notNow:
+            return L10n.ui(.apNotNow, language)
+        case .togglePanel:
+            return L10n.ui(.panelToggle, language)
+        case .back:
+            return L10n.ui(.back, language)
+        case .stopAll:
+            return L10n.ui(.stopAll, language) + " / " + L10n.ui(.resume, language)
+        case .find:
+            return fr ? "Rechercher" : "Find"
+        }
     }
 }
 
@@ -265,16 +307,149 @@ public enum MenuShortcutTable {
     }
 }
 
+/// EN/FR text for one help-sheet row.
+public struct ShortcutCopy: Equatable, Hashable {
+    public let en: String
+    public let fr: String
+
+    public init(en: String, fr: String) {
+        self.en = en
+        self.fr = fr
+    }
+
+    public func text(_ language: Language) -> String {
+        language == .fr ? fr : en
+    }
+}
+
+/// A chord a view binds with `.keyboardShortcut`. It fires only while that
+/// view has focus, so two views can reuse a key; the menu bar's chords stay in
+/// `MenuShortcutTable`.
+public enum ViewAction: String, CaseIterable {
+    case editClient = "client-edit"
+    case saveClient = "client-save"
+    case cancelClientEdit = "client-edit-cancel"
+    case cancelSend = "cancel-send"
+    case sendProposal = "send-proposal"
+    case sendMessage = "send-message"
+    case dismissSheet = "dismiss-sheet"
+    case confirmSheet = "confirm-sheet"
+    case editProposal = "edit-proposal"
+    case moveWaiting = "move-waiting"
+    case openRow = "open-row"
+    case leaveEditing = "leave-editing"
+
+    /// The rows Help ▸ Keyboard Shortcuts prints, in order.
+    public static let helpRows: [ViewAction] = [.editProposal, .moveWaiting, .openRow, .leaveEditing]
+}
+
+/// One key a view binds: a printable key with modifiers, or one of SwiftUI's
+/// two symbolic sheet keys.
+public enum ViewShortcutKey: Equatable, Hashable {
+    case character(Character, MenuShortcutModifiers)
+    case cancel
+    case defaultAction
+
+    /// What the help sheet prints for the key itself.
+    public var display: String {
+        switch self {
+        case .character(let key, let modifiers): return modifiers.symbols + printedKey(key)
+        case .cancel: return "Esc"
+        case .defaultAction: return "↩"
+        }
+    }
+
+    /// The key and modifiers this chord consumes, for collision tests.
+    public var chord: (key: Character, modifiers: MenuShortcutModifiers) {
+        switch self {
+        case .character(let key, let modifiers): return (key, modifiers)
+        case .cancel: return ("\u{1b}", [])
+        case .defaultAction: return ("\r", [])
+        }
+    }
+}
+
+/// One row of the in-view table: the action, the key the view binds, and the
+/// help copy when the sheet prints it.
+public struct ViewShortcutBinding: Equatable, Hashable {
+    public let action: ViewAction
+    public let key: ViewShortcutKey?
+    /// Set for a row printed as several keys (the waiting list's arrow/J/K pair).
+    public let printedKeys: String?
+    /// Help-sheet copy; `nil` when the sheet does not print this chord.
+    public let help: ShortcutCopy?
+
+    public init(
+        action: ViewAction,
+        key: ViewShortcutKey?,
+        printedKeys: String? = nil,
+        help: ShortcutCopy? = nil
+    ) {
+        self.action = action
+        self.key = key
+        self.printedKeys = printedKeys
+        self.help = help
+    }
+
+    public var display: String { printedKeys ?? key?.display ?? "" }
+}
+
+/// The one list of chords views bind by hand, plus the printable keys the help
+/// sheet lists. Views map these rows through `viewShortcut` in `AuxesisMacApp`.
+public enum ViewShortcutTable {
+    public static func binding(for action: ViewAction) -> ViewShortcutBinding {
+        switch action {
+        case .editClient:
+            return ViewShortcutBinding(action: action, key: .character("e", .command))
+        case .saveClient:
+            return ViewShortcutBinding(action: action, key: .character("s", .command))
+        case .cancelClientEdit:
+            return ViewShortcutBinding(action: action, key: .cancel)
+        case .cancelSend:
+            return ViewShortcutBinding(action: action, key: .character("z", .command))
+        case .sendProposal:
+            return ViewShortcutBinding(action: action, key: .character("\r", .command))
+        case .sendMessage:
+            return ViewShortcutBinding(action: action, key: .character("\r", .command))
+        case .dismissSheet:
+            return ViewShortcutBinding(action: action, key: .cancel)
+        case .confirmSheet:
+            return ViewShortcutBinding(action: action, key: .defaultAction)
+        case .editProposal:
+            return ViewShortcutBinding(
+                action: action, key: .character("e", []),
+                help: ShortcutCopy(en: "Edit proposal", fr: "Modifier la proposition"))
+        case .moveWaiting:
+            return ViewShortcutBinding(
+                action: action, key: nil, printedKeys: "↑ / ↓ · J / K",
+                help: ShortcutCopy(en: "Move through waiting items", fr: "Parcourir les éléments en attente"))
+        case .openRow:
+            return ViewShortcutBinding(
+                action: action, key: .defaultAction,
+                help: ShortcutCopy(en: "Open selected row", fr: "Ouvrir la ligne choisie"))
+        case .leaveEditing:
+            return ViewShortcutBinding(
+                action: action, key: .cancel,
+                help: ShortcutCopy(en: "Leave editing", fr: "Quitter la modification"))
+        }
+    }
+
+    /// Every in-view row, in declaration order.
+    public static var all: [ViewShortcutBinding] { ViewAction.allCases.map { binding(for: $0) } }
+
+    /// The rows Help ▸ Keyboard Shortcuts prints, in order.
+    public static var help: [ViewShortcutBinding] { ViewAction.helpRows.map { binding(for: $0) } }
+}
+
 /// One line of Help ▸ Keyboard Shortcuts.
 public struct MenuShortcut: Equatable {
     public let title: String
     public let keys: String
 }
 
-/// The shortcuts the app really binds, for the help sheet. Every row comes
-/// from `MenuShortcutTable`, including ⌘1…⌘9, which belong to the Go menu's
-/// agents alone; the Records pages have no shortcut. `inView` are keys a view
-/// handles.
+/// The shortcuts the app really binds, for the help sheet. Menu rows come from
+/// `MenuShortcutTable` and in-view rows from `ViewShortcutTable`. ⌘1…⌘9 belong
+/// to the Go menu's agents alone; the Records pages have no shortcut.
 public enum MenuShortcuts {
     public static func menu(agents: [Agent], language: Language) -> [MenuShortcut] {
         let agentRows = GoMenu.agentItems(agents: agents).compactMap { item in
@@ -292,51 +467,16 @@ public enum MenuShortcuts {
                 }
                 continue
             }
-            guard let title = title(for: binding.action, language: language) else { continue }
+            guard let title = binding.title(language) else { continue }
             rows.append(MenuShortcut(title: title, keys: binding.display))
         }
         return rows
     }
 
-    private static func title(for action: MenuAction, language: Language) -> String? {
-        let fr = language == .fr
-        switch action {
-        case .newConversation:
-            return L10n.ui(.newConversation, language)
-        case .settings:
-            return L10n.ui(.settings, language) + "…"
-        case .quit:
-            return fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)"
-        case .goAgent1, .goAgent2, .goAgent3, .goAgent4, .goAgent5,
-             .goAgent6, .goAgent7, .goAgent8, .goAgent9:
-            return nil
-        case .toggleSidebar:
-            return fr ? "Afficher ou masquer la barre latérale" : "Show or hide sidebar"
-        case .askAux:
-            return fr ? "Demander à Aux…" : "Ask Aux…"
-        case .sendProposal:
-            return fr ? "Envoyer la proposition" : "Send proposal"
-        case .notNow:
-            return L10n.ui(.apNotNow, language)
-        case .togglePanel:
-            return L10n.ui(.panelToggle, language)
-        case .back:
-            return L10n.ui(.back, language)
-        case .stopAll:
-            return L10n.ui(.stopAll, language) + " / " + L10n.ui(.resume, language)
-        case .find:
-            return fr ? "Rechercher" : "Find"
-        }
-    }
-
     public static func inView(language: Language) -> [MenuShortcut] {
-        let fr = language == .fr
-        return [
-            MenuShortcut(title: fr ? "Modifier la proposition" : "Edit proposal", keys: "E"),
-            MenuShortcut(title: fr ? "Parcourir les éléments en attente" : "Move through waiting items", keys: "↑ / ↓ · J / K"),
-            MenuShortcut(title: fr ? "Ouvrir la ligne choisie" : "Open selected row", keys: "↩"),
-            MenuShortcut(title: fr ? "Quitter la modification" : "Leave editing", keys: "Esc"),
-        ]
+        ViewShortcutTable.help.compactMap { binding in
+            binding.help.map { MenuShortcut(title: $0.text(language), keys: binding.display) }
+        }
     }
 }
 

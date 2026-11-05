@@ -345,20 +345,20 @@ struct ClientCardView: View {
             if shell.clientEditing {
                 Button(copy(.clientCancel)) { shell.cancelClientEdit() }
                     .buttonStyle(AuxButtonStyle())
-                    .keyboardShortcut(.cancelAction)
+                    .viewShortcut(.cancelClientEdit)
                     .disabled(shell.clientSaving)
                     .accessibilityLabel(copy(.clientCancel)).accessibilityIdentifier("client-edit-cancel")
                 Button(shell.clientSaving ? copy(.saving) : copy(.clientSave)) {
                     Task { await shell.saveClientDraft() }
                 }
                 .buttonStyle(AuxButtonStyle(kind: .primary))
-                .keyboardShortcut("s", modifiers: .command)
+                .viewShortcut(.saveClient)
                 .disabled(shell.clientSaving || !(shell.clientDraft?.edit.isValid ?? false))
                 .accessibilityLabel(shell.clientSaving ? copy(.saving) : copy(.clientSave)).accessibilityIdentifier("client-edit-save")
             } else {
                 Button(copy(.clientEdit)) { shell.beginClientEdit() }
                     .buttonStyle(AuxButtonStyle())
-                    .keyboardShortcut("e", modifiers: .command)
+                    .viewShortcut(.editClient)
                     .accessibilityLabel(copy(.clientEdit)).accessibilityIdentifier("client-edit")
                 Button { shell.briefClient() } label: {
                     Text(copy(.clientBrief))

@@ -146,7 +146,7 @@ import XCTest
             guard let chord = view.key?.chord else { continue }
             for menu in MenuShortcutTable.menu
             where menu.key == chord.key && menu.modifiers == chord.modifiers {
-                XCTAssertEqual(allowed[view.action], menu.action,
+                XCTAssertEqual(allowed[view.action], Optional(menu.action),
                                "\(view.action.rawValue) shadows menu \(menu.action.rawValue)")
             }
         }

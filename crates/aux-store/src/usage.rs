@@ -10,6 +10,25 @@ use super::*;
 /// [`Store::try_reserve_for`]); a daemon's calls hold a handful.
 const MAX_HELD_RESERVATIONS: i64 = 10_000;
 
+/// How long a reconcile claim (`usage_reconciled`) is kept, in days, from
+/// both the claim and its reservation's day.
+///
+/// A claim matters only until the live settle of its call comes. A row is
+/// claimed only once past its `RESERVATION_TTL` (30 min), a live call settles
+/// within its stream life (shorter than the TTL), and a job the settlement
+/// worker owes is never claimed. What is left is a process frozen mid-call:
+/// the Mac asleep, or the daemon stopped and resumed. A week is 336 times the
+/// TTL and covers a laptop closed over a long weekend.
+///
+/// A settle that still comes after its claim was pruned is charged in full
+/// (see [`Store::settle_reservation`]): it may count the claim's amount
+/// twice, never less than was spent.
+const RECONCILED_RETENTION_DAYS: u64 = 7;
+const _: () = assert!(RECONCILED_RETENTION_DAYS * 86_400 > 100 * RESERVATION_TTL.as_secs());
+
+/// The most claims one prune deletes, so a pass stays short.
+const PRUNE_BATCH: i64 = 1000;
+
 impl Store {
     /// Close one agent's existing daily budget latch and audit it atomically.
     /// This reuses the v6 `budget_stops` table; it does not add a migration.
@@ -565,8 +584,13 @@ impl Store {
     /// `RESERVATION_TTL` is sized to keep that case out of the stream path.
     /// A held row a reconcile claimed first is the exception: the claim
     /// recorded the row's amount and kept it (`usage_reconciled`), so this
-    /// records what `actual` tops it by in each direction and raises the
-    /// claim to it: the live amount wins, and is still recorded once.
+    /// records what `actual` tops it by in each direction and drops the
+    /// claim: the live amount wins, and is still recorded once.
+    ///
+    /// A reservation of a day at least [`RECONCILED_RETENTION_DAYS`] old with
+    /// neither row nor claim may have had its claim pruned: it is charged in
+    /// full. That fails safe: at worst the claim's amount counts twice, the
+    /// spend is never under-counted.
     ///
     /// When the recorded totals reach or cross a cap of `reservation.caps`,
     /// the same transaction writes a `budget_stops` latch for the agent and the
@@ -603,13 +627,22 @@ impl Store {
                 None
             } else {
                 tx.query_row(
-                    "SELECT tokens_in, tokens_out, usd_cents FROM usage_reconciled
-                     WHERE reservation_id = ?1",
+                    "DELETE FROM usage_reconciled WHERE reservation_id = ?1
+                     RETURNING tokens_in, tokens_out, usd_cents",
                     [reservation.id],
                     |row| Ok([row.get::<_, u64>(0)?, row.get(1)?, row.get(2)?]),
                 )
                 .optional()?
             };
+            // No claim, but one this old may have been pruned: charge it all.
+            let pruned = !claim
+                && claimed.is_none()
+                && tx.query_row(
+                    "SELECT ?1 <= date('now', 'localtime', ?2)",
+                    rusqlite::params![reservation.day, retention_ago()],
+                    |row| row.get::<_, bool>(0),
+                )?;
+            let claimed = if pruned { Some([0; 3]) } else { claimed };
             let rest = claimed.map(|[tokens_in, tokens_out, usd_cents]| UsageActual {
                 tokens_in: actual.tokens_in.saturating_sub(tokens_in),
                 tokens_out: actual.tokens_out.saturating_sub(tokens_out),
@@ -626,11 +659,14 @@ impl Store {
                 }
             }
         }
-        if claim || deleted == 0 {
-            // The claim keeps the most recorded for this reservation so far.
+        if claim {
+            // The claim keeps what it recorded until the live settle (or the
+            // prune) drops it.
             tx.execute(
-                "INSERT INTO usage_reconciled(reservation_id, tokens_in, tokens_out, usd_cents)
-                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(reservation_id) DO UPDATE SET
+                "INSERT INTO usage_reconciled(reservation_id, tokens_in, tokens_out, usd_cents,
+                     day, claimed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', 'localtime'))
+                 ON CONFLICT(reservation_id) DO UPDATE SET
                    tokens_in = MAX(tokens_in, excluded.tokens_in),
                    tokens_out = MAX(tokens_out, excluded.tokens_out),
                    usd_cents = MAX(usd_cents, excluded.usd_cents)",
@@ -638,7 +674,8 @@ impl Store {
                     reservation.id,
                     actual.tokens_in,
                     actual.tokens_out,
-                    actual.usd_cents
+                    actual.usd_cents,
+                    reservation.day
                 ],
             )?;
         }
@@ -764,8 +801,9 @@ impl Store {
     /// raised), once. Each is claimed: deleted, recorded and kept in one
     /// transaction, so a live settle that still comes records only what tops
     /// it (see [`Store::settle_reservation`]). The daemon runs it at start
-    /// and every minute. Returns how many settled and how many failed; a
-    /// failed one stays held for the next pass.
+    /// and every minute; each pass then prunes old claims. Returns how many
+    /// settled and how many failed; a failed one stays held for the next
+    /// pass.
     pub fn settle_abandoned_reservations(
         &self,
         skip: &[i64],
@@ -807,7 +845,24 @@ impl Store {
             };
             failed += usize::from(self.settle_held(&reservation, &actual, true).is_err());
         }
+        // A prune that fails keeps its claims for the next pass; it never
+        // costs a settle.
+        let _ = self.prune_reconciled_claims();
         Ok((rows.len() - failed, failed))
+    }
+
+    /// Delete up to [`PRUNE_BATCH`] reconcile claims no late settle can still
+    /// need: made, and of a reservation day, at least
+    /// [`RECONCILED_RETENTION_DAYS`] ago. Returns how many it deleted.
+    pub fn prune_reconciled_claims(&self) -> Result<usize, StoreError> {
+        Ok(self.conn.execute(
+            "DELETE FROM usage_reconciled WHERE reservation_id IN (
+                 SELECT reservation_id FROM usage_reconciled
+                 WHERE claimed_at <= datetime('now', 'localtime', ?1)
+                   AND day <= date('now', 'localtime', ?1)
+                 LIMIT ?2)",
+            rusqlite::params![retention_ago(), PRUNE_BATCH],
+        )?)
     }
 
     /// Drop a reservation without recording usage.
@@ -848,6 +903,11 @@ impl Store {
         )?;
         Ok(record)
     }
+}
+
+/// The SQLite modifier for [`RECONCILED_RETENTION_DAYS`] ago.
+fn retention_ago() -> String {
+    format!("-{RECONCILED_RETENTION_DAYS} days")
 }
 
 #[cfg(test)]
@@ -2280,6 +2340,7 @@ mod tests {
             ..UsageActual::default()
         };
         store.settle_reservation(&held, &live).unwrap();
+        assert_eq!(claims(&store), 0, "the settle consumed its claim");
         store.settle_reservation(&held, &live).unwrap();
         let totals = store.usage_totals("main", &day).unwrap();
         let sum = |t: UsageTotals| (t.tokens_in, t.tokens_out, t.usd_cents);
@@ -2295,6 +2356,102 @@ mod tests {
             .unwrap();
         store.settle_reservation(&other, &live).unwrap();
         assert_eq!(sum(store.usage_totals("main", &day).unwrap()), (180, 13, 6));
+    }
+
+    fn claims(store: &Store) -> i64 {
+        let count = "SELECT COUNT(*) FROM usage_reconciled";
+        store.conn.query_row(count, [], |row| row.get(0)).unwrap()
+    }
+
+    /// Reserve 60 in / 9 out on `day`, expire it and let the reconcile claim it.
+    fn claimed(store: &Store, day: &str) -> Reservation {
+        let caps = caps(Some(1000), None);
+        let reserved = store.try_reserve("main", day, &caps, &estimate(60, 9));
+        let ReserveOutcome::Reserved(held) = reserved.unwrap() else {
+            panic!("admitted");
+        };
+        let expire = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+        store.conn.execute(expire, []).unwrap();
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (1, 0));
+        held
+    }
+
+    const AGE_CLAIM: &str = "UPDATE usage_reconciled SET claimed_at = datetime('now',
+        'localtime', '-8 days'), day = date('now', 'localtime', '-8 days')
+        WHERE reservation_id = ?1";
+
+    #[test]
+    fn a_claim_past_its_retention_is_pruned_and_a_fresh_one_kept() {
+        let store = Store::open_in_memory().unwrap();
+        let day = store.local_day().unwrap();
+        let (old, fresh) = (claimed(&store, &day), claimed(&store, &day));
+        store.conn.execute(AGE_CLAIM, [old.id]).unwrap();
+        // Six days is still inside the week.
+        let recent = "UPDATE usage_reconciled SET claimed_at = datetime('now', 'localtime',
+            '-6 days'), day = date('now', 'localtime', '-6 days') WHERE reservation_id = ?1";
+        store.conn.execute(recent, [fresh.id]).unwrap();
+        // The reconcile's own pass prunes.
+        assert_eq!(store.settle_abandoned_reservations(&[]).unwrap(), (0, 0));
+        let left: i64 = store
+            .conn
+            .query_row("SELECT reservation_id FROM usage_reconciled", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!((claims(&store), left), (1, fresh.id));
+        // A claim made today of an old day's reservation (a Mac asleep a
+        // week mid-call) is kept a full retention too.
+        let late = claimed(&store, &day);
+        let aged_day = "UPDATE usage_reconciled SET day = date('now', 'localtime', '-8 days')
+            WHERE reservation_id = ?1";
+        store.conn.execute(aged_day, [late.id]).unwrap();
+        assert_eq!(store.prune_reconciled_claims().unwrap(), 0);
+    }
+
+    #[test]
+    fn one_prune_deletes_at_most_a_batch() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .conn
+            .execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001)
+                 INSERT INTO usage_reconciled
+                 SELECT i, 1, 1, 0, '2000-01-01', '2000-01-01 00:00:00' FROM n",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.prune_reconciled_claims().unwrap(), 1000);
+        assert_eq!(store.prune_reconciled_claims().unwrap(), 1);
+        assert_eq!(claims(&store), 0);
+    }
+
+    #[test]
+    fn a_late_settle_after_its_claim_was_pruned_is_charged_in_full() {
+        let store = Store::open_in_memory().unwrap();
+        let today = store.local_day().unwrap();
+        let week_ago: String = store
+            .conn
+            .query_row("SELECT date('now', 'localtime', '-8 days')", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        // The reconcile records the reserve today, the claim ages out.
+        let held = claimed(&store, &week_ago);
+        store.conn.execute(AGE_CLAIM, [held.id]).unwrap();
+        assert_eq!(store.prune_reconciled_claims().unwrap(), 1);
+        let live = UsageActual {
+            tokens_in: 90,
+            tokens_out: 4,
+            usd_cents: 3,
+            ..UsageActual::default()
+        };
+        store.settle_reservation(&held, &live).unwrap();
+        let totals = store.usage_totals("main", &today).unwrap();
+        // Over-counted by the claim (60 + 90, 9 + 4), never under.
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out, totals.usd_cents),
+            (150, 13, 3)
+        );
     }
 
     #[test]

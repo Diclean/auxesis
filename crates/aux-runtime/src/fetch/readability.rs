@@ -1041,30 +1041,22 @@ fn find_heading(node: &Handle, tag: &str, depth: usize, deadline: &Deadline) -> 
     None
 }
 
-/// The page's `<title>`: the first one in the HTML namespace. An SVG
-/// `<title>` is an icon's tooltip, which the renderer drops with its `<svg>`.
-/// The search enters `<head>` (where a real title lives) but no other
-/// dropped element, so a `<title>` inside `<noscript>`, `<template>`, a
-/// `<form>` or an `<svg>` is never the page title.
-fn find_title(node: &Handle, depth: usize, deadline: &Deadline) -> Option<Handle> {
-    if let NodeData::Element { name, .. } = &node.data {
-        if name.ns == ns!(html) && &*name.local == "title" {
-            return Some(node.clone());
-        }
-    }
-    let tag = tag_name(node);
-    if tag.is_some_and(|tag| tag != "head" && is_dropped(tag))
-        || depth >= MAX_DOM_DEPTH
-        || deadline.expired()
-    {
+/// The page's `<title>`: only a `<title>` that is a direct child of the
+/// document's `<head>` (`<html>` > `<head>` > `<title>`). A `<title>` the
+/// parser places anywhere in `<body>` (foster-parented out of a table, under
+/// a hidden or dropped ancestor, inside an SVG) is never the page title; the
+/// heading fallback, which follows the renderer's drop rules, takes over.
+fn find_title(document: &Handle, deadline: &Deadline) -> Option<Handle> {
+    let is_html = |node: &Handle, local: &str| match &node.data {
+        NodeData::Element { name, .. } => name.ns == ns!(html) && &*name.local == local,
+        _ => false,
+    };
+    let html = document.children().find(|child| is_html(child, "html"))?;
+    let head = html.children().find(|child| is_html(child, "head"))?;
+    if deadline.expired() {
         return None;
     }
-    for child in node.children() {
-        if let Some(found) = find_title(&child, depth + 1, deadline) {
-            return Some(found);
-        }
-    }
-    None
+    head.children().find(|child| is_html(child, "title"))
 }
 
 /// Volume metrics for one subtree, used by the scorer.
@@ -1207,7 +1199,7 @@ fn choose_root(document: &Handle, deadline: &Deadline) -> Handle {
 }
 
 fn title_of(document: &Handle, root: &Handle, deadline: &Deadline) -> String {
-    if let Some(found) = find_title(document, 0, deadline) {
+    if let Some(found) = find_title(document, deadline) {
         let title = normalize(&raw_text(&found, deadline));
         if !title.is_empty() {
             return truncate_title(title);
@@ -2209,6 +2201,10 @@ mod tests {
             "<template><title>Hidden two</title></template>",
             "<form><title>Hidden three</title></form>",
             "<svg><title>Hidden four</title></svg>",
+            "<table><title>Hidden five</title></table>",
+            "<div hidden><title>Hidden six</title></div>",
+            "<div style=\"display:none\"><title>Hidden seven</title></div>",
+            "<title>Hidden eight</title>",
         ] {
             let html = format!("<body>{hidden}<h1>Visible</h1><p>Body text.</p></body>");
             let title = extract_readable(html.as_bytes()).title;

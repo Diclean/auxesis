@@ -172,7 +172,7 @@ fn configure(opened: &OpenedHome) -> anyhow::Result<(std::path::PathBuf, Config)
     let home = opened.home.clone();
     let verified = opened.verified.clone();
     let config_file = config_path(&home);
-    let config = Config::load_or_create_verified(&verified)?;
+    let config = aux_engine::config::load_or_create_verified(&verified)?;
     // Default-silence the HTML/XML parser crates: html5ever logs one `WARN`
     // per foster-parented token, so a hostile 512 KiB page used to write
     // ~8.85 MiB into the launchd-redirected log file. The WhatsApp transport
@@ -392,6 +392,9 @@ fn prepare_jobs(
     // A claim left by a dead process is `uncertain`, never silently sendable.
     store.recover_mail_draft_claims()?;
     let store = Arc::new(Mutex::new(store));
+    // A paid call a stopped process left held is charged at the most it is
+    // known to have spent: now, then every minute.
+    aux_engine::watch_held_reservations(&store);
     // Seal evidence blobs left in plaintext by an older build. A
     // failure leaves them to be sealed on their first read.
     // Only counts are logged, never a name or a byte.

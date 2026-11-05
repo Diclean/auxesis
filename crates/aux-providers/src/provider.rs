@@ -77,6 +77,14 @@ pub trait ChatProvider: Send + Sync {
     fn on_this_mac(&self) -> bool {
         false
     }
+
+    /// True only for the trusted subscription backend itself (Ollama Cloud
+    /// at `https://ollama.com`), where a model the catalog marks as billed by
+    /// subscription costs 0 cents per call. Any other endpoint sending the
+    /// same model id is billed per call.
+    fn subscription_billed(&self) -> bool {
+        false
+    }
 }
 
 /// One provider attempt: the host it went to (`None` when unknown) and

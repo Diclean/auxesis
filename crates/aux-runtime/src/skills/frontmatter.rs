@@ -648,14 +648,14 @@ body line
 tools:
   - google.gmail.search
   - google.gmail.send
-budget: { daily_usd: 2.00 }
+settings: { timeout: 2.00 }
 channels: [mac, telegram]
 ---
 ";
         let (value, _) = parse(text).unwrap();
         assert_eq!(map(&value, "tools").as_list().unwrap().len(), 2);
         assert_eq!(
-            map(&value, "budget").get("daily_usd"),
+            map(&value, "settings").get("timeout"),
             Some(&Value::Float(2.0))
         );
         assert_eq!(map(&value, "channels").as_list().unwrap().len(), 2);

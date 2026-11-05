@@ -18,13 +18,15 @@ struct TodayView: View {
     @EnvironmentObject private var shell: ShellModel
     @Environment(\.palette) private var palette
     @Environment(\.language) private var language
-    let selection: TodaySelection
+    /// The queue's selection: a top row's "Open" shows that card here.
+    @Binding var selection: TodaySelection
+    @State private var showsAllMail = false
 
     var body: some View {
         let copy = Copy(language: language)
         let selected = TodayQueueModel.resolvedSelection(selection,
             waitingIDs: shell.waitingApprovals.map(\.id), ledgerIDs: shell.ledger.value?.map(\.id) ?? [],
-            agentIDs: TeamMember.all.filter { shell.workingAgents.contains($0.id) }.map(\.id))
+            agentIDs: shell.roster.filter { shell.workingAgents.contains($0.id) }.map(\.id))
         ViewPage(title: copy(.today), lede: lede(copy)) {
             selectionDetail(copy, selected: selected)
             switch shell.today {
@@ -132,17 +134,26 @@ struct TodayView: View {
     }
 
     private func content(_ copy: Copy, _ brief: DailyBrief) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let urgent = shell.waitingApprovals.first {
-                Text(copy.f(.todayLead, shell.rowHeadline(for: urgent)))
-                    .font(.hk(Theme.Text.lead, Theme.Weight.regular)).foregroundStyle(palette.ink.color)
-                    .padding(.bottom, 24)
-            } else {
-                Text(copy(.waitingEmpty)).font(.hk(Theme.Text.lead, Theme.Weight.regular))
-                    .foregroundStyle(palette.ink.color).padding(.bottom, 24)
+        let approvals = shell.waitingApprovals.map {
+            (id: $0.id, headline: shell.rowHeadline(for: $0), agent: $0.agent,
+             at: $0.ts > 0 ? Date(timeIntervalSince1970: TimeInterval($0.ts) / 1000) : nil) as TodayFocusApproval
+        }
+        let jobs = shell.planned.value ?? []
+        let now = shell.now
+        let top = TodayFocus.top(approvals: approvals, jobs: jobs, brief: brief, now: now, language: language)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(TodayFocus.line(approvals: approvals, jobs: jobs, brief: brief, now: now).text(language))
+                .font(.hk(Theme.Text.lead, Theme.Weight.regular)).foregroundStyle(palette.ink.color)
+                .accessibilityIdentifier("today-focus").padding(.bottom, 24)
+            if !top.isEmpty {
+                section(copy(.todayTopTitle), count: nil, loud: true) {
+                    ForEach(Array(top.enumerated()), id: \.element.id) { index, item in
+                        topRow(copy, item, first: index == 0)
+                    }
+                }
             }
-            Text(copy(.todayYourDay)).font(.hk(Theme.Text.title, Theme.Weight.strong))
-                .foregroundStyle(palette.ink.color).padding(.bottom, 16)
+            Text(copy(.todayYourDay)).font(.hk(Theme.Text.ui, Theme.Weight.semibold))
+                .foregroundStyle(palette.ink2.color).padding(.bottom, 12)
             if let events = brief.events {
                 section(copy(.todayCalendar), count: events.count == 1 ? copy(.todayEventsOne) : copy.f(.todayEventsMany, events.count)) {
                     if events.isEmpty { emptyRow(copy(.todayNoEvents)) }
@@ -159,12 +170,35 @@ struct TodayView: View {
                     : (mail.count == 1 ? copy(.todayUnreadOne) : copy.f(.todayUnreadMany, mail.count))
                 section(copy(.todayMail), count: unreadCount) {
                     if mail.isEmpty { emptyRow(copy(.todayNoMail)) }
-                    ForEach(Array(mail.enumerated()), id: \.offset) { _, header in
+                    ForEach(Array(mail.prefix(showsAllMail ? mail.count : Self.mailPreview).enumerated()), id: \.offset) { _, header in
                         row(lead: header.sender, text: header.subject, strongLead: true)
+                    }
+                    if !showsAllMail && mail.count > Self.mailPreview {
+                        Button(copy(.showAll)) { showsAllMail = true }
+                            .buttonStyle(AuxButtonStyle(kind: .link)).padding(.top, 8)
+                            .accessibilityLabel(copy(.showAll))
+                            .accessibilityIdentifier("today-mail-show-all")
                     }
                 }
             } else {
                 section(copy(.todayMail), count: copy(.unavailable)) { emptyRow(copy(.unavailable)) }
+            }
+            let count = brief.prospects.count
+            section(copy(.prospectsTitle), count: count == 1 ? copy(.prospectsOne) : copy.f(.prospectsMany, count)) {
+                if brief.prospects.isEmpty { emptyRow(copy(.todayNoProspects)) }
+                ForEach(brief.prospects) { prospect in
+                    prospectRow(copy, prospect).transition(.opacity)
+                }
+            }
+            section(copy(.todayWhatRan), count: nil) {
+                if let entries = shell.ledger.value.map(SinceYouLeftPresentation.previewEntries), !entries.isEmpty {
+                    ForEach(entries.prefix(5)) { entry in
+                        row(lead: LedgerText.localTime(entry.at, locale: Locale(identifier: language.localeIdentifier)),
+                            text: LedgerText.what(entry, language: language))
+                    }
+                } else if let line = SinceYouLeftPresentation.emptyLine(shell.ledger, language: language) {
+                    emptyRow(line)
+                }
             }
             let checks = TodayBriefChecks.block(for: brief)
             VStack(alignment: .leading, spacing: 6) {
@@ -186,25 +220,56 @@ struct TodayView: View {
                         .accessibilityLabel(shell.briefRunning ? copy(.todayRunning) : copy(.todayCheckSources)).accessibilityIdentifier("today-check-sources")
                 }
             }.padding(.bottom, 28)
-            let count = brief.prospects.count
-            section(copy(.prospectsTitle), count: count == 1 ? copy(.prospectsOne) : copy.f(.prospectsMany, count)) {
-                if brief.prospects.isEmpty { emptyRow(copy(.todayNoProspects)) }
-                ForEach(brief.prospects) { prospect in
-                    prospectRow(copy, prospect).transition(.opacity)
-                }
-            }
-            section(copy(.todayWhatRan), count: nil) {
-                if let entries = shell.ledger.value.map(SinceYouLeftPresentation.previewEntries), !entries.isEmpty {
-                    ForEach(entries.prefix(5)) { entry in
-                        row(lead: LedgerText.localTime(entry.at, locale: Locale(identifier: language.localeIdentifier)),
-                            text: LedgerText.what(entry, language: language))
-                    }
-                } else if let line = SinceYouLeftPresentation.emptyLine(shell.ledger, language: language) {
-                    emptyRow(line)
-                }
-            }
         }
         .animation(.easeOut(duration: 0.22), value: brief.prospects.map(\.id))
+    }
+
+    private static let mailPreview = 5  // mail rows before "Show all"
+
+    /// A "What matters first" row: mark, title, evidence, one existing act (the first is the suggested step).
+    private func topRow(_ copy: Copy, _ item: TodayTopItem, first: Bool) -> some View {
+        var label = copy(.open)
+        if case .openJob = item.action { label = copy(.openLedger) }
+        return HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    if let mark = item.mark { topMark(copy, mark) }
+                    Text(item.title).font(.hk(Theme.Text.body, Theme.Weight.semibold)).foregroundStyle(palette.ink.color)
+                }
+                Text(item.evidence).font(.meta).monospacedDigit().foregroundStyle(palette.muted.color)
+            }
+            .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 12)
+            Button(label) { act(item.action) }
+                .buttonStyle(AuxButtonStyle(kind: first ? .primary : .plain, height: 26))
+                .accessibilityLabel(label + ", " + item.title)
+                .accessibilityIdentifier("today-top-\(item.id)")
+        }
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) { Hairline() }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Amber only for attention, the error hue only for a failure; always a word too.
+    private func topMark(_ copy: Copy, _ mark: TodayTopItem.Mark) -> some View {
+        let (word, hue): (String, Color) = switch mark {
+        case .waits: (copy(.apNeedsYou), palette.amber.color)
+        case .late: (copy(.jobHealthLate), palette.amber.color)
+        case .failed: (copy(.jobHealthFailing), palette.red.color)
+        }
+        return HStack(spacing: 5) {
+            Circle().fill(hue).frame(width: 6, height: 6).accessibilityHidden(true)
+            Text(word).font(.meta).foregroundStyle(mark == .failed ? palette.red.color : palette.ink2.color)
+        }
+    }
+
+    private func act(_ action: TodayTopItem.Action) {
+        switch action {
+        case .openApproval(let id): selection = .waiting(id)
+        case .openJob: shell.ledgerOpensPlanned = true; shell.go(.ledger)
+        case .openCalendar: shell.go(.calendar)
+        case .openMail: shell.go(.agent(TeamMember.mail.id))
+        }
     }
 
     private func checkStatus(_ state: TodayBriefCheckState, _ copy: Copy) -> String {
@@ -269,10 +334,11 @@ struct TodayView: View {
         CalendarEventPresentation.timeText(for: event, language: language)
     }
 
-    private func section<Rows: View>(_ title: String, count: String?, @ViewBuilder rows: () -> Rows) -> some View {
+    /// Only "What matters first" is `loud`; the rest of the day sits below it, quieter.
+    private func section<Rows: View>(_ title: String, count: String?, loud: Bool = false, @ViewBuilder rows: () -> Rows) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.hk(Theme.Text.title, Theme.Weight.strong)).foregroundStyle(palette.ink.color)
+                Text(title).font(.hk(loud ? Theme.Text.title : Theme.Text.body, Theme.Weight.strong)).foregroundStyle(palette.ink.color)
                 Spacer()
                 if let count { Text(count).font(.meta).monospacedDigit().foregroundStyle(palette.muted.color) }
             }

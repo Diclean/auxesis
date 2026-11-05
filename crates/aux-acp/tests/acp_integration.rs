@@ -1172,6 +1172,39 @@ async fn backend_wall_clock_timeout_kills_the_tree_and_settles() {
 }
 
 #[tokio::test]
+async fn a_turn_dropped_after_dispatch_still_charges_its_reserve() {
+    let env = test_env();
+    let pidfile = env.workspace.join("child.pid");
+    let (mut backend, store, _session_id) = backend_for(&env, test_limits());
+    // The "hang" agent takes the prompt (its pid file appears), then never answers.
+    backend.agent_mut().args = vec!["hang".to_string(), pidfile.display().to_string()];
+    let mut observer = NullObserver;
+    let request = AcpTurnRequest {
+        prompt: safe("never answer"),
+        cancel: None,
+        turns_used: 0,
+    };
+    let child_pid = tokio::select! {
+        result = backend.run_turn(request, &mut observer) => panic!("no answer: {result:?}"),
+        pid = wait_for_pid(&pidfile) => pid,
+    };
+    assert!(process_gone(child_pid), "the dropped turn's tree is reaped");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while store.lock().unwrap().reservation_count().unwrap() > 0 {
+        assert!(std::time::Instant::now() < deadline, "unsettled");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let guard = store.lock().unwrap();
+    assert_eq!(guard.reservation_count().unwrap(), 0, "not left to expire");
+    let day = guard.local_day().unwrap();
+    assert_eq!(
+        guard.usage_totals("main", &day).unwrap().usd_cents,
+        kernel_core::config::DEFAULT_ACP_TURN_COST_ESTIMATE_CENTS,
+        "the fixed estimate is charged once"
+    );
+}
+
+#[tokio::test]
 async fn a_gated_prompt_is_the_only_text_the_agent_sees() {
     // The backend takes a `SafeText`, so the agent can only receive what a gate
     // issued: the e-mail address is masked before the prompt leaves the process.

@@ -2458,7 +2458,6 @@ mod tests {
             name: "assistant".to_string(),
             brain: Brain::Cloud,
             default_mode: AgentMode::Private,
-            budget: None,
             channels: Vec::new(),
             tools: vec![
                 "google.calendar.create_event".to_string(),

@@ -3,11 +3,14 @@
 
 use super::{ChatError, ChatSession, DEFAULT_OUTPUT_RESERVE, ESTIMATED_UNIT};
 use aux_providers::{ChatDelta, ChatMessage, ChatProvider, ChatRequest, ChatResponse, SafeMessage};
-use aux_store::{StoreError, StoreHandle};
+use aux_store::{Store, StoreError, StoreHandle};
 use kernel_core::budget::{
-    audit_denial, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome, UsageActual,
-    UsageKind, UsageTotals,
+    audit_denial, BudgetCaps, Denial, DenialReason, PriceTable, Reservation, ReserveOutcome,
+    UsageActual, UsageKind, UsageTotals,
 };
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
+use std::time::{Duration, Instant};
 
 fn unit_for(estimated: bool) -> &'static str {
     if estimated {
@@ -48,27 +51,304 @@ impl StreamCapture {
     }
 }
 
-pub(super) fn settle_streamed(
-    store: &StoreHandle<'_>,
-    reservation: &Reservation,
+/// What a streaming call is known to have used: the counts the provider
+/// reported, else the estimates of its prompt and of the text that streamed.
+pub(super) fn streamed_actual(
+    request: &ChatRequest,
+    capture: &StreamCapture,
+    provider: &dyn ChatProvider,
+    prices: &PriceTable,
+) -> UsageActual {
+    let mut response = ChatResponse::assistant(capture.text());
+    response.usage = capture.usage();
+    usage_actual(request, &response, request_model(provider, request), prices)
+}
+
+pub(super) fn settle_streamed<S: SettleStore>(
+    held: HeldReservation<'_, S>,
     request: &ChatRequest,
     capture: &StreamCapture,
     provider: &dyn ChatProvider,
     prices: &PriceTable,
 ) {
-    let mut response = ChatResponse::assistant(capture.text());
-    response.usage = capture.usage();
-    let actual = usage_actual(request, &response, request_model(provider, request), prices);
-    if let Err(err) = store.with(|store| store.settle_reservation(reservation, &actual)) {
+    let id = held.reservation().id;
+    if let Err(err) = held.settle(&streamed_actual(request, capture, provider, prices)) {
         tracing::warn!(
-            reservation = reservation.id,
+            reservation = id,
             error = %err,
             "could not settle a failed streaming call's estimated usage"
         );
     }
 }
 
-pub(super) fn usage_actual(
+/// The store a [`HeldReservation`] settles in: a turn's own handle, or a
+/// shared store (one a future that must be `Send` can hold). Sealed, so a
+/// guard's drop runs no code from outside this crate but its own callback.
+pub trait SettleStore: sealed::Sealed {
+    /// Settle `reservation` at `actual`. The store settles a reservation once.
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError>;
+    /// Hand that settle to the settlement worker: never blocks, never locks.
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual);
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for aux_store::StoreHandle<'_> {}
+    impl Sealed for std::sync::Arc<std::sync::Mutex<aux_store::Store>> {}
+}
+
+impl SettleStore for StoreHandle<'_> {
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
+        self.with(|store| store.settle_reservation(reservation, actual))
+    }
+
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
+        // A borrowed store cannot reach the worker: its row stays held for
+        // the daemon's reconcile.
+        if let StoreHandle::Shared(store) = self {
+            store.settle_later(reservation, actual);
+        }
+    }
+}
+
+impl SettleStore for Arc<Mutex<Store>> {
+    fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError> {
+        kernel_core::lock_recover(self).settle_reservation(reservation, actual)
+    }
+
+    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
+        hand_over(Work::Settle(Box::new(SettleJob {
+            store: Arc::clone(self),
+            reservation: reservation.clone(),
+            actual,
+        })));
+    }
+}
+
+/// What the settlement worker is handed.
+enum Work {
+    /// A settle it owes until it succeeds.
+    Settle(Box<SettleJob>),
+    /// A store whose abandoned held rows it settles, now and every minute.
+    Watch(Weak<Mutex<Store>>),
+}
+
+struct SettleJob {
+    store: Arc<Mutex<Store>>,
+    reservation: Reservation,
+    actual: UsageActual,
+}
+
+/// A failed try is retried after `FIRST_RETRY`, then twice as long each
+/// time up to `RETRY_CAP`, and never given up. Tests run the same schedule
+/// faster.
+const FIRST_RETRY: Duration = Duration::from_millis(if cfg!(test) { 1 } else { 500 });
+const RETRY_CAP: Duration = Duration::from_millis(if cfg!(test) { 4 } else { 60_000 });
+const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } else { 60_000 });
+
+/// The settlement worker, started by the first guard: one thread on an
+/// unbounded queue, so no drop waits on the store's lock or on SQLite and
+/// no job is ever turned away. Each job keeps its row held until it
+/// settles, and the store refuses new reservations past a bound on held
+/// rows, so a store that stops settling cannot grow this queue without end.
+fn settler() -> &'static mpsc::Sender<Work> {
+    static SETTLER: OnceLock<mpsc::Sender<Work>> = OnceLock::new();
+    SETTLER.get_or_init(|| {
+        let (work, queue) = mpsc::channel();
+        let worker = std::thread::Builder::new().name("budget-settle".to_string());
+        if let Err(err) = worker.spawn(move || settle_jobs(&queue)) {
+            tracing::error!(error = %err, "no settlement worker: dropped calls stay held");
+        }
+        work
+    })
+}
+
+/// Hand `work` to the worker. This never blocks; it fails only with no
+/// worker, and the row then stays held for a reconcile.
+fn hand_over(work: Work) {
+    if settler().send(work).is_err() {
+        tracing::error!("no settlement worker: the call stays held for a reconcile");
+    }
+}
+
+/// Settle, now and every minute while this process runs, the held
+/// reservations in `store` past their TTL (those a stopped process left), each
+/// at the most its call is known to have spent. The daemon watches its store.
+pub fn watch_held_reservations(store: &Arc<Mutex<Store>>) {
+    hand_over(Work::Watch(Arc::downgrade(store)));
+}
+
+/// A job the worker owes: when it is next due, and the wait after that.
+type Owed = (SettleJob, Instant, Duration);
+
+fn settle_jobs(queue: &mpsc::Receiver<Work>) {
+    let mut owed: Vec<Owed> = Vec::new();
+    let mut watched: Vec<Weak<Mutex<Store>>> = Vec::new();
+    let mut reconcile_at = Instant::now();
+    loop {
+        let due = owed.iter().map(|(_, at, _)| *at);
+        let next = due
+            .chain((!watched.is_empty()).then_some(reconcile_at))
+            .min();
+        // Nothing due: wait for the next work, however long that takes.
+        let wait = next.map_or(Duration::MAX, |at| {
+            at.saturating_duration_since(Instant::now())
+        });
+        match queue.recv_timeout(wait) {
+            Ok(Work::Settle(job)) => owed.push((*job, Instant::now(), FIRST_RETRY)),
+            Ok(Work::Watch(store)) => {
+                watched.push(store);
+                reconcile_at = Instant::now();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        let now = Instant::now();
+        owed.retain_mut(|(job, at, wait)| {
+            if *at > now {
+                return true;
+            }
+            if try_settle(job) {
+                return false;
+            }
+            *at = now + *wait;
+            *wait = (*wait * 2).min(RETRY_CAP);
+            true
+        });
+        if !watched.is_empty() && now >= reconcile_at {
+            watched.retain(|store| match store.upgrade() {
+                Some(store) => {
+                    reconcile(&store, &owed);
+                    true
+                }
+                None => false, // the store is gone (a test's)
+            });
+            reconcile_at = now + RECONCILE_EVERY;
+        }
+    }
+}
+
+/// One try at `job`: raise its held row to the job's amount first, so the
+/// most its call is known to have spent outlives this process, then settle.
+fn try_settle(job: &SettleJob) -> bool {
+    let (store, reservation) = (kernel_core::lock_recover(&job.store), &job.reservation);
+    let tried = catch_unwind(AssertUnwindSafe(|| {
+        // A raise that fails leaves the settle to fail or succeed on its own.
+        let _ = store.raise_held_reservation(reservation.id, &job.actual);
+        store.settle_reservation(reservation, &job.actual)
+    }));
+    match tried {
+        Ok(Ok(())) => true,
+        Ok(Err(err)) => {
+            tracing::warn!(reservation = reservation.id, error = %err, "settle failed; retried");
+            false
+        }
+        Err(_) => {
+            tracing::error!(reservation = reservation.id, "settle panicked; retried");
+            false
+        }
+    }
+}
+
+/// Settle `store`'s abandoned held rows, but those a job here still owes: it
+/// records its own amount. A settle this cannot see (a job still in the
+/// channel, a direct one) may find its row claimed here; the store then
+/// records what it tops the claim by, once, so the live amount still wins.
+fn reconcile(store: &Arc<Mutex<Store>>, owed: &[Owed]) {
+    let skip: Vec<i64> = (owed.iter())
+        .filter(|(job, ..)| Arc::ptr_eq(&job.store, store))
+        .map(|(job, ..)| job.reservation.id)
+        .collect();
+    let store = kernel_core::lock_recover(store);
+    let settle = || store.settle_abandoned_reservations(&skip);
+    match catch_unwind(AssertUnwindSafe(settle)) {
+        Ok(Ok((0, 0))) => {}
+        outcome => tracing::warn!(?outcome, "settled held reservations a stopped process left"),
+    }
+}
+
+/// A reservation whose call the provider may already bill, held from the
+/// reserve until it is settled: every reservation a call takes comes as one.
+///
+/// [`HeldReservation::settle`] records what the call cost. Dropped
+/// unsettled (the future making the call was cancelled after the request
+/// went out), it hands the settlement worker the reserved estimate, or what
+/// [`HeldReservation::or_known`] reports where that is more, so the spend is
+/// never handed back as headroom. The drop never blocks, takes no lock and
+/// never panics; the store row stays held (counted, never swept) until a
+/// settle deletes it, so the reservation settles once.
+pub struct HeldReservation<'k, S: SettleStore> {
+    store: S,
+    reservation: Reservation,
+    settled: bool,
+    known: Option<Box<dyn Fn() -> UsageActual + Send + 'k>>,
+}
+
+impl<'k, S: SettleStore> HeldReservation<'k, S> {
+    /// Hold `reservation`, taken in `store`, until it is settled.
+    pub fn new(store: S, reservation: Reservation) -> Self {
+        settler(); // started now, so no drop waits for it
+        Self {
+            store,
+            reservation,
+            settled: false,
+            known: None,
+        }
+    }
+
+    /// What the call is known to have used so far, read only if this drops
+    /// unsettled: the drop then settles the larger of it and the reserved
+    /// estimate in each direction, never less than the reservation.
+    pub fn or_known(mut self, known: impl Fn() -> UsageActual + Send + 'k) -> Self {
+        self.known = Some(Box::new(known));
+        self
+    }
+
+    /// The reservation held: its estimate (the output clamped to the
+    /// headroom left) and the caps it was admitted under.
+    pub fn reservation(&self) -> &Reservation {
+        &self.reservation
+    }
+
+    /// Settle what the call cost. The guard is spent whatever the outcome;
+    /// a settle that fails goes to the settlement worker to retry.
+    pub fn settle(mut self, actual: &UsageActual) -> Result<(), StoreError> {
+        self.settled = true;
+        let settled = self.store.settle(&self.reservation, actual);
+        if settled.is_err() {
+            self.store.settle_later(&self.reservation, *actual);
+        }
+        settled
+    }
+}
+
+impl<S: SettleStore> Drop for HeldReservation<'_, S> {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        // The callback is the caller's code: if it panics, the reserve
+        // stands in for it, and nothing unwinds out of a drop.
+        let known =
+            (self.known.as_ref()).and_then(|known| catch_unwind(AssertUnwindSafe(known)).ok());
+        let actual = at_least(known.unwrap_or_default(), &self.reservation.estimate);
+        self.store.settle_later(&self.reservation, actual);
+    }
+}
+
+/// `known`, raised to `reserved` in each direction it falls short in; a
+/// raised amount is an estimate.
+fn at_least(known: UsageActual, reserved: &UsageTotals) -> UsageActual {
+    UsageActual {
+        tokens_in: known.tokens_in.max(reserved.tokens_in),
+        tokens_in_estimated: known.tokens_in_estimated || known.tokens_in < reserved.tokens_in,
+        tokens_out: known.tokens_out.max(reserved.tokens_out),
+        tokens_out_estimated: known.tokens_out_estimated || known.tokens_out < reserved.tokens_out,
+        usd_cents: known.usd_cents.max(reserved.usd_cents),
+    }
+}
+
+pub(crate) fn usage_actual(
     request: &ChatRequest,
     response: &ChatResponse,
     model: Option<&str>,
@@ -103,15 +383,10 @@ fn reservation_estimate(
     model: Option<&str>,
     prices: &PriceTable,
 ) -> UsageTotals {
-    let tokens_in = estimate_request_tokens(request).max(1);
-    UsageTotals {
-        tokens_in,
-        tokens_out: DEFAULT_OUTPUT_RESERVE,
-        usd_cents: priced_cents(prices, model, tokens_in, DEFAULT_OUTPUT_RESERVE),
-    }
+    call_estimate(request, model, prices, DEFAULT_OUTPUT_RESERVE)
 }
 
-pub(super) fn request_model<'r>(
+pub(crate) fn request_model<'r>(
     provider: &'r dyn ChatProvider,
     request: &'r ChatRequest,
 ) -> Option<&'r str> {
@@ -122,36 +397,136 @@ pub(super) fn request_model<'r>(
         .or_else(|| provider.model())
 }
 
-static UNPRICED_MODEL_NOTICE: std::sync::Once = std::sync::Once::new();
+/// Models already warned about as unpriced, keyed by model and UTC day: one
+/// warning per model per day, not one per process.
+static UNPRICED_MODEL_NOTICES: std::sync::Mutex<Vec<(String, u64)>> =
+    std::sync::Mutex::new(Vec::new());
 
 fn notice_unpriced_model(model: Option<&str>) {
-    UNPRICED_MODEL_NOTICE.call_once(|| {
-        tracing::warn!(
-            model = model.unwrap_or("<unreported>"),
-            "no price table entry for this model: the daily usd_cents cap cannot bind; \
-             the token caps are the effective ones (add [prices.models.<model>] to config.toml)"
-        );
-    });
+    let model = model.unwrap_or("<unreported>");
+    let day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() / 86_400);
+    let mut seen = kernel_core::lock_recover(&UNPRICED_MODEL_NOTICES);
+    seen.retain(|(_, seen_day)| *seen_day == day);
+    if seen.iter().any(|(seen_model, _)| seen_model == model) {
+        return;
+    }
+    seen.push((model.to_string(), day));
+    tracing::warn!(
+        model,
+        "no price for this model in [prices] or the bundled catalog: the daily usd_cents \
+         cap cannot be checked, so calls to it are refused while a money cap applies \
+         (add [prices.models.<model>] to config.toml)"
+    );
 }
 
-fn priced_cents(prices: &PriceTable, model: Option<&str>, tokens_in: u64, tokens_out: u64) -> u64 {
-    match model {
-        Some(model) if prices.price(model).is_some() => {
-            prices.usd_cents_for(Some(model), tokens_in, tokens_out)
+/// The bundled catalog's list prices, in whole cents per million tokens
+/// rounded up, for every model id that carries both prices. When two
+/// providers list the same id, the higher price wins.
+fn catalog_prices() -> &'static PriceTable {
+    static PRICES: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
+    PRICES.get_or_init(|| {
+        let mut table = PriceTable {
+            models: Default::default(),
+        };
+        let cents = |usd: f64| (usd * 100.0 - 1e-6).ceil().max(0.0) as u64;
+        for row in aux_providers::Catalog::bundled().rows() {
+            let (Some(input), Some(output)) = (row.input_usd_mtok, row.output_usd_mtok) else {
+                continue;
+            };
+            let entry = table.models.entry(row.id.clone()).or_default();
+            entry.input_cents_per_million = entry.input_cents_per_million.max(cents(input));
+            entry.output_cents_per_million = entry.output_cents_per_million.max(cents(output));
         }
-        _ => {
-            notice_unpriced_model(model);
-            0
-        }
+        table
+    })
+}
+
+/// The price of `model`. A price the owner set in `[prices]` wins; otherwise
+/// the higher of the built-in default and the catalog list price, so a stale
+/// built-in can never undercount the money cap. `None` means unpriced.
+fn model_price(
+    prices: &PriceTable,
+    model: Option<&str>,
+) -> Option<kernel_core::budget::ModelPrice> {
+    static BUILT_IN: std::sync::OnceLock<PriceTable> = std::sync::OnceLock::new();
+    let model = model?;
+    let configured = prices.price(model).copied();
+    let built_in = BUILT_IN
+        .get_or_init(PriceTable::default)
+        .price(model)
+        .copied();
+    match (configured, catalog_prices().price(model).copied()) {
+        (Some(owner), _) if configured != built_in => Some(owner),
+        (Some(a), Some(b)) => Some(kernel_core::budget::ModelPrice {
+            input_cents_per_million: a.input_cents_per_million.max(b.input_cents_per_million),
+            output_cents_per_million: a.output_cents_per_million.max(b.output_cents_per_million),
+        }),
+        (configured, catalog) => configured.or(catalog),
     }
 }
 
+/// Cents for one call, rounded up; `0` when the model is unpriced (an
+/// unpriced call is refused before it starts while a money cap applies).
+fn priced_cents(prices: &PriceTable, model: Option<&str>, tokens_in: u64, tokens_out: u64) -> u64 {
+    let Some(price) = model_price(prices, model) else {
+        return 0;
+    };
+    let numerator = tokens_in as u128 * price.input_cents_per_million as u128
+        + tokens_out as u128 * price.output_cents_per_million as u128;
+    numerator.div_ceil(1_000_000).min(u64::MAX as u128) as u64
+}
+
+/// The provider-reported cost in cents. A missing, zero, negative or
+/// non-finite cost is treated as "not reported", so the price table decides:
+/// a gateway that reports `0` must not make the money cap inert.
 fn provider_cost_cents(usage: Option<aux_providers::Usage>) -> Option<u64> {
     let cost = usage?.cost_usd?;
     if !cost.is_finite() || cost <= 0.0 {
-        return Some(0);
+        return None;
     }
     Some((cost * 100.0).ceil().min(u64::MAX as f64) as u64)
+}
+
+/// True when the bundled catalog marks `model` as billed by subscription.
+fn catalog_subscription(model: &str) -> bool {
+    aux_providers::Catalog::bundled()
+        .rows()
+        .iter()
+        .any(|row| row.id == model && row.billing == Some(aux_providers::Billing::Subscription))
+}
+
+/// A call whose model has no price cannot be checked against the money cap:
+/// it would reserve 0 cents, so concurrent calls could all pass the cap. While
+/// a money cap applies (every capped agent has one), such a call is refused,
+/// on a loopback endpoint too (a local forwarder can reach a paid service).
+///
+/// Two calls run unpriced: a model the catalog marks as billed by
+/// subscription, sent to the trusted subscription backend itself (0 cents
+/// per call); and an in-process adapter that names neither a model nor an
+/// endpoint host (every network adapter names both).
+fn unpriced_under_money_cap(
+    caps: &kernel_core::budget::BudgetCaps,
+    prices: &PriceTable,
+    provider: &dyn ChatProvider,
+    model: Option<&str>,
+) -> Option<String> {
+    if caps.limit(UsageKind::UsdCents).is_none() || model_price(prices, model).is_some() {
+        return None;
+    }
+    let in_process = model.is_none() && provider.endpoint_hosts().is_empty();
+    let subscription = provider.subscription_billed() && model.is_some_and(catalog_subscription);
+    if in_process || subscription {
+        return None;
+    }
+    notice_unpriced_model(model);
+    let model = model.unwrap_or("<unreported>");
+    Some(format!(
+        "model {model} has no price; add [prices.models.\"{model}\"] with \
+         input_cents_per_million and output_cents_per_million to config.toml \
+         (0 and 0 if this model really runs on this Mac)"
+    ))
 }
 
 pub(super) fn estimate_tokens(text: &str) -> u64 {
@@ -209,6 +584,66 @@ fn estimate_response_tokens(response: &ChatResponse) -> u64 {
     estimate_message_tokens(&response.message)
 }
 
+/// The one atomic admission every paid call goes through: a chat round and
+/// the shell judge (WO-BUD-1). The reservation is taken inside the store
+/// transaction that checks the caps; a denial, or a ledger that cannot
+/// answer, is audited as `budget.denied` and refuses the call.
+pub(crate) fn admit(
+    store: &StoreHandle<'_>,
+    run_id: Option<&str>,
+    agent: &str,
+    day: &str,
+    caps: &BudgetCaps,
+    estimate: &UsageTotals,
+) -> Result<Reservation, ChatError> {
+    let denial = match store.with(|store| store.try_reserve_for(run_id, agent, day, caps, estimate))
+    {
+        Ok(ReserveOutcome::Reserved(reservation)) => return Ok(reservation),
+        Ok(ReserveOutcome::Denied(denial)) => denial,
+        Err(err) => ledger_down(agent, day, err),
+    };
+    Err(refuse(store, denial))
+}
+
+/// Fail closed when the budget day cannot be read, with an audit trail.
+pub(crate) fn day_denied(store: &StoreHandle<'_>, agent: &str, err: StoreError) -> ChatError {
+    refuse(store, ledger_down(agent, "unknown", err))
+}
+
+fn ledger_down(agent: &str, day: &str, err: StoreError) -> Denial {
+    Denial {
+        agent: agent.to_string(),
+        day: day.to_string(),
+        reason: DenialReason::LedgerUnavailable {
+            message: err.to_string(),
+        },
+        audit_error: None,
+    }
+}
+
+/// Audit `denial` as `budget.denied` and turn it into the call's error.
+fn refuse(store: &StoreHandle<'_>, denial: Denial) -> ChatError {
+    let denial = store.with(|store| audit_denial(store, denial));
+    ChatError::BudgetDenied {
+        reason: denial.reason_text(),
+    }
+}
+
+/// The estimate one call reserves: its prompt, `tokens_out` of answer.
+pub(crate) fn call_estimate(
+    request: &ChatRequest,
+    model: Option<&str>,
+    prices: &PriceTable,
+    tokens_out: u64,
+) -> UsageTotals {
+    let tokens_in = estimate_request_tokens(request).max(1);
+    UsageTotals {
+        tokens_in,
+        tokens_out,
+        usd_cents: priced_cents(prices, model, tokens_in, tokens_out),
+    }
+}
+
 impl<'a> ChatSession<'a> {
     /// Reserve the estimated spend for one provider call, or fail the turn
     /// when a daily cap is reached. The reservation is taken atomically with
@@ -225,11 +660,12 @@ impl<'a> ChatSession<'a> {
     /// Returns `None` only for an explicit `unlimited = true` (or an empty
     /// per-agent cap set): usage is still recorded after the call. A fresh
     /// config no longer takes this path; it carries the conservative
-    /// defaults.
-    pub(super) fn reserve_budget(
+    /// defaults. The reservation comes held: a turn dropped before it settles
+    /// it still settles the reserved estimate.
+    pub(super) fn reserve_budget<'k>(
         &self,
         request: &ChatRequest,
-    ) -> Result<Option<Reservation>, ChatError> {
+    ) -> Result<Option<HeldReservation<'k, StoreHandle<'a>>>, ChatError> {
         let caps = self.budgets.caps_for(&self.agent);
         if caps.is_unlimited() {
             if caps.unlimited {
@@ -240,41 +676,35 @@ impl<'a> ChatSession<'a> {
             }
             return Ok(None);
         }
+        let model = request_model(self.provider, request);
+        if let Some(message) = unpriced_under_money_cap(&caps, self.prices, self.provider, model) {
+            let denial = Denial {
+                agent: self.agent.clone(),
+                day: self.current_day()?,
+                reason: DenialReason::LedgerUnavailable { message },
+                audit_error: None,
+            };
+            let denial = self.store.with(|store| audit_denial(store, denial));
+            return Err(ChatError::BudgetDenied {
+                reason: denial.reason_text(),
+            });
+        }
+
         // The budget day is the Mac's local day at *check* time, not at
         // session start: a turn that crosses midnight starts enforcing the
         // new day on its next provider call.
         let day = self.current_day()?;
         let estimate =
             reservation_estimate(request, request_model(self.provider, request), self.prices);
-        match self.store.with(|store| {
-            store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)
-        }) {
-            Ok(ReserveOutcome::Reserved(reservation)) => Ok(Some(reservation)),
-            Ok(ReserveOutcome::Denied(denial)) => {
-                let denial = self.store.with(|store| audit_denial(store, denial));
-                Err(ChatError::BudgetDenied {
-                    reason: denial.reason_text(),
-                })
-            }
-            Err(err) => {
-                let denial = self.store.with(|store| {
-                    audit_denial(
-                        store,
-                        Denial {
-                            agent: self.agent.clone(),
-                            day,
-                            reason: DenialReason::LedgerUnavailable {
-                                message: err.to_string(),
-                            },
-                            audit_error: None,
-                        },
-                    )
-                });
-                Err(ChatError::BudgetDenied {
-                    reason: denial.reason_text(),
-                })
-            }
-        }
+        admit(
+            &self.store,
+            self.run_id.as_deref(),
+            &self.agent,
+            &day,
+            &caps,
+            &estimate,
+        )
+        .map(|reservation| Some(HeldReservation::new(self.store.clone(), reservation)))
     }
 
     /// Test seam: replace the budget day source for one session.
@@ -296,22 +726,7 @@ impl<'a> ChatSession<'a> {
 
     /// Fail closed when the day itself cannot be read, with an audit trail.
     fn day_error(&self, err: StoreError) -> ChatError {
-        let denial = self.store.with(|store| {
-            audit_denial(
-                store,
-                Denial {
-                    agent: self.agent.clone(),
-                    day: "unknown".to_string(),
-                    reason: DenialReason::LedgerUnavailable {
-                        message: err.to_string(),
-                    },
-                    audit_error: None,
-                },
-            )
-        });
-        ChatError::BudgetDenied {
-            reason: denial.reason_text(),
-        }
+        day_denied(&self.store, &self.agent, err)
     }
 
     /// Record the provider call's usage when no cap required a reservation.
@@ -1386,6 +1801,257 @@ mod tests {
         );
     }
 
+    /// A provider that takes the request, streams `before`, then never answers.
+    struct AcceptsThenHangs {
+        before: Vec<ChatDelta>,
+        sent: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl ChatProvider for AcceptsThenHangs {
+        async fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+            self.sent.notify_one();
+            std::future::pending().await
+        }
+
+        async fn complete_streaming(
+            &self,
+            _req: &ChatRequest,
+            sink: &(dyn Fn(ChatDelta) + Send + Sync),
+        ) -> Result<ChatResponse, ProviderError> {
+            for delta in &self.before {
+                sink(delta.clone());
+            }
+            self.sent.notify_one();
+            std::future::pending().await
+        }
+
+        fn name(&self) -> &str {
+            "hangs"
+        }
+    }
+
+    /// One turn whose future is dropped once its provider has the request
+    /// (and streamed `before`): `main`'s totals today, reservations still held.
+    async fn dropped_after_dispatch(before: Vec<ChatDelta>) -> (UsageTotals, usize) {
+        let harness = Harness::new();
+        let provider = AcceptsThenHangs {
+            before,
+            sent: tokio::sync::Notify::new(),
+        };
+        let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+        tokio::select! {
+            _ = session.send("hello") => panic!("the provider never answers"),
+            () = provider.sent.notified() => {}
+        }
+        settled(&harness.store);
+        let store = harness.store();
+        let day = store.local_day().unwrap();
+        let totals = store.usage_totals("main", &day).unwrap();
+        (totals, store.reservation_count().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_turn_dropped_after_dispatch_still_charges_its_reserve() {
+        let partial = ChatDelta::Text("partial ".to_string());
+        for before in [vec![], vec![partial]] {
+            let (totals, held) = dropped_after_dispatch(before).await;
+            assert_eq!(held, 0, "settled, not left to expire");
+            assert!(totals.tokens_in > 0, "{totals:?}");
+            assert_eq!(
+                totals.tokens_out, DEFAULT_OUTPUT_RESERVE,
+                "never less than the reserve: {totals:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_turn_charges_what_streamed_when_it_tops_the_reserve() {
+        let usage = Usage {
+            prompt_tokens: 90_000,
+            completion_tokens: 5_000,
+            ..Default::default()
+        };
+        let (totals, held) = dropped_after_dispatch(vec![ChatDelta::Usage(usage)]).await;
+        assert_eq!(held, 0, "settled once");
+        assert_eq!((totals.tokens_in, totals.tokens_out), (90_000, 5_000));
+    }
+
+    /// Waits (10 s at most) for the settlement worker to settle all of
+    /// `store`, then reads the day's totals for "main".
+    fn settled(store: &Mutex<Store>) -> UsageTotals {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let store = kernel_core::lock_recover(store);
+            if store.reservation_count().unwrap() == 0 {
+                return store
+                    .usage_totals("main", &store.local_day().unwrap())
+                    .unwrap();
+            }
+            drop(store);
+            assert!(std::time::Instant::now() < deadline, "never settled");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// `tokens_in` in, 9 out, for "main" under a 100-token input cap.
+    fn reserve(store: &Mutex<Store>, tokens_in: u64) -> ReserveOutcome {
+        let store = kernel_core::lock_recover(store);
+        let caps = BudgetCaps {
+            tokens_in: Some(100),
+            ..Default::default()
+        };
+        let estimate = UsageTotals {
+            tokens_in,
+            tokens_out: 9,
+            usd_cents: 0,
+        };
+        let day = store.local_day().unwrap();
+        store
+            .try_reserve_for(None, "main", &day, &caps, &estimate)
+            .unwrap()
+    }
+
+    const EXPIRE: &str = "UPDATE usage_reservations SET expires_at = '2000-01-01 00:00:00'";
+
+    #[test]
+    fn a_call_above_its_reserve_outlives_failed_settles_and_records_its_actual_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        // Each try is counted (its raise is an update), and the store refuses
+        // settles, as a busy one would, while `hold` has a row.
+        let raw = aux_store::open_keyed(&path).unwrap();
+        raw.execute_batch(
+            "CREATE TABLE tries(n); CREATE TABLE hold(n); INSERT INTO hold VALUES (1);
+             CREATE TRIGGER tried AFTER UPDATE ON usage_reservations
+             BEGIN INSERT INTO tries VALUES (1); END;
+             CREATE TRIGGER busy BEFORE DELETE ON usage_reservations
+             WHEN EXISTS (SELECT 1 FROM hold) BEGIN SELECT RAISE(ABORT, 'database is busy'); END;",
+        )
+        .unwrap();
+        // Dropped knowing more than it reserved: its job is the only copy.
+        let known = UsageActual {
+            tokens_in: 90,
+            tokens_out: 20,
+            ..UsageActual::default()
+        };
+        drop(HeldReservation::new(Arc::clone(&store), reservation).or_known(move || known));
+        let tries = || raw.query_row("SELECT COUNT(*) FROM tries", [], |row| row.get::<_, i64>(0));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while tries().unwrap() < 200 {
+            assert!(Instant::now() < deadline, "the retries stopped");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Past 150 failures and its TTL, the row holds the actual: 20 more
+        // would fit beside the reserve (60 + 20), not beside it (90 + 20).
+        raw.execute_batch(EXPIRE).unwrap();
+        assert!(matches!(reserve(&store, 20), ReserveOutcome::Denied(_)));
+        raw.execute_batch("DELETE FROM hold").unwrap();
+        let totals = settled(&store);
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out),
+            (90, 20),
+            "the actual, once"
+        );
+    }
+
+    #[test]
+    fn a_watched_store_settles_an_abandoned_held_row_without_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        watch_held_reservations(&store);
+        // A row a stopped process left: held, with no guard, past its TTL.
+        assert!(matches!(reserve(&store, 60), ReserveOutcome::Reserved(_)));
+        aux_store::open_keyed(&path)
+            .unwrap()
+            .execute_batch(EXPIRE)
+            .unwrap();
+        let totals = settled(&store);
+        assert_eq!((totals.tokens_in, totals.tokens_out), (60, 9));
+    }
+
+    /// The race a minute reconcile can win: a live job still in the channel
+    /// while the reconcile claims its expired row. A worker of its own, its
+    /// queue filled before it starts, fixes that order without a sleep.
+    #[test]
+    fn a_job_still_queued_when_the_reconcile_claims_its_row_records_its_actual_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        let raw = aux_store::open_keyed(&path).unwrap();
+        raw.execute_batch(EXPIRE).unwrap();
+        let actual = UsageActual {
+            tokens_in: 90,
+            tokens_out: 20,
+            ..UsageActual::default()
+        };
+        let job = || {
+            let store = Arc::clone(&store);
+            let reservation = reservation.clone();
+            Work::Settle(Box::new(SettleJob {
+                store,
+                reservation,
+                actual,
+            }))
+        };
+        let (work, queue) = mpsc::channel();
+        // The reconcile runs on the first message, the job and its retry wait.
+        work.send(Work::Watch(Arc::downgrade(&store))).unwrap();
+        work.send(job()).unwrap();
+        work.send(job()).unwrap();
+        drop(work);
+        std::thread::spawn(move || settle_jobs(&queue))
+            .join()
+            .unwrap();
+        let claim = "SELECT tokens_in, tokens_out, consumed_at IS NOT NULL
+            FROM usage_reconciled WHERE reservation_id = ?1";
+        let claimed: (i64, i64, bool) = raw
+            .query_row(claim, [reservation.id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(
+            claimed,
+            (60, 9, true),
+            "the reconcile claimed it at the reserve, the job topped and consumed it"
+        );
+        let totals = settled(&store);
+        assert_eq!(
+            (totals.tokens_in, totals.tokens_out),
+            (90, 20),
+            "the actual, once"
+        );
+    }
+
+    #[test]
+    fn a_drop_takes_no_lock_and_outlives_a_callback_that_panics_while_unwinding() {
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let ReserveOutcome::Reserved(reservation) = reserve(&store, 60) else {
+            panic!("admitted");
+        };
+        let held =
+            HeldReservation::new(Arc::clone(&store), reservation).or_known(|| panic!("boom"));
+        // Dropped while this thread holds the store's lock and is unwinding: a
+        // drop that locked would deadlock, a panic out of it would abort.
+        let locked = kernel_core::lock_recover(&store);
+        let unwound = catch_unwind(AssertUnwindSafe(move || {
+            let _held = held;
+            panic!("the turn fails");
+        }));
+        assert!(unwound.is_err());
+        drop(locked);
+        let totals = settled(&store);
+        assert_eq!((totals.tokens_in, totals.tokens_out), (60, 9));
+    }
+
     #[tokio::test]
     async fn an_upgraded_config_with_an_empty_budgets_table_is_still_capped() {
         // The exact bytes an older install carries must enforce the
@@ -1413,6 +2079,228 @@ mod tests {
         assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
         assert!(err.to_string().contains("tokens_in"), "{err}");
         assert_eq!(provider.request_count(), 0, "no provider call may happen");
+    }
+
+    fn wide_token_caps(usd_cents: u64) -> Budgets {
+        let mut budgets = Budgets::default();
+        budgets.default.tokens_in = Some(10_000_000);
+        budgets.default.tokens_out = Some(10_000_000);
+        budgets.default.usd_cents = Some(usd_cents);
+        budgets
+    }
+
+    fn reported(prompt: u64, completion: u64, cost_usd: Option<f64>) -> ChatResponse {
+        ChatResponse::assistant("done").with_usage(aux_providers::Usage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            cost_usd,
+            cached_prompt_tokens: None,
+        })
+    }
+
+    fn usd_spent(harness: &Harness) -> u64 {
+        let day = harness.store().local_day().unwrap();
+        harness
+            .store()
+            .usage_totals("main", &day)
+            .unwrap()
+            .usd_cents
+    }
+
+    #[tokio::test]
+    async fn a_zero_reported_cost_still_charges_from_the_price_table() {
+        let mut harness = Harness::new();
+        harness.prices.models.insert(
+            "priced-model".to_string(),
+            kernel_core::budget::ModelPrice {
+                input_cents_per_million: 100,
+                output_cents_per_million: 100,
+            },
+        );
+        let provider = FakeProvider::repeating("fake", reported(399_600, 400, Some(0.0)))
+            .with_model("priced-model");
+        let budgets = wide_token_caps(1_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(
+            usd_spent(&harness),
+            40,
+            "a reported 0 falls back to [prices]"
+        );
+    }
+
+    #[tokio::test]
+    async fn deepseek_chat_settles_its_catalog_price() {
+        // No [prices] entry: the bundled catalog lists deepseek-chat at
+        // 0.27 / 1.10 USD per million tokens.
+        let harness = Harness::new();
+        assert!(harness.prices.price("deepseek-chat").is_none());
+        let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+            .with_model("deepseek-chat");
+        let budgets = wide_token_caps(10_000);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        session.send("hello").await.unwrap();
+
+        assert_eq!(usd_spent(&harness), 27 + 110);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_model_under_a_money_only_cap_is_refused() {
+        let harness = Harness::new();
+        let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"))
+            .with_model("unpriced-model");
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        let err = session.send("hello").await.unwrap_err();
+
+        assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+        assert!(err.to_string().contains("unpriced-model"), "{err}");
+        assert_eq!(provider.request_count(), 0, "no provider call may happen");
+        assert_eq!(harness.store().event_count("budget.denied").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_model_is_refused_even_when_token_caps_also_bind() {
+        let harness = Harness::new();
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"))
+            .with_model("unpriced-model");
+        let budgets = wide_token_caps(100);
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+        let err = session.send("hello").await.unwrap_err();
+
+        assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("[prices.models.\"unpriced-model\"]"),
+            "{err}"
+        );
+        assert_eq!(provider.request_count(), 0, "no provider call may happen");
+        assert_eq!(
+            harness.store().reservation_count().unwrap(),
+            0,
+            "nothing reserved"
+        );
+        assert_eq!(usd_spent(&harness), 0);
+    }
+
+    #[test]
+    fn every_bundled_catalog_model_is_priced_or_billed_by_subscription() {
+        // A new catalog row without either would be refused under the money cap.
+        for row in aux_providers::Catalog::bundled().rows() {
+            assert!(
+                catalog_prices().price(&row.id).is_some() || catalog_subscription(&row.id),
+                "{}/{} has no price and no billing = \"subscription\"",
+                row.provider,
+                row.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_catalog_price_wins_over_a_stale_built_in_but_not_over_the_owner() {
+        let flash = |prices: &PriceTable| model_price(prices, Some("deepseek-flash")).unwrap();
+        let shipped = flash(&PriceTable::default());
+        assert!(shipped.input_cents_per_million >= 30, "{shipped:?}");
+        assert!(shipped.output_cents_per_million >= 120, "{shipped:?}");
+        let mut owner = PriceTable::default();
+        let set = kernel_core::budget::ModelPrice {
+            input_cents_per_million: 10,
+            output_cents_per_million: 10,
+        };
+        owner.models.insert("deepseek-flash".to_string(), set);
+        assert_eq!(flash(&owner), set, "an explicit [prices] entry wins");
+    }
+
+    #[tokio::test]
+    async fn deepseek_flash_runs_under_the_default_money_cap() {
+        // The owner's brain with the default caps, with the shipped [prices]
+        // and with an owner table that left it out: the catalog price binds.
+        for prices in [
+            PriceTable::default(),
+            PriceTable {
+                models: Default::default(),
+            },
+        ] {
+            let mut harness = Harness::new();
+            harness.prices = prices;
+            let provider = FakeProvider::repeating("fake", reported(1_000_000, 1_000_000, None))
+                .with_model("deepseek-flash");
+            let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+
+            session.send("hello").await.unwrap();
+
+            assert_eq!(provider.request_count(), 1);
+            assert_eq!(usd_spent(&harness), 30 + 120);
+        }
+    }
+
+    /// An OpenAI-compatible brain at `base` sending `model`; never called.
+    fn wire(base: &str, model: &str, local: bool) -> aux_providers::OpenAiCompat {
+        let config = aux_providers::ProviderConfig {
+            disable_thinking: false,
+            id: "brain".to_string(),
+            base_url: base.to_string(),
+            model: model.to_string(),
+            key_user: None,
+            kind: aux_providers::ProviderKind::OpenAiCompat,
+        };
+        let provider = aux_providers::OpenAiCompat::with_key(&config, None).unwrap();
+        if local {
+            provider.local_runtime()
+        } else {
+            provider
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unpriced_call_is_refused_on_a_paid_endpoint_and_on_loopback() {
+        // A paid endpoint sending a subscription model id, and a loopback
+        // forwarder serving an unpriced model: both refused before any call.
+        for provider in [
+            wire("https://paid.example/v1", "gpt-oss:120b-cloud", false),
+            wire("http://127.0.0.1:9/v1", "llama3.2", true),
+        ] {
+            let harness = Harness::new();
+            let budgets: Budgets = toml::from_str("[default]\nusd_cents = 100\n").unwrap();
+            let mut session =
+                harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+
+            let err = session.send("hello").await.unwrap_err();
+
+            assert!(matches!(err, ChatError::BudgetDenied { .. }), "got {err:?}");
+            assert!(err.to_string().contains("[prices.models."), "{err}");
+            assert_eq!(harness.store().reservation_count().unwrap(), 0);
+            assert_eq!(harness.store().event_count("budget.denied").unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn a_subscription_model_passes_only_on_the_subscription_backend() {
+        let caps = kernel_core::budget::BudgetCaps::conservative_default();
+        let prices = PriceTable::default();
+        let check = |provider: &dyn ChatProvider| {
+            unpriced_under_money_cap(&caps, &prices, provider, provider.model())
+        };
+        assert_eq!(
+            check(&wire("https://ollama.com/v1", "gpt-oss:120b-cloud", false)),
+            None
+        );
+        assert!(check(&wire("https://ollama.com/v1", "not-in-catalog", false)).is_some());
+        assert!(check(&wire(
+            "https://paid.example/v1",
+            "gpt-oss:120b-cloud",
+            false
+        ))
+        .is_some());
     }
 
     #[tokio::test]

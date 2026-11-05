@@ -5,6 +5,10 @@
 //! from the `soul.md` body and the `dot.toml` sidecar. Any unknown
 //! front-matter key is a load error: the loader fails to load, it never
 //! degrades.
+//!
+//! The old `budget.daily_usd` front-matter key is gone: daily caps come only
+//! from `[budgets]` in `config.toml`. An older `agent.md` that still carries
+//! it loads normally and is told, once, where the cap now lives.
 
 use std::fmt;
 use std::fs;
@@ -79,8 +83,6 @@ pub struct LoadedAgent {
     pub brain: Brain,
     /// Default privacy mode.
     pub default_mode: AgentMode,
-    /// Optional daily spend cap in USD.
-    pub budget: Option<f64>,
     /// Channels the agent may be reached on.
     pub channels: Vec<String>,
     /// Allowed tools, canonical logical names.
@@ -102,6 +104,9 @@ impl LoadedAgent {
     pub fn allows(&self, tool: &str) -> bool {
         let canonical = tool_map::canonical_name(tool).unwrap_or_else(|| tool.to_string());
         self.tools.contains(&canonical)
+            || (self.name == crate::grants::CHIEF_AGENT
+                && self.source == AgentSource::Legacy
+                && self.tools.iter().any(|tool| tool == "*"))
     }
 }
 
@@ -109,7 +114,6 @@ const AGENT_KEYS: &[&str] = &[
     "name",
     "brain",
     "default_mode",
-    "budget",
     "channels",
     "tools",
     "recipients",
@@ -175,7 +179,19 @@ fn parse_agent_md(bytes: &[u8], dir: &Path, name: &str) -> Result<LoadedAgent, A
     let entries = meta
         .as_map()
         .ok_or_else(|| error("agent.md", "front matter must be a mapping"))?;
+    let file = dir.join("agent.md");
     for (key, _) in entries {
+        // Dead config, kept loadable: the daily cap lives in `[budgets]`, so
+        // an older agent.md is told once where it moved rather than failing
+        // the whole agent (or dropping the key in silence).
+        if key == "budget" {
+            tracing::warn!(
+                file = %file.display(),
+                agent = %name,
+                "agent.md `budget.daily_usd` is ignored; set the daily cap in config.toml under [budgets.agents.{name}]"
+            );
+            continue;
+        }
         if !AGENT_KEYS.contains(&key.as_str()) {
             return Err(error(
                 "agent.md",
@@ -209,28 +225,6 @@ fn parse_agent_md(bytes: &[u8], dir: &Path, name: &str) -> Result<LoadedAgent, A
             Some("open") => AgentMode::Open,
             _ => return Err(error("agent.md", "default_mode must be private or open")),
         },
-    };
-
-    let budget = match meta.get("budget") {
-        None | Some(Value::Null) => None,
-        Some(value) => {
-            let entries = value
-                .as_map()
-                .ok_or_else(|| error("agent.md", "budget must be a mapping"))?;
-            for (key, _) in entries {
-                if key != "daily_usd" {
-                    return Err(error("agent.md", format!("unknown budget key `{key}`")));
-                }
-            }
-            match value.get("daily_usd") {
-                Some(Value::Float(amount)) => Some(*amount),
-                Some(Value::Int(amount)) => Some(*amount as f64),
-                Some(_) => {
-                    return Err(error("agent.md", "budget.daily_usd must be a number"));
-                }
-                None => return Err(error("agent.md", "budget requires daily_usd")),
-            }
-        }
     };
 
     let channels = string_list(&meta, "channels", "agent.md")?;
@@ -269,7 +263,6 @@ fn parse_agent_md(bytes: &[u8], dir: &Path, name: &str) -> Result<LoadedAgent, A
         name: name.to_string(),
         brain,
         default_mode,
-        budget,
         channels,
         tools,
         recipients_policy,
@@ -313,6 +306,7 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
                     format!("{sidecar_name} is unreadable: {}", err.message()),
                 )
             })?;
+            let unrestricted_chief = name == crate::grants::CHIEF_AGENT && sidecar.tools.is_none();
             let mut tools = Vec::new();
             for tool in sidecar.tools.unwrap_or_default() {
                 let canonical = tool_map::canonical_name(&tool).unwrap_or(tool);
@@ -320,8 +314,12 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
                     tools.push(canonical);
                 }
             }
+            if unrestricted_chief {
+                tools.push("*".into());
+            }
             tools
         }
+        Err(ReadError::NotFound) if name == crate::grants::CHIEF_AGENT => vec!["*".into()],
         Err(ReadError::NotFound) => Vec::new(),
         Err(ReadError::TooLarge) => {
             return Err(error(
@@ -347,7 +345,6 @@ fn load_legacy(dir: &Path, name: &str) -> Result<LoadedAgent, AgentLoadError> {
         name: name.to_string(),
         brain: Brain::Cloud,
         default_mode: AgentMode::Private,
-        budget: None,
         channels: Vec::new(),
         tools,
         recipients_policy: RecipientPolicy::KnownContacts,
@@ -432,6 +429,16 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[test]
+    fn chief_skills_use_all_tools_by_default_but_respect_an_empty_ceiling() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("main");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(load_agent(&dir).unwrap().allows("mail.send"));
+        std::fs::write(dir.join("agent.toml"), "tools = []\n").unwrap();
+        assert!(!load_agent(&dir).unwrap().allows("mail.send"));
+    }
+
     fn write(dir: &Path, name: &str, contents: &str) {
         fs::write(dir.join(name), contents).unwrap();
     }
@@ -444,18 +451,88 @@ mod tests {
         write(
             &agent_dir,
             "agent.md",
-            "---\nname: assistant\nbrain: cloud\ndefault_mode: private\nbudget: { daily_usd: 2.00 }\nchannels: [mac, telegram]\ntools: [google.gmail.search]\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nBody text.\n",
+            "---\nname: assistant\nbrain: cloud\ndefault_mode: private\nchannels: [mac, telegram]\ntools: [google.gmail.search]\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nBody text.\n",
         );
         let agent = load_agent(&agent_dir).unwrap();
         assert_eq!(agent.name, "assistant");
         assert_eq!(agent.brain, Brain::Cloud);
         assert_eq!(agent.default_mode, AgentMode::Private);
-        assert_eq!(agent.budget, Some(2.0));
         assert_eq!(agent.channels, vec!["mac", "telegram"]);
         assert_eq!(agent.tools, vec!["google.gmail.search"]);
         assert!(agent.allows("google.gmail.search"));
         assert_eq!(agent.source, AgentSource::AgentMd);
         assert_eq!(agent.body, "Body text.\n");
+    }
+
+    /// WO-BUD-6: the removed `budget.daily_usd` key no longer fails the load
+    /// and no longer has anywhere to be stored; one warning names the file
+    /// and points at the config.toml section that replaced it.
+    #[test]
+    fn a_legacy_budget_key_is_ignored_once_with_a_pointer_to_config_toml() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+            type Writer = Capture;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("assistant");
+        fs::create_dir_all(&agent_dir).unwrap();
+        write(
+            &agent_dir,
+            "agent.md",
+            "---\nname: assistant\ndefault_mode: open\nbudget: { daily_usd: 2.00 }\n---\nBody text.\n",
+        );
+
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+
+        let agent = load_agent(&agent_dir).expect("an old budget key must not stop the load");
+
+        drop(guard);
+        assert_eq!(agent.name, "assistant");
+        assert_eq!(agent.default_mode, AgentMode::Open);
+        assert_eq!(agent.body, "Body text.\n");
+
+        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("budget.daily_usd"), "{logs}");
+        assert!(
+            logs.contains(&agent_dir.join("agent.md").display().to_string()),
+            "the warning names the file: {logs}"
+        );
+        assert!(
+            logs.contains("[budgets.agents.assistant]"),
+            "the warning points at config.toml: {logs}"
+        );
+        assert!(logs.contains("config.toml"), "{logs}");
+        assert_eq!(
+            logs.lines()
+                .filter(|line| line.contains("budget.daily_usd"))
+                .count(),
+            1,
+            "exactly one warning per load: {logs}"
+        );
     }
 
     #[test]

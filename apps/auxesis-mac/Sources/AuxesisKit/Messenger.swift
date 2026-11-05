@@ -140,10 +140,10 @@ public struct SidebarEntry: Equatable {
 }
 
 public extension ShellModel {
-    /// Aux first, then Mail, Calendar, Clients, Documents. A decision counts
+    /// Aux first, then the other agents that exist. A decision counts
     /// once, on the agent that owns it; Aux's row carries no badge.
     func sidebarEntries(now: Date = Date()) -> [SidebarEntry] {
-        TeamMember.all.map { member in
+        roster.map { member in
             let row = row(for: member, now: now)
             let what = waitingApprovals.first { $0.agent == member.id }?.headline
             return SidebarEntry(

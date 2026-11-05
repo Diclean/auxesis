@@ -139,7 +139,7 @@ fn write_home(
     std::fs::create_dir_all(home.join("agents/main")).unwrap();
     std::fs::write(
         kernel_core::config_path(&home),
-        format!("version = 1\n\n[privacy]\nmode = \"{mode}\"\n"),
+        format!("version = 1\n\n[privacy]\nmode = \"{mode}\"\n\n[prices.models.\"m\"]\ninput_cents_per_million = 1\noutput_cents_per_million = 1\n"),
     )
     .unwrap();
     let key_line = key
@@ -319,7 +319,7 @@ fn without_providers_toml_the_legacy_single_provider_path_still_works() {
         kernel_core::config_path(&home),
         format!(
             "version = 1\n\n[privacy]\nmode = \"open\"\n\n\
-             [[providers]]\nid = \"legacy\"\nbase_url = \"{}/v1\"\nmodel = \"m\"\nkind = \"openai-compat\"\n",
+             [[providers]]\nid = \"legacy\"\nbase_url = \"{}/v1\"\nmodel = \"m\"\nkind = \"openai-compat\"\n\n[prices.models.\"m\"]\ninput_cents_per_million = 1\noutput_cents_per_million = 1\n",
             server.base
         ),
     )

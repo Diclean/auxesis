@@ -32,8 +32,11 @@
 # focused runs. PR CI uses the full workspace. Phase 2 is never narrowed.
 set -euo pipefail
 
-# cargo-nextest 0.9.150, aarch64-apple-darwin, `cargo install --locked` on the Mac runner.
+# cargo-nextest 0.9.150: the aarch64-apple-darwin `cargo install --locked` build
+# (maintainer Mac), then the official universal-apple-darwin release binary that
+# CI downloads (tarball sha256 82a759b4...c3c301a, checked in ci.yml).
 NEXTEST_SHA256="6e256a8d8d9d0c897e5027deefe7483fb0a98b15ccbe073eee1f95bb6eb068a4"
+NEXTEST_RELEASE_SHA256="aad9d409cd2f0a81fcaed49d7672a133254179458436c1e957505e4a11655329"
 
 use_nextest=0
 if [[ "${1:-}" == "--nextest" ]]; then
@@ -92,7 +95,7 @@ if (( use_nextest )); then
         # Fixed content, never from the repo, so a PR cannot add retries or filters.
         cat >"$nextest_config" <<'TOML'
 [profile.ci]
-# The Mac runner has 10 cores and is shared with agent builds.
+# Hosted macos-15 runners have 3 cores; most tests wait on I/O and child processes.
 test-threads = 6
 fail-fast = false
 # A flaky test must show red, not pass on a second try.
@@ -104,18 +107,37 @@ final-status-level = "slow"
 # Tests that assert wall-clock time run alone and first: under parallel load
 # they failed on the clock, not on behaviour (about 60 s serial).
 [[profile.ci.overrides]]
-filter = 'test(/linear|scales|_seconds|times_out|expired|grace|approval_timeout/) | binary(perf)'
+filter = 'test(/linear|scales|_seconds|times_out|expired|grace|approval_timeout/)'
 threads-required = "num-test-threads"
 priority = 100
 
-# The longest tests start next, so they do not form a tail at the end.
+# Bomb and resource-limit tests each run alone: process limits count every
+# process the user runs, and a fork bomb, a 600 MB allocation or a CPU spin
+# starves its neighbours. threads-required takes every test slot; the group
+# also keeps them from overlapping each other.
+[test-groups]
+resource-limits = { max-threads = 1 }
+
 [[profile.ci.overrides]]
-filter = 'binary(prefix_key_glue) | binary(crm_property) | binary(crm_promote_property) | binary(norm_glyph_union) | binary(k10_gate_config) | binary(entity_encoded) | binary(registry_thread_local_drop)'
+filter = 'test(/fork_bomb|process_bomb|memory_bomb|_limit_stops_|memory_watchdog/)'
+test-group = "resource-limits"
+threads-required = "num-test-threads"
+
+# The longest tests (property tests, about 3-5 min each) start next, so they
+# do not form a tail at the end. nextest refuses a binary() name that matches
+# no test binary: keep this list to binaries in this workspace.
+[[profile.ci.overrides]]
+filter = 'binary(crm_property) | binary(crm_promote_property)'
 priority = 50
 TOML
         chmod 0500 "$nextest_bin"
         got="$(shasum -a 256 "$nextest_bin" | cut -d' ' -f1)"
-        if [[ "$got" != "${AUX_NEXTEST_SHA256:-$NEXTEST_SHA256}" ]]; then
+        if [[ -n "${AUX_NEXTEST_SHA256:-}" ]]; then
+            allowed=("$AUX_NEXTEST_SHA256")
+        else
+            allowed=("$NEXTEST_SHA256" "$NEXTEST_RELEASE_SHA256")
+        fi
+        if [[ " ${allowed[*]} " != *" $got "* ]]; then
             echo "FAIL: $nextest_src has SHA-256 $got, not the pinned cargo-nextest; reinstall with: cargo install cargo-nextest --locked --version 0.9.150" >&2
             exit 1
         fi

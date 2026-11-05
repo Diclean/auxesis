@@ -47,7 +47,8 @@ The tool map (`aux-runtime::skills::tool_map`) gains these names. `send-invite` 
 ## 4. Read path
 
 The read path: pull only, ENVELOPE first, `BODY.PEEK[]`, never `\Seen`,
-plain part preferred, HTML through the readability extractor, the untrusted banner on every result,
+plain part preferred, HTML through the mail extractor (the whole body, without hidden elements
+or text hidden by inline style or a simple `<style>` rule), the untrusted banner on every result,
 the hard bounds. Results go to the model through the session gate (Private: tokenised).
 
 Threads are computed from envelopes, no store cache in Phase 1. The CRM timeline (B3)

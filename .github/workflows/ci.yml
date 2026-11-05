@@ -25,11 +25,11 @@ on:
 permissions:
   contents: read
 
-# A pull request keeps one run: a new push cancels the older one. Each push to
-# main gets its own group (its commit SHA), so no main run is ever cancelled or
-# replaced while queued, and every merge gets a finished result.
+# macOS runners are scarce: a new push to a pull request cancels that PR's
+# older run; pushes to main share one group, so only the newest queued run
+# waits and a run already in progress is never cancelled.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -39,6 +39,57 @@ env:
   CARGO_TARGET_DIR: ${{ github.workspace }}/target
 
 jobs:
+  # Works out which Mac jobs a pull request can affect. A later job skipped by
+  # its `if` reports "Success", so a required check may be skipped safely.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.detect.outputs.rust }}
+      swift: ${{ steps.detect.outputs.swift }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The pull request's base commit must be in history for `git diff`.
+          fetch-depth: 0
+      - name: Detect changed areas
+        id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # A push to main and a manual run always take both jobs. A pull
+          # request diffs the base commit with the merge result. Any detection
+          # failure falls back to running both, never to a false green.
+          both() {
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+          }
+          if [[ "$EVENT" != "pull_request" ]]; then
+            both
+            exit 0
+          fi
+          if [[ -z "$BASE_SHA" ]] || ! changed="$(git diff --name-only --no-renames "$BASE_SHA" HEAD)"; then
+            both
+            exit 0
+          fi
+          rust=false
+          swift=false
+          while IFS= read -r path; do
+            [[ -n "$path" ]] || continue
+            case "$path" in
+              apps/*|packages/*|scripts/swift-gate.sh|scripts/ci-sandbox-env.sh|.github/workflows/*)
+                swift=true ;;
+            esac
+            case "$path" in
+              apps/*|packages/*|docs/*|*.md) ;;
+              *) rust=true ;;
+            esac
+          done <<<"$changed"
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "swift=$swift" >> "$GITHUB_OUTPUT"
+
   lint:
     # Format and the egress contract read source only: Linux is enough.
     runs-on: ubuntu-latest
@@ -72,10 +123,20 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
   check:
+    needs: changes
+    # Rust code, manifests, tests and scripts live outside the Swift app, docs
+    # and Markdown, so only a change there needs this job. A failed detector
+    # runs it rather than risk a false green.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     # Auxesis is a Mac product: the workspace holds macOS-only code, so clippy
     # and the tests run on macOS.
     runs-on: macos-15
     timeout-minutes: 120
+    env:
+      # No incremental state and no dev debug info: both bloat the cache, and
+      # no test asserts a backtrace.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,6 +146,14 @@ jobs:
           rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
             --profile minimal --component rustfmt --component clippy
           rustup show
+      - name: Rust cache
+        # Restore the cargo home and target dir. Pull requests only read the
+        # cache; a push to main writes it, so a PR cannot seed bad state.
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: check-macos-15
+          cache-on-failure: false
       - name: Owner-like Mac (Paris time, Command Line Tools)
         # Many tests are written for an owner in Europe/Paris, and the shell
         # sandbox allows the Command Line Tools, not a full Xcode (which the
@@ -95,12 +164,33 @@ jobs:
           date; xcode-select -p
       - name: Clippy
         run: scripts/ci-sandbox-env.sh cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo-nextest 0.9.150 (official release, pinned by checksum)
+        # A prebuilt binary, no compile: the tarball must match this SHA-256,
+        # and check-no-keychain.sh checks the binary hash again before it runs.
+        env:
+          NEXTEST_URL: https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-universal-apple-darwin.tar.gz
+          NEXTEST_TGZ_SHA256: 82a759b4d218d38359424196ab244c470e8f7c7d149c814fbbeef4d67c3c301a
+        run: |
+          tgz="$RUNNER_TEMP/cargo-nextest.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$tgz" "$NEXTEST_URL"
+          echo "$NEXTEST_TGZ_SHA256  $tgz" | shasum -a 256 -c -
+          bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          mkdir -p "$bin"
+          tar -xzf "$tgz" -C "$bin" cargo-nextest
+          rm -f "$tgz"
+          "$bin/cargo-nextest" nextest --version
       - name: Tests (sandboxed, no Keychain)
         # The workspace suite under a scratch HOME with a fake `security` on
-        # PATH: a test that reaches the Keychain fails the step.
-        run: scripts/check-no-keychain.sh --locked
+        # PATH: a test that reaches the Keychain fails the step. --nextest runs
+        # test binaries in parallel with a fixed config written by the script
+        # (no retries, no fail-fast), then the doctests with cargo test --doc.
+        run: scripts/check-no-keychain.sh --nextest --locked
 
   swift:
+    needs: changes
+    # Only the Swift app, the shared package, a Swift gate script or a workflow
+    # can change a Swift build; a Rust or docs pull request skips it.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.swift == 'true') }}
     # The SwiftUI app in apps/auxesis-mac: swift build, then swift test.
     # macos-26: the app needs Swift 6.2 or later (macos-15 ships 6.1).
     runs-on: macos-26

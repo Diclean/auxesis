@@ -1084,6 +1084,38 @@ pub(crate) const MIGRATION_V37_CONTACTS_TIME_ZONE: &str =
     "ALTER TABLE contacts ADD COLUMN time_zone TEXT;";
 pub(crate) const MIGRATION_V37_PARTY_TIME_ZONE: &str =
     "ALTER TABLE party ADD COLUMN time_zone TEXT;";
+/// A reservation also holds the money it may spend, so concurrent calls
+/// cannot each fit under the daily money cap and together cross it. Rows
+/// written before this column existed hold no money.
+pub(crate) const MIGRATION_V38_RESERVED_USD: &str =
+    "ALTER TABLE usage_reservations ADD COLUMN usd_cents INTEGER NOT NULL DEFAULT 0;";
+
+/// v39: a reservation is held until settled. `unsettled` carries what a
+/// settle needs once its process is gone; a held row never expires (a daemon
+/// start settles those a dead process left). Older rows still expire.
+pub(crate) const MIGRATION_V39_UNSETTLED: &str =
+    "ALTER TABLE usage_reservations ADD COLUMN unsettled TEXT;";
+
+/// v40: what a reconcile recorded for each held row it claimed, kept so a
+/// live settle that comes after records only what tops it, once.
+pub(crate) const MIGRATION_V40_RECONCILED: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_reconciled (
+    reservation_id INTEGER PRIMARY KEY,
+    tokens_in      INTEGER NOT NULL,
+    tokens_out     INTEGER NOT NULL,
+    usd_cents      INTEGER NOT NULL
+);
+"#;
+
+/// v41: when each reconcile claim was made and when a live settle consumed
+/// it, both from the store's clock (UTC), so a consumed claim is pruned once
+/// past its retention (see `Store::prune_reconciled_claims`). Rows from
+/// before v41 are stamped as claimed at the upgrade and stay unconsumed.
+pub(crate) const MIGRATION_V41_CLAIM_AGE: &str = r#"
+ALTER TABLE usage_reconciled ADD COLUMN claimed_at TEXT;
+ALTER TABLE usage_reconciled ADD COLUMN consumed_at TEXT;
+UPDATE usage_reconciled SET claimed_at = datetime('now') WHERE claimed_at IS NULL;
+"#;
 
 /// Enforce the v15 wire-name uniqueness invariant on an existing store.
 ///
@@ -1471,6 +1503,19 @@ impl Store {
             // The client's own zone, on the contacts index and on the card.
             self.apply_v37()?;
         }
+        if version < 38 {
+            self.apply_v38()?;
+        }
+        if version < 39 {
+            self.apply_v39()?;
+        }
+        if version < 40 {
+            // The reconcile's claims on held rows. Purely additive DDL.
+            self.apply_migration_with_version(MIGRATION_V40_RECONCILED, 40)?;
+        }
+        if version < 41 {
+            self.apply_v41()?;
+        }
         // v15 is unreleased, but a store written by a pre-release draft may
         // already exist with the old non-unique wire index and duplicate wire
         // names. Repair it in place (idempotent: the fast path is a pragma
@@ -1646,6 +1691,76 @@ impl Store {
                 [37_i64.to_string()],
             )?;
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply v38: reservations gain `usd_cents`. The `ALTER` is guarded by a
+    /// pragma read under the write lock, so a concurrent open cannot run it
+    /// twice (the v7/v13 pattern).
+    fn apply_v38(&mut self) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('usage_reservations') WHERE name = 'usd_cents'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has == 0 {
+            tx.execute_batch(MIGRATION_V38_RESERVED_USD)?;
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [38_i64.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply v39: reservations gain `unsettled`. The `ALTER` is guarded by a
+    /// pragma read under the write lock (the v7/v13 pattern).
+    fn apply_v39(&mut self) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('usage_reservations') WHERE name = 'unsettled'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has == 0 {
+            tx.execute_batch(MIGRATION_V39_UNSETTLED)?;
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [39_i64.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Apply v41: the claim-age columns, re-checked under the write lock
+    /// because the `ALTER` is not idempotent.
+    fn apply_v41(&mut self) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('usage_reconciled') WHERE name = 'claimed_at'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has == 0 {
+            tx.execute_batch(MIGRATION_V41_CLAIM_AGE)?;
+        }
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [41_i64.to_string()],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1971,6 +2086,84 @@ mod tests {
         assert_eq!(
             Store::open(&path).unwrap().schema_version().unwrap(),
             SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn v40_store_upgrades_to_v41_and_stamps_its_claims() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        {
+            let store = Store::open(&path).unwrap();
+            // A v40 claim: no claim nor consume time.
+            store
+                .conn
+                .execute_batch(
+                    "ALTER TABLE usage_reconciled DROP COLUMN claimed_at;
+                     ALTER TABLE usage_reconciled DROP COLUMN consumed_at;
+                     INSERT INTO usage_reconciled VALUES (7, 60, 9, 0);
+                     UPDATE meta SET value = '40' WHERE key = 'schema_version';",
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        let stamped: (i64, bool) = store
+            .conn
+            .query_row(
+                "SELECT tokens_in, claimed_at IS NOT NULL AND consumed_at IS NULL
+                 FROM usage_reconciled WHERE reservation_id = 7",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stamped, (60, true), "kept as an unconsumed claim");
+        assert_eq!(store.prune_reconciled_claims().unwrap(), 0);
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().schema_version().unwrap(),
+            SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn v37_store_upgrades_to_v38_and_keeps_its_reservations() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        {
+            let store = Store::open(&path).unwrap();
+            // The store a pre-v38 process left: a live reservation and no
+            // money column yet.
+            store
+                .conn
+                .execute_batch(
+                    "ALTER TABLE usage_reservations DROP COLUMN usd_cents;
+                     INSERT INTO usage_reservations(agent, at, expires_at, tokens_in, tokens_out)
+                     VALUES ('main', '2026-10-03', '2999-01-01 00:00:00', 7, 9);
+                     UPDATE meta SET value = '37' WHERE key = 'schema_version';",
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        let row: (String, i64, i64, i64) = store
+            .conn
+            .query_row(
+                "SELECT agent, tokens_in, tokens_out, usd_cents FROM usage_reservations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("main".to_string(), 7, 9, 0),
+            "the old row holds no money"
+        );
+        drop(store);
+        assert_eq!(
+            Store::open(&path).unwrap().schema_version().unwrap(),
+            SCHEMA_VERSION,
+            "reopening is idempotent: the ALTER does not run twice"
         );
     }
 

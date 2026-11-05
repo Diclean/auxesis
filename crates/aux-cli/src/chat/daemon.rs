@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use kernel_core::{auxesis_home, config_path, Config, Lang};
+use kernel_core::{auxesis_home, config_path, Lang};
 use serde_json::Value;
 
 use super::ChatArgs;
@@ -226,7 +226,7 @@ async fn chat(daemon: &Daemon, args: &ChatArgs, home: &Path) -> Result<(), Strin
     let mut thread = match &args.agent {
         Some(agent) => agent.clone(),
         None => {
-            let config = Config::load_or_create(&config_path(home));
+            let config = aux_engine::config::load_or_create(&config_path(home));
             config.map_err(|err| err.to_string())?.default_agent
         }
     };

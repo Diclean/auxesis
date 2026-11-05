@@ -15,7 +15,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use aux_engine::TurnEvents;
+use aux_engine::{HeldReservation, TurnEvents};
 use aux_store::{Message, Store};
 use kernel_core::budget::{Budgets, ReserveOutcome, UsageActual, UsageKind, UsageTotals};
 
@@ -24,8 +24,9 @@ use crate::protocol::UsageUpdate;
 
 /// One turn's admission reservation (fixed conservative estimate).
 pub struct TurnReservation {
-    /// Store row to settle.
-    pub(crate) inner: kernel_core::budget::Reservation,
+    /// Store row to settle. A turn dropped before its settle (its future
+    /// cancelled while the agent had the prompt) settles the fixed estimate.
+    pub(crate) inner: HeldReservation<'static, Arc<Mutex<Store>>>,
     /// The fixed cents reserved for this turn.
     pub cost_cents: u64,
 }
@@ -176,8 +177,15 @@ impl TurnHost for StoreTurnHost {
         };
         let store = lock_store(&self.store);
         let day = store.local_day()?;
-        match store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)? {
-            ReserveOutcome::Reserved(inner) => Ok(Some(TurnReservation { inner, cost_cents })),
+        let outcome =
+            store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)?;
+        // Unlocked first: a held reservation settles through this same lock.
+        drop(store);
+        match outcome {
+            ReserveOutcome::Reserved(inner) => Ok(Some(TurnReservation {
+                inner: HeldReservation::new(Arc::clone(&self.store), inner),
+                cost_cents,
+            })),
             ReserveOutcome::Denied(denial) => Err(AcpError::BudgetDenied {
                 reason: denial.reason_text(),
             }),
@@ -209,7 +217,7 @@ impl TurnHost for StoreTurnHost {
                     tokens_out_estimated: true,
                     usd_cents: reservation.cost_cents,
                 };
-                lock_store(&self.store).settle_reservation(&reservation.inner, &actual)
+                reservation.inner.settle(&actual)
             }
             None => {
                 // Unlimited budgets take no store reservation, but the fixed
@@ -412,12 +420,31 @@ mod tests {
 
     #[test]
     fn a_failed_settle_records_a_marker_for_the_run() {
-        // An estimate above i64::MAX is admitted, then cannot be written
-        // to the usage table, so the settle fails. The failure must be
-        // recorded under the run for the receipt to mark usage unverified.
-        let (host, store) = host(capped_budgets(u64::MAX));
-        let mut host = host.with_run_id("turn-out-of-range");
-        let reservation = host.reserve_turn(u64::MAX).unwrap().unwrap();
+        // A settle that cannot write its usage row fails. The failure must
+        // be recorded under the run for the receipt to mark usage unverified.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("store.db");
+        let store = Arc::new(Mutex::new(Store::open(&db).unwrap()));
+        let session = lock_store(&store)
+            .create_session("main", Some("acp test"))
+            .unwrap();
+        let mut host = StoreTurnHost::new(
+            Arc::clone(&store),
+            "main".to_string(),
+            session.id,
+            capped_budgets(50),
+            None,
+        )
+        .with_run_id("turn-settle-refused");
+        let reservation = host.reserve_turn(10).unwrap().unwrap();
+        // The store refuses every new usage row: the settle fails.
+        aux_store::open_keyed(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_usage BEFORE INSERT ON usage
+                 BEGIN SELECT RAISE(ABORT, 'usage refused'); END;",
+            )
+            .unwrap();
         assert!(host
             .settle_turn(Some(reservation), &UsageUpdate::default())
             .is_err());

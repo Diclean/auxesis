@@ -282,6 +282,12 @@ impl ChatProvider for OpenAiCompat {
         self.local_runtime && self.direct && !self.model.to_ascii_lowercase().contains("cloud")
     }
 
+    fn subscription_billed(&self) -> bool {
+        reqwest::Url::parse(&self.endpoint).is_ok_and(|url| {
+            url.scheme() == "https" && url.host_str() == Some("ollama.com") && url.port().is_none()
+        })
+    }
+
     fn endpoint_host(&self) -> Option<String> {
         reqwest::Url::parse(&self.endpoint)
             .ok()?
@@ -1518,6 +1524,24 @@ mod tests {
         assert!(!brain("http://127.0.0.1:11434/v1", "kimi-k2:cloud", true));
         assert!(!brain("http://127.0.0.1:11434/v1", "llama3.2", false));
         assert!(!brain("https://ollama.example/v1", "llama3.2", true));
+    }
+
+    #[test]
+    fn only_https_ollama_com_is_the_subscription_backend() {
+        let billed = |base: &str| {
+            let config = ProviderConfig {
+                base_url: base.into(),
+                ..config()
+            };
+            OpenAiCompat::with_key(&config, None)
+                .unwrap()
+                .subscription_billed()
+        };
+        assert!(billed("https://ollama.com/v1"));
+        assert!(!billed("https://ollama.com:8443/v1"));
+        assert!(!billed("https://ollama.com.paid.example/v1"));
+        assert!(!billed("https://paid.example/v1"));
+        assert!(!billed("http://127.0.0.1:11434/v1"));
     }
 
     #[test]

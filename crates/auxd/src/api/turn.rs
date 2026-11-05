@@ -532,11 +532,11 @@ impl EngineTurnRunner {
     fn shell_judge(
         &self,
         config: &kernel_core::Config,
-        agent: &str,
         thread_id: i64,
         provider: Arc<dyn ChatProvider>,
         contacts: &aux_runtime::known_names::Contacts,
         sent: &SentOwner,
+        budget: aux_engine::judge::JudgeBudget,
     ) -> Option<aux_engine::judge::ShellJudge> {
         if !config.approval.shell_judge || config.shell.network || self.mode_floor.is_some() {
             return None;
@@ -545,16 +545,15 @@ impl EngineTurnRunner {
         let sent = Arc::clone(sent);
         let owner: aux_engine::judge::OwnerMessages =
             Arc::new(move || kernel_core::lock_recover(&sent).clone());
-        let mode = self.mode_fn(agent);
-        let started = mode();
+        let workspace = aux_engine::soul::workspace_dir(&self.home, &budget.agent);
         Some(aux_engine::judge::ShellJudge::new(
             provider,
-            mode,
-            started,
+            self.mode_fn(&budget.agent),
             thread_id,
             names,
             owner,
-            aux_engine::soul::workspace_dir(&self.home, agent),
+            workspace,
+            budget,
         ))
     }
 
@@ -2111,13 +2110,20 @@ impl EngineTurnRunner {
             &registry,
             StoreHandle::Shared(Arc::clone(&store)).audit_sink(),
             Some(run_id.clone()),
+            // WO-BUD-1: the judge's call is `agent`'s spend, on this run.
             self.shell_judge(
                 &config,
-                agent,
                 thread_id,
                 Arc::clone(&shared),
                 &contacts,
                 &sent,
+                aux_engine::judge::JudgeBudget {
+                    store: Arc::clone(&store),
+                    agent: agent.to_string(),
+                    run_id: Some(run_id.clone()),
+                    budgets: config.budgets.clone(),
+                    prices: config.prices.clone(),
+                },
             ),
         );
 
@@ -2674,16 +2680,14 @@ fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &st
     });
 }
 
-/// True when an agent's tool list names the registered tool `name`.
-///
-/// The registry holds wire names (`mail_send`); agent files list logical ones
-/// (`mail.send`). M4-0: the wire name is mapped back through the one table,
-/// so either form matches.
-/// CHIEF-BASE-1: an agent other than the chief can do nothing the chief
+/// An agent other than the chief can do nothing the chief
 /// could not. A tool the chief is refused (its grants, its tools lists, its
 /// own config deny) is denied for the agent; one the chief must ask about
 /// asks, unless the agent is already denied it. Only ever narrows. Returns
 /// the asks it added, so the auto policy keeps their cards.
+///
+/// The chief is the one this home runs ([`crate::agents::ceilings`]): on an
+/// older install an added agent stays under `aux` as well as under `main`.
 pub fn apply_chief_ceiling(
     home: &Path,
     agent: &str,
@@ -2692,32 +2696,29 @@ pub fn apply_chief_ceiling(
     owner_rules: &[Rule],
     rules: &mut Vec<Rule>,
 ) -> Vec<Rule> {
-    use aux_runtime::grants::{GrantLevel, ToolOrigin, CHIEF_AGENT};
+    use aux_runtime::grants::{GrantLevel, ToolOrigin};
     let mut asks = Vec::new();
-    if agent == CHIEF_AGENT || agent == crate::agents::chief_id(home) {
+    let ids = crate::agents::ceilings(home, agent);
+    if ids.is_empty() {
         return asks;
     }
-    let chief = crate::agents::registry(home).map(|agents| crate::agents::chief_grants(&agents));
-    // The chief's tools lists; an unreadable one allows nothing.
-    let mut lists: Vec<Vec<String>> = Vec::new();
-    match agent::config(home, CHIEF_AGENT) {
-        Ok(config) => lists.extend(config.tools),
-        Err(_) => lists.push(Vec::new()),
-    }
-    match aux_runtime::skills::load_agent(&aux_engine::agent_dir(home, CHIEF_AGENT)) {
-        Ok(md)
-            if md.source == aux_runtime::skills::agent::AgentSource::AgentMd
-                && !md.tools.is_empty() =>
-        {
-            lists.push(md.tools)
-        }
-        Ok(_) => {}
-        Err(_) => lists.push(Vec::new()),
-    }
-    let chief_rules: Vec<Rule> = owner_rules
-        .iter()
-        .filter(|rule| rule.agent == CHIEF_AGENT)
-        .cloned()
+    let agents = crate::agents::registry(home);
+    let caps: Vec<Ceiling> = ids
+        .into_iter()
+        .map(|id| Ceiling {
+            id,
+            // An unreadable registry refuses every tool.
+            grants: agents
+                .as_ref()
+                .ok()
+                .map(|agents| crate::agents::ceiling_grants(agents, id)),
+            lists: tool_lists(home, id),
+            rules: owner_rules
+                .iter()
+                .filter(|rule| rule.agent == id)
+                .cloned()
+                .collect(),
+        })
         .collect();
     for name in registry.names() {
         let explicit = registry
@@ -2728,25 +2729,63 @@ pub fn apply_chief_ceiling(
         };
         let origin = origins.get(name).copied().unwrap_or(ToolOrigin::Unknown);
         let scope = aux_runtime::grants::tool_scope(name);
-        let level = chief.as_ref().ok().and_then(|grants| {
-            grants
-                .action_for_origin(CHIEF_AGENT, name, origin, scope)
-                .ok()
-        });
-        let owner = action(&chief_rules, CHIEF_AGENT);
-        if level.is_none()
-            || owner == Some(Action::Deny)
-            || !lists.iter().all(|tools| listed(tools, name))
-        {
+        // Every ceiling is decided before a rule is added: the last matching
+        // rule wins, so an ask must never follow another ceiling's deny.
+        let (mut denied, mut ask) = (false, false);
+        for cap in &caps {
+            let level = cap
+                .grants
+                .as_ref()
+                .and_then(|grants| grants.action_for_origin(cap.id, name, origin, scope).ok());
+            let owner = action(&cap.rules, cap.id);
+            if level.is_none()
+                || owner == Some(Action::Deny)
+                || !cap.lists.iter().all(|tools| listed(tools, name))
+            {
+                denied = true;
+            } else if level == Some(GrantLevel::Ask) || owner == Some(Action::Ask) {
+                ask = true;
+            }
+        }
+        if denied {
             rules.push(Rule::new(agent, name, Action::Deny));
-        } else if (level == Some(GrantLevel::Ask) || owner == Some(Action::Ask))
-            && action(rules, agent) != Some(Action::Deny)
-        {
+        } else if ask && action(rules, agent) != Some(Action::Deny) {
             asks.push(Rule::new(agent, name, Action::Ask));
         }
     }
     rules.extend(asks.iter().cloned());
     asks
+}
+
+/// One agent whose access caps another (see [`apply_chief_ceiling`]).
+struct Ceiling {
+    id: &'static str,
+    /// `None` when the registry cannot be read.
+    grants: Option<aux_runtime::grants::AgentGrants>,
+    lists: Vec<Vec<String>>,
+    /// The owner's config rules for this agent.
+    rules: Vec<Rule>,
+}
+
+/// An agent's tools lists: `agent.toml`'s, and `agent.md`'s when it names
+/// tools. An unreadable one allows nothing.
+fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
+    let mut lists: Vec<Vec<String>> = Vec::new();
+    match agent::config(home, id) {
+        Ok(config) => lists.extend(config.tools),
+        Err(_) => lists.push(Vec::new()),
+    }
+    match aux_runtime::skills::load_agent(&aux_engine::agent_dir(home, id)) {
+        Ok(md)
+            if md.source == aux_runtime::skills::agent::AgentSource::AgentMd
+                && !md.tools.is_empty() =>
+        {
+            lists.push(md.tools)
+        }
+        Ok(_) => {}
+        Err(_) => lists.push(Vec::new()),
+    }
+    lists
 }
 
 /// The chief ceiling for the CLI and scheduled-job turns, whose registries
@@ -2780,6 +2819,11 @@ pub fn constrain_non_api_turn(
     apply_chief_ceiling(home, agent, registry, &origins, &owner_rules, rules);
 }
 
+/// True when an agent's tool list names the registered tool `name`.
+///
+/// The registry holds wire names (`mail_send`); agent files list logical ones
+/// (`mail.send`). The wire name is mapped back through the one table, so
+/// either form matches.
 fn listed(tools: &[String], name: &str) -> bool {
     let logical = aux_runtime::skills::tool_map::from_wire(name)
         .map(|info| info.logical)
@@ -4003,6 +4047,62 @@ mod tests {
         assert!(!denied("mail_read"));
     }
 
+    /// An older install's chief `aux` has no mail access: the CLI/job ceiling
+    /// denies a mail tool to an added agent and to `main` (not the chief
+    /// there), while Mail, which `aux` hands work to, keeps it. A `main` home
+    /// is as before.
+    #[test]
+    fn the_non_api_ceiling_holds_an_agent_under_the_legacy_chief() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let mut registry = kernel_broker::ToolRegistry::new();
+        registry.register_native(Box::new(NamedTestTool("mail_read")));
+        registry.register_native(Box::new(NamedTestTool("read_file")));
+        let denied = |agent: &str| {
+            let mut rules = Vec::new();
+            constrain_non_api_turn(home, agent, &registry, &mut rules);
+            let deny = |tool: &str| {
+                rules
+                    .iter()
+                    .any(|r| r.agent == agent && r.tool == tool && r.action == Action::Deny)
+            };
+            (deny("mail_read"), deny("read_file"))
+        };
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
+        assert_eq!(denied("scout"), (true, false));
+        assert_eq!(denied("main"), (true, false));
+        assert_eq!(denied("mail"), (false, false));
+        assert_eq!(denied("aux"), (false, false));
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        assert_eq!(denied("scout"), (false, false));
+    }
+
+    /// Two ceilings are decided together: an ask from one never follows the
+    /// other's deny, since the last matching rule wins.
+    #[test]
+    fn a_ceiling_ask_never_follows_another_ceilings_deny() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // `main` asks before a mail read; `aux` (the chief) has no mail.
+        std::fs::write(
+            home.join("config.toml"),
+            "default_agent = \"aux\"\n\n[[rules]]\nagent = \"main\"\ntool = \"mail_read\"\naction = \"ask\"\n",
+        )
+        .unwrap();
+        let mut registry = kernel_broker::ToolRegistry::new();
+        registry.register_native(Box::new(NamedTestTool("mail_read")));
+        let owner = aux_engine::config::load_rules(&home.join("config.toml")).unwrap();
+        let mut rules = owner.clone();
+        let origins = HashMap::from([(
+            "mail_read".to_string(),
+            aux_runtime::grants::ToolOrigin::Connector,
+        )]);
+        let asks = apply_chief_ceiling(home, "scout", &registry, &origins, &owner, &mut rules);
+        assert!(asks.is_empty(), "{asks:?}");
+        let last = kernel_broker::matching_rule(&rules, "scout", "mail_read", false);
+        assert_eq!(last.map(|(_, rule)| rule.action), Some(Action::Deny));
+    }
+
     #[test]
     fn a_replaced_delegate_takes_the_new_origin_and_is_denied() {
         use aux_runtime::grants::ToolOrigin;
@@ -4292,6 +4392,7 @@ mod m4_invite_tests {
     fn seeded_agents_gain_only_the_calendar_invite() {
         let dir = tempdir().unwrap();
         let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"aux\"\n").unwrap();
         let snapshot: Vec<String> = SEEDED
             .iter()
             .map(|agent| format!("{agent}: {}", effective(home, agent, None)))
@@ -4359,7 +4460,7 @@ mod m4_invite_tests {
             std::fs::create_dir_all(&agent_dir).unwrap();
             std::fs::write(agent_dir.join("soul.md"), "Calendar soul.\n").unwrap();
             let added = crate::agents::install_shipped_files(&home).unwrap();
-            assert_eq!(added.len(), 9, "{added:?}");
+            assert_eq!(added.len(), 3, "only the calendar agent exists: {added:?}");
         } else {
             std::fs::create_dir_all(agent_dir.join("skills")).unwrap();
             std::fs::write(agent_dir.join("agent.md"), INVITE_AGENT_MD).unwrap();

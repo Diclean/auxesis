@@ -545,6 +545,17 @@ fn doctor_survives_closed_stdout() {
     );
 }
 
+/// A doctor run on a fresh home makes the same config as the
+/// daemon would: the `main` chief, never the legacy `aux`.
+#[test]
+fn doctor_on_a_fresh_home_starts_with_the_main_chief() {
+    let dir = tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let stdout = String::from_utf8_lossy(&doctor(&home, dead_port()).stdout).into_owned();
+    assert!(stdout.contains("default agent: main"), "{stdout}");
+}
+
 #[test]
 fn doctor_gives_no_legacy_hint_now_that_main_is_the_chief() {
     let dir = tempdir().unwrap();

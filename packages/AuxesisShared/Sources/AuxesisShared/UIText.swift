@@ -66,7 +66,10 @@ public enum UIKey: String, CaseIterable {
     // Today
     case todaySubtitle, todayWrittenAt, todayCalendar, todayMail, todayWeather, todayAvailable, todayUnavailable
     case todayNotChecked, todayFreshnessUnreported, todayCheckSources, todayAllDay, todayNoEvents, todayNoMail
-    case todayDueEmpty, todayNoProspects, todayWhatRan, whatBriefChecked, todayLead, todayYourDay, runningNow
+    case todayDueEmpty, todayNoProspects, todayWhatRan, whatBriefChecked, todayYourDay, runningNow
+    case todayFocusWaitingOne, todayFocusWaitingMany, todayFocusJobFailed, todayFocusJobLate, todayFocusEventSoon
+    case todayFocusUnreadOne, todayFocusUnreadMany, todayFocusUnreadAtLeast, todayFocusCalm
+    case todayTopTitle, todayTopAsked, todayTopEventAt, todayTopOldestUnread
     case todayEventsOne, todayEventsMany, todayUnreadOne, todayUnreadMany, todayUnreadAtLeast, todayEmpty, todayRun, todayRunning
     case privateAnswersTitle, privateAnswersHint, privateAnswersShowMore, privateAnswersShowLess
     case privateAnswersDismiss, privateAnswersDismissFailed
@@ -111,7 +114,7 @@ public enum UIKey: String, CaseIterable {
     // Agent profile
     case brain, brainDefault, change, canSee, canDo, never, worksWith, memory, forget, skills, workshop
     case lvRead, lvAsk, lvOff, lvAuto, lvAsksEveryTime, grantsUnavailable, memoryEmpty, workshopEmpty
-    case pauseAgent, agentPaused, worksWithAux, worksWithTeam, keptChief
+    case pauseAgent, agentPaused, worksWithAux, worksWithTeam, worksWithNone, listAnd, keptChief
     case agentIdle, agentThinking, agentWorking, agentNeedsYou, agentStopped, agentStateUnavailable, brainUnavailable
     case notificationsQuietHours, notificationsUnavailable, interruptRules, interruptDecisionWaiting
     case interruptFailure, interruptUnknownOutcome, quietHours, schedule, changeQuietHours
@@ -169,6 +172,10 @@ public enum UIKey: String, CaseIterable {
 
     // Menu bar
     case menuWorkingOne, menuWorkingMany, menuIdle, menuWaiting, menuOpen, menuQuit, menuOffline
+
+    // Add an agent (templates)
+    case addAgent, addAgentMenu, addAgentLede, addAgentAdded, addAgentConfirm, addAgentExceedsChief, addAgentDoes, addAgentAsks
+    case grantMailRead, grantMailDraft, grantMailSend, grantCalendarRead, grantCalendarWrite, grantClientsRead, grantClientsNote, grantDocumentsRead, grantDocumentsFile
 }
 
 public extension L10n {
@@ -194,6 +201,23 @@ public extension L10n {
     }()
 
     static let uiEnglish: [UIKey: String] = [
+        .addAgent: "Add an agent",
+        .addAgentMenu: "Add an Agent…",
+        .addAgentLede: "Aux works alone until you add an agent. Each one gets only the access listed here.",
+        .addAgentAdded: "Already added",
+        .addAgentConfirm: "Add agent",
+        .addAgentExceedsChief: "This agent would get more access than Aux itself, so it was not created.",
+        .addAgentDoes: "Does on its own: %@",
+        .addAgentAsks: "Asks you first: %@",
+        .grantMailRead: "read mail",
+        .grantMailDraft: "draft replies",
+        .grantMailSend: "send mail",
+        .grantCalendarRead: "read the calendar",
+        .grantCalendarWrite: "add events",
+        .grantClientsRead: "read client records",
+        .grantClientsNote: "add client notes",
+        .grantDocumentsRead: "read documents",
+        .grantDocumentsFile: "file documents",
         .appName: "Auxesis",
         .go: "Go",
         .team: "Team",
@@ -273,7 +297,7 @@ public extension L10n {
         .pinnedOne: "1 action waits for your yes",
         .pinnedMany: "%d actions wait for your yes",
         .stoppedTitle: "Stopped.",
-        .stoppedBody: "All five agents are paused. Nothing runs or sends until you press Resume.",
+        .stoppedBody: "All agents are paused. Nothing runs or sends until you press Resume.",
         .stoppedCancelledOne: "1 pending send was cancelled.",
         .stoppedCancelledMany: "%d pending sends were cancelled.",
         .offlineTitle: "Auxesis isn't running on this Mac.",
@@ -473,8 +497,20 @@ public extension L10n {
         .todayNoProspects: "No possible new clients found.",
         .todayWhatRan: "What ran",
         .whatBriefChecked: "What this brief checked, and what it could not",
-        .todayLead: "Waiting for you: %@",
         .todayYourDay: "Your day",
+        .todayFocusWaitingOne: "1 thing waits for you.",
+        .todayFocusWaitingMany: "%d things wait for you.",
+        .todayFocusJobFailed: "A job failed: %@.",
+        .todayFocusJobLate: "A job is late: %@.",
+        .todayFocusEventSoon: "%@ starts at %@.",
+        .todayFocusUnreadOne: "1 unread email. Nothing else needs you.",
+        .todayFocusUnreadMany: "%d unread emails. Nothing else needs you.",
+        .todayFocusUnreadAtLeast: "At least %d unread emails. Nothing else needs you.",
+        .todayFocusCalm: "Nothing needs you right now.",
+        .todayTopTitle: "What matters first",
+        .todayTopAsked: "%@ · since %@",
+        .todayTopEventAt: "Today · %@",
+        .todayTopOldestUnread: "Oldest unread · from %@",
         .runningNow: "Running now",
         .todayEventsOne: "1 event",
         .todayEventsMany: "%d events",
@@ -727,7 +763,9 @@ public extension L10n {
         .pauseAgent: "Pause %@",
         .agentPaused: "Paused",
         .worksWithAux: "Aux hands it work and gets back only the result.",
-        .worksWithTeam: "Mail, Calendar, Clients and Documents.",
+        .worksWithTeam: "Aux hands work to %@.",
+        .worksWithNone: "Add Mail, Calendar, Clients or Documents when you need them.",
+        .listAnd: "and",
         .keptChief: "Aux only sees the short results the team sends back. Your mail, files and bank lines stay with the agent that owns them.",
         .agentIdle: "Idle",
         .workTab: "Work",
@@ -893,6 +931,23 @@ public extension L10n {
 
     /// FR peers, key by key (Today). Missing keys fall back to EN.
     static let uiFrench: [UIKey: String] = [
+        .addAgent: "Ajouter un agent",
+        .addAgentMenu: "Ajouter un agent…",
+        .addAgentLede: "Aux travaille seul tant que vous n’ajoutez pas d’agent. Chacun ne reçoit que les accès indiqués ici.",
+        .addAgentAdded: "Déjà ajouté",
+        .addAgentConfirm: "Ajouter l’agent",
+        .addAgentExceedsChief: "Cet agent aurait plus d’accès qu’Aux lui-même, il n’a donc pas été créé.",
+        .addAgentDoes: "Fait seul : %@",
+        .addAgentAsks: "Vous demande d’abord : %@",
+        .grantMailRead: "lire les e-mails",
+        .grantMailDraft: "rédiger des brouillons",
+        .grantMailSend: "envoyer des e-mails",
+        .grantCalendarRead: "lire l’agenda",
+        .grantCalendarWrite: "ajouter des événements",
+        .grantClientsRead: "lire les fiches clients",
+        .grantClientsNote: "annoter les fiches clients",
+        .grantDocumentsRead: "lire les documents",
+        .grantDocumentsFile: "classer les documents",
         .tabPlugins: "Plugins",
         .pluginsLede: "Les plugins donnent de nouveaux outils à vos agents. Parcourir cette liste ne connecte rien : un plugin ne tourne qu'après votre accord.",
         .pluginsInstalled: "Installés",
@@ -1100,8 +1155,20 @@ public extension L10n {
         .todayNoProspects: "Aucun nouveau client potentiel trouvé.",
         .todayWhatRan: "Activité",
         .whatBriefChecked: "Ce que ce brief a vérifié et ce qu’il n’a pas pu vérifier",
-        .todayLead: "Vous attend : %@",
         .todayYourDay: "Votre journée",
+        .todayFocusWaitingOne: "1 chose vous attend.",
+        .todayFocusWaitingMany: "%d choses vous attendent.",
+        .todayFocusJobFailed: "Une tâche a échoué : %@.",
+        .todayFocusJobLate: "Une tâche est en retard : %@.",
+        .todayFocusEventSoon: "%@ commence à %@.",
+        .todayFocusUnreadOne: "1 mail non lu. Rien d’autre ne vous attend.",
+        .todayFocusUnreadMany: "%d mails non lus. Rien d’autre ne vous attend.",
+        .todayFocusUnreadAtLeast: "Au moins %d mails non lus. Rien d’autre ne vous attend.",
+        .todayFocusCalm: "Rien ne vous attend pour l’instant.",
+        .todayTopTitle: "À traiter d’abord",
+        .todayTopAsked: "%@ · depuis %@",
+        .todayTopEventAt: "Aujourd’hui · %@",
+        .todayTopOldestUnread: "Plus ancien non lu · de %@",
         .runningNow: "En cours",
         .todayEventsOne: "1 événement",
         .todayEventsMany: "%d événements",
@@ -1544,7 +1611,7 @@ public extension L10n {
         .stopNow: "Arrêter maintenant",
         .stopRowHint: "Arrête tous les agents et annule les envois en attente. Aussi dans la barre des menus.",
         .stopRowTitle: "Arrêter",
-        .stoppedBody: "Les cinq agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre.",
+        .stoppedBody: "Tous les agents sont en pause. Rien ne tourne ni ne s’envoie tant que vous n’appuyez pas sur Reprendre.",
         .stoppedCancelledMany: "%d envois en attente ont été annulés.",
         .stoppedCancelledOne: "1 envoi en attente a été annulé.",
         .stoppedTitle: "Arrêté.",
@@ -1578,7 +1645,9 @@ public extension L10n {
         .workTab: "Travail",
         .worksWith: "Travaille avec",
         .worksWithAux: "Aux lui confie du travail et ne reçoit que le résultat.",
-        .worksWithTeam: "Mail, Calendrier, Clients et Documents.",
+        .worksWithTeam: "Aux confie du travail à %@.",
+        .worksWithNone: "Ajoutez Mail, Calendar, Clients ou Documents quand vous en avez besoin.",
+        .listAnd: "et",
         .workshop: "Atelier",
         .workshopEmpty: "Aucun outil créé pour l’instant. Un outil n’est créé qu’après votre approbation de son code source.",
         .yesterday: "Hier",

@@ -1048,7 +1048,7 @@ async fn run_brief(mode: &str, sender: Option<Arc<dyn Sender>>) -> (serde_json::
     let local_gateway = Arc::new(auxd::gateway::local::LocalGateway::new(local.clone()));
     let worker = tokio::spawn(run_worker(remotes, local_gateway, mode_fn, rx));
     let store = tokio::task::spawn_blocking(move || {
-        let config = kernel_core::Config::load_or_create(&kernel_core::config_path(&home));
+        let config = aux_engine::config::load_or_create(&kernel_core::config_path(&home));
         let noon = chrono::Local::now()
             .date_naive()
             .and_hms_opt(12, 0, 0)

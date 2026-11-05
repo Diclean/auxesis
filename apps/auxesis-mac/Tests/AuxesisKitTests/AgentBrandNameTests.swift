@@ -20,8 +20,8 @@ import Testing
     /// The owner reads Aux, Mail, Calendar, Clients and Documents. None of
     /// them carries a brand name.
     func testNoBuiltInAgentIsNamedAfterABrand() {
-        XCTAssertEqual(TeamMember.all.count, 5, "the five agents of the team")
-        for member in TeamMember.all {
+        // The catalogue of brand definitions; an install may have only some.
+        for member in TeamMember.all + [.main] {
             let shown = TeamMember.displayName(member.id)
             XCTAssertEqual(shown, member.name, "\(member.id) shows its own name")
             for brand in oldBrand + thirdParty {

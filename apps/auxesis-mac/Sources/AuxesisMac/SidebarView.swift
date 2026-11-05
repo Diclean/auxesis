@@ -214,7 +214,7 @@ struct AgentSelectionList: View {
                 EmptyRouteView(copyKey: .runningEmpty)
             } else {
                 List(selection: $selected) {
-                    ForEach(TeamMember.all.filter { !workingOnly || shell.workingAgents.contains($0.id) }) { member in
+                    ForEach(shell.roster.filter { !workingOnly || shell.workingAgents.contains($0.id) }) { member in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Label(member.name, systemImage: "person")
@@ -234,6 +234,15 @@ struct AgentSelectionList: View {
                             selected = member.id
                             onSelect?(member.id)
                         }
+                    }
+                    if !workingOnly, shell.canAddAgents {
+                        Button {
+                            shell.beginAddAgent()
+                        } label: {
+                            Label(copy(.addAgent), systemImage: "plus")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(copy(.addAgent)).accessibilityIdentifier("agent-selection-add")
                     }
                     if !workingOnly {
                         Section {

@@ -214,7 +214,7 @@ fn refuse_when_unsandboxed(
     store: &aux_store::Store,
     workspace: &str,
 ) -> Result<(), String> {
-    let config = kernel_core::Config::load_or_create(&config_path(home))
+    let config = aux_engine::config::load_or_create(&config_path(home))
         .map_err(|err| format!("could not read the config: {err}"))?;
     aux_engine::refuse_when_unsandboxed_shell(store, workspace, "owner-cli", &config.shell)
         .map_err(|err| err.to_string())

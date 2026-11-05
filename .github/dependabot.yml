@@ -10,6 +10,14 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    groups:
+      # html5ever and markup5ever_rcdom must share one markup5ever version,
+      # so they move together or not at all.
+      html-parser:
+        patterns:
+          - html5ever
+          - markup5ever
+          - markup5ever_rcdom
   - package-ecosystem: github-actions
     directory: /
     schedule:

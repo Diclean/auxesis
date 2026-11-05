@@ -96,7 +96,7 @@ impl Sandbox {
             format!(
                 "version = 1\nprivacy.mode = \"open\"\ndefault_agent = \"main\"\n\n\
                  [[providers]]\nid = \"local\"\nbase_url = \"{base_url}/v1\"\n\
-                 model = \"test-model\"\nkind = \"openai-compat\"\n"
+                 model = \"test-model\"\nkind = \"openai-compat\"\n\n[prices.models.\"test-model\"]\ninput_cents_per_million = 1\noutput_cents_per_million = 1\n"
             ),
         )
         .unwrap();

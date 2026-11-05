@@ -131,8 +131,12 @@ if ! ours "$IMAP_PORT"; then
   die "aux-fakemail is not listening on 127.0.0.1:$IMAP_PORT (see $STATE/fakemail.log)"
 fi
 
-# 2 + 3. config.toml: mail account and [brief].
-touch "$CONFIG"
+# 2 + 3. config.toml: mail account and [brief]. A new config names `main` as
+# the chief, as the app writes one (without the key the home reads as an older
+# install); an existing config keeps what it has.
+if [ ! -e "$CONFIG" ] && [ ! -L "$CONFIG" ]; then
+  (set -C && umask 077 && printf 'version = 1\ndefault_agent = "main"\n' >"$CONFIG")
+fi
 chmod 600 "$CONFIG"
 WORK="$(mktemp "$CONFIG.edit.XXXXXX")"
 trap 'rm -f "$WORK"' EXIT

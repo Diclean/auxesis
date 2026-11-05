@@ -356,6 +356,12 @@ impl ChatProvider for FallbackProvider {
         self.providers.first().and_then(|provider| provider.model())
     }
 
+    /// Only when every hop is the subscription backend: the call is priced
+    /// by the primary's model, whichever hop serves it.
+    fn subscription_billed(&self) -> bool {
+        !self.providers.is_empty() && self.providers.iter().all(|p| p.subscription_billed())
+    }
+
     fn endpoint_host(&self) -> Option<String> {
         self.served_host
             .lock()

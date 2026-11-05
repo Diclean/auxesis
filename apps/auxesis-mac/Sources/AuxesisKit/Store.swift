@@ -698,6 +698,12 @@ public final class Store: ObservableObject {
         }
     }
 
+    /// Re-read `GET /v1/agents` (after an agent was added).
+    public func refreshAgents() async {
+        guard let list = try? await transport.agents() else { return }
+        for agent in list { upsert(agent: agent) }
+    }
+
     private func upsert(agent agent: AgentSummary) {
         let mapped = Mapper.agent(
             from: agent,
@@ -709,6 +715,8 @@ public final class Store: ObservableObject {
         if let index = agents.firstIndex(where: { $0.name == agent.name }) {
             var updated = mapped
             updated.waiting = agents[index].waiting
+            // A live agent frame carries no display name: keep the listed one.
+            updated.displayName = mapped.displayName ?? agents[index].displayName
             agents[index] = updated
         } else {
             agents.append(mapped)

@@ -110,6 +110,122 @@ async fn put_auth(t: &TestApi, path: &str, body: &str) -> HttpResponse {
     call_auth(t, "PUT", path, Some(body)).await
 }
 
+/// A fresh home gets one agent, the `main` chief shown as
+/// "Aux"; a config naming `aux` is left as it is.
+#[test]
+fn a_fresh_home_starts_with_the_main_chief_and_aux_configs_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = dir.path().join("fresh");
+    std::fs::create_dir_all(&fresh).unwrap();
+    assert_eq!(
+        api::load_config_verified(&fresh).unwrap().default_agent,
+        "main"
+    );
+    let ids: Vec<String> = auxd::agents::registry(&fresh)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(ids, ["main"]);
+    let legacy = dir.path().join("legacy");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(
+        config_path(&legacy),
+        "version = 1\ndefault_agent = \"aux\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        api::load_config_verified(&legacy).unwrap().default_agent,
+        "aux"
+    );
+    let ids: Vec<String> = auxd::agents::registry(&legacy)
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(ids, ["aux", "mail", "calendar", "clients", "documents"]);
+}
+
+/// The chief alone, then an agent made from a template: it gets the
+/// template's grants and files, and can never be widened past the chief.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_chief_alone_then_a_template_agent_under_its_ceiling() {
+    let config = "version = 1\ndefault_agent = \"main\"\n\n[[providers]]\nid = \"fake\"\n\
+        base_url = \"http://127.0.0.1:9/v1\"\nmodel = \"fake\"\nkind = \"fake\"\n";
+    let mut t = TestApi::start_with_config(config).await;
+    let agents = get_auth(&t, "/v1/agents").await.json();
+    let chief = &agents.as_array().unwrap()[0];
+    assert_eq!(
+        (chief["name"].as_str(), chief["display_name"].as_str()),
+        (Some("main"), Some("Aux"))
+    );
+    let templates = get_auth(&t, "/v1/agent-templates").await.json();
+    let ids: Vec<&str> = templates["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["mail", "calendar", "clients", "documents"]);
+
+    let completed = post_auth(&t, "/v1/first-run/complete", "{}").await;
+    assert_eq!(completed.status, 201, "{}", completed.body);
+    let chief_dir = t.home.join("agents/main");
+    let definition = aux_runtime::skills::load_agent(&chief_dir).unwrap();
+    let loaded = aux_runtime::skills::load_skills(&chief_dir, &definition, None);
+    assert!(loaded.skills.iter().any(|skill| skill.name == "send-draft"));
+
+    let added = post_auth(&t, "/v1/agents", &json!({"template": "mail"}).to_string()).await;
+    assert_eq!(added.status, 201, "{}", added.body);
+    assert!(t.home.join("agents/mail/skills/send-draft.md").is_file());
+    let mail = auxd::agents::grants(&t.home, "mail").unwrap();
+    assert_eq!(
+        Some(&mail),
+        aux_runtime::grants::default_grants("mail").as_ref()
+    );
+    let unknown = post_auth(&t, "/v1/agents", &json!({"template": "bank"}).to_string()).await;
+    assert_eq!(unknown.status, 400, "{}", unknown.body);
+
+    let mut over = auxd::agents::grants_json(&mail);
+    over["do"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"skill": "payments.send", "level": "auto"}));
+    let refused = put_auth(&t, "/v1/agents/mail/grants", &over.to_string()).await;
+    assert_eq!(refused.status, 409, "{}", refused.body);
+    assert!(
+        refused.body.contains("grant_exceeds_chief"),
+        "{}",
+        refused.body
+    );
+    t.stop();
+}
+
+/// Break-It A: with the chief lowered, a template's id is refused by the
+/// ceiling whether it comes as `template` or as a plain `name`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_id_as_a_plain_name_is_held_to_the_chief_ceiling() {
+    let mut t = TestApi::start().await;
+    let mut chief = auxd::agents::grants(&t.home, "main").unwrap();
+    let send = chief.can_do.iter_mut().find(|g| g.skill == "mail.send");
+    send.unwrap().level = aux_runtime::grants::ActionLevel::Off;
+    auxd::agents::write_grants(&t.home, "main", &chief).unwrap();
+    for body in [json!({"template": "mail"}), json!({"name": "mail"})] {
+        let refused = post_auth(&t, "/v1/agents", &body.to_string()).await;
+        assert_eq!(refused.status, 409, "{body}: {}", refused.body);
+        assert!(
+            refused.body.contains("grant_exceeds_chief"),
+            "{}",
+            refused.body
+        );
+    }
+    assert!(!t.home.join("agents/mail").exists());
+    // Calendar sends invites (mail.send): refused too. Documents still fits.
+    let added = post_auth(&t, "/v1/agents", &json!({"name": "documents"}).to_string()).await;
+    assert_eq!(added.status, 201, "{}", added.body);
+    t.stop();
+}
+
 /// Payloads of every journal row of `kind`, oldest first.
 fn event_payloads(home: &Path, kind: &str) -> Vec<String> {
     let conn = aux_store::open_keyed_readonly(&store_path(home)).unwrap();

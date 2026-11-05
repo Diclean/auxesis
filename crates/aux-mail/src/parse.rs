@@ -2,8 +2,8 @@
 //!
 //! `mail-parser` (built with `full_encoding`) owns MIME walking and charset
 //! decoding. `text/plain` is always preferred; an HTML-only message goes
-//! through the runtime's readability extractor
-//! ([`aux_runtime::fetch::extract_readable`]), which replaces the old
+//! through the runtime's readability extractor over the whole body
+//! ([`aux_runtime::fetch::extract_body_text`]), which replaces the old
 //! `aux-fetch` crate (`docs/phase1.md` §2).
 //!
 //! Attachments are **metadata only** — name, MIME type, decoded size and IMAP
@@ -13,7 +13,7 @@
 //! Nothing here renders to a model: the parsed strings are still hostile and
 //! must pass through [`crate::sanitize::render_untrusted`].
 
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::{Mailbox, Message, MessageParser, MessagePart, PartId, PartKind, PartRole};
 
 use crate::error::MailError;
 use crate::imap_read::RawMail;
@@ -25,7 +25,7 @@ pub struct AttachmentMeta {
     pub file_name: String,
     /// The declared `type/subtype`, or `application/octet-stream`.
     pub mime: String,
-    /// The decoded part length in bytes.
+    /// The decoded part length in bytes; a text part counts its UTF-8 text.
     pub size: u32,
     /// The IMAP part specifier (`2`, `2.1`, …) the download in MA3 uses.
     pub part_id: String,
@@ -63,13 +63,13 @@ pub fn parse_message(raw: &RawMail) -> Result<MailItem, MailError> {
         .parse(raw.bytes.as_slice())
         .ok_or(MailError::Protocol)?;
 
-    let text = if let Some(plain) = message.body_text(0) {
-        plain.into_owned()
-    } else if let Some(html) = message.body_html(0) {
-        aux_runtime::fetch::extract_readable(html.as_bytes()).text
-    } else {
-        String::new()
-    };
+    // The first text-body part (plain when there is one), else the first HTML one.
+    let text = message
+        .text_body()
+        .next()
+        .and_then(body_part_text)
+        .or_else(|| message.html_body().next().and_then(body_part_text))
+        .unwrap_or_default();
 
     let attachments = attachment_meta(&message)?;
 
@@ -78,10 +78,13 @@ pub fn parse_message(raw: &RawMail) -> Result<MailItem, MailError> {
         subject: message.subject().unwrap_or_default().to_string(),
         from: message
             .from()
-            .map(format_address)
-            .and_then(|addresses| addresses.into_iter().next())
+            .and_then(|addresses| addresses.mailboxes().next())
+            .map(format_mailbox)
             .unwrap_or_default(),
-        to: message.to().map(format_address).unwrap_or_default(),
+        to: message
+            .to()
+            .map(|addresses| addresses.mailboxes().map(format_mailbox).collect())
+            .unwrap_or_default(),
         date: message
             .date()
             .map(|date| date.to_rfc822())
@@ -93,13 +96,34 @@ pub fn parse_message(raw: &RawMail) -> Result<MailItem, MailError> {
     })
 }
 
-fn attachment_meta(message: &mail_parser::Message<'_>) -> Result<Vec<AttachmentMeta>, MailError> {
+/// The text of one body part: a text part as decoded, an HTML part through
+/// the runtime's extractor, which drops `noscript`, `iframe` and the other
+/// elements a reader never sees (`mail-parser`'s own conversion keeps them),
+/// and text hidden by an element's own attributes or inline style.
+/// `None` for inline media.
+fn body_part_text(part: MessagePart<'_>) -> Option<String> {
+    match part.kind() {
+        PartKind::Text => part.text().map(|text| text.into_owned()),
+        PartKind::Html => part
+            .text()
+            .map(|html| aux_runtime::fetch::extract_body_text(html.as_bytes()).text),
+        _ => None,
+    }
+}
+
+/// The attachments of the top-level message, in document order.
+///
+/// `mail-parser`'s own list follows RFC 8621, which leaves out an image, audio
+/// or video part shown inline in the body. Such a part is still a file the
+/// sender attached (a photo pasted into a mail), so it is listed too.
+fn attachment_meta(message: &Message<'_>) -> Result<Vec<AttachmentMeta>, MailError> {
     let numbering = part_ids(message)?;
-    let mut attachments = Vec::with_capacity(message.attachments.len().min(MAX_PARTS));
-    for id in &message.attachments {
-        let Some(part) = message.part(*id) else {
-            continue;
-        };
+    let mut attachments = Vec::new();
+    let listed = message
+        .root()
+        .parts()
+        .filter(|part| part.is_attachment() || part.role() == PartRole::MediaBody);
+    for part in listed {
         let mime = part
             .content_type()
             .map(|content_type| match content_type.subtype() {
@@ -110,15 +134,25 @@ fn attachment_meta(message: &mail_parser::Message<'_>) -> Result<Vec<AttachmentM
         attachments.push(AttachmentMeta {
             file_name: part.attachment_name().unwrap_or_default().to_string(),
             mime,
-            size: part.len() as u32,
+            size: part_size(part),
             part_id: numbering
                 .iter()
-                .find(|(index, _)| *index == *id as usize)
+                .find(|(id, _)| *id == part.id())
                 .map(|(_, part_id)| part_id.clone())
                 .unwrap_or_default(),
         });
     }
     Ok(attachments)
+}
+
+/// The decoded length: the UTF-8 text of a text part, else the
+/// transfer-decoded bytes.
+fn part_size(part: MessagePart<'_>) -> u32 {
+    let len = match part.text() {
+        Some(text) => text.len(),
+        None => part.decoded_len(),
+    };
+    len as u32
 }
 
 /// Deepest MIME nesting we will number before refusing the message.
@@ -127,28 +161,28 @@ const MAX_PART_DEPTH: u32 = 32;
 /// Most MIME parts we will number before refusing the message.
 const MAX_PARTS: usize = 500;
 
-/// Map every MIME part index to its IMAP part specifier.
+/// Map every MIME part id to its IMAP part specifier.
 ///
 /// RFC 3501 numbers the children of a multipart from 1, dotted by nesting. The
 /// walk is **iterative**: a hostile message can nest thousands of multiparts,
 /// and a recursive walk would exhaust the stack before `mail-parser` (which
 /// itself walks multiparts with an explicit state stack) returns. It refuses
 /// past [`MAX_PART_DEPTH`] or [`MAX_PARTS`] with a typed error, never a panic.
-/// A `message/rfc822` part has no `sub_parts`, so it is a leaf and is **not**
+/// A `message/rfc822` part has no `children()`, so it is a leaf and is **not**
 /// recursed into (the nested-message rule).
-fn part_ids(message: &mail_parser::Message<'_>) -> Result<Vec<(usize, String)>, MailError> {
+fn part_ids(message: &Message<'_>) -> Result<Vec<(PartId, String)>, MailError> {
     let mut ids = Vec::new();
     let mut parts = 0usize;
-    // (part index, dotted prefix, depth of the parent)
-    let mut stack = vec![(0usize, String::new(), 0u32)];
-    while let Some((index, prefix, depth)) = stack.pop() {
-        let Some(children) = message.parts.get(index).and_then(|part| part.sub_parts()) else {
+    // (part, dotted prefix, depth of the parent)
+    let mut stack = vec![(message.root_part(), String::new(), 0u32)];
+    while let Some((part, prefix, depth)) = stack.pop() {
+        if !part.is_multipart() {
             continue;
-        };
+        }
         if depth >= MAX_PART_DEPTH {
             return Err(MailError::Protocol);
         }
-        for (position, child) in children.iter().enumerate() {
+        for (position, child) in part.children().enumerate() {
             parts += 1;
             if parts > MAX_PARTS {
                 return Err(MailError::Protocol);
@@ -158,26 +192,15 @@ fn part_ids(message: &mail_parser::Message<'_>) -> Result<Vec<(usize, String)>, 
             } else {
                 format!("{prefix}.{}", position + 1)
             };
-            let child = *child as usize;
-            ids.push((child, id.clone()));
+            ids.push((child.id(), id.clone()));
             stack.push((child, id, depth + 1));
         }
     }
     Ok(ids)
 }
 
-fn format_address(address: &mail_parser::Address<'_>) -> Vec<String> {
-    match address {
-        mail_parser::Address::List(list) => list.iter().map(format_addr).collect(),
-        mail_parser::Address::Group(groups) => groups
-            .iter()
-            .flat_map(|group| group.addresses.iter().map(format_addr))
-            .collect(),
-    }
-}
-
-fn format_addr(addr: &mail_parser::Addr<'_>) -> String {
-    match (addr.name.as_deref(), addr.address.as_deref()) {
+fn format_mailbox(mailbox: Mailbox<'_>) -> String {
+    match (mailbox.name(), mailbox.address()) {
         (Some(name), Some(address)) => format!("{name} <{address}>"),
         (None, Some(address)) => address.to_string(),
         (Some(name), None) => name.to_string(),

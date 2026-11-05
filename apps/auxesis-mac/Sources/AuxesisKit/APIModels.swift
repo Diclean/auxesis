@@ -266,6 +266,9 @@ public enum PrivacyMode: Equatable {
 /// One agent as `GET /v1/agents` (and polled `agent.state` frames) expose it.
 public struct AgentSummary: Decodable, Equatable, Identifiable {
     public let name: String
+    /// The name the owner reads, independent of the id. Absent on an old
+    /// daemon or for an agent outside the registry.
+    public let displayName: String?
     public let enabled: Bool
     public let jobsTotal: Int
     public let jobsEnabled: Int
@@ -301,11 +304,13 @@ public struct AgentSummary: Decodable, Equatable, Identifiable {
         case lastActivity = "last_activity"
         case threadId = "thread_id"
         case privacyMode = "privacy_mode"
+        case displayName = "display_name"
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        displayName = try? c.decode(String.self, forKey: .displayName)
         enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? true
         jobsTotal = (try? c.decode(Int.self, forKey: .jobsTotal)) ?? 0
         jobsEnabled = (try? c.decode(Int.self, forKey: .jobsEnabled)) ?? 0
@@ -334,10 +339,12 @@ public struct AgentSummary: Decodable, Equatable, Identifiable {
         lastActivity: ActivityEntry? = nil,
         threadId: String? = nil,
         brain: String? = nil,
-        privacyMode: PrivacyMode = .unknown
+        privacyMode: PrivacyMode = .unknown,
+        displayName: String? = nil
     ) {
         self.brain = brain
         self.privacyMode = privacyMode
+        self.displayName = displayName
         self.name = name
         self.enabled = enabled
         self.jobsTotal = jobsTotal
@@ -1479,6 +1486,8 @@ public struct Agent: Identifiable, Equatable {
     public var brain: String?
     /// The daemon's live mode for this agent; unknown until it says.
     public var privacyMode: PrivacyMode
+    /// The daemon's `display_name`; nil falls back to the brand name.
+    public var displayName: String?
 
     public init(
         id: String,
@@ -1495,10 +1504,12 @@ public struct Agent: Identifiable, Equatable {
         lastActive: Int64? = nil,
         runningJob: String? = nil,
         brain: String? = nil,
-        privacyMode: PrivacyMode = .unknown
+        privacyMode: PrivacyMode = .unknown,
+        displayName: String? = nil
     ) {
         self.brain = brain
         self.privacyMode = privacyMode
+        self.displayName = displayName
         self.id = id
         self.name = name
         self.hue = hue
@@ -1565,7 +1576,8 @@ public enum Mapper {
             lastActive: Timestamps.unixMillis(from: agent.lastActivity?.at).flatMap { $0 > 0 ? $0 : nil },
             runningJob: agent.runningJob,
             brain: agent.brain,
-            privacyMode: agent.privacyMode
+            privacyMode: agent.privacyMode,
+            displayName: agent.displayName
         )
     }
 

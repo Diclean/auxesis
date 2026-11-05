@@ -39,7 +39,7 @@ cargo metadata --locked --format-version 1 >/dev/null
 
 The Rust workspace holds the daemon (`auxd`), the CLI (`aux`) and the privacy kernel. The
 kernel crates come from the public `auxesis-privacy-kernel` repository, a git dependency pinned
-to tag `v0.1.1`; Cargo fetches that one repository when it builds.
+to tag `v0.1.3`; Cargo fetches that one repository when it builds.
 
 ```sh
 cargo build --workspace --locked

@@ -62,8 +62,10 @@ struct ShellView: View {
                 .environmentObject(shell)
                 .themed()
         }
+        // "Add an agent", from the agents list or Go ▸ Add an Agent….
+        .sheet(item: $shell.addingAgent) { model in AgentTemplatesSheet(model: model).themed() }
         .sheet(isPresented: $shell.shortcutHelpOpen) {
-            KeyboardShortcutsSheet(language: shell.language)
+            KeyboardShortcutsSheet(language: shell.language, agents: shell.store.agents)
                 .themed()
                 .frame(minWidth: 480, minHeight: 420)
         }
@@ -103,7 +105,7 @@ struct ShellView: View {
                     .frame(maxWidth: detail ? 380 : .infinity)
                 if detail {
                     Rectangle().fill(palette.line.color).frame(width: 1)
-                    DetailColumn(selectedAgent: selectedAgent, todaySelection: todaySelection,
+                    DetailColumn(selectedAgent: selectedAgent, todaySelection: $todaySelection,
                                  selectedLedgerEntryID: selectedLedgerEntryID, privacySelection: selectedPrivacyRecord)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .disabled(shell.stopped)
@@ -117,7 +119,7 @@ struct ShellView: View {
 struct DetailColumn: View {
     @EnvironmentObject private var shell: ShellModel
     let selectedAgent: String
-    let todaySelection: TodaySelection
+    @Binding var todaySelection: TodaySelection
     let selectedLedgerEntryID: String?
     let privacySelection: String?
 
@@ -129,7 +131,7 @@ struct DetailColumn: View {
                let approval = shell.waitingApprovals.first(where: { $0.id == id }) {
                 ApprovalProposalView(approval: approval)
             } else {
-                TodayView(selection: todaySelection)
+                TodayView(selection: $todaySelection)
             }
         } else if shell.route == .clients {
             if shell.selectedClient != nil { ClientCardView() }
@@ -248,7 +250,7 @@ private struct TodayQueueList: View {
         let copy = Copy(language: language)
         let approvals = shell.waitingApprovals
         let entries = SinceYouLeftPresentation.previewEntries(shell.ledger.value ?? [])
-        let running = TeamMember.all.filter { shell.workingAgents.contains($0.id) }
+        let running = shell.roster.filter { shell.workingAgents.contains($0.id) }
         let groups = TodayQueueModel.groups(waiting: approvals.count, dueToday: 0,
                                              sinceYouLeft: nil, runningNow: running.count)
         List {
@@ -655,21 +657,13 @@ struct OfflineBar: View {
 
 private struct KeyboardShortcutsSheet: View {
     let language: Language
+    /// The agents that exist: ⌘1… go to them, as in the Go menu.
+    let agents: [Agent]
     @State private var query = ""
 
     private var entries: [(String, String)] {
-        // TODO: Move the complete menu and help shortcut catalog into AuxesisKit so both stay in sync.
-        let values: [(String, String)] = [
-            (L10n.ui(.newConversation, language), "⌘N"),
-            ("Settings", "⌘,"), ("Quit Auxesis (agents keep running)", "⌘Q"),
-            ("Today", "⌘1"), ("Waiting", "⌘2"), ("Since you left", "⌘3"),
-            ("Money", "⌘4"), ("Privacy record", "⌘5"), ("Agents and rules", "⌘6"),
-            ("Clients", "⌘7"), ("Documents", "⌘8"), ("What Aux knows", "⌘9"),
-            ("Ask Aux…", "⌘K"), ("Find", "⌘F"), ("Edit proposal", "E"),
-            ("Not now", "⌘D"), ("Show or hide sidebar", "⌃⌘S"), ("Send proposal", "⌘↩"),
-            ("Move through waiting items", "↑ / ↓ · J / K"), ("Open selected row", "↩"),
-            ("Leave editing", "Esc"),
-        ]
+        let values = (MenuShortcuts.menu(agents: agents, language: language) + MenuShortcuts.inView(language: language))
+            .map { ($0.title, $0.keys) }
         return values.filter { query.isEmpty || $0.0.localizedCaseInsensitiveContains(query) || $0.1.localizedCaseInsensitiveContains(query) }
     }
 

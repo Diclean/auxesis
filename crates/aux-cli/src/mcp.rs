@@ -91,7 +91,7 @@ fn discover_with(home: &Path, config: &McpConfig, network_guard: bool) -> McpRun
         .flat_map(|server| server.env.iter().cloned())
         .collect();
     let secrets = kernel_core::env_file::read_values(home, &names);
-    let web = kernel_core::Config::load_or_create(&kernel_core::config_path(home))
+    let web = aux_engine::config::load_or_create(&kernel_core::config_path(home))
         .map(|config| config.web)
         .unwrap_or_default();
     let deny = deny_domain_gate(web);

@@ -86,12 +86,20 @@ import XCTest
         let fake = FakeDocs(rows: try rows())
         let model = DocumentsPageModel(client: fake)
         await model.reload()
+        XCTAssertEqual(fake.asked, [.all], "the first load asks for everything")
+
+        // Setting the filter starts its own reload on the main actor. Wait for
+        // that reload to reach the client instead of asking it again by hand:
+        // a second, awaited reload would race it, and both call the client off
+        // the main actor.
         model.filter = .unlinked
-        await model.reload()
+        let unlinked = await waitForRequests([.all, .unlinked], from: fake)
+        XCTAssertEqual(unlinked, [.all, .unlinked], "the filter's reload asks for the unlinked slice")
         model.filter = .client(7)
-        await model.reload()
-        XCTAssertEqual(Array(fake.asked.prefix(1)), [.all])
-        XCTAssertTrue(fake.asked.contains(.unlinked) && fake.asked.last == .client(7), "\(fake.asked)")
+        let client = await waitForRequests([.all, .unlinked, .client(7)], from: fake)
+        XCTAssertEqual(client, [.all, .unlinked, .client(7)], "the filter's reload asks for that client's slice")
+        XCTAssertTrue(client.contains(.unlinked) && client.last == .client(7), "\(client)")
+
         let empty = FakeDocs(rows: [])
         let none = DocumentsPageModel(client: empty)
         await none.reload()
@@ -203,29 +211,66 @@ import XCTest
     }
 }
 
+/// Wait for the fake to record exactly `expected` requests. The filter starts
+/// its reload in a `Task` on the main actor, and that task only runs when the
+/// test yields; `waitUntil` spins the run loop without suspending, so it would
+/// time out while the main actor is held by the test. Sleep between reads.
+@MainActor
+private func waitForRequests(_ expected: [DocumentsFilter], from fake: FakeDocs,
+                             timeout: TimeInterval = 5) async -> [DocumentsFilter] {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline, fake.asked != expected {
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    return fake.asked
+}
+
+/// Records the calls it receives. The model's async reloads run the client off
+/// the main actor, so its state is lock-protected: a bare array read from the
+/// test while a reload appends to it is a race, and on CI that race killed the
+/// whole test process (exit 1, no failing assertion printed).
 private final class FakeDocs: DocumentsClient {
     let rows: [DocumentRow]
-    var failure: Error?
-    var exportAnswer: DocumentsExportResult = .empty
-    private(set) var asked: [DocumentsFilter] = []
-    private(set) var links: [(String, Int64?)] = []
-    private(set) var exports: [DocumentsExport] = []
+    private let lock = NSLock()
+    private var _failure: Error?
+    private var _exportAnswer: DocumentsExportResult = .empty
+    private var _asked: [DocumentsFilter] = []
+    private var _links: [(String, Int64?)] = []
+    private var _exports: [DocumentsExport] = []
 
     init(rows: [DocumentRow]) { self.rows = rows }
 
+    var failure: Error? {
+        get { lock.withLock { _failure } }
+        set { lock.withLock { _failure = newValue } }
+    }
+    var exportAnswer: DocumentsExportResult {
+        get { lock.withLock { _exportAnswer } }
+        set { lock.withLock { _exportAnswer = newValue } }
+    }
+    var asked: [DocumentsFilter] { lock.withLock { _asked } }
+    var links: [(String, Int64?)] { lock.withLock { _links } }
+    var exports: [DocumentsExport] { lock.withLock { _exports } }
+
     func documents(_ filter: DocumentsFilter) async throws -> [DocumentRow] {
-        asked.append(filter)
-        if let failure { throw failure }
-        return rows
+        try lock.withLock {
+            _asked.append(filter)
+            if let _failure { throw _failure }
+            return rows
+        }
     }
     func linkDocument(hash: String, client: Int64?) async throws {
-        if let failure { throw failure }
-        links.append((hash, client))
+        try lock.withLock {
+            if let _failure { throw _failure }
+            _links.append((hash, client))
+        }
     }
     func exportDocuments(_ request: DocumentsExport) async throws -> DocumentsExportResult {
-        exports.append(request)
-        if let failure { throw failure }
-        return exportAnswer
+        try lock.withLock {
+            _exports.append(request)
+            if let _failure { throw _failure }
+            return _exportAnswer
+        }
     }
     func clients() async throws -> [ClientSummary] {
         [ClientSummary(id: 7, displayName: "Nordwind Studio SARL"), ClientSummary(id: 9, displayName: "Atelier Cobalt")]

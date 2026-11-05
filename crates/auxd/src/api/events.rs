@@ -443,6 +443,7 @@ mod tests {
     fn agent(name: &str, running: Option<&str>) -> AgentJson {
         AgentJson {
             name: name.to_string(),
+            display_name: None,
             enabled: true,
             jobs_total: 1,
             jobs_enabled: 1,

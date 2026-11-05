@@ -27,8 +27,44 @@ public struct TeamMember: Identifiable, Equatable, Hashable {
     public static let all: [TeamMember] = [.aux, .mail, .calendar, .clients, .documents]
     public static let domain: [TeamMember] = [.mail, .calendar, .clients, .documents]
 
+    /// A fresh install's chief: id `main`, shown as Aux. An older install
+    /// keeps the `aux` chief and all five agents.
+    public static let main = TeamMember(id: "main", name: "Aux", role: .chief, icon: .mark, roleKey: .roleAux, aboutKey: .aboutAux)
+
     public static func member(_ id: String) -> TeamMember? {
-        all.first { $0.id == id }
+        all.first { $0.id == id } ?? (id == main.id ? main : nil)
+    }
+
+    /// The same agent under the name the daemon shows; the id never changes.
+    public func named(_ shown: String?) -> TeamMember {
+        guard let shown, !shown.isEmpty, shown != name else { return self }
+        return TeamMember(id: id, name: shown, role: role, icon: icon, roleKey: roleKey, aboutKey: aboutKey)
+    }
+
+    /// The agents that exist, in sidebar order: the chief, the catalogue
+    /// agents, then any other agent by id. Each shows the daemon's
+    /// `display_name`, else its brand name, else its id. `all` is only the
+    /// catalogue: until the daemon has listed its agents, it stands in.
+    public static func roster(_ agents: [Agent]) -> [TeamMember] {
+        guard !agents.isEmpty else { return all }
+        let order = [main.id] + all.map(\.id)
+        func rank(_ id: String) -> Int { order.firstIndex(of: id) ?? order.count }
+        return agents
+            .sorted { rank($0.id) != rank($1.id) ? rank($0.id) < rank($1.id) : $0.id < $1.id }
+            .map { (member($0.id) ?? .custom($0.id)).named($0.displayName) }
+    }
+
+    /// The chief's "Works with" line: the other agents that exist, by the
+    /// name the sidebar shows, or a neutral line when Aux works alone. Nil
+    /// until the daemon has listed its agents (as the Go menu's loading
+    /// state): the catalogue never stands in for agents that may not exist.
+    public static func worksWithLine(agents: [Agent], _ language: Language) -> String? {
+        guard !GoMenu.loading(agents: agents) else { return nil }
+        let names = roster(agents).filter { $0.role != .chief }.map(\.name)
+        guard let last = names.last else { return L10n.ui(.worksWithNone, language) }
+        let list = names.count == 1 ? last
+            : names.dropLast().joined(separator: ", ") + " " + L10n.ui(.listAnd, language) + " " + last
+        return L10n.uf(.worksWithTeam, language, list)
     }
 
     /// Display name for any agent id (a non-team agent keeps its own name).

@@ -57,7 +57,7 @@ pub use brain::{
     build_chain, build_chain_noop, build_entry, build_resolved, find_entry, resolve_brain,
     BrainError, ResolvedBrain,
 };
-pub use catalog::{gate_skill_tools, Catalog, ChatOnly, ModelRow};
+pub use catalog::{gate_skill_tools, Billing, Catalog, ChatOnly, ModelRow};
 pub use config::{
     chat_completions_url, load_providers, parse_providers, provider_name_is_key_shaped,
     shown_base_url, shown_id_plain, ConfigError, ProviderConfig, ProviderKind,

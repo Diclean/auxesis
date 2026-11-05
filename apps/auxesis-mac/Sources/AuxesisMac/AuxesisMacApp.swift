@@ -268,20 +268,20 @@ struct TeamCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button(L10n.ui(.newConversation, shell.language)) { shell.newConversation() }
-                .keyboardShortcut("n", modifiers: .command)
+                .menuShortcut(.newConversation)
                 .accessibilityLabel(L10n.ui(.newConversation, shell.language))
                 .accessibilityIdentifier("menu-new-conversation")
         }
         CommandGroup(replacing: .appSettings) {
             Button(L10n.ui(.settings, shell.language) + "…") { shell.go(.agentsAndRules) }
-                .keyboardShortcut(",", modifiers: .command)
+                .menuShortcut(.settings)
                 .accessibilityLabel(L10n.ui(.settings, shell.language) + "…").accessibilityIdentifier("menu-settings")
         }
         CommandGroup(replacing: .appTermination) {
             Button(shell.language == .fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)") {
                 NSApp.terminate(nil)
             }
-            .keyboardShortcut("q", modifiers: .command)
+            .menuShortcut(.quit)
             .accessibilityLabel(shell.language == .fr ? "Quitter Auxesis (les agents continuent)" : "Quit Auxesis (agents keep running)").accessibilityIdentifier("menu-quit")
         }
         CommandMenu(L10n.ui(.go, shell.language)) {
@@ -306,18 +306,18 @@ struct TeamCommands: Commands {
             Button(shell.sidebarVisible ? (shell.language == .fr ? "Masquer la barre latérale" : "Hide Sidebar") : (shell.language == .fr ? "Afficher la barre latérale" : "Show Sidebar")) {
                 shell.sidebarVisible.toggle()
             }
-            .keyboardShortcut("s", modifiers: [.control, .command])
+            .menuShortcut(.toggleSidebar)
             .accessibilityLabel(shell.sidebarVisible ? (shell.language == .fr ? "Masquer la barre latérale" : "Hide Sidebar") : (shell.language == .fr ? "Afficher la barre latérale" : "Show Sidebar")).accessibilityIdentifier("menu-toggle-sidebar")
         }
         CommandMenu(L10n.ui(.agents, shell.language)) {
             Button(shell.language == .fr ? "Demander à Aux…" : "Ask Aux…") { shell.askAux() }
-                .keyboardShortcut("k", modifiers: .command)
+                .menuShortcut(.askAux)
                 .accessibilityLabel(shell.language == .fr ? "Demander à Aux…" : "Ask Aux…").accessibilityIdentifier("menu-ask-aux")
             let selected = shell.selectedWaitingApproval
             Button(shell.language == .fr ? "Envoyer la proposition" : "Send proposal") {
                 if let selected { shell.sendProposal(selected) }
             }
-            .keyboardShortcut(.return, modifiers: .command)
+            .menuShortcut(.sendProposal)
             .disabled(selected.map { !shell.canSendProposal($0) } ?? true)
             .accessibilityLabel(shell.language == .fr ? "Envoyer la proposition" : "Send proposal").accessibilityIdentifier("menu-send-proposal")
             let availability = ProposalMenuAvailability.evaluate(
@@ -334,31 +334,31 @@ struct TeamCommands: Commands {
             Button(Copy(language: shell.language)(.apNotNow)) {
                 if availability.notNow, let selected { shell.notNow(selected) }
             }
-            .keyboardShortcut("d", modifiers: .command)
+            .menuShortcut(.notNow)
             .disabled(!availability.notNow)
             .accessibilityLabel(Copy(language: shell.language)(.apNotNow)).accessibilityIdentifier("menu-not-now")
             Divider()
             Button(L10n.ui(.panelToggle, shell.language)) { shell.toggleRightPanel() }
-                .keyboardShortcut("i", modifiers: [.command, .option])
+                .menuShortcut(.togglePanel)
                 .accessibilityLabel(L10n.ui(.panelToggle, shell.language)).accessibilityIdentifier("menu-profile")
             Button(L10n.ui(.back, shell.language)) { shell.goBack() }
-                .keyboardShortcut("[", modifiers: .command)
+                .menuShortcut(.back)
                 .disabled(!shell.conversationPresented && shell.returnDelegation == nil)
                 .accessibilityLabel(L10n.ui(.back, shell.language)).accessibilityIdentifier("menu-back")
             Divider()
             if shell.stopped {
                 Button(L10n.ui(.resume, shell.language)) { shell.resumeAll() }
-                    .keyboardShortcut(".", modifiers: .command)
+                    .menuShortcut(.stopAll)
                     .accessibilityLabel(L10n.ui(.resume, shell.language)).accessibilityIdentifier("menu-resume")
             } else {
                 Button(L10n.ui(.stopAll, shell.language)) { shell.stopAll() }
-                    .keyboardShortcut(".", modifiers: .command)
+                    .menuShortcut(.stopAll)
                     .accessibilityLabel(L10n.ui(.stopAll, shell.language)).accessibilityIdentifier("menu-stop-all")
             }
         }
         CommandGroup(after: .textEditing) {
             Button(shell.language == .fr ? "Rechercher" : "Find") { shell.requestSearchFocus() }
-                .keyboardShortcut("f", modifiers: .command)
+                .menuShortcut(.find)
                 .accessibilityLabel(shell.language == .fr ? "Rechercher" : "Find").accessibilityIdentifier("menu-find")
         }
         CommandGroup(after: .help) {
@@ -382,11 +382,36 @@ struct TeamCommands: Commands {
         .disabled(!windows.hasMainWindow || (isAgent && loading))
         .accessibilityLabel(title)
         .accessibilityIdentifier("menu-go-\(item.id)")
-        if let shortcut = item.shortcut, let key = shortcut.last {
-            button.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        if let binding = item.binding {
+            button.menuShortcut(binding)
         } else {
             button
         }
+    }
+}
+
+/// The menu bar uses `MenuShortcutTable` as its one list of chords: the two
+/// per-action calls below are the only bridge from that table to SwiftUI.
+private extension MenuShortcutModifiers {
+    var eventModifiers: EventModifiers {
+        var modifiers: EventModifiers = []
+        if contains(.control) { modifiers.formUnion(.control) }
+        if contains(.option) { modifiers.formUnion(.option) }
+        if contains(.shift) { modifiers.formUnion(.shift) }
+        if contains(.command) { modifiers.formUnion(.command) }
+        return modifiers
+    }
+}
+
+private extension View {
+    /// Bind the chord the one table gives this action.
+    func menuShortcut(_ action: MenuAction) -> some View {
+        menuShortcut(MenuShortcutTable.binding(for: action))
+    }
+
+    /// Bind one table row (the Go menu picks its agent digits at runtime).
+    func menuShortcut(_ binding: MenuShortcutBinding) -> some View {
+        keyboardShortcut(KeyEquivalent(binding.key), modifiers: binding.modifiers.eventModifiers)
     }
 }
 

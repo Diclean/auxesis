@@ -75,6 +75,37 @@ import XCTest
         XCTAssertTrue(shortcuts.allSatisfy { if case .agent = $0.route { return true } else { return false } }, "a Records page has no shortcut")
     }
 
+    /// The table is the menu bar's copy: these are the chords the menu bound
+    /// by hand before it moved here, so a rewrite cannot change the app.
+    func testTheShortcutTableKeepsTheMenuBarChords() {
+        let fixed = MenuShortcutTable.menu.filter { $0.action.agentSlot == nil }.map(\.display)
+        XCTAssertEqual(fixed, ["⌘N", "⌘,", "⌘Q", "⌃⌘S", "⌘K", "⌘↩", "⌘D", "⌥⌘I", "⌘[", "⌘.", "⌘F"])
+        XCTAssertEqual(MenuShortcutTable.agent(1)?.display, "⌘1")
+        XCTAssertEqual(MenuShortcutTable.agent(9)?.display, "⌘9")
+        XCTAssertNil(MenuShortcutTable.agent(10), "the Go menu stops at nine agents")
+        XCTAssertEqual(GoMenu.agentItems(agents: allFive).map { $0.binding?.action }, [.goAgent1, .goAgent2, .goAgent3, .goAgent4, .goAgent5])
+    }
+
+    func testTheHelpSheetListsEveryMenuBarRowFromTheSameTable() {
+        let fixed = MenuShortcutTable.menu.filter { $0.action.agentSlot == nil }.map(\.display)
+        for agents in [[], [agent("main")], allFive] {
+            let rows = MenuShortcuts.menu(agents: agents, language: .en).map(\.keys)
+            let digits = GoMenu.agentItems(agents: agents).compactMap(\.shortcut)
+            XCTAssertEqual(rows, Array(fixed.prefix(3)) + digits + Array(fixed.dropFirst(3)))
+        }
+    }
+
+    func testNoTwoMenuBindingsShareAKeyAndModifiers() {
+        var seen: [String: MenuAction] = [:]
+        for binding in MenuShortcutTable.menu {
+            let chord = "\(binding.modifiers.symbols)\(binding.key)"
+            XCTAssertNil(seen[chord], "\(binding.action.rawValue) reuses \(chord)")
+            seen[chord] = binding.action
+        }
+        let digits = MenuShortcutTable.menu.filter { $0.action.agentSlot != nil }
+        XCTAssertEqual(digits.map(\.display), (1...9).map { "⌘\($0)" }, "⌘1…⌘9 belong to the agents")
+    }
+
     func testAddAnAgentWhileItsSheetIsOpenKeepsTheOpenSheet() {
         let shell = makeShell()
         XCTAssertTrue(shell.canAddAgents)
@@ -114,7 +145,7 @@ import XCTest
         let shell = makeShell()
         shell.go(.today)
 
-        XCTAssertTrue(GoMenu.select(GoMenuItem(route: .agent(TeamMember.mail.id), shortcut: "⌘2"), hasMainWindow: true, in: shell))
+        XCTAssertTrue(GoMenu.select(GoMenuItem(route: .agent(TeamMember.mail.id), binding: MenuShortcutTable.binding(for: .goAgent2)), hasMainWindow: true, in: shell))
         XCTAssertEqual(shell.route, .agent(TeamMember.mail.id))
         XCTAssertEqual(shell.selectedAgent, TeamMember.mail.id)
 
@@ -126,7 +157,7 @@ import XCTest
 
     func testGoMenuDoesNothingWithoutAMainWindow() {
         let shell = makeShell()
-        XCTAssertFalse(GoMenu.select(GoMenuItem(route: .agent(TeamMember.aux.id), shortcut: "⌘1"), hasMainWindow: false, in: shell))
+        XCTAssertFalse(GoMenu.select(GoMenuItem(route: .agent(TeamMember.aux.id), binding: MenuShortcutTable.binding(for: .goAgent1)), hasMainWindow: false, in: shell))
         XCTAssertEqual(shell.route, .today)
     }
 

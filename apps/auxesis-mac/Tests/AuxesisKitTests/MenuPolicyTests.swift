@@ -135,8 +135,9 @@ import XCTest
     /// none may shadow a menu-bar chord unless the table says it is deliberate.
     func testNoViewChordShadowsAMenuChordUnlessItIsTheSameAction() {
         // Deliberate overlaps, each with its reason:
-        // - sendProposal is the same action: the proposal card's button and the
-        //   menu item both call `shell.sendProposal`.
+        // - sendProposal is the same action: the proposal card's button calls
+        //   `shell.sendProposal`, and the menu item reaches it through
+        //   `ProposalMenuGate`.
         // - sendMessage: while the composer has focus it owns ⌘↩; the menu's
         //   Send proposal needs a selected waiting card and is disabled otherwise,
         //   so the two never fire together.

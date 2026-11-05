@@ -638,12 +638,14 @@ public final class ShellModel: ObservableObject {
         ProposalViewModel(approval: approval, language: language)
     }
 
-    /// The approval selected in Waiting for you, if it is still actionable.
-    /// A sheet (Settings, Add an Agent, Keyboard Shortcuts) covers the window.
+    /// A sheet the model opens (Settings, Add an Agent, Keyboard Shortcuts,
+    /// Setup) covers the window. A view's own sheet is not tracked here: the
+    /// menu's `ProposalMenuGate` asks AppKit about every sheet, alert or modal.
     public var sheetPresented: Bool {
-        settingsTab != nil || addingAgent != nil || shortcutHelpOpen
+        settingsTab != nil || addingAgent != nil || shortcutHelpOpen || setupOpen
     }
 
+    /// The approval selected in Waiting for you, if it is still actionable.
     public var selectedWaitingApproval: Approval? {
         // ⌘Return sends only what is on screen: the Waiting for you page shows
         // each pending body whole; from any other page the focused item is

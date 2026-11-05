@@ -760,10 +760,10 @@ fn validate_selection(
 }
 
 /// A tools list names only tools the chief may use (its
-/// grants, its own tools list, its config deny rules). The run-time ceiling
-/// enforces the same every turn; this refuses early with a clear error. The
-/// chief is the one this home runs: on an older install an added agent stays
-/// under `aux` as well as under `main` ([`crate::agents::ceilings`]).
+/// grants, its own tools list, the config rules that deny it). The run-time
+/// ceiling enforces the same every turn; this refuses early with a clear
+/// error. The chief is the one this home runs: on an older install an added
+/// agent stays under `aux` as well as under `main` ([`crate::agents::ceilings`]).
 #[allow(clippy::result_large_err)]
 fn validate_tool_ceiling(home: &Path, id: &str, tools: &[String]) -> Result<(), Response> {
     let caps = crate::agents::ceilings(home, id);
@@ -782,12 +782,13 @@ fn validate_tool_ceiling(home: &Path, id: &str, tools: &[String]) -> Result<(), 
         agent::config(home, cap).map_err(|_| internal_error())?;
         // Both of the chief's lists, as the run-time ceiling reads them.
         let chief_lists = super::turn::tool_lists(home, cap);
-        let chief_rules: Vec<_> = rules.iter().filter(|r| r.agent == cap).cloned().collect();
         let refused = tools.iter().any(|tool| {
             // An agent file names `mail.send`; rules and grants see `mail_send`.
             let wire = aux_runtime::skills::tool_map::wire_name(tool);
             let tool = wire.as_deref().unwrap_or(tool);
-            let denied = kernel_broker::matching_rule(&chief_rules, cap, tool, false)
+            // Every rule, matched as the broker matches it: an `agent = "*"`
+            // rule is the chief's too, and the last match wins.
+            let denied = kernel_broker::matching_rule(&rules, cap, tool, false)
                 .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
             denied
                 || chief.check_tool(cap, tool).is_err()
@@ -1262,6 +1263,53 @@ kind = "openai-compat"
         assert_eq!(status, StatusCode::CREATED);
         let wide = vec!["mail_send".to_string(), "shell".to_string()];
         assert!(validate_tool_ceiling(home, "main", &wide).is_ok());
+    }
+
+    /// An `agent = "*"` rule denies the chief as an exact one does, in the
+    /// broker's order. `mail_send` denied to every agent, then allowed to
+    /// Mail: the chief is denied it, so the Mail template and a list naming
+    /// it are refused. The reverse order is refused too. An allow for the
+    /// chief after the wildcard lets both through again.
+    #[test]
+    fn a_wildcard_deny_of_the_chief_refuses_a_tools_list() {
+        let rule = |agent: &str, action: &str| {
+            format!(
+                "\n[[rules]]\nagent = \"{agent}\"\ntool = \"mail_send\"\naction = \"{action}\"\n"
+            )
+        };
+        let (every, mail, chief) = (
+            rule("*", "deny"),
+            rule("mail", "allow"),
+            rule("main", "allow"),
+        );
+        for (rules, refused) in [
+            (format!("{every}{mail}"), true),
+            (format!("{mail}{every}"), true),
+            (format!("{every}{chief}{mail}"), false),
+        ] {
+            let dir = home_with_config(&format!("{CONFIG}{rules}"));
+            let home = dir.path();
+            let sends = vec!["mail.send".to_string()];
+            let listed = validate_tool_ceiling(home, "scout", &sends);
+            assert_eq!(listed.is_err(), refused, "{rules}");
+            let db = home.join("store.db");
+            aux_store::Store::open(&db).unwrap();
+            let template = CreateAgentRequest {
+                template: Some("mail".to_string()),
+                ..CreateAgentRequest::default()
+            };
+            let status = match create_sync(home, &db, template) {
+                Ok((status, _)) => status,
+                Err(response) => response.status(),
+            };
+            let expected = if refused {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::CREATED
+            };
+            assert_eq!(status, expected, "{rules}");
+            assert_eq!(agent::exists(home, "mail"), !refused, "{rules}");
+        }
     }
 
     #[test]

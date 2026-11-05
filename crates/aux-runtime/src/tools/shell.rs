@@ -35,7 +35,7 @@ use kernel_broker::sanitize_text;
 use kernel_broker::ToolClass;
 use kernel_broker::{CancelToken, NativeTool, Risk, Tool, ToolCtx, ToolError, ToolOutput};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::time::Duration;
@@ -639,6 +639,26 @@ fn visibility_of(n: i32, size: i32, errno: Option<i32>, zombie: bool, ppid: u32)
     }
 }
 
+/// True when the kernel says `pid` is a zombie right now (never a seam).
+#[cfg(target_os = "macos")]
+fn is_zombie(pid: i32) -> bool {
+    matches!(pid_visibility(pid), Visibility::Zombie { .. })
+}
+
+#[cfg(target_os = "linux")]
+fn is_zombie(pid: i32) -> bool {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    let state = stat
+        .rfind(')')
+        .and_then(|close| stat[close + 1..].split_whitespace().next());
+    state == Some("Z")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn is_zombie(_pid: i32) -> bool {
+    false
+}
+
 /// Linux lists a task under `/proc` only once it is fully created.
 #[cfg(not(target_os = "macos"))]
 fn pid_visibility(_pid: i32) -> Visibility {
@@ -854,12 +874,14 @@ impl TrackedPid {
     /// real reader). Called immediately before every individual signal, so a
     /// pid the OS recycled since the scan is dropped instead of killed.
     fn still_same(&self, lookup: StartLookup<'_>) -> bool {
+        lookup(self.pid).is_some_and(|answer| self.is(answer))
+    }
+
+    /// One `(ppid, uid, start)` answer names this process: ours, same start.
+    fn is(&self, (_, uid, start): (i32, u32, u64)) -> bool {
         // SAFETY: `geteuid` is a side-effect-free read of this process's
         // effective uid; it cannot fail and touches no memory.
-        matches!(
-            lookup(self.pid),
-            Some((_, uid, start)) if uid == unsafe { libc::geteuid() } && start == self.start
-        )
+        uid == unsafe { libc::geteuid() } && start == self.start
     }
 }
 
@@ -1093,6 +1115,10 @@ fn kill_process_tree_with(
 const MAX_SWEEP_PASSES: usize = 50;
 const MAX_SWEEP_TIME: Duration = Duration::from_secs(2);
 
+/// A session id no process can have: pids stay below 2^22 (Linux) or 99999
+/// (macOS), so a sweep given it scans the marker and the seen set only.
+const NO_SESSION: i32 = i32::MAX;
+
 /// Whether a leftover sweep proved nothing is left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Sweep {
@@ -1107,12 +1133,15 @@ enum Sweep {
 }
 
 /// Why a sweep could not describe processes: this OS cannot list them, this
-/// process could not describe itself, or `proc_pidinfo` failed with `ENOMEM`.
+/// process could not describe itself, `proc_pidinfo` failed with `ENOMEM`, or
+/// a process the call saw stayed unreadable ([`Identity::Unknown`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Undescribed {
     NoListing,
     SelfCheck,
     OutOfMemory,
+    Unreadable,
+    NoSession,
 }
 
 impl Undescribed {
@@ -1121,6 +1150,25 @@ impl Undescribed {
             Self::NoListing => "[cleanup unverified: this OS cannot list processes; only the command's process group was killed]",
             Self::SelfCheck => "[cleanup incomplete: this process could not describe itself, so no leftover could be checked]",
             Self::OutOfMemory => "[cleanup incomplete: a process could not be described (ENOMEM: out of kernel memory)]",
+            Self::Unreadable => "[cleanup incomplete: a process the command started could not be read, so it may still run]",
+            Self::NoSession => "[cleanup unverified: after the reap the command's session can no longer be checked]",
+        }
+    }
+}
+
+impl Sweep {
+    /// The note for a sweep that did not prove the tree empty, on either path.
+    fn note(self, passes: usize, time: Duration) -> Option<String> {
+        let ms = time.as_millis();
+        match self {
+            Self::Clean => None,
+            Self::Incomplete(survivors) => Some(format!(
+                "[cleanup incomplete: sweep hit its {passes}-pass/{ms} ms cap with {survivors} process(es) still signalled]"
+            )),
+            Self::Unavailable(why) => Some(why.note().to_string()),
+            Self::SeenCap => Some(format!(
+                "[cleanup incomplete: over {MAX_SEEN_PIDS} processes seen]"
+            )),
         }
     }
 }
@@ -1140,57 +1188,70 @@ fn sweep_precheck(listing: bool, self_described: bool) -> Option<Sweep> {
 }
 
 /// Whether a seen process is still the one the call saw. `Gone`: `ESRCH`, a
-/// zombie (its children already went to launchd), or another start time or
-/// owner. `Unknown`: listed but unreadable (`EPERM`, `ENOMEM`, short read).
+/// zombie (it cannot fork, and its children were reparented when it exited),
+/// or another start time or owner. `Unknown`: listed but unreadable (`EPERM`,
+/// `ENOMEM`, a short read; on Linux an own pid whose `/proc` read failed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Identity {
     Same,
     Gone,
-    Unknown,
+    Unknown(Undescribed),
 }
 
-/// `lookup` reads `(ppid, uid, start)`; `visibility` sorts a failed read.
+/// `lookup` reads `(ppid, uid, start)`, once; `visibility` sorts a failed read.
 fn identity_of(
     tracked: &TrackedPid,
     lookup: StartLookup<'_>,
     visibility: &dyn Fn(i32) -> Visibility,
 ) -> Identity {
-    if lookup(tracked.pid).is_some() {
-        return match tracked.still_same(lookup) {
+    if let Some(answer) = lookup(tracked.pid) {
+        return match tracked.is(answer) {
             true => Identity::Same,
             false => Identity::Gone,
         };
     }
+    // A zombie cannot fork: the kernel's own answer, whatever the seam says.
+    if is_zombie(tracked.pid) {
+        return Identity::Gone;
+    }
     match visibility(tracked.pid) {
         Visibility::Unseen | Visibility::Zombie { .. } => Identity::Gone,
+        Visibility::OutOfMemory => Identity::Unknown(Undescribed::OutOfMemory),
+        Visibility::Unknown => Identity::Unknown(Undescribed::Unreadable),
         // Linux describes every pid it lists, so only `ESRCH` says gone.
         // SAFETY: signal 0 sends nothing; it only probes the pid.
         _ if !cfg!(target_os = "macos") && unsafe { libc::kill(tracked.pid, 0) } != 0 => {
             Identity::Gone
         }
-        _ => Identity::Unknown,
+        Visibility::Described => Identity::Unknown(Undescribed::Unreadable),
     }
 }
 
-/// Drops [`Identity::Gone`] entries from a full `seen` (below the cap they
-/// cost nothing). `true` when an [`Identity::Unknown`] one was kept: the
-/// sweep then never reports clean.
+/// Sorts every seen process but `skip` (the root) on each pass, whatever the
+/// set's size: drops [`Identity::Gone`] ones, keeps the rest, and returns why
+/// an [`Identity::Unknown`] one was kept (`ENOMEM` first), never clean.
 fn forget_gone(
     seen: &mut HashSet<TrackedPid>,
+    skip: i32,
     lookup: StartLookup<'_>,
     visibility: &dyn Fn(i32) -> Visibility,
-) -> bool {
-    let mut unknown = false;
-    if seen.len() >= MAX_SEEN_PIDS {
-        seen.retain(|tracked| match identity_of(tracked, lookup, visibility) {
+) -> Option<Undescribed> {
+    let mut unknown = None;
+    seen.retain(|tracked| {
+        if tracked.pid == skip {
+            return true;
+        }
+        match identity_of(tracked, lookup, visibility) {
             Identity::Gone => false,
             Identity::Same => true,
-            Identity::Unknown => {
-                unknown = true;
+            Identity::Unknown(why) => {
+                if unknown != Some(Undescribed::OutOfMemory) {
+                    unknown = Some(why);
+                }
                 true
             }
-        });
-    }
+        }
+    });
     unknown
 }
 
@@ -1234,8 +1295,9 @@ impl ExitSteps {
 ///
 /// Returns [`Sweep::Incomplete`] on a cap, or [`Sweep::Unavailable`] when the
 /// kernel cannot describe a process: report it and keep the reaper armed.
-/// Each pass first prunes a full `seen` ([`forget_gone`]): [`Sweep::SeenCap`]
-/// only if it stays full or keeps an unreadable pid.
+/// Each pass first sorts `seen` ([`forget_gone`]): a pid that stays
+/// unreadable keeps the passes going and ends them as
+/// [`Undescribed::Unreadable`]; [`Sweep::SeenCap`] only if the set stays full.
 fn sweep_leftovers(root: i32, marker: &Marker, seen: &mut HashSet<TrackedPid>) -> Sweep {
     sweep_leftovers_with(
         root,
@@ -1272,11 +1334,18 @@ fn sweep_leftovers_with(
         let mut pending = false;
         // Orphan zombies already charged a pass; a dead pid is dropped.
         let mut counted_zombies = HashSet::new();
-        // Set when the set is still full after a prune (or kept a process it
-        // cannot read), or could not take a candidate: this sweep fails closed.
+        // Set when the set is still full after a prune, or could not take a
+        // candidate: this sweep fails closed.
         let mut capped = false;
+        // This pass kept a seen process it cannot read.
+        let mut unreadable = false;
         for pass in 0..max_passes {
-            capped |= forget_gone(seen, &pid_ppid_uid_start, &|pid| visibility(pass, pid));
+            let pass_visibility = |pid| visibility(pass, pid);
+            let kept = forget_gone(seen, root, &pid_ppid_uid_start, &pass_visibility);
+            if kept == Some(Undescribed::OutOfMemory) {
+                return Sweep::Unavailable(Undescribed::OutOfMemory);
+            }
+            unreadable = kept.is_some();
             capped |= seen.len() >= MAX_SEEN_PIDS;
             let mut hard_error = false;
             counted_zombies.retain(|&pid| match visibility(pass, pid) {
@@ -1371,7 +1440,7 @@ fn sweep_leftovers_with(
                         }
                     }
                     counted_zombies = orphan_zombies;
-                    if !unsettled {
+                    if !unsettled && !unreadable {
                         return if capped { Sweep::SeenCap } else { Sweep::Clean };
                     }
                     pending = true;
@@ -1390,7 +1459,11 @@ fn sweep_leftovers_with(
                 std::thread::yield_now();
             }
         }
-        Sweep::Incomplete(survivors)
+        // An unreadable seen pid is the most specific reason, so it wins.
+        match unreadable {
+            true => Sweep::Unavailable(Undescribed::Unreadable),
+            false => Sweep::Incomplete(survivors),
+        }
     }
     #[cfg(not(unix))]
     {
@@ -1425,7 +1498,8 @@ enum Stop {
 /// unreaped while its group is signalled: reaping it would free the pgid for
 /// reuse. Normal completion runs [`sweep_leftovers`] and disarms it only when
 /// that sweep proves clean: an incomplete sweep leaves the guard armed, and
-/// its `Drop` retries the session/marker sweep before the call returns.
+/// [`Self::retire`] retries the session/marker sweep before the call returns
+/// (a dropped call: `Drop` hands the retry to the one late-retry thread).
 struct TreeReaper {
     child: Option<tokio::process::Child>,
     root: Option<i32>,
@@ -1433,6 +1507,72 @@ struct TreeReaper {
     armed: bool,
     /// Processes the call saw: every sweep, `Drop` included, signals them.
     seen: HashSet<TrackedPid>,
+    /// The marker file, open until the last retry ends: while it is open its
+    /// inode cannot be reused, so `marker` names no other call's file.
+    marker_file: Option<std::fs::File>,
+}
+
+/// Retries of reapers dropped armed, and whether the one thread that runs
+/// them is alive: at most one late retry runs at a time in this process.
+static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
+    std::sync::Mutex::new((false, VecDeque::new()));
+
+fn late_retries() -> std::sync::MutexGuard<'static, (bool, VecDeque<TreeReaper>)> {
+    LATE_RETRIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Runs one late retry; a panic or a sweep not proven clean is logged.
+fn late_retry_logged(reaper: &mut TreeReaper) {
+    let retry = std::panic::AssertUnwindSafe(|| reaper.retry());
+    match std::panic::catch_unwind(retry) {
+        Err(_) => tracing::error!("shell: a late cleanup retry panicked"),
+        Ok(sweep) => {
+            if let Some(note) = sweep.and_then(|s| s.note(MAX_SWEEP_PASSES, MAX_SWEEP_TIME)) {
+                tracing::warn!(%note, "shell: a late cleanup retry");
+            }
+        }
+    }
+}
+
+/// Queues `reaper`'s retry (first in, first out) for the late-retry thread,
+/// starting it if needed. No thread: only this retry runs here, and the
+/// failure is logged with the retries still queued for the next thread.
+fn late_retry(reaper: TreeReaper) {
+    let mut queue = late_retries();
+    queue.1.push_back(reaper);
+    if std::mem::replace(&mut queue.0, true) {
+        return;
+    }
+    drop(queue);
+    let worker = || loop {
+        let next = {
+            let mut queue = late_retries();
+            let next = queue.1.pop_front();
+            queue.0 = next.is_some();
+            next
+        };
+        let Some(mut next) = next else {
+            return;
+        };
+        late_retry_logged(&mut next);
+    };
+    let spawned = std::thread::Builder::new()
+        .name("shell-late-retry".into())
+        .spawn(worker);
+    if let Err(err) = spawned {
+        let (mine, pending) = {
+            let mut queue = late_retries();
+            queue.0 = false;
+            // The queue was idle, so this reaper is first.
+            (queue.1.pop_front(), queue.1.len())
+        };
+        tracing::error!(%err, pending, "shell: no late-retry thread; this retry runs inline");
+        if let Some(mut mine) = mine {
+            late_retry_logged(&mut mine);
+        }
+    }
 }
 
 impl TreeReaper {
@@ -1444,7 +1584,14 @@ impl TreeReaper {
             marker,
             armed: true,
             seen: root.and_then(TrackedPid::of).into_iter().collect(),
+            marker_file: None,
         }
+    }
+
+    /// Keep the marker file open for as long as this reaper or its retry runs.
+    fn holding(mut self, marker_file: std::fs::File) -> Self {
+        self.marker_file = Some(marker_file);
+        self
     }
 
     /// Resolve once the direct child has exited, *without reaping it*: the
@@ -1556,46 +1703,54 @@ impl TreeReaper {
     }
 
     /// The armed reaper's retry, then disarm. Still unreaped: the pgid is
-    /// pinned, so the full tree kill runs. Already reaped but not proven
-    /// clean: the session/marker scans still work, so the leftover sweep runs.
-    /// `self.child` drops after it, so the group kill runs unreaped.
-    fn retry(&mut self) {
+    /// pinned, so the full tree kill runs (no sweep result). Reaped: the root's
+    /// pid no longer pins its session id, so only the marker (held) and the
+    /// seen set are swept, and without the session net it is never clean.
+    fn retry(&mut self) -> Option<Sweep> {
+        self.armed = false;
         if self.child.as_ref().is_some_and(|c| c.id().is_some()) {
             self.sweep_now();
-        } else if let Some(root) = self.root {
-            let _ = sweep_leftovers(root, &self.marker, &mut self.seen);
+            return None;
         }
-        self.armed = false;
+        self.root?;
+        Some(
+            match sweep_leftovers(NO_SESSION, &self.marker, &mut self.seen) {
+                Sweep::Clean => Sweep::Unavailable(Undescribed::NoSession),
+                sweep => sweep,
+            },
+        )
     }
 
     /// End of a call: an armed reaper retries on a blocking thread, and the
-    /// call returns only after it.
-    async fn retire(mut self) {
-        if self.armed {
-            let _ = tokio::task::spawn_blocking(move || self.retry()).await;
+    /// call returns only after it, with the retry's sweep. A panic is the error.
+    async fn retire(mut self) -> Result<Option<Sweep>, tokio::task::JoinError> {
+        match self.armed {
+            true => tokio::task::spawn_blocking(move || self.retry()).await,
+            false => Ok(None),
         }
     }
 }
 
 impl Drop for TreeReaper {
-    /// A call dropped mid-flight (cancelled turn) still retries, on its own
-    /// thread so no async worker blocks for up to [`MAX_SWEEP_TIME`].
+    /// A call dropped mid-flight (cancelled turn) still retries, on the
+    /// late-retry thread; the retry owns the child and the marker file.
     fn drop(&mut self) {
         if !self.armed {
             return;
         }
+        // Disarmed: dropping it never queues another retry.
         let mut rest = TreeReaper {
             child: self.child.take(),
             root: self.root,
             marker: self.marker,
             armed: false,
             seen: std::mem::take(&mut self.seen),
+            marker_file: self.marker_file.take(),
         };
         if tokio::runtime::Handle::try_current().is_err() {
-            rest.retry();
+            late_retry_logged(&mut rest);
         } else {
-            // A failed spawn drops `rest` disarmed: no recursion, no retry.
-            let _ = std::thread::Builder::new().spawn(move || rest.retry());
+            late_retry(rest);
         }
     }
 }
@@ -1778,7 +1933,7 @@ impl Tool for ShellTool {
         // the same whole-tree sweep as the timeout path. A normal exit
         // disarms it. Holding the `Child` keeps the root unreaped until the
         // group kill has run.
-        let mut reaper = TreeReaper::new(child, marker);
+        let mut reaper = TreeReaper::new(child, marker).holding(marker_file);
         let cancel = ctx.cancel.clone();
 
         // Wait for the *direct child*: output goes to files, so a background
@@ -1845,8 +2000,9 @@ impl Tool for ShellTool {
             Stop::Exited(result) => {
                 result?;
                 // One scan as the root exits: what it still sees stays a
-                // sweep candidate after it leaves every net.
-                // Seen children now: the group kill makes a seen member a zombie.
+                // sweep candidate after it leaves every net. The seen family
+                // is read now: a member the group kill takes hands its
+                // children to launchd, out of every `ppid` walk.
                 if let Some(root) = child_pid {
                     let tracked = tracked_pids(root as i32, &reaper.marker, launched_at, true);
                     let _ = remember(&mut reaper.seen, tracked);
@@ -1893,21 +2049,9 @@ impl Tool for ShellTool {
                     );
                     push_section(&mut content, &note);
                 }
-                if let Sweep::Incomplete(survivors) = sweep {
-                    let note = format!(
-                        "[cleanup incomplete: sweep hit its {}-pass/{} ms cap with {survivors} process(es) still signalled]",
-                        self.sweep_passes,
-                        self.sweep_time.as_millis()
-                    );
-                    push_section(&mut content, &note);
-                }
-                if let Sweep::Unavailable(why) = sweep {
-                    // Not described, so not proven empty: a note, and the
-                    // reaper stays armed like a capped sweep.
-                    push_section(&mut content, why.note());
-                }
-                if matches!(sweep, Sweep::SeenCap) {
-                    let note = format!("[cleanup incomplete: over {MAX_SEEN_PIDS} processes seen]");
+                // Not proven empty (a cap, an undescribed or unreadable
+                // process, a full seen set): a note, and the reaper stays armed.
+                if let Some(note) = sweep.note(self.sweep_passes, self.sweep_time) {
                     push_section(&mut content, &note);
                 }
                 if !status.success() {
@@ -1944,12 +2088,9 @@ impl Tool for ShellTool {
                     ),
                 };
                 content.push_str(&note);
-                if sweep != Sweep::Clean {
-                    content.push_str(" [cleanup incomplete: retried before the call returns]");
-                    if let Sweep::Unavailable(why) = sweep {
-                        content.push(' ');
-                        content.push_str(why.note());
-                    }
+                if let Some(why) = sweep.note(self.sweep_passes, self.sweep_time) {
+                    content.push_str(" [cleanup incomplete: retried before the call returns] ");
+                    content.push_str(&why);
                 }
                 // Keep a bounded *tail* of what was written before the kill:
                 // the lines that say why it hung live at the end.
@@ -1966,7 +2107,13 @@ impl Tool for ShellTool {
             content.push_str("(no output)");
         }
 
-        reaper.retire().await;
+        let retried = match reaper.retire().await {
+            Err(err) => Some(format!("[cleanup retry failed: {err}]")),
+            Ok(sweep) => sweep.and_then(|sweep| sweep.note(MAX_SWEEP_PASSES, MAX_SWEEP_TIME)),
+        };
+        if let Some(note) = retried {
+            push_section(&mut content, &format!("[after the retry] {note}"));
+        }
         Ok(ToolOutput { content, is_error })
     }
 
@@ -3217,7 +3364,7 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
 
     /// Kills on drop what a test command named in pid files under its dir,
     /// so a failed `run()` or an early panic leaks nothing. Built before the
-    /// run, it signals only a process of this user (macOS: started after the
+    /// run, it signals only a process of this user (started after the
     /// guard, so an older process that took over the pid is left alone; one
     /// recycled within the test's own seconds is not told apart).
     #[cfg(unix)]
@@ -3227,8 +3374,18 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
     impl PidFiles {
         fn new(dir: &std::path::Path, names: &'static [&'static str]) -> Self {
             #[cfg(target_os = "macos")]
-            let after = std::time::UNIX_EPOCH.elapsed().unwrap().as_micros() as u64 - 1_000_000;
-            #[cfg(not(target_os = "macos"))]
+            let after = (std::time::UNIX_EPOCH.elapsed().unwrap().as_micros() as u64)
+                .saturating_sub(1_000_000);
+            // Linux: clock ticks since boot, from `/proc/uptime` seconds.
+            #[cfg(target_os = "linux")]
+            let after = {
+                let uptime = std::fs::read_to_string("/proc/uptime").unwrap();
+                let secs: f64 = uptime.split_whitespace().next().unwrap().parse().unwrap();
+                // SAFETY: `sysconf` only reads a system constant.
+                let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as f64;
+                ((secs - 1.0).max(0.0) * hz) as u64
+            };
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             let after = 0;
             Self(dir.to_path_buf(), names, after)
         }
@@ -3517,7 +3674,8 @@ await(q(bg.pid));
         #[cfg(target_os = "macos")]
         {
             let mut seen = fill(i32::MAX - 1);
-            assert_eq!(sweep(&mut seen, Visibility::Described), Sweep::SeenCap);
+            let unreadable = Sweep::Unavailable(Undescribed::Unreadable);
+            assert_eq!(sweep(&mut seen, Visibility::Described), unreadable);
             assert_eq!(seen.len(), MAX_SEEN_PIDS, "unknown pids were dropped");
         }
         // Pids that cannot be live: pruned on the first pass.
@@ -3540,13 +3698,14 @@ await(q(bg.pid));
         let me = unsafe { libc::geteuid() };
         let mut seen: HashSet<_> = (0..MAX_SEEN_PIDS as i32).map(|p| at(p, p as u64)).collect();
         let same = |pid: i32| Some((1, me, pid as u64));
-        assert!(!forget_gone(&mut seen, &same, &|_| Visibility::Described));
+        let described = |_: i32| Visibility::Described;
+        assert!(forget_gone(&mut seen, -1, &same, &described).is_none());
         assert_eq!(seen.len(), MAX_SEEN_PIDS);
         let zombie = |_: i32| Visibility::Zombie {
             orphan: true,
             parent: 1,
         };
-        assert!(!forget_gone(&mut seen, &|_| None, &zombie));
+        assert!(forget_gone(&mut seen, -1, &|_| None, &zombie).is_none());
         assert!(seen.is_empty());
     }
 
@@ -3563,14 +3722,11 @@ await(q(bg.pid));
             assert_eq!(sweep_precheck(listing, own), want.map(Sweep::Unavailable));
         }
         assert_eq!(sweep_precheck(true, true), None);
-        assert_eq!(
-            PROCESS_LISTING,
-            cfg!(any(target_os = "macos", target_os = "linux"))
-        );
         for (why, text) in [
             (NoListing, "cannot list"),
             (SelfCheck, "describe itself"),
             (OutOfMemory, "(ENOMEM"),
+            (Unreadable, "could not be read"),
         ] {
             assert!(why.note().contains(text), "{why:?}: {}", why.note());
         }
@@ -3612,7 +3768,83 @@ await(q(bg.pid));
             matches!(sweep, Sweep::Incomplete(_)) && reaper.armed,
             "{sweep:?}"
         );
+        // The root is killed and reaped: no 2 s `Drop` retry after the test.
+        reaper.disarm();
         assert!(during >= 2, "{during} ticks in a {window:?} sweep");
+    }
+
+    /// SHELL-SWEEP-5 (2): one seen pid, far below [`MAX_SEEN_PIDS`], that
+    /// stays unreadable is never clean; a real zombie (this test's unreaped
+    /// child) is gone by the kernel's answer though the seam says listed.
+    #[cfg(unix)]
+    #[test]
+    fn below_the_cap_an_unreadable_pid_is_never_clean_and_a_zombie_is_gone() {
+        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let zombie = HeldZombie::new();
+        for (pid, want) in [
+            (i32::MAX - 1, Sweep::Unavailable(Undescribed::Unreadable)),
+            (zombie.pid(), Sweep::Clean),
+        ] {
+            let mut seen = HashSet::from([TrackedPid { pid, start: 1 }]);
+            let sweep = sweep_leftovers_with(
+                i32::MAX,
+                &marker,
+                &mut seen,
+                &|_pass| Vec::new(),
+                &|_pass, at| match at == i32::MAX - 1 {
+                    true => Visibility::Unknown,
+                    false => Visibility::Described,
+                },
+                3,
+                MAX_SWEEP_TIME,
+            );
+            assert_eq!(
+                (sweep, seen.len()),
+                (want, usize::from(want != Sweep::Clean))
+            );
+            let note = sweep.note(3, MAX_SWEEP_TIME).unwrap_or_default();
+            assert!(!note.contains(&MAX_SEEN_PIDS.to_string()), "{note}");
+        }
+    }
+
+    /// SHELL-SWEEP-5 (1): a reaper dropped armed after its root was reaped
+    /// retries on the late thread, after the call returned. Its root's pid
+    /// now names another session (the seam: a live helper H, session leader,
+    /// with child C): the retry must not take that session's members.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_late_retry_never_kills_the_session_of_a_reused_root_pid() {
+        let leader = "exec perl -MPOSIX -e 'POSIX::setsid; exec q(sh), q(-c), q(sleep 60 & wait)'";
+        let mut guard = Spawned(vec![spawn_sh(leader)], Vec::new());
+        let reused = guard.0[0].id() as i32;
+        let member = (0..500).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            child_pids(reused).first().copied()
+        });
+        let member = TrackedPid::of(member.expect("the helper never forked")).unwrap();
+        guard.1.push(member);
+        let marker_file = tempfile::tempfile().unwrap();
+        let reaper = TreeReaper {
+            child: None,
+            root: Some(reused),
+            marker: Marker::from_file(&marker_file).unwrap(),
+            armed: true,
+            seen: HashSet::new(),
+            marker_file: Some(marker_file),
+        };
+        drop(reaper);
+        let idle = || !late_retries().0;
+        for _ in 0..1000 {
+            if idle() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(idle(), "the late retry never ended");
+        assert!(
+            member.still_same(&pid_ppid_uid_start),
+            "C {member:?} of the session that reused the root's pid was killed"
+        );
     }
 
     /// SHELL-SWEEP-4 (5): the stop path reads the same seam as the exit path:

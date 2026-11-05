@@ -28,7 +28,7 @@ const MAX_HELD_RESERVATIONS: i64 = 10_000;
 const RECONCILED_RETENTION_DAYS: u64 = 7;
 
 /// The most claims one prune deletes, so a pass stays short.
-const PRUNE_BATCH: i64 = 1000;
+pub(crate) const PRUNE_BATCH: i64 = 1000;
 
 impl Store {
     /// Close one agent's existing daily budget latch and audit it atomically.
@@ -846,11 +846,7 @@ impl Store {
     /// not consumed is never deleted. Returns how many it deleted.
     pub fn prune_reconciled_claims(&self) -> Result<usize, StoreError> {
         Ok(self.conn.execute(
-            "DELETE FROM usage_reconciled WHERE reservation_id IN (
-                 SELECT reservation_id FROM usage_reconciled
-                 WHERE consumed_at IS NOT NULL
-                   AND consumed_at <= datetime('now', ?1)
-                 LIMIT ?2)",
+            PRUNE_RECONCILED_SQL,
             rusqlite::params![retention_ago(), PRUNE_BATCH],
         )?)
     }
@@ -895,8 +891,17 @@ impl Store {
     }
 }
 
+/// The prune of consumed reconcile claims; `?1` = [`retention_ago`], `?2` =
+/// [`PRUNE_BATCH`]. Shared with the v42 index test so it plans the real query.
+pub(crate) const PRUNE_RECONCILED_SQL: &str =
+    "DELETE FROM usage_reconciled WHERE reservation_id IN (
+                 SELECT reservation_id FROM usage_reconciled
+                 WHERE consumed_at IS NOT NULL
+                   AND consumed_at <= datetime('now', ?1)
+                 LIMIT ?2)";
+
 /// The SQLite modifier for [`RECONCILED_RETENTION_DAYS`] ago.
-fn retention_ago() -> String {
+pub(crate) fn retention_ago() -> String {
     format!("-{RECONCILED_RETENTION_DAYS} days")
 }
 

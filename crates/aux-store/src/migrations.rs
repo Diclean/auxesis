@@ -2099,10 +2099,6 @@ mod tests {
         );
     }
 
-    const PRUNE_INNER_SELECT: &str = "SELECT reservation_id FROM usage_reconciled
-         WHERE consumed_at IS NOT NULL AND consumed_at <= datetime('now', '-7 days')
-         LIMIT 100";
-
     fn reconciled_index_exists(store: &Store) -> bool {
         store
             .conn
@@ -2123,9 +2119,15 @@ mod tests {
         assert!(reconciled_index_exists(&store));
         let plan: Vec<String> = store
             .conn
-            .prepare(&format!("EXPLAIN QUERY PLAN {PRUNE_INNER_SELECT}"))
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                crate::usage::PRUNE_RECONCILED_SQL
+            ))
             .unwrap()
-            .query_map([], |row| row.get::<_, String>(3))
+            .query_map(
+                rusqlite::params![crate::usage::retention_ago(), crate::usage::PRUNE_BATCH],
+                |row| row.get::<_, String>(3),
+            )
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();

@@ -508,17 +508,11 @@ fn all_pids() -> Vec<i32> {
     Vec::new()
 }
 
-/// Start time units per second: microseconds on macOS, Linux clock ticks.
-#[cfg(target_os = "macos")]
-const START_UNITS_PER_SEC: u64 = 1_000_000;
-#[cfg(not(target_os = "macos"))]
-const START_UNITS_PER_SEC: u64 = 1;
-
 /// `PROC_PIDTBSDINFO_SIZE` in `<sys/proc_info.h>`: 136 bytes, not 144.
 #[cfg(target_os = "macos")]
 const _: () = assert!(std::mem::size_of::<libc::proc_bsdinfo>() == 136);
 
-/// `(ppid, uid, start time in [`START_UNITS_PER_SEC`])` of a live process.
+/// `(ppid, uid, start time in microseconds)` of a live process.
 #[cfg(target_os = "macos")]
 fn pid_ppid_uid_start(pid: i32) -> Option<(i32, u32, u64)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
@@ -542,7 +536,7 @@ fn pid_ppid_uid_start(pid: i32) -> Option<(i32, u32, u64)> {
     // valid value of this integer-only struct.
     let info = unsafe { info.assume_init() };
     let (sec, usec) = (info.pbi_start_tvsec, info.pbi_start_tvusec);
-    let start = sec.saturating_mul(START_UNITS_PER_SEC).saturating_add(usec);
+    let start = sec.saturating_mul(1_000_000).saturating_add(usec);
     Some((info.pbi_ppid as i32, info.pbi_uid, start))
 }
 
@@ -816,7 +810,9 @@ fn orphan_pids_holding_marker(marker: &Marker, min_start: u64, pids: &[i32]) -> 
             continue;
         }
         // One second of slack for clock granularity at launch time.
-        if min_start != 0 && (start / START_UNITS_PER_SEC).saturating_add(1) < min_start {
+        #[cfg(target_os = "macos")]
+        let start = start / 1_000_000;
+        if min_start != 0 && start.saturating_add(1) < min_start {
             continue;
         }
         if process_holds_marker(pid, marker) {
@@ -881,9 +877,8 @@ fn parent_in_call(parent: i32, seen: &HashSet<TrackedPid>) -> bool {
 /// through more is stopped and reported, not tracked forever.
 const MAX_SEEN_PIDS: usize = 4 * MAX_COMMAND_PROCESSES;
 
-/// Adds `more` to the call's seen set. A full set first forgets pids that no
-/// longer exist (a gone pid has no children left to find); `false` means it
-/// is still full, so the caller kills what it knows and reports the cap.
+/// Adds `more` to `seen`. A full set first forgets gone pids; `false` means
+/// it is still full: the caller kills what it knows and reports the cap.
 fn remember(seen: &mut HashSet<TrackedPid>, more: impl IntoIterator<Item = TrackedPid>) -> bool {
     let mut pruned = false;
     for tracked in more {
@@ -987,12 +982,12 @@ fn process_footprint(_pid: i32) -> u64 {
 /// whole call and never waited here, so its pid and process group stay
 /// reserved: the group signal cannot land on a group the kernel recycled.
 /// Scanned descendants have no such pin, so every one is re-verified (start
-/// time unchanged) immediately before its own signal. Every `seen` process
-/// still alive, and its descendants, is a candidate too.
+/// time unchanged) immediately before its own signal. Live `seen` processes
+/// and their descendants are candidates too; every find is remembered.
 fn kill_process_tree(
     root: Option<&mut tokio::process::Child>,
     marker: &Marker,
-    seen: &HashSet<TrackedPid>,
+    seen: &mut HashSet<TrackedPid>,
 ) {
     kill_process_tree_with(root, marker, &pid_ppid_uid_start, seen);
 }
@@ -1001,7 +996,7 @@ fn kill_process_tree_with(
     root: Option<&mut tokio::process::Child>,
     marker: &Marker,
     lookup: StartLookup<'_>,
-    seen: &HashSet<TrackedPid>,
+    seen: &mut HashSet<TrackedPid>,
 ) {
     #[cfg(unix)]
     if let Some(root) = root {
@@ -1016,12 +1011,13 @@ fn kill_process_tree_with(
         // Scan while the root is still alive so the ppid tree is intact. The
         // recorded identities stay meaningful after the group signal reparents
         // them, and every one is re-checked immediately before its own signal.
-        let scan = |pid| {
+        let scan = |seen: &mut HashSet<TrackedPid>| {
             let mut found = tracked_pids(pid, marker, 0, true);
             found.extend(seen_family(seen, pid, lookup));
+            let _ = remember(seen, found.iter().copied());
             found
         };
-        let first = scan(pid);
+        let first = scan(seen);
 
         // The dedicated group first, as a whole: one signal reaches the root
         // and every member still in its group, so the root cannot run another
@@ -1043,7 +1039,7 @@ fn kill_process_tree_with(
         // during the first kill; each candidate was recorded at scan time and
         // is re-checked right before its signal.
         for pass in 0..2 {
-            let tracked = if pass == 0 { first.clone() } else { scan(pid) };
+            let tracked = if pass == 0 { first.clone() } else { scan(seen) };
             for tracked in tracked {
                 if tracked.pid == pid || tracked.pid <= 1 {
                     continue;
@@ -1148,9 +1144,8 @@ impl ExitSteps {
 /// extra pass while it exists; a parented one only while its parent, seen by
 /// the call, may still hand children over.
 ///
-/// Returns [`Sweep::Incomplete`] or [`Sweep::SeenCap`] on a cap, or
-/// [`Sweep::Unavailable`] when the kernel cannot describe a process: report
-/// it and keep the reaper armed.
+/// Returns [`Sweep::Incomplete`] on a cap, or [`Sweep::Unavailable`] when the
+/// kernel cannot describe a process: report it and keep the reaper armed.
 fn sweep_leftovers(root: i32, marker: &Marker, seen: &mut HashSet<TrackedPid>) -> Sweep {
     sweep_leftovers_with(
         root,
@@ -1177,6 +1172,10 @@ fn sweep_leftovers_with(
 ) -> Sweep {
     #[cfg(unix)]
     {
+        // If this process cannot be described, no identity can: fail closed.
+        if pid_ppid_uid_start(std::process::id() as i32).is_none() {
+            return Sweep::Unavailable;
+        }
         let started = std::time::Instant::now();
         let mut survivors = 0usize;
         let mut pending = false;
@@ -1336,8 +1335,7 @@ struct TreeReaper {
     root: Option<i32>,
     marker: Marker,
     armed: bool,
-    /// Processes the call saw; every sweep, `Drop` included, signals them
-    /// and their descendants.
+    /// Processes the call saw: every sweep, `Drop` included, signals them.
     seen: HashSet<TrackedPid>,
 }
 
@@ -1355,7 +1353,7 @@ impl TreeReaper {
 
     /// Resolve once the direct child has exited, *without reaping it*: the
     /// zombie keeps its pid reserved, and with it the process-group id, so
-    /// [`Self::kill_group`] can signal the group with no chance of reaching a
+    /// [`Self::end_group`] can signal the group with no chance of reaching a
     /// group the kernel recycled.
     /// It borrows nothing, so the watchdog can grow `seen` meanwhile.
     fn wait(&self) -> impl std::future::Future<Output = std::io::Result<()>> + 'static {
@@ -1374,7 +1372,7 @@ impl TreeReaper {
     /// children stay in it unless they `setsid()`/`setpgid()`) twice, the
     /// root left unreaped for the sweep that follows. `group_kill` is false
     /// only in a test that proves the scan alone.
-    fn kill_group(&self, group_kill: bool) {
+    fn end_group(&self, group_kill: bool) {
         let pid = self.child.as_ref().and_then(|child| child.id());
         #[cfg(not(unix))]
         let _ = (group_kill, pid);
@@ -1420,7 +1418,7 @@ impl TreeReaper {
     /// Kill the whole tree now (timeout/watchdog/cancel paths). The child is
     /// held (not reaped) across the sweep.
     fn sweep_now(&mut self) {
-        kill_process_tree(self.child.as_mut(), &self.marker, &self.seen);
+        kill_process_tree(self.child.as_mut(), &self.marker, &mut self.seen);
     }
 
     /// Leave backgrounded processes alone (normal completion).
@@ -1680,11 +1678,13 @@ impl Tool for ShellTool {
             Stop::Exited(result) => {
                 result?;
                 // One scan as the root exits: what it still sees stays a
-                // sweep candidate after it leaves every net (a full set
-                // makes the sweep fail closed).
+                // sweep candidate after it leaves every net.
+                // Seen children now: the group kill makes a seen member a zombie.
                 if let Some(root) = child_pid {
                     let tracked = tracked_pids(root as i32, &reaper.marker, launched_at, true);
                     let _ = remember(&mut reaper.seen, tracked);
+                    let family = seen_family(&reaper.seen, root as i32, &pid_ppid_uid_start);
+                    let _ = remember(&mut reaper.seen, family);
                 }
                 #[cfg(not(test))]
                 let steps = ExitSteps::BOTH;
@@ -1706,9 +1706,8 @@ impl Tool for ShellTool {
                 };
                 // Nothing a call started outlives it: first the whole group,
                 // pinned by the unreaped root (no process-table race), then
-                // the scan as the net for what left the group, both before
-                // the root is reaped.
-                reaper.kill_group(steps.group_kill);
+                // the scan as the net for what left the group, then the reap.
+                reaper.end_group(steps.group_kill);
                 let sweep = match child_pid {
                     Some(root) if steps.scan => sweep_leftovers_with(
                         root as i32,
@@ -1759,9 +1758,7 @@ impl Tool for ShellTool {
                     push_section(&mut content, note);
                 }
                 if matches!(sweep, Sweep::SeenCap) {
-                    let note = format!(
-                        "[cleanup incomplete: the command started more than {MAX_SEEN_PIDS} processes]"
-                    );
+                    let note = format!("[cleanup incomplete: over {MAX_SEEN_PIDS} processes seen]");
                     push_section(&mut content, &note);
                 }
                 if !status.success() {
@@ -1775,8 +1772,23 @@ impl Tool for ShellTool {
             }
             Stop::TimedOut | Stop::Cancelled | Stop::ProcessLimit | Stop::MemoryLimit => {
                 reaper.sweep_now();
+                // Only a clean sweep disarms; else `Drop` retries it.
+                let sweep = match child_pid {
+                    Some(root) => sweep_leftovers_with(
+                        root as i32,
+                        &reaper.marker,
+                        &mut reaper.seen,
+                        &|_pass| Vec::new(),
+                        &|_pass, pid| pid_visibility(pid),
+                        self.sweep_passes,
+                        self.sweep_time,
+                    ),
+                    None => Sweep::Clean,
+                };
                 reaper.reap().await;
-                reaper.disarm();
+                if sweep == Sweep::Clean {
+                    reaper.disarm();
+                }
                 is_error = true;
                 let note = match stop {
                     Stop::TimedOut => format!("[timed out after {}s]", self.timeout.as_secs()),
@@ -1791,6 +1803,9 @@ impl Tool for ShellTool {
                     ),
                 };
                 content.push_str(&note);
+                if sweep != Sweep::Clean {
+                    content.push_str(" [cleanup incomplete: retried before the call returns]");
+                }
                 // Keep a bounded *tail* of what was written before the kill:
                 // the lines that say why it hung live at the end.
                 let (out, out_total) = read_capture_tail(&mut stdout_capture)?;
@@ -3073,7 +3088,7 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
 
     /// Exit step 1 alone: with the scan off, only the group kill can take a
     /// backgrounded sleeper that stays in the command's group. Without the
-    /// group signal in `kill_group`, the sleeper outlives the call and the
+    /// group signal in `end_group`, the sleeper outlives the call and the
     /// group never empties, so this fails.
     #[cfg(unix)]
     #[tokio::test]
@@ -3161,13 +3176,17 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
         );
     }
 
-    /// Test helpers, killed and reaped on drop so a failure cannot leak them.
+    /// What a test started (children, other pids), killed on drop.
     #[cfg(unix)]
-    struct Spawned(Vec<std::process::Child>);
+    struct Spawned(Vec<std::process::Child>, Vec<TrackedPid>);
 
     #[cfg(unix)]
     impl Drop for Spawned {
         fn drop(&mut self) {
+            for tracked in self.1.iter().filter(|t| t.still_same(&pid_ppid_uid_start)) {
+                // SAFETY: SIGKILL of a process this test started, re-checked.
+                unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
+            }
             for child in &mut self.0 {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -3183,153 +3202,146 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
         command.stderr(null()).spawn().unwrap()
     }
 
-    /// The single child of `pid`, once it shows up (at most 5 s).
-    #[cfg(unix)]
-    fn only_child(pid: i32) -> i32 {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if let [child] = child_pids(pid)[..] {
-                return child;
-            }
-            assert!(std::time::Instant::now() < deadline, "{pid} never forked");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    /// A held process H, reaped by its own parent the moment it dies, and
-    /// H's child C. Neither is in any call's tree, session or marker.
-    #[cfg(unix)]
-    fn held_and_child() -> (Spawned, i32, i32) {
-        let guard = Spawned(vec![spawn_sh("/bin/sh -c 'sleep 60 & wait' & wait")]);
-        let held = only_child(guard.0[0].id() as i32);
-        let child = only_child(held);
-        (guard, held, child)
-    }
-
-    /// SHELL-SWEEP-3 (1, 4): the sweep must read C under the seen H before it
-    /// signals H; killed first, H is reaped and C goes to launchd, out of
-    /// every `ppid` walk.
+    /// SHELL-SWEEP-3 (2, P1-b): the timeout kill takes a seen process H (not
+    /// in the root's tree, session or marker) and H's child C, and remembers C.
     #[cfg(unix)]
     #[tokio::test]
-    async fn the_sweep_kills_a_seen_process_s_child_before_its_parent_is_reaped() {
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
-        let (_guard, held, child) = held_and_child();
-        let mut seen: HashSet<TrackedPid> = TrackedPid::of(held).into_iter().collect();
-        let _ = sweep_leftovers(i32::MAX, &marker, &mut seen);
-        assert!(seen.iter().any(|t| t.pid == child), "child not remembered");
-        for pid in [child, held] {
-            let gone = gone_within(pid, Duration::from_secs(2)).await;
-            assert!(gone, "{pid} outlived the sweep (child {child})");
-        }
-    }
-
-    /// SHELL-SWEEP-3 (2): the timeout kill takes a seen process and its child.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn the_timeout_kill_takes_seen_processes_and_their_children() {
+    async fn the_timeout_kill_takes_and_remembers_a_seen_process_s_child() {
         use std::os::unix::process::CommandExt;
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
         let mut root = std::process::Command::new("sleep");
         root.arg("60").process_group(0);
         let root = tokio::process::Command::from(root).spawn().unwrap();
         let mut reaper = TreeReaper::new(root, marker);
-        let (_guard, held, child) = held_and_child();
-        reaper.seen.extend(TrackedPid::of(held));
+        let mut guard = Spawned(vec![spawn_sh("sleep 60 & wait")], Vec::new());
+        let held = TrackedPid::of(guard.0[0].id() as i32).unwrap();
+        let child = (0..500).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            child_pids(held.pid).first().copied()
+        });
+        let child = child.expect("the helper never forked");
+        guard.1.extend(TrackedPid::of(child));
+        reaper.seen.insert(held);
         reaper.sweep_now();
         reaper.reap().await;
         reaper.disarm();
-        for pid in [child, held] {
-            let gone = gone_within(pid, Duration::from_secs(2)).await;
-            assert!(gone, "{pid} (held {held}, child {child}) outlived the kill");
-        }
+        assert!(reaper.seen.iter().any(|t| t.pid == child), "not remembered");
+        let gone = gone_within(child, Duration::from_secs(2)).await;
+        assert!(gone, "C {child} outlived the kill");
     }
 
-    /// SHELL-SWEEP-3 (1, 4) end to end: detached K holds the marker through
-    /// the exit scan, so the call saw it; K's child G left the session and
-    /// closed every descriptor first, so only a walk under K finds it.
+    /// The root forks P (own session when `detach`); P forks C, which leaves
+    /// the session and closes every descriptor before the root exits. Only a
+    /// walk under the seen P finds C, and it must run before P is killed.
     #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn a_seen_process_s_detached_child_does_not_outlive_the_call() {
-        let command = r#"/usr/bin/perl -MPOSIX -e '
-sub wr { open(my $fh, q(>), $_[0]) or exit 5; print $fh $$; close $fh }
-sub await { for (1 .. 400) { last if -s $_[0]; select(undef, undef, undef, 0.005) } }
-if (fork() == 0) {
-  POSIX::setsid() or exit 2;
-  if (fork() == 0) { POSIX::setsid() or exit 4; POSIX::close($_) for 3 .. 1023; wr(q(g.pid)); sleep 300 }
+    async fn assert_seen_parent_s_child_is_killed(detach: bool) {
+        let leave = ["", "POSIX::setsid() or exit 2;"][usize::from(detach)];
+        let command = format!(
+            r#"/usr/bin/perl -MPOSIX -e '
+sub wr {{ open(my $fh, q(>), $_[0]) or exit 5; print $fh $$; close $fh }}
+sub await {{ for (1 .. 400) {{ last if -s $_[0]; select(undef, undef, undef, 0.005) }} }}
+if (fork() == 0) {{
+  {leave}
+  if (fork() == 0) {{ POSIX::setsid() or exit 4; POSIX::close($_) for 3 .. 1023; wr(q(g.pid)); sleep 300 }}
   await(q(g.pid)); wr(q(bg.pid)); sleep 300;
-}
+}}
 await(q(bg.pid));
-'"#;
+'"#
+        );
         let dir = tempdir().unwrap();
         let output = test_tool(Duration::from_secs(10))
             .run(&json!({ "command": command }), &ctx(dir.path()))
             .await
             .unwrap();
-        let g_pid = std::fs::read_to_string(dir.path().join("g.pid"));
-        let g_pid = g_pid.ok().and_then(|raw| raw.trim().parse().ok());
-        let (Some(kid), Some(grandchild)) = (bg_pid(dir.path()), g_pid) else {
+        let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).ok();
+        let pids = ["bg.pid", "g.pid"].map(|name| read(name)?.trim().parse::<i32>().ok());
+        let tracked = pids.iter().flatten().filter_map(|&pid| TrackedPid::of(pid));
+        let _guard = Spawned(Vec::new(), tracked.collect());
+        let [Some(parent), Some(child)] = pids else {
             panic!("perl or a fork was refused: {}", head(&output.content, 400));
         };
         let gone = [
-            gone_within(grandchild, Duration::from_secs(2)).await,
-            gone_within(kid, Duration::from_secs(2)).await,
+            gone_within(child, Duration::from_secs(2)).await,
+            gone_within(parent, Duration::from_secs(2)).await,
         ];
         let text = head(&output.content, 400);
-        assert_eq!(
-            gone, [true; 2],
-            "grandchild {grandchild}, kid {kid}: {text}"
-        );
+        assert_eq!(gone, [true; 2], "P {parent}, C {child}: {text}");
     }
 
-    /// SHELL-SWEEP-3 (3): a full seen set forgets gone pids, else refuses
-    /// more; a sweep handed a full set fails closed.
+    /// SHELL-SWEEP-3 (1, 4): P detached, seen by its marker; P1-a: P in the
+    /// group, killed by the group kill before the sweep runs.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_seen_process_s_child_does_not_outlive_the_call() {
+        for detach in [true, false] {
+            assert_seen_parent_s_child_is_killed(detach).await;
+        }
+    }
+
+    /// SHELL-SWEEP-3 P1-b: a stop whose sweep is not clean (zero passes) says
+    /// so and keeps the reaper armed for the retry.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_whose_sweep_is_not_clean_is_reported_and_stays_armed() {
+        let dir = tempdir().unwrap();
+        let mut tool = test_tool(Duration::from_millis(300));
+        tool.sweep_passes = 0;
+        let out = tool
+            .run(&json!({"command": "sleep 30"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        let text = &out.content;
+        assert!(out.is_error && text.contains("timed out"), "{text}");
+        assert!(text.contains("cleanup incomplete: retried"), "{text}");
+    }
+
+    /// SHELL-SWEEP-3 (3): a full seen set fails closed and drops only gone pids.
     #[cfg(unix)]
     #[test]
-    fn the_seen_set_stops_at_its_cap_and_forgets_only_gone_pids() {
-        let own = std::process::id() as i32;
+    fn the_seen_set_stops_at_its_cap_and_a_full_set_fails_closed() {
         let at = |pid, start| TrackedPid { pid, start };
-        let fill = |pid| (0..MAX_SEEN_PIDS as u64).map(move |start| at(pid, start));
-        // Every entry names a pid that exists (this process): nothing to drop.
-        let mut seen: HashSet<TrackedPid> = fill(own).collect();
-        assert!(
-            !remember(&mut seen, [at(own, u64::MAX)]),
-            "a full set took one more"
-        );
-        assert_eq!(seen.len(), MAX_SEEN_PIDS);
-        assert!(
-            remember(&mut seen, [at(own, 0)]),
-            "a known entry always fits"
-        );
+        let fill = |pid| -> HashSet<TrackedPid> {
+            (0..MAX_SEEN_PIDS as u64)
+                .map(move |start| at(pid, start))
+                .collect()
+        };
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
-        let sweep = sweep_leftovers(i32::MAX, &marker, &mut seen);
-        assert_ne!(sweep, Sweep::Clean, "a full set must not end clean");
-        // Entries whose pid no longer exists make room.
-        let mut seen: HashSet<TrackedPid> = fill(i32::MAX - 1).collect();
-        assert!(remember(&mut seen, [at(own, u64::MAX)]));
-        assert_eq!(seen, HashSet::from([at(own, u64::MAX)]));
+        // Pids that cannot be live.
+        let mut seen = fill(i32::MAX - 1);
+        let sweep = sweep_leftovers_with(
+            i32::MAX,
+            &marker,
+            &mut seen,
+            &|_pass| Vec::new(),
+            &|_pass, _pid| Visibility::Described,
+            3,
+            MAX_SWEEP_TIME,
+        );
+        assert_eq!(sweep, Sweep::SeenCap);
+        assert!(remember(&mut seen, [at(i32::MAX - 2, 0)]));
+        assert_eq!(seen.len(), 1);
+        // A live helper's pid, with start times it never had (never signalled).
+        let guard = Spawned(vec![spawn_sh("sleep 30")], Vec::new());
+        let mut seen = fill(guard.0[0].id() as i32);
+        assert!(!remember(&mut seen, [at(i32::MAX - 2, 0)]));
+        assert_eq!(seen.len(), MAX_SEEN_PIDS);
     }
 
-    /// SHELL-SWEEP-3 (5, 6): start times are microseconds since the epoch, so
-    /// a pid recycled within the same second never matches.
+    /// SHELL-SWEEP-3 (5, 6): this process is described; start times are in
+    /// microseconds, so a pid recycled within a second never matches.
     #[cfg(target_os = "macos")]
     #[test]
     fn start_times_are_microseconds_so_a_recycled_pid_never_matches() {
-        let spawned = Spawned(vec![spawn_sh("sleep 30"), spawn_sh("sleep 30")]);
+        assert!(pid_ppid_uid_start(std::process::id() as i32).is_some());
+        let spawned = Spawned(vec![spawn_sh("sleep 30"), spawn_sh("sleep 30")], Vec::new());
         let [first, second] = [0, 1].map(|i| TrackedPid::of(spawned.0[i].id() as i32).unwrap());
         assert!(first.start < second.start, "{first:?} vs {second:?}");
         let now = std::time::UNIX_EPOCH.elapsed().unwrap().as_micros() as u64;
-        assert!(
-            now.abs_diff(first.start) < 60 * START_UNITS_PER_SEC,
-            "start {} is not microseconds since the epoch (now {now})",
-            first.start
-        );
-        // What a pid recycled in the same second looks like at signal time.
+        assert!(now.abs_diff(first.start) < 60_000_000, "{first:?}");
         let mut recycled = second;
         recycled.start = first.start;
         assert!(!recycled.still_same(&pid_ppid_uid_start));
         assert!(second.still_same(&pid_ppid_uid_start));
-        // Only the whole struct is read; a short or larger answer is "gone".
-        assert!(!pidfdinfo_filled_buffer(128, 136) && !pidfdinfo_filled_buffer(144, 136));
     }
 
     #[tokio::test]

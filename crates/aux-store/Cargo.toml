@@ -16,7 +16,7 @@ getrandom = "0.4"
 # the RustCrypto construction already in the lock file (0.12.4); `sha2` is its
 # hash (0.10.9, already used elsewhere in the workspace).
 hkdf = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 libc = "0.2"
 rusqlite.workspace = true
 zeroize = "1"

@@ -756,6 +756,21 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
     let mut record = |err: InstallError| {
         first_error.get_or_insert(err);
     };
+    // A `000` subdirectory makes the guarded home scan refuse the whole home, so
+    // owner bits are restored first; `make_writable_tree` never follows a link,
+    // and a real `extensions/` dir is required. Failures surface below.
+    let raw_root = extensions_dir(home);
+    if std::fs::symlink_metadata(&raw_root).is_ok_and(|meta| meta.is_dir()) {
+        for entry in std::fs::read_dir(&raw_root).into_iter().flatten().flatten() {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!("{name}@"))
+            {
+                let _ = make_writable_tree(&entry.path());
+            }
+        }
+    }
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => Some(handle),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,

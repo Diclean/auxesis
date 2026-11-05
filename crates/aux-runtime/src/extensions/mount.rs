@@ -179,6 +179,9 @@ fn load_mounts(home: &Path) -> Result<MountTable, MountError> {
 fn store_mounts(home: &Path, mounts: &MountTable) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(mounts).map_err(std::io::Error::other)?;
     let handle = kernel_core::SandboxHome::open(home)?;
+    let dirs = Path::new("extensions");
+    handle.create_dir_all(dirs)?;
+    super::install::force_private_dir(&handle, dirs)?;
     handle.write_atomic(&mounts_rel(), text.as_bytes(), 0o600)
 }
 
@@ -390,17 +393,24 @@ pub fn remove_from_all_mounts(home: &Path, name: &str) -> std::io::Result<()> {
 }
 
 /// Freeze `name`: unmount everywhere, persist the flag and write the Ledger row.
+///
+/// The mount table is checked before anything is written, and the flag is
+/// written first: any later failure leaves the extension frozen (fail closed).
+/// An unreadable table is never rewritten; it mounts nothing (every reader
+/// fails closed), the freeze is still logged, and the table is reported.
 pub fn freeze(home: &Path, name: &str, reason: &str) -> Result<(), MountError> {
     let mut state =
         load_state(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
+    let table = load_mounts(home);
     state.frozen = true;
     store_state(home, &state)?;
-    remove_from_all_mounts(home, name)?;
     ledger::log(
         home,
         "ext.frozen",
         &serde_json::json!({"name": name, "version": state.version, "reason": reason}),
     );
+    table?;
+    remove_from_all_mounts(home, name)?;
     Ok(())
 }
 
@@ -669,6 +679,66 @@ mod tests {
             mount(home.path(), "ghost", "alice"),
             Err(MountError::NotInstalled(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_mounts_reforces_a_private_extensions_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("extensions");
+        std::fs::create_dir_all(&root).unwrap();
+        super::super::install::set_mode(&root, 0o777).unwrap();
+        store_mounts(home.path(), &MountTable::default()).unwrap();
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    fn unreadable_table(home: &Path) -> PathBuf {
+        install_entry(home, "demo", super::super::catalog::Sensitivity::Public);
+        store_state(home, &state("demo")).unwrap();
+        let path = home.join("extensions").join("mounts.json");
+        std::fs::write(&path, b"not json").unwrap();
+        path
+    }
+
+    #[test]
+    fn mount_refuses_an_unreadable_table_and_leaves_it_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let path = unreadable_table(home.path());
+        assert!(matches!(
+            mount(home.path(), "demo", "alice"),
+            Err(MountError::MountsUnreadable)
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn freeze_with_an_unreadable_table_still_freezes_and_reports_it() {
+        let home = tempfile::tempdir().unwrap();
+        let path = unreadable_table(home.path());
+        assert!(matches!(
+            freeze(home.path(), "demo", "drift"),
+            Err(MountError::MountsUnreadable)
+        ));
+        assert!(is_frozen(home.path(), "demo"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"not json");
+        assert!(mount(home.path(), "demo", "alice").is_err());
+    }
+
+    #[test]
+    fn an_oversized_state_row_reads_as_frozen() {
+        let home = tempfile::tempdir().unwrap();
+        install_entry(
+            home.path(),
+            "demo",
+            super::super::catalog::Sensitivity::Public,
+        );
+        store_state(home.path(), &state("demo")).unwrap();
+        let row = home.path().join("extensions/state/demo.json");
+        std::fs::write(&row, vec![b' '; MAX_STATE_BYTES as usize + 1]).unwrap();
+        assert!(is_frozen(home.path(), "demo"));
+        assert!(mount(home.path(), "demo", "alice").is_err());
     }
 
     fn install_entry(home: &Path, name: &str, sensitivity: super::super::catalog::Sensitivity) {

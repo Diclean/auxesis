@@ -13,7 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::catalog::{Entry, SourceType, Transport};
-use super::{extensions_dir, hex, install_dir, valid_name};
+use super::{extensions_dir, hex, valid_name};
 
 /// The secrets file, relative to the sandboxed home. Same name the provider writer uses.
 const ENV_FILE: &str = ".env";
@@ -120,6 +120,59 @@ pub(crate) fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Open the directory `rel` below the verified home, one component at a time
+/// with `openat(O_NOFOLLOW | O_DIRECTORY)`: a symlink at ANY level is refused,
+/// never followed. The root fd is checked to be the verified home's inode.
+#[cfg(unix)]
+fn open_dir_anchored(
+    handle: &kernel_core::SandboxHome,
+    rel: &Path,
+) -> std::io::Result<std::fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let flags = libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
+    let mut dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(handle.real_path()?)?;
+    handle.reverify()?;
+    let (opened, held) = (dir.metadata()?, std::fs::symlink_metadata(handle.path())?);
+    if (opened.dev(), opened.ino()) != (held.dev(), held.ino()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "the home changed while it was being opened",
+        ));
+    }
+    for part in rel.components() {
+        let Component::Normal(part) = part else {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        };
+        let name = std::ffi::CString::new(part.as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), libc::O_RDONLY | flags) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        dir = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    Ok(dir)
+}
+
+/// Whether the directory `rel` exists below the verified home, every component
+/// a real directory. A symlink or file on the way is an error, never followed.
+fn anchored_dir_exists(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    let opened = open_dir_anchored(handle, rel).map(drop);
+    #[cfg(not(unix))]
+    let opened = std::fs::read_dir(handle.real_path()?.join(rel)).map(drop);
+    match opened {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 pub(crate) fn force_private_dir(
     handle: &kernel_core::SandboxHome,
     rel: &Path,
@@ -127,11 +180,7 @@ pub(crate) fn force_private_dir(
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
-        use std::os::unix::fs::OpenOptionsExt;
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
-            .open(handle.real_path()?.join(rel))?;
+        let file = open_dir_anchored(handle, rel)?;
         if unsafe { libc::fchmod(file.as_raw_fd(), 0o700) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -327,15 +376,16 @@ pub async fn install(
         });
     }
 
-    let dir = install_dir(home, &entry.name, &entry.version);
-    let parent = extensions_dir(home);
+    let rel_dir = Path::new("extensions").join(format!("{}@{}", entry.name, entry.version));
     // Defence in depth: the install path must stay under the extensions root
     // before anything is created or removed.
-    ensure_within(&parent, &dir)?;
+    ensure_within(Path::new("extensions"), &rel_dir)?;
     let handle = kernel_core::SandboxHome::open(home)?;
     handle.create_dir_all(Path::new("extensions"))?;
     force_private_dir(&handle, Path::new("extensions"))?;
-    let rel_dir = Path::new("extensions").join(format!("{}@{}", entry.name, entry.version));
+    // Every path below is built from the verified home's real path, the same
+    // directory `handle` creates in: the created and unpacked trees are one.
+    let dir = handle.real_path()?.join(&rel_dir);
     match std::fs::symlink_metadata(&dir) {
         Ok(meta) if meta.file_type().is_symlink() => {
             return Err(InstallError::Unpack(format!(
@@ -345,7 +395,7 @@ pub async fn install(
         }
         Ok(_) => {
             make_writable_tree(&dir)?;
-            std::fs::remove_dir_all(&dir)?;
+            handle.remove_dir_all(&rel_dir)?;
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
@@ -369,7 +419,12 @@ pub async fn install(
     let setup = (|| -> Result<(), InstallError> {
         unpack(entry, &handle, &rel_dir, &dir, &bytes)?;
         let work = dir.join("work");
-        let _ = handle.create_dir(&rel_dir.join("work"))?;
+        if !handle.create_dir(&rel_dir.join("work"))? {
+            return Err(InstallError::Unpack(format!(
+                "{} already exists",
+                work.display()
+            )));
+        }
         if !std::fs::symlink_metadata(&work).is_ok_and(|meta| meta.is_dir()) {
             return Err(InstallError::Unpack(format!(
                 "{} is not a directory",
@@ -384,7 +439,7 @@ pub async fn install(
         Ok(())
     })();
     if let Err(err) = setup {
-        return Err(discard_partial_install(&dir, err));
+        return Err(discard_partial_install(&handle, &rel_dir, &dir, err));
     }
 
     let installed = InstalledExtension {
@@ -400,6 +455,8 @@ pub async fn install(
             super::session::pin_extension(home, &installed, options.allow_loopback).await
         {
             return Err(discard_partial_install(
+                &handle,
+                &rel_dir,
                 &installed.dir,
                 InstallError::Unpack(err.to_string()),
             ));
@@ -409,8 +466,13 @@ pub async fn install(
 }
 
 /// Delete a failed install's tree; a cleanup failure is reported beside the cause.
-fn discard_partial_install(dir: &Path, err: InstallError) -> InstallError {
-    let cleanup = make_writable_tree(dir).and_then(|()| std::fs::remove_dir_all(dir));
+fn discard_partial_install(
+    handle: &kernel_core::SandboxHome,
+    rel_dir: &Path,
+    dir: &Path,
+    err: InstallError,
+) -> InstallError {
+    let cleanup = make_writable_tree(dir).and_then(|()| handle.remove_dir_all(rel_dir));
     match cleanup {
         Ok(()) => err,
         Err(cleanup_err) => InstallError::Unpack(format!(
@@ -672,6 +734,9 @@ pub fn verify_installed(home: &Path, name: &str) -> Result<InstalledExtension, I
 ///
 /// Returns the number of install trees deleted. The Ledger keeps its history.
 pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
+    if !valid_name(name) {
+        return Err(InstallError::NotInstalled(name.to_owned()));
+    }
     let state = super::mount::load_state(home, name);
     // The state is the record of this extension's secrets. Without it, the installed
     // entry names the same secrets, and it is read before the trees are deleted.
@@ -687,45 +752,59 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
         .filter(|secret| super::catalog::valid_secret_name(name, secret))
         .collect();
     let mut removed = 0usize;
-    let root = extensions_dir(home);
     let mut first_error: Option<InstallError> = None;
-    // A root that exists but cannot be read is an error, never "nothing to remove".
-    let entries = match std::fs::read_dir(&root) {
-        Ok(entries) => Some(entries),
+    let mut record = |err: InstallError| {
+        first_error.get_or_insert(err);
+    };
+    let handle = match kernel_core::SandboxHome::open_existing(home) {
+        Ok(handle) => Some(handle),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => {
-            first_error = Some(err.into());
+            record(err.into());
             None
         }
     };
-    for entry in entries.into_iter().flatten().flatten() {
-        let file_name = entry.file_name().to_string_lossy().to_string();
-        if file_name.starts_with(&format!("{name}@")) {
-            let path = entry.path();
+    if let Some(handle) = handle.as_ref() {
+        // Trees and the state row are removed by name through the verified
+        // home: a link anywhere on the way is refused, and a planted link,
+        // FIFO or dangling state row is unlinked itself, never its target.
+        let extensions = Path::new("extensions");
+        // A root that exists but cannot be read is an error, never "nothing to remove".
+        let entries = anchored_dir_exists(handle, extensions).and_then(|exists| {
+            if !exists {
+                return Ok(None);
+            }
+            std::fs::read_dir(handle.real_path()?.join(extensions)).map(Some)
+        });
+        let entries = entries.unwrap_or_else(|err| {
+            record(err.into());
+            None
+        });
+        for entry in entries.into_iter().flatten().flatten() {
+            let file_name = entry.file_name();
+            if !file_name.to_string_lossy().starts_with(&format!("{name}@")) {
+                continue;
+            }
+            let rel = extensions.join(&file_name);
             let result = (|| -> Result<(), InstallError> {
-                ensure_within(&root, &path)?;
-                make_writable_tree(&path)?;
-                std::fs::remove_dir_all(&path)?;
+                // `file_type` is the listing's own entry type: a link is never followed.
+                if !entry.file_type()?.is_dir() {
+                    let msg = format!("{} is not a directory", rel.display());
+                    return Err(std::io::Error::other(msg).into());
+                }
+                make_writable_tree(&handle.real_path()?.join(&rel))?;
+                handle.remove_dir_all(&rel)?;
                 Ok(())
             })();
             match result {
                 Ok(()) => removed += 1,
-                Err(err) => {
-                    if first_error.is_none() {
-                        first_error = Some(err);
-                    }
-                }
+                Err(err) => record(err),
             }
         }
-    }
-    // State, mounts and secrets are cleaned up even when a tree could not be
-    // deleted, and the first failure is reported at the end.
-    let state_file = root.join("state").join(format!("{name}.json"));
-    if state_file.is_file() {
-        if let Err(err) = std::fs::remove_file(&state_file) {
-            if first_error.is_none() {
-                first_error = Some(err.into());
-            }
+        // State, mounts and secrets are cleaned up even when a tree could not be
+        // deleted, and the first failure is reported at the end.
+        if let Err(err) = remove_state_row(handle, name) {
+            record(err.into());
         }
     }
     if let Err(err) = super::mount::remove_from_all_mounts(home, name) {
@@ -744,6 +823,17 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
         Some(err) => Err(err),
         None => Ok(removed),
     }
+}
+
+/// Unlink `extensions/state/<name>.json` through the verified home. The row is
+/// unlinked itself (a FIFO, link or dangling link included), never its target,
+/// and a linked `state/` directory is refused.
+fn remove_state_row(handle: &kernel_core::SandboxHome, name: &str) -> std::io::Result<()> {
+    let state_dir = Path::new("extensions").join("state");
+    if anchored_dir_exists(handle, &state_dir)? {
+        handle.remove_file(&state_dir.join(format!("{name}.json")))?;
+    }
+    Ok(())
 }
 
 /// Drop the named keys from `~/.auxesis/.env`, keeping every other line.
@@ -1300,6 +1390,114 @@ mod tests {
         let removed = remove(home.path(), "demo").unwrap();
         assert_eq!(removed, 1);
         assert!(!dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn force_private_dir_never_follows_a_swapped_parent() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("state")).unwrap();
+        set_mode(&outside.path().join("state"), 0o755).unwrap();
+        let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
+        // `extensions/` is swapped for a link after the handle was opened.
+        std::os::unix::fs::symlink(outside.path(), home.path().join("extensions")).unwrap();
+        assert!(force_private_dir(&handle, Path::new("extensions/state")).is_err());
+        let mode = std::fs::metadata(outside.path().join("state"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o755,
+            "the link target's mode must not change"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_install_through_a_linked_home_lands_in_the_real_home() {
+        let scratch = tempfile::tempdir().unwrap();
+        let real = scratch.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = scratch.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let gz = gz_tar(|builder| {
+            let (header, data) = regular("package/index.js", b"x");
+            builder.append(&header, &data[..]).unwrap();
+        });
+        let path = scratch.path().join("pkg.tgz");
+        std::fs::write(&path, &gz).unwrap();
+        let mut entry = tarball_entry("demo", &gz, "1.0.0");
+        entry.source.package = path.to_string_lossy().into_owned();
+        let options = InstallOptions {
+            allow_loopback: true,
+            pin: false,
+        };
+        let installed = install(&link, &entry, &options).await.unwrap();
+        let real = real.canonicalize().unwrap();
+        assert!(installed.dir.starts_with(&real), "{:?}", installed.dir);
+        assert!(installed.dir.join("index.js").is_file());
+        assert!(installed.work_dir().is_dir());
+        assert!(real.join("extensions/demo@1.0.0/index.js").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_never_follows_a_linked_state_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("demo.json"), b"{}").unwrap();
+        std::fs::create_dir(home.path().join("extensions")).unwrap();
+        let state = home.path().join("extensions/state");
+        std::os::unix::fs::symlink(outside.path(), &state).unwrap();
+        assert!(
+            remove(home.path(), "demo").is_err(),
+            "a linked state dir is reported"
+        );
+        assert!(outside.path().join("demo.json").is_file());
+        assert!(std::fs::symlink_metadata(&state).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_unlinks_a_fifo_state_row() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("extensions/state");
+        std::fs::create_dir_all(&dir).unwrap();
+        let row = dir.join("demo.json");
+        let mkfifo = std::process::Command::new("mkfifo").arg(&row).status();
+        assert!(mkfifo.unwrap().success());
+        remove(home.path(), "demo").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&row).is_err(),
+            "the FIFO row is gone"
+        );
+    }
+
+    // A home holding a link is refused whole while the sandbox guard is on (CI),
+    // so the link rows are planted after the handle is opened, as a swap would be.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_or_dangling_state_row_is_unlinked_never_its_target() {
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("kept.json");
+        std::fs::write(&target, b"{}").unwrap();
+        for link_to in [target.clone(), outside.path().join("gone")] {
+            let home = tempfile::tempdir().unwrap();
+            let dir = home.path().join("extensions/state");
+            std::fs::create_dir_all(&dir).unwrap();
+            let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
+            let row = dir.join("demo.json");
+            std::os::unix::fs::symlink(&link_to, &row).unwrap();
+            remove_state_row(&handle, "demo").unwrap();
+            assert!(
+                std::fs::symlink_metadata(&row).is_err(),
+                "the link row is gone"
+            );
+        }
+        assert!(target.is_file(), "a link row's target survives");
     }
 
     #[test]

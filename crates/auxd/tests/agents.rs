@@ -1219,6 +1219,75 @@ async fn a_chief_deny_caps_every_agent_at_run_time_and_creation() {
     t.stop();
 }
 
+/// Files edited by hand never widen an agent past the chief: Mail's grants
+/// gain a payment tool the chief never had, then the chief's own grants drop
+/// mail sending after Mail was made. Mail keeps what the chief still has, and
+/// both calls are denied before they run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hand_widened_agent_and_a_narrowed_chief_run_at_the_chief_only() {
+    let provider = Arc::new(FakeProvider::scripted(
+        "fakey",
+        vec![
+            tool_call("mcp__bank__pay", json!({})),
+            tool_call("mail_send", json!({})),
+            ChatResponse::assistant("done"),
+        ],
+    ));
+    let (paid, sent) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (pay, send) = (Arc::clone(&paid), Arc::clone(&sent));
+    let tools: ToolRegistryHook = Arc::new(move |registry| {
+        let pay = TestTool::simple("mcp__bank__pay", "paid", Arc::clone(&pay));
+        registry.register_native(Box::new(pay));
+        let send = TestTool::simple("mail_send", "sent", Arc::clone(&send));
+        registry.register_native(Box::new(send));
+    });
+    let config = CONFIG.replace("default_agent = \"aux\"", "default_agent = \"main\"");
+    let options = ApiOptions {
+        tools: Some(tools),
+        ..options(provider)
+    };
+    let mut t = TestApi::start_with(options, &config).await;
+    let created = t.post("/v1/agents", r#"{"name":"mail"}"#);
+    assert_eq!(created.status, 201, "{}", created.body);
+    let grant = |scope: &str, skills: &[(&str, &str)]| {
+        let mut text = format!("[[see]]\nscope = \"{scope}\"\nvia = \"local\"\nlevel = \"read\"\n");
+        for (skill, level) in skills {
+            text += &format!("\n[[do]]\nskill = \"{skill}\"\nlevel = \"{level}\"\n");
+        }
+        text
+    };
+    let widened = grant(
+        "mail",
+        &[
+            ("mail.read", "auto"),
+            ("mail.send", "ask"),
+            ("mcp__bank__pay", "auto"),
+        ],
+    );
+    std::fs::write(t.home.join("agents/mail/grants.toml"), widened).unwrap();
+    std::fs::create_dir_all(t.home.join("agents/main")).unwrap();
+    let narrowed = grant("mail", &[("mail.read", "auto"), ("mail.send", "off")]);
+    std::fs::write(t.home.join("agents/main/grants.toml"), narrowed).unwrap();
+
+    let mail = auxd::agents::grants(&t.home, "mail").unwrap();
+    assert!(mail.check_tool("mail", "mail_read").is_ok());
+    assert!(mail.check_tool("mail", "mail_send").is_err());
+    assert!(mail.check_tool("mail", "mcp__bank__pay").is_err());
+    let sent_turn = t.post(
+        "/v1/threads/mail/messages",
+        r#"{"content":"pay, then mail it"}"#,
+    );
+    assert_eq!(sent_turn.status, 200, "body: {}", sent_turn.body);
+    assert!(!paid.load(Ordering::SeqCst), "the payment ran");
+    assert!(!sent.load(Ordering::SeqCst), "the send ran");
+    let messages = t.get("/v1/threads/mail/messages").body;
+    assert!(messages.contains("denied"), "{messages}");
+    t.stop();
+}
+
 /// On an older install the chief is `aux`, which may not read mail. An agent
 /// written on disk with `tools = ["mail_read"]` still cannot read mail when a
 /// turn runs for it, and an agent created through the API is held to what

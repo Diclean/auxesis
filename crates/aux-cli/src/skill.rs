@@ -403,6 +403,18 @@ fn operator_rules(verified: &SandboxHome) -> Result<Vec<kernel_broker::Rule>, St
     aux_engine::load_rules(&path.join("config.toml")).map_err(|err| err.to_string())
 }
 
+/// The chief ceiling over every tool a skill can call, as `aux chat` and the
+/// daemon apply it: an agent's skill run never does what the chief could not.
+fn held_to_chief(
+    home: &Path,
+    agent: &str,
+    mut rules: Vec<kernel_broker::Rule>,
+) -> Vec<kernel_broker::Rule> {
+    let no_tools = kernel_broker::ToolRegistry::new();
+    auxd::api::constrain_non_api_turn(home, agent, &no_tools, &mut rules);
+    rules
+}
+
 /// Execute one skill for real: validate → rehydrate → approve → broker →
 /// connector → Ledger, with no retry.
 fn run_skill(
@@ -455,7 +467,7 @@ fn run_skill(
         }
     };
     let rules = match operator_rules(&verified) {
-        Ok(rules) => rules,
+        Ok(rules) => held_to_chief(home, agent_name, rules),
         Err(err) => {
             eprintln!("aux skill run: {err}");
             return ExitCode::FAILURE;
@@ -1069,6 +1081,37 @@ mod tests {
         );
         assert_eq!(connector.0.load(Ordering::SeqCst), 0, "nothing was sent");
         assert_eq!(sink.payloads("skill.run")[0]["outcome"], "refused");
+    }
+
+    /// `aux skill run` is held to the chief, as `aux chat` is: with the owner's
+    /// rules denying the chief `mail_send`, another agent's invite is refused
+    /// before any call. The chief is not held to itself.
+    #[tokio::test]
+    async fn a_skill_run_is_held_to_the_chief_ceiling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let deny = "\n[[rules]]\nagent = \"main\"\ntool = \"mail_send\"\naction = \"deny\"\n";
+        std::fs::write(&path, format!("default_agent = \"main\"\n{deny}")).unwrap();
+        let operator = aux_engine::load_rules(&path).unwrap();
+        let chief = held_to_chief(dir.path(), "main", operator.clone());
+        assert_eq!(chief, operator);
+        let connector = CountingConnector::default();
+        let sink = Arc::new(kernel_broker::MemoryAuditSink::new());
+        let rules = held_to_chief(dir.path(), "assistant", operator);
+        let outcome = run_with(
+            &AlwaysYes,
+            &connector,
+            &sink,
+            rules,
+            &NeverStopped,
+            &ImmediateClock,
+        )
+        .await;
+        assert!(
+            matches!(outcome, Ok(RunOutcome::Refused { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(connector.0.load(Ordering::SeqCst), 0, "nothing was sent");
     }
 
     /// STOP raised before the run: the CLI refuses and sends nothing.

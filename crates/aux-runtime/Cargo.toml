@@ -19,13 +19,12 @@ aux-store = { path = "../aux-store" }
 base64 = "0.23"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 flate2 = "1"
-html5ever = "0.39"
+html5ever = "0.40"
 kernel-broker.workspace = true
 kernel-core.workspace = true
 kernel-mcp.workspace = true
 kernel-net.workspace = true
 kernel-privacy.workspace = true
-markup5ever_rcdom = "0.39"
 reqwest = { workspace = true, features = ["form"] }
 serde.workspace = true
 serde_json = "1"

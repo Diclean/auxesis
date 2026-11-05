@@ -35,7 +35,7 @@ use kernel_broker::sanitize_text;
 use kernel_broker::ToolClass;
 use kernel_broker::{CancelToken, NativeTool, Risk, Tool, ToolCtx, ToolError, ToolOutput};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::time::Duration;
@@ -1115,6 +1115,10 @@ fn kill_process_tree_with(
 const MAX_SWEEP_PASSES: usize = 50;
 const MAX_SWEEP_TIME: Duration = Duration::from_secs(2);
 
+/// A session id no process can have: pids stay below 2^22 (Linux) or 99999
+/// (macOS), so a sweep given it scans the marker and the seen set only.
+const NO_SESSION: i32 = i32::MAX;
+
 /// Whether a leftover sweep proved nothing is left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Sweep {
@@ -1137,6 +1141,7 @@ enum Undescribed {
     SelfCheck,
     OutOfMemory,
     Unreadable,
+    NoSession,
 }
 
 impl Undescribed {
@@ -1146,6 +1151,7 @@ impl Undescribed {
             Self::SelfCheck => "[cleanup incomplete: this process could not describe itself, so no leftover could be checked]",
             Self::OutOfMemory => "[cleanup incomplete: a process could not be described (ENOMEM: out of kernel memory)]",
             Self::Unreadable => "[cleanup incomplete: a process the command started could not be read, so it may still run]",
+            Self::NoSession => "[cleanup unverified: after the reap the command's session can no longer be checked]",
         }
     }
 }
@@ -1189,7 +1195,7 @@ fn sweep_precheck(listing: bool, self_described: bool) -> Option<Sweep> {
 enum Identity {
     Same,
     Gone,
-    Unknown,
+    Unknown(Undescribed),
 }
 
 /// `lookup` reads `(ppid, uid, start)`, once; `visibility` sorts a failed read.
@@ -1210,27 +1216,27 @@ fn identity_of(
     }
     match visibility(tracked.pid) {
         Visibility::Unseen | Visibility::Zombie { .. } => Identity::Gone,
-        Visibility::Unknown | Visibility::OutOfMemory => Identity::Unknown,
+        Visibility::OutOfMemory => Identity::Unknown(Undescribed::OutOfMemory),
+        Visibility::Unknown => Identity::Unknown(Undescribed::Unreadable),
         // Linux describes every pid it lists, so only `ESRCH` says gone.
         // SAFETY: signal 0 sends nothing; it only probes the pid.
         _ if !cfg!(target_os = "macos") && unsafe { libc::kill(tracked.pid, 0) } != 0 => {
             Identity::Gone
         }
-        Visibility::Described => Identity::Unknown,
+        Visibility::Described => Identity::Unknown(Undescribed::Unreadable),
     }
 }
 
-/// Sorts every seen process but `skip` (the root, handled by the caller) on
-/// each pass, whatever the set's size: drops [`Identity::Gone`] ones and
-/// keeps the rest. `true` when an [`Identity::Unknown`] one was kept: the
-/// sweep then never reports clean while it stays unreadable.
+/// Sorts every seen process but `skip` (the root) on each pass, whatever the
+/// set's size: drops [`Identity::Gone`] ones, keeps the rest, and returns why
+/// an [`Identity::Unknown`] one was kept (`ENOMEM` first), never clean.
 fn forget_gone(
     seen: &mut HashSet<TrackedPid>,
     skip: i32,
     lookup: StartLookup<'_>,
     visibility: &dyn Fn(i32) -> Visibility,
-) -> bool {
-    let mut unknown = false;
+) -> Option<Undescribed> {
+    let mut unknown = None;
     seen.retain(|tracked| {
         if tracked.pid == skip {
             return true;
@@ -1238,8 +1244,10 @@ fn forget_gone(
         match identity_of(tracked, lookup, visibility) {
             Identity::Gone => false,
             Identity::Same => true,
-            Identity::Unknown => {
-                unknown = true;
+            Identity::Unknown(why) => {
+                if unknown != Some(Undescribed::OutOfMemory) {
+                    unknown = Some(why);
+                }
                 true
             }
         }
@@ -1290,8 +1298,7 @@ impl ExitSteps {
 /// Each pass first sorts `seen` ([`forget_gone`]): a pid that stays
 /// unreadable keeps the passes going and ends them as
 /// [`Undescribed::Unreadable`]; [`Sweep::SeenCap`] only if the set stays full.
-/// `root` is `None` when its pid no longer names the call's session.
-fn sweep_leftovers(root: Option<i32>, marker: &Marker, seen: &mut HashSet<TrackedPid>) -> Sweep {
+fn sweep_leftovers(root: i32, marker: &Marker, seen: &mut HashSet<TrackedPid>) -> Sweep {
     sweep_leftovers_with(
         root,
         marker,
@@ -1307,7 +1314,7 @@ fn sweep_leftovers(root: Option<i32>, marker: &Marker, seen: &mut HashSet<Tracke
 /// the call's known processes and records every candidate found. Caps are
 /// lowered only by tests.
 fn sweep_leftovers_with(
-    root: Option<i32>,
+    root: i32,
     marker: &Marker,
     seen: &mut HashSet<TrackedPid>,
     extra_pids: &dyn Fn(usize) -> Vec<i32>,
@@ -1332,10 +1339,13 @@ fn sweep_leftovers_with(
         let mut capped = false;
         // This pass kept a seen process it cannot read.
         let mut unreadable = false;
-        let skip = root.unwrap_or(0);
         for pass in 0..max_passes {
             let pass_visibility = |pid| visibility(pass, pid);
-            unreadable = forget_gone(seen, skip, &pid_ppid_uid_start, &pass_visibility);
+            let kept = forget_gone(seen, root, &pid_ppid_uid_start, &pass_visibility);
+            if kept == Some(Undescribed::OutOfMemory) {
+                return Sweep::Unavailable(Undescribed::OutOfMemory);
+            }
+            unreadable = kept.is_some();
             capped |= seen.len() >= MAX_SEEN_PIDS;
             let mut hard_error = false;
             counted_zombies.retain(|&pid| match visibility(pass, pid) {
@@ -1353,9 +1363,7 @@ fn sweep_leftovers_with(
             // An empty listing means the syscall failed (this process itself
             // is always in it): it must not count as a clean pass.
             if !all.is_empty() {
-                let found = root
-                    .map(|root| session_pids(root, &all))
-                    .unwrap_or_default()
+                let found = session_pids(root, &all)
                     .into_iter()
                     .chain(orphan_pids_holding_marker(marker, 0, &all))
                     .chain(extra_pids(pass));
@@ -1363,7 +1371,7 @@ fn sweep_leftovers_with(
                 let mut signalled = 0usize;
                 // A seen process stays a candidate after leaving every net,
                 // and so do its descendants, read before any signal.
-                let family = seen_family(seen, skip, &pid_ppid_uid_start);
+                let family = seen_family(seen, root, &pid_ppid_uid_start);
                 capped |= !remember(seen, family.iter().copied());
                 for tracked in family {
                     if !tracked.still_same(&pid_ppid_uid_start) {
@@ -1432,11 +1440,8 @@ fn sweep_leftovers_with(
                         }
                     }
                     counted_zombies = orphan_zombies;
-                    if !unsettled && capped {
-                        return Sweep::SeenCap;
-                    }
                     if !unsettled && !unreadable {
-                        return Sweep::Clean;
+                        return if capped { Sweep::SeenCap } else { Sweep::Clean };
                     }
                     pending = true;
                 } else {
@@ -1454,9 +1459,10 @@ fn sweep_leftovers_with(
                 std::thread::yield_now();
             }
         }
-        match (survivors, unreadable) {
-            (0, true) => Sweep::Unavailable(Undescribed::Unreadable),
-            _ => Sweep::Incomplete(survivors),
+        // An unreadable seen pid is the most specific reason, so it wins.
+        match unreadable {
+            true => Sweep::Unavailable(Undescribed::Unreadable),
+            false => Sweep::Incomplete(survivors),
         }
     }
     #[cfg(not(unix))]
@@ -1508,20 +1514,34 @@ struct TreeReaper {
 
 /// Retries of reapers dropped armed, and whether the one thread that runs
 /// them is alive: at most one late retry runs at a time in this process.
-static LATE_RETRIES: std::sync::Mutex<(bool, Vec<TreeReaper>)> =
-    std::sync::Mutex::new((false, Vec::new()));
+static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
+    std::sync::Mutex::new((false, VecDeque::new()));
 
-fn late_retries() -> std::sync::MutexGuard<'static, (bool, Vec<TreeReaper>)> {
+fn late_retries() -> std::sync::MutexGuard<'static, (bool, VecDeque<TreeReaper>)> {
     LATE_RETRIES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Queues `reaper`'s retry for the late-retry thread, starting it if needed.
-/// No thread: the queue runs here, and the failure is logged.
+/// Runs one late retry; a panic or a sweep not proven clean is logged.
+fn late_retry_logged(reaper: &mut TreeReaper) {
+    let retry = std::panic::AssertUnwindSafe(|| reaper.retry());
+    match std::panic::catch_unwind(retry) {
+        Err(_) => tracing::error!("shell: a late cleanup retry panicked"),
+        Ok(sweep) => {
+            if let Some(note) = sweep.and_then(|s| s.note(MAX_SWEEP_PASSES, MAX_SWEEP_TIME)) {
+                tracing::warn!(%note, "shell: a late cleanup retry");
+            }
+        }
+    }
+}
+
+/// Queues `reaper`'s retry (first in, first out) for the late-retry thread,
+/// starting it if needed. No thread: only this retry runs here, and the
+/// failure is logged with the retries still queued for the next thread.
 fn late_retry(reaper: TreeReaper) {
     let mut queue = late_retries();
-    queue.1.push(reaper);
+    queue.1.push_back(reaper);
     if std::mem::replace(&mut queue.0, true) {
         return;
     }
@@ -1529,30 +1549,28 @@ fn late_retry(reaper: TreeReaper) {
     let worker = || loop {
         let next = {
             let mut queue = late_retries();
-            let next = queue.1.pop();
+            let next = queue.1.pop_front();
             queue.0 = next.is_some();
             next
         };
         let Some(mut next) = next else {
             return;
         };
-        let retry = std::panic::AssertUnwindSafe(|| next.retry());
-        if std::panic::catch_unwind(retry).is_err() {
-            tracing::error!("shell: a late cleanup retry panicked");
-        }
+        late_retry_logged(&mut next);
     };
     let spawned = std::thread::Builder::new()
         .name("shell-late-retry".into())
         .spawn(worker);
     if let Err(err) = spawned {
-        tracing::error!(%err, "shell: no thread for a late cleanup retry; it runs inline");
-        let pending = {
+        let (mine, pending) = {
             let mut queue = late_retries();
             queue.0 = false;
-            std::mem::take(&mut queue.1)
+            // The queue was idle, so this reaper is first.
+            (queue.1.pop_front(), queue.1.len())
         };
-        for mut reaper in pending {
-            reaper.retry();
+        tracing::error!(%err, pending, "shell: no late-retry thread; this retry runs inline");
+        if let Some(mut mine) = mine {
+            late_retry_logged(&mut mine);
         }
     }
 }
@@ -1663,7 +1681,7 @@ impl TreeReaper {
             }
             let sweep = match self.root.filter(|_| scan) {
                 Some(root) => sweep_leftovers_with(
-                    Some(root),
+                    root,
                     &self.marker,
                     &mut self.seen,
                     &|_pass| Vec::new(),
@@ -1685,39 +1703,37 @@ impl TreeReaper {
     }
 
     /// The armed reaper's retry, then disarm. Still unreaped: the pgid is
-    /// pinned, so the full tree kill runs. Already reaped but not proven
-    /// clean: the marker scan still works (the file is held), so the
-    /// leftover sweep runs; the root's pid names the call's session only
-    /// while no process holds that pid, else another session took it over.
-    /// `self.child` drops after it, so the group kill runs unreaped.
-    fn retry(&mut self) {
+    /// pinned, so the full tree kill runs (no sweep result). Reaped: the root's
+    /// pid no longer pins its session id, so only the marker (held) and the
+    /// seen set are swept, and without the session net it is never clean.
+    fn retry(&mut self) -> Option<Sweep> {
+        self.armed = false;
         if self.child.as_ref().is_some_and(|c| c.id().is_some()) {
             self.sweep_now();
-        } else if let Some(root) = self.root {
-            // SAFETY: signal 0 sends nothing; it only asks whether a process
-            // (any owner, a zombie too) holds the pid.
-            let free = unsafe { libc::kill(root, 0) } != 0
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-            let _ = sweep_leftovers(free.then_some(root), &self.marker, &mut self.seen);
+            return None;
         }
-        self.armed = false;
+        self.root?;
+        Some(
+            match sweep_leftovers(NO_SESSION, &self.marker, &mut self.seen) {
+                Sweep::Clean => Sweep::Unavailable(Undescribed::NoSession),
+                sweep => sweep,
+            },
+        )
     }
 
     /// End of a call: an armed reaper retries on a blocking thread, and the
-    /// call returns only after it. A retry that panicked is the error.
-    async fn retire(mut self) -> Result<(), tokio::task::JoinError> {
-        if self.armed {
-            tokio::task::spawn_blocking(move || self.retry()).await?;
+    /// call returns only after it, with the retry's sweep. A panic is the error.
+    async fn retire(mut self) -> Result<Option<Sweep>, tokio::task::JoinError> {
+        match self.armed {
+            true => tokio::task::spawn_blocking(move || self.retry()).await,
+            false => Ok(None),
         }
-        Ok(())
     }
 }
 
 impl Drop for TreeReaper {
     /// A call dropped mid-flight (cancelled turn) still retries, on the
-    /// late-retry thread so no async worker blocks for up to
-    /// [`MAX_SWEEP_TIME`]. The retry owns the child and the marker file, so
-    /// both stay held until it ends, after the call's own files are gone.
+    /// late-retry thread; the retry owns the child and the marker file.
     fn drop(&mut self) {
         if !self.armed {
             return;
@@ -2091,8 +2107,12 @@ impl Tool for ShellTool {
             content.push_str("(no output)");
         }
 
-        if let Err(err) = reaper.retire().await {
-            push_section(&mut content, &format!("[cleanup retry failed: {err}]"));
+        let retried = match reaper.retire().await {
+            Err(err) => Some(format!("[cleanup retry failed: {err}]")),
+            Ok(sweep) => sweep.and_then(|sweep| sweep.note(MAX_SWEEP_PASSES, MAX_SWEEP_TIME)),
+        };
+        if let Some(note) = retried {
+            push_section(&mut content, &format!("[after the retry] {note}"));
         }
         Ok(ToolOutput { content, is_error })
     }
@@ -2732,7 +2752,7 @@ mod tests {
             let mut child = command.spawn().unwrap();
             let root = child.id().unwrap() as i32;
             let _status = child.wait().await.unwrap();
-            let _ = sweep_leftovers(Some(root), &marker, &mut HashSet::new());
+            let _ = sweep_leftovers(root, &marker, &mut HashSet::new());
             (root, marker, launched.temp)
         }
 
@@ -2837,7 +2857,7 @@ mod tests {
         // its own session/marker (never this process or launchd) is covered by
         // `a_sweep_never_targets_this_process_or_launchd`.
         let sweep = sweep_leftovers_with(
-            Some(root_pid),
+            root_pid,
             &marker,
             &mut HashSet::new(),
             &|pass| {
@@ -2918,7 +2938,7 @@ mod tests {
         assert!(all_pids().contains(&helper), "the helper must be listed");
 
         let sweep = sweep_leftovers_with(
-            Some(root_pid),
+            root_pid,
             &marker,
             &mut HashSet::new(),
             &|pass| if pass == 1 { vec![helper] } else { Vec::new() },
@@ -2953,7 +2973,7 @@ mod tests {
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
         // No session has this id, so only the seam keeps the pass unclean.
         let sweep = sweep_leftovers_with(
-            Some(i32::MAX),
+            i32::MAX,
             &marker,
             &mut HashSet::new(),
             &|_pass| Vec::new(),
@@ -2965,7 +2985,7 @@ mod tests {
         // An answer that says nothing fails closed the same way: the sweep
         // ends `Incomplete`, so the caller notes it and keeps its reaper armed.
         let sweep = sweep_leftovers_with(
-            Some(i32::MAX),
+            i32::MAX,
             &marker,
             &mut HashSet::new(),
             &|_pass| Vec::new(),
@@ -3085,7 +3105,7 @@ mod tests {
         }
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
         let sweep = sweep_leftovers_with(
-            Some(i32::MAX),
+            i32::MAX,
             &marker,
             &mut HashSet::new(),
             &|pass| {
@@ -3179,7 +3199,7 @@ mod tests {
             let helper = children.0[1].id() as i32;
             let passes = std::cell::Cell::new(0);
             let sweep = sweep_leftovers_with(
-                Some(i32::MAX),
+                i32::MAX,
                 &marker,
                 &mut HashSet::new(),
                 &|pass| {
@@ -3344,16 +3364,15 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
 
     /// Kills on drop what a test command named in pid files under its dir,
     /// so a failed `run()` or an early panic leaks nothing. Built before the
-    /// run, it signals only a process of this user started at most a second
-    /// before the guard, so an older process that took over the pid is left
-    /// alone (one recycled within the test's own seconds is not told apart).
+    /// run, it signals only a process of this user (started after the
+    /// guard, so an older process that took over the pid is left alone; one
+    /// recycled within the test's own seconds is not told apart).
     #[cfg(unix)]
     struct PidFiles(std::path::PathBuf, &'static [&'static str], u64);
 
     #[cfg(unix)]
     impl PidFiles {
         fn new(dir: &std::path::Path, names: &'static [&'static str]) -> Self {
-            // macOS start times are microseconds since the epoch.
             #[cfg(target_os = "macos")]
             let after = (std::time::UNIX_EPOCH.elapsed().unwrap().as_micros() as u64)
                 .saturating_sub(1_000_000);
@@ -3638,7 +3657,7 @@ await(q(bg.pid));
         // `answer` is what the visibility seam says of the fake pid.
         let sweep = |seen: &mut HashSet<TrackedPid>, answer: Visibility| {
             sweep_leftovers_with(
-                Some(i32::MAX),
+                i32::MAX,
                 &marker,
                 seen,
                 &|_pass| Vec::new(),
@@ -3655,7 +3674,8 @@ await(q(bg.pid));
         #[cfg(target_os = "macos")]
         {
             let mut seen = fill(i32::MAX - 1);
-            assert_eq!(sweep(&mut seen, Visibility::Described), Sweep::SeenCap);
+            let unreadable = Sweep::Unavailable(Undescribed::Unreadable);
+            assert_eq!(sweep(&mut seen, Visibility::Described), unreadable);
             assert_eq!(seen.len(), MAX_SEEN_PIDS, "unknown pids were dropped");
         }
         // Pids that cannot be live: pruned on the first pass.
@@ -3753,33 +3773,38 @@ await(q(bg.pid));
         assert!(during >= 2, "{during} ticks in a {window:?} sweep");
     }
 
-    /// SHELL-SWEEP-5 (2): a seen pid that stays unreadable keeps the sweep
-    /// from reading clean, with one entry, far below [`MAX_SEEN_PIDS`].
+    /// SHELL-SWEEP-5 (2): one seen pid, far below [`MAX_SEEN_PIDS`], that
+    /// stays unreadable is never clean; a real zombie (this test's unreaped
+    /// child) is gone by the kernel's answer though the seam says listed.
     #[cfg(unix)]
     #[test]
-    fn one_unreadable_seen_pid_below_the_cap_is_never_clean() {
+    fn below_the_cap_an_unreadable_pid_is_never_clean_and_a_zombie_is_gone() {
         let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
-        let ghost = i32::MAX - 1;
-        let mut seen = HashSet::from([TrackedPid {
-            pid: ghost,
-            start: 1,
-        }]);
-        let sweep = sweep_leftovers_with(
-            Some(i32::MAX),
-            &marker,
-            &mut seen,
-            &|_pass| Vec::new(),
-            &|_pass, pid| match pid == ghost {
-                true => Visibility::Unknown,
-                false => Visibility::Described,
-            },
-            3,
-            MAX_SWEEP_TIME,
-        );
-        assert_eq!(sweep, Sweep::Unavailable(Undescribed::Unreadable));
-        assert_eq!(seen.len(), 1, "the unreadable pid was forgotten");
-        let note = sweep.note(3, MAX_SWEEP_TIME).unwrap();
-        assert!(!note.contains(&MAX_SEEN_PIDS.to_string()), "{note}");
+        let zombie = HeldZombie::new();
+        for (pid, want) in [
+            (i32::MAX - 1, Sweep::Unavailable(Undescribed::Unreadable)),
+            (zombie.pid(), Sweep::Clean),
+        ] {
+            let mut seen = HashSet::from([TrackedPid { pid, start: 1 }]);
+            let sweep = sweep_leftovers_with(
+                i32::MAX,
+                &marker,
+                &mut seen,
+                &|_pass| Vec::new(),
+                &|_pass, at| match at == i32::MAX - 1 {
+                    true => Visibility::Unknown,
+                    false => Visibility::Described,
+                },
+                3,
+                MAX_SWEEP_TIME,
+            );
+            assert_eq!(
+                (sweep, seen.len()),
+                (want, usize::from(want != Sweep::Clean))
+            );
+            let note = sweep.note(3, MAX_SWEEP_TIME).unwrap_or_default();
+            assert!(!note.contains(&MAX_SEEN_PIDS.to_string()), "{note}");
+        }
     }
 
     /// SHELL-SWEEP-5 (1): a reaper dropped armed after its root was reaped
@@ -3789,20 +3814,8 @@ await(q(bg.pid));
     #[cfg(unix)]
     #[tokio::test]
     async fn a_late_retry_never_kills_the_session_of_a_reused_root_pid() {
-        use std::os::unix::process::CommandExt;
-        let mut leader = std::process::Command::new("/bin/sh");
-        leader.args(["-c", "sleep 60 & wait"]);
-        // SAFETY: `setsid` is async-signal-safe and runs in the forked child
-        // before exec; it touches no memory of this process.
-        unsafe {
-            leader.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-        let null = std::process::Stdio::null;
-        let leader = leader.stdin(null()).stdout(null()).stderr(null()).spawn();
-        let mut guard = Spawned(vec![leader.unwrap()], Vec::new());
+        let leader = "exec perl -MPOSIX -e 'POSIX::setsid; exec q(sh), q(-c), q(sleep 60 & wait)'";
+        let mut guard = Spawned(vec![spawn_sh(leader)], Vec::new());
         let reused = guard.0[0].id() as i32;
         let member = (0..500).find_map(|_| {
             std::thread::sleep(Duration::from_millis(10));
@@ -3820,10 +3833,7 @@ await(q(bg.pid));
             marker_file: Some(marker_file),
         };
         drop(reaper);
-        let idle = || {
-            let queue = late_retries();
-            !queue.0 && queue.1.is_empty()
-        };
+        let idle = || !late_retries().0;
         for _ in 0..1000 {
             if idle() {
                 break;

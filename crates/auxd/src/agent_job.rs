@@ -436,6 +436,36 @@ impl AgentJobRunner {
         format!("condition {verdict}")
     }
 
+    /// The rules one job turn of `agent` runs under: the owner's, its tools
+    /// list (every registered tool it does not list is denied),
+    /// MAIL-NO-SHELL, then its own grants held to the chief
+    /// ([`crate::api::constrain_non_api_turn`]).
+    fn turn_rules(
+        &self,
+        agent: &str,
+        agent_config: &AgentConfig,
+        registry: &mut ToolRegistry,
+    ) -> Vec<Rule> {
+        let mut rules = self.rules.clone();
+        if let Some(tools) = &agent_config.tools {
+            let names: Vec<String> = registry.names().into_iter().map(str::to_string).collect();
+            for name in &names {
+                if !tools.iter().any(|tool| tool == name) {
+                    rules.push(Rule::new(agent, name, Action::Deny));
+                }
+            }
+        }
+        aux_engine::config::keep_shell_from_domain_agent(
+            &self.home,
+            agent,
+            agent_config.tools.as_deref(),
+            registry,
+            &mut rules,
+        );
+        crate::api::constrain_non_api_turn(&self.home, agent, registry, &mut rules);
+        rules
+    }
+
     /// Run one turn under `mode` (the mode the run was admitted in) with the
     /// `contacts` its gate masks. Returns the outcome and how many approvals
     /// were denied.
@@ -463,39 +493,12 @@ impl AgentJobRunner {
             title.as_deref(),
             "job",
         )?;
-        // The per-agent tools ceiling: listed tools keep their
-        // global rules, every other registered tool is denied for this agent.
-        let mut rules = self.rules.clone();
-        if let Some(tools) = &agent_config.tools {
-            let names: Vec<String> = registry
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .names()
-                .into_iter()
-                .map(str::to_string)
-                .collect();
-            for name in &names {
-                if !tools.iter().any(|tool| tool == name) {
-                    rules.push(Rule::new(&job.agent, name, Action::Deny));
-                }
-            }
-        }
-        aux_engine::config::keep_shell_from_domain_agent(
-            &self.home,
+        let rules = self.turn_rules(
             &job.agent,
-            agent_config.tools.as_deref(),
+            agent_config,
             &mut registry
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-            &mut rules,
-        );
-        crate::api::constrain_non_api_turn(
-            &self.home,
-            &job.agent,
-            &registry
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            &mut rules,
         );
         // Load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
@@ -1534,6 +1537,37 @@ mod tests {
             "the denial is persisted: {}",
             tool_message.content
         );
+    }
+
+    /// A job turn is held to the agent's own grants, not only to the chief:
+    /// with Calendar's `mail.send` set `off`, the send its skill would make is
+    /// denied though the chief may send. With the shipped grants it asks.
+    #[test]
+    fn a_job_holds_the_agent_to_its_own_grants_even_when_the_chief_allows() {
+        use aux_runtime::grants::{default_grants, ActionLevel};
+        let harness = Harness::new();
+        std::fs::write(
+            kernel_core::config_path(&harness.home),
+            "version = 1\ndefault_agent = \"main\"\nprivacy.mode = \"open\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(aux_engine::agent_dir(&harness.home, "calendar")).unwrap();
+        let provider = Arc::new(FakeProvider::scripted("fake", Vec::new()));
+        let runner = harness.runner(provider, Vec::new(), &Budgets::default());
+        let send = |agent: &str| {
+            let mut registry = ToolRegistry::new();
+            let rules = runner.turn_rules(agent, &AgentConfig::default(), &mut registry);
+            kernel_broker::matching_rule(&rules, agent, "mail_send", false)
+                .map(|(_, rule)| rule.action)
+        };
+        assert_eq!(send("calendar"), Some(Action::Ask));
+        let mut own = default_grants("calendar").unwrap();
+        for grant in own.can_do.iter_mut().filter(|g| g.skill == "mail.send") {
+            grant.level = ActionLevel::Off;
+        }
+        crate::agents::write_grants(&harness.home, "calendar", &own).unwrap();
+        assert_eq!(send("calendar"), Some(Action::Deny));
+        assert_eq!(send("main"), None, "the chief may send");
     }
 
     /// Under a global `allow shell`, a scheduled

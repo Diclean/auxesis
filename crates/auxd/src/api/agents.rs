@@ -439,6 +439,8 @@ pub(crate) fn create_sync(
             crate::agents::RegistryError::ExceedsChief => crate::agents::exceeds_chief(),
             _ => internal_error(),
         })?;
+        // Its shipped `agent.md` lists tools: the same ceiling as a request.
+        validate_tool_ceiling(home, &def.id, &crate::agents::shipped_tools(&def.id))?;
         request.name = Some(def.id);
     }
     let validated = validate_create(home, request)?;
@@ -453,9 +455,11 @@ pub(crate) fn create_sync(
                     _ => internal_error(),
                 },
             )?;
+            validate_tool_ceiling(home, &def.id, &crate::agents::shipped_tools(&def.id))?;
         }
     }
-    validate_tool_ceiling(home, name, &validated.config)?;
+    let requested = validated.config.tools.as_deref().unwrap_or_default();
+    validate_tool_ceiling(home, name, requested)?;
     let expected_soul = validated
         .instructions
         .clone()
@@ -571,6 +575,8 @@ fn update_sync(
         request.instructions.as_deref(),
         request.soul_md.as_deref(),
     )?;
+    // The ceiling check and the write it allows, as one step (as a create).
+    let _guard = kernel_core::lock_recover(crate::agents::grants_lock());
     let mut config = agent::config(home, id).map_err(|err| agent_write_failed(&err.to_string()))?;
     let mut fields: Vec<&str> = Vec::new();
 
@@ -629,7 +635,7 @@ fn update_sync(
         }
     }
     validate_effective_selection(home, &config)?;
-    validate_tool_ceiling(home, id, &config)?;
+    validate_tool_ceiling(home, id, config.tools.as_deref().unwrap_or_default())?;
 
     if let Some(instructions) = &instructions {
         let text = if instructions.trim().is_empty() {
@@ -754,16 +760,16 @@ fn validate_selection(
 }
 
 /// A tools list names only tools the chief may use (its
-/// grants, its own tools list, its config deny rules). The run-time ceiling
-/// enforces the same every turn; this refuses early with a clear error. The
-/// chief is the one this home runs: on an older install an added agent stays
-/// under `aux` as well as under `main` ([`crate::agents::ceilings`]).
+/// grants, its own tools list, the config rules that deny it). The run-time
+/// ceiling enforces the same every turn; this refuses early with a clear
+/// error. The chief is the one this home runs: on an older install an added
+/// agent stays under `aux` as well as under `main` ([`crate::agents::ceilings`]).
 #[allow(clippy::result_large_err)]
-fn validate_tool_ceiling(home: &Path, id: &str, config: &AgentConfig) -> Result<(), Response> {
+fn validate_tool_ceiling(home: &Path, id: &str, tools: &[String]) -> Result<(), Response> {
     let caps = crate::agents::ceilings(home, id);
-    let Some(tools) = config.tools.as_ref().filter(|_| !caps.is_empty()) else {
+    if caps.is_empty() || tools.is_empty() {
         return Ok(());
-    };
+    }
     let agents = crate::agents::registry(home).map_err(|_| internal_error())?;
     let path = config_path(home);
     let rules = if path.exists() {
@@ -773,18 +779,22 @@ fn validate_tool_ceiling(home: &Path, id: &str, config: &AgentConfig) -> Result<
     };
     for cap in caps {
         let chief = crate::agents::ceiling_grants(&agents, cap);
-        let chief_tools = agent::config(home, cap)
-            .map_err(|_| internal_error())?
-            .tools;
-        let chief_rules: Vec<_> = rules.iter().filter(|r| r.agent == cap).cloned().collect();
+        agent::config(home, cap).map_err(|_| internal_error())?;
+        // Both of the chief's lists, as the run-time ceiling reads them.
+        let chief_lists = super::turn::tool_lists(home, cap);
         let refused = tools.iter().any(|tool| {
-            let denied = kernel_broker::matching_rule(&chief_rules, cap, tool, false)
+            // An agent file names `mail.send`; rules and grants see `mail_send`.
+            let wire = aux_runtime::skills::tool_map::wire_name(tool);
+            let tool = wire.as_deref().unwrap_or(tool);
+            // Every rule, matched as the broker matches it: an `agent = "*"`
+            // rule is the chief's too, and the last match wins.
+            let denied = kernel_broker::matching_rule(&rules, cap, tool, false)
                 .is_some_and(|(_, rule)| rule.action == kernel_broker::Action::Deny);
             denied
                 || chief.check_tool(cap, tool).is_err()
-                || chief_tools
-                    .as_ref()
-                    .is_some_and(|list| !list.contains(tool))
+                || !chief_lists
+                    .iter()
+                    .all(|list| super::turn::listed(list, tool))
         });
         if refused {
             return Err(crate::agents::exceeds_chief());
@@ -1218,10 +1228,7 @@ kind = "openai-compat"
     /// which `aux` hands work to, keeps it; a `main` home is as before.
     #[test]
     fn a_tools_list_is_held_to_the_chief_this_home_runs() {
-        let reader = AgentConfig {
-            tools: Some(vec!["mail_read".to_string()]),
-            ..AgentConfig::default()
-        };
+        let reader = vec!["mail_read".to_string()];
         let dir = home_with_config("version = 1\ndefault_agent = \"aux\"\n");
         let home = dir.path();
         for id in ["scout", "main"] {
@@ -1233,6 +1240,76 @@ kind = "openai-compat"
 
         let dir = home_with_config("version = 1\ndefault_agent = \"main\"\n");
         assert!(validate_tool_ceiling(dir.path(), "scout", &reader).is_ok());
+    }
+
+    /// A template's shipped tools list is held to the chief like a requested
+    /// one: with `main` denied `mail_send`, Mail is refused and leaves no
+    /// folder, Documents still fits, and the chief is never held to itself.
+    #[test]
+    fn a_template_tools_list_is_held_to_the_chief() {
+        let deny = "\n[[rules]]\nagent = \"main\"\ntool = \"mail_send\"\naction = \"deny\"\n";
+        let dir = home_with_config(&format!("{CONFIG}{deny}"));
+        let home = dir.path();
+        let db = home.join("store.db");
+        aux_store::Store::open(&db).unwrap();
+        let template = |id: &str| CreateAgentRequest {
+            template: Some(id.to_string()),
+            ..CreateAgentRequest::default()
+        };
+        let refused = create_sync(home, &db, template("mail")).unwrap_err();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert!(!agent::exists(home, "mail"));
+        let (status, _) = create_sync(home, &db, template("documents")).unwrap();
+        assert_eq!(status, StatusCode::CREATED);
+        let wide = vec!["mail_send".to_string(), "shell".to_string()];
+        assert!(validate_tool_ceiling(home, "main", &wide).is_ok());
+    }
+
+    /// An `agent = "*"` rule denies the chief as an exact one does, in the
+    /// broker's order. `mail_send` denied to every agent, then allowed to
+    /// Mail: the chief is denied it, so the Mail template and a list naming
+    /// it are refused. The reverse order is refused too. An allow for the
+    /// chief after the wildcard lets both through again.
+    #[test]
+    fn a_wildcard_deny_of_the_chief_refuses_a_tools_list() {
+        let rule = |agent: &str, action: &str| {
+            format!(
+                "\n[[rules]]\nagent = \"{agent}\"\ntool = \"mail_send\"\naction = \"{action}\"\n"
+            )
+        };
+        let (every, mail, chief) = (
+            rule("*", "deny"),
+            rule("mail", "allow"),
+            rule("main", "allow"),
+        );
+        for (rules, refused) in [
+            (format!("{every}{mail}"), true),
+            (format!("{mail}{every}"), true),
+            (format!("{every}{chief}{mail}"), false),
+        ] {
+            let dir = home_with_config(&format!("{CONFIG}{rules}"));
+            let home = dir.path();
+            let sends = vec!["mail.send".to_string()];
+            let listed = validate_tool_ceiling(home, "scout", &sends);
+            assert_eq!(listed.is_err(), refused, "{rules}");
+            let db = home.join("store.db");
+            aux_store::Store::open(&db).unwrap();
+            let template = CreateAgentRequest {
+                template: Some("mail".to_string()),
+                ..CreateAgentRequest::default()
+            };
+            let status = match create_sync(home, &db, template) {
+                Ok((status, _)) => status,
+                Err(response) => response.status(),
+            };
+            let expected = if refused {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::CREATED
+            };
+            assert_eq!(status, expected, "{rules}");
+            assert_eq!(agent::exists(home, "mail"), !refused, "{rules}");
+        }
     }
 
     #[test]

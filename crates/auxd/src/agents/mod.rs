@@ -361,10 +361,44 @@ pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
         if over.iter().all(|cap| subset(&agent.grants, cap)) {
             continue;
         }
-        tracing::warn!(agent = %agent.id, "agent grants capped at the chief");
-        agent.grants = clamp_all(&agent.grants, &over);
+        let capped = clamp_all(&agent.grants, &over);
+        log_capped(&agent.id, &cut(&agent.grants, &capped));
+        agent.grants = capped;
     }
     Ok(agents)
+}
+
+/// The names of the grants `capped` lowers or drops from `grants`, and of
+/// the chief `never`s it adds.
+fn cut(grants: &AgentGrants, capped: &AgentGrants) -> Vec<String> {
+    let see = grants.see.iter().filter(|grant| {
+        !capped
+            .see
+            .iter()
+            .any(|c| c.scope == grant.scope && c.level == grant.level)
+    });
+    let can_do = grants.can_do.iter().filter(|grant| {
+        !capped
+            .can_do
+            .iter()
+            .any(|c| c.skill == grant.skill && c.level == grant.level)
+    });
+    let never = capped.never.iter().filter(|n| !grants.never.contains(n));
+    see.map(|grant| grant.scope.clone())
+        .chain(can_do.map(|grant| grant.skill.clone()))
+        .chain(never.cloned())
+        .collect()
+}
+
+/// One warning per agent and capped set, never repeated: the agent id and
+/// the grant or tool names only, never a level, a note or any content.
+pub(crate) fn log_capped(agent: &str, names: &[String]) {
+    static SEEN: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let names = names.join(",");
+    if kernel_core::lock_recover(&SEEN).insert(format!("{agent}\n{names}")) {
+        tracing::warn!(agent, grants = %names, "agent access capped at the chief");
+    }
 }
 
 /// `grants` capped at each ceiling in turn. If that still exceeds one of
@@ -561,6 +595,21 @@ const SHIPPED_FILES: [(&str, &str, &str); 9] = [
         include_str!("../../../aux-runtime/src/skills/fixtures/skills/collect-receipts.md"),
     ),
 ];
+
+/// The tools a template's shipped `agent.md` lists, read before any file is
+/// written, so a create the chief ceiling refuses leaves nothing behind.
+pub(crate) fn shipped_tools(id: &str) -> Vec<String> {
+    let text = SHIPPED_FILES
+        .iter()
+        .find(|(agent, file, _)| *agent == id && *file == "agent.md")
+        .map(|(_, _, text)| *text);
+    let meta = text.and_then(|text| aux_runtime::skills::frontmatter::parse(text).ok());
+    let items = meta
+        .as_ref()
+        .and_then(|(meta, _)| meta.get("tools")?.as_list());
+    let names = items.into_iter().flatten().filter_map(|item| item.as_str());
+    names.map(str::to_string).collect()
+}
 
 /// True when `name` is a skill shipped inside `agent`'s directory.
 pub(crate) fn is_shipped_skill(agent: &str, name: &str) -> bool {
@@ -1647,6 +1696,23 @@ mod tests {
         narrow.can_do.retain(|g| g.skill != "mail.read");
         let refused = write_grants(home, CHIEF_AGENT, &narrow);
         assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+    }
+
+    /// The chief is never held to itself: a set wider than its shipped one is
+    /// written and read back as is, and no ceiling caps it.
+    #[test]
+    fn the_chief_is_never_refused_against_itself() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let mut wider = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        wider.can_do.push(DoGrant {
+            skill: "mcp__bank__pay".to_string(),
+            level: ActionLevel::Auto,
+        });
+        write_grants(home, CHIEF_AGENT, &wider).unwrap();
+        assert_eq!(grants(home, CHIEF_AGENT).unwrap(), wider);
+        assert!(ceilings(home, CHIEF_AGENT).is_empty());
     }
 
     /// An older install's chief is `aux`: an added agent (and `main`, which

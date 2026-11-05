@@ -92,9 +92,11 @@ fn sandbox() -> (tempfile::TempDir, PathBuf) {
     let home = dir.path().join(".auxesis");
     let agent = home.join("agents/main");
     std::fs::create_dir_all(agent.join("skills")).unwrap();
+    // `main` is the chief, as on a fresh install. Without the key this would
+    // be an older home, whose chief `aux` caps `main` and has no CRM tools.
     std::fs::write(
         home.join("config.toml"),
-        "version = 1\n\n[privacy]\nmode = \"open\"\n",
+        "version = 1\ndefault_agent = \"main\"\n\n[privacy]\nmode = \"open\"\n",
     )
     .unwrap();
     std::fs::write(agent.join("agent.md"), AGENT).unwrap();

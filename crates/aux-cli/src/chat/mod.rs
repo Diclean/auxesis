@@ -229,6 +229,29 @@ struct ChatParts<'a> {
 }
 
 impl ChatParts<'_> {
+    /// The rules a session runs under: the owner's, MAIL-NO-SHELL, then the
+    /// agent's own grants held to the chief, as the daemon holds a turn
+    /// ([`auxd::api::constrain_non_api_turn`]).
+    fn session_rules(
+        &self,
+        registry: &mut kernel_broker::ToolRegistry,
+    ) -> Vec<kernel_broker::Rule> {
+        // A config that cannot be read opts into nothing: no shell.
+        let toml_tools = auxd::agent::config(&self.home, &self.agent)
+            .ok()
+            .and_then(|config| config.tools);
+        let mut rules = self.rules.clone();
+        aux_engine::config::keep_shell_from_domain_agent(
+            &self.home,
+            &self.agent,
+            toml_tools.as_deref(),
+            registry,
+            &mut rules,
+        );
+        auxd::api::constrain_non_api_turn(&self.home, &self.agent, registry, &mut rules);
+        rules
+    }
+
     /// A session under `mode`, resuming `resume` when given. Its gate and its
     /// stop follow `mode`: a change of the live mode stops its turns. Its tools
     /// are dispatched through the live mode, so each call asks it again.
@@ -249,19 +272,7 @@ impl ChatParts<'_> {
             ));
         }
         kernel_broker::gate_dispatch(&mut registry, Arc::clone(&self.live));
-        // A config that cannot be read opts into nothing: no shell.
-        let toml_tools = auxd::agent::config(&self.home, &self.agent)
-            .ok()
-            .and_then(|config| config.tools);
-        let mut rules = self.rules.clone();
-        aux_engine::config::keep_shell_from_domain_agent(
-            &self.home,
-            &self.agent,
-            toml_tools.as_deref(),
-            &mut registry,
-            &mut rules,
-        );
-        auxd::api::constrain_non_api_turn(&self.home, &self.agent, &registry, &mut rules);
+        let rules = self.session_rules(&mut registry);
         ChatSession::start(ChatSetup {
             mode: Arc::new(move || mode),
             contacts: Arc::clone(&self.contacts),
@@ -646,6 +657,39 @@ mod tests {
                 "{agent} opt-in {opt_in}"
             );
         }
+    }
+
+    /// `aux chat` holds the agent to its own grants, not only to the chief:
+    /// with Calendar's `mail.send` set `off`, its send is denied though the
+    /// chief may send. With the shipped grants it asks.
+    #[test]
+    fn a_session_holds_the_agent_to_its_own_grants_even_when_the_chief_allows() {
+        use aux_runtime::grants::{default_grants, ActionLevel};
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(aux_engine::agent_dir(&home, "calendar")).unwrap();
+        let config_file = kernel_core::config_path(&home);
+        let text = "version = 1\ndefault_agent = \"main\"\nprivacy.mode = \"open\"\n";
+        std::fs::write(&config_file, text).unwrap();
+        let config = Config::default();
+        let provider = aux_providers::FakeProvider::echo("calendar");
+        let mut parts = test_parts(&home, &config, &provider, live_from(&config_file));
+        let send = |parts: &ChatParts<'_>| {
+            let mut registry = aux_engine::registry_from_config(parts.config);
+            let rules = parts.session_rules(&mut registry);
+            kernel_broker::matching_rule(&rules, &parts.agent, "mail_send", false)
+                .map(|(_, rule)| rule.action)
+        };
+        parts.agent = "calendar".to_string();
+        assert_eq!(send(&parts), Some(kernel_broker::Action::Ask));
+        let mut own = default_grants("calendar").unwrap();
+        for grant in own.can_do.iter_mut().filter(|g| g.skill == "mail.send") {
+            grant.level = ActionLevel::Off;
+        }
+        auxd::agents::write_grants(&home, "calendar", &own).unwrap();
+        assert_eq!(send(&parts), Some(kernel_broker::Action::Deny));
+        parts.agent = "main".to_string();
+        assert_eq!(send(&parts), None, "the chief may send");
     }
 
     #[test]

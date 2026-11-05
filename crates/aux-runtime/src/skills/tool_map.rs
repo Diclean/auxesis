@@ -177,6 +177,11 @@ pub fn lookup(name: &str) -> Option<ToolInfo> {
     })
 }
 
+/// The wire name of every fixed tool: each one a skill run can call.
+pub fn wire_names() -> impl Iterator<Item = &'static str> {
+    STATIC_TOOLS.iter().map(|(_, wire, ..)| *wire)
+}
+
 /// Resolve a wire name back to its tool.
 pub fn from_wire(wire: &str) -> Option<ToolInfo> {
     if let Some((logical, ..)) = STATIC_TOOLS.iter().find(|(_, name, ..)| *name == wire) {

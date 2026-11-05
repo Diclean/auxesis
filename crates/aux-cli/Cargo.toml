@@ -53,5 +53,8 @@ tempfile.workspace = true
 # Enable auxd's `test-util` seams for the workspace test build (feature
 # unification), so auxd's own integration tests compile the turn hook.
 auxd = { path = "../auxd", features = ["test-util"] }
+# The chat loop's unit tests use the fake provider; `test-fake` is off by
+# default, so a release `aux` build has no fake adapter.
+aux-providers = { path = "../aux-providers", features = ["test-fake"] }
 # `MemoryAuditSink` for the skill-run tests (cfg(test) does not cross crates).
 kernel-broker = { workspace = true, features = ["test-util"] }

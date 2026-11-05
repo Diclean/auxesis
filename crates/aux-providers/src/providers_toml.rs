@@ -44,7 +44,8 @@ pub enum EntryKind {
     Ollama,
     /// An ACP agent (OpenCode, …), a turn-level backend.
     Acp,
-    /// Deterministic in-process adapter for tests.
+    /// Deterministic in-process adapter for tests; requires the off-by-default
+    /// `test-fake` feature (release builds refuse a `fake` entry).
     Fake,
 }
 

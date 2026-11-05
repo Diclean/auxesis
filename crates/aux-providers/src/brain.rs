@@ -11,9 +11,8 @@ use std::sync::Arc;
 
 use crate::anthropic::AnthropicCompat;
 use crate::catalog::{gate_skill_tools, Catalog, ChatOnly};
-use crate::config::{shown_id_plain, ConfigError, ProviderConfig, ProviderKind};
+use crate::config::{build_fake, shown_id_plain, ConfigError, ProviderConfig, ProviderKind};
 use crate::error::ProviderError;
-use crate::fake::FakeProvider;
 use crate::fallback::{FallbackAdmission, FallbackLedger, FallbackProvider, NoopLedger};
 use crate::openai_compat::OpenAiCompat;
 use crate::provider::ChatProvider;
@@ -208,7 +207,7 @@ pub fn build_entry(
     home: &Path,
 ) -> Result<Box<dyn ChatProvider>, ProviderError> {
     match entry.kind {
-        EntryKind::Fake => Ok(Box::new(FakeProvider::echo(&entry.id))),
+        EntryKind::Fake => build_fake(&entry.id),
         EntryKind::Acp => Err(ProviderError::AcpBackend {
             provider: shown_id_plain(&entry.id),
         }),

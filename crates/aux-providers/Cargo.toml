@@ -22,10 +22,11 @@ tracing.workspace = true
 # The integration tests (tests/providers_layer.rs, tests/ollama_preset.rs,
 # tests/openai_compat_wire.rs) link this crate as an external dependency and
 # need its `test_gate` seam, which is compiled only with the `test-util`
-# feature. A self dev-edge turns it on for this crate alone (`cargo test -p
+# feature. The fake provider is behind `test-fake`, also off by default.
+# A self dev-edge turns both on for this crate alone (`cargo test -p
 # aux-providers`, `cargo clippy -p aux-providers --all-targets`), the way
-# crates/aux-mail and crates/auxd do it; a production build never enables it.
-aux-providers = { path = ".", features = ["test-util"] }
+# crates/aux-mail and crates/auxd do it; a production build never enables them.
+aux-providers = { path = ".", features = ["test-util", "test-fake"] }
 kernel-privacy = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["time"] }
@@ -34,3 +35,7 @@ wiremock = "0.6"
 [features]
 # Test helpers for tokenising gates (`test_gate`), for this crate and its dependents' tests.
 test-util = ["kernel-privacy/test-util"]
+# The deterministic in-process fake provider (`FakeProvider`). Tests enable it
+# through a dev-dependency; release binaries do not, and a `fake` provider
+# entry is then refused when its adapter is built.
+test-fake = []

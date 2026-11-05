@@ -81,7 +81,8 @@ pub fn is_fallback_eligible(err: &ProviderError) -> bool {
         | ProviderError::Refused { .. }
         | ProviderError::Config(_)
         | ProviderError::Key(_)
-        | ProviderError::AcpBackend { .. } => false,
+        | ProviderError::AcpBackend { .. }
+        | ProviderError::FakeDisabled { .. } => false,
     }
 }
 

@@ -86,6 +86,16 @@ pub enum ProviderError {
         /// Provider id from the configuration.
         provider: String,
     },
+    /// A `fake` provider was configured, but this build has no fake adapter.
+    #[error(
+        "provider `{provider}` is a fake provider, and this build does not include \
+         the fake adapter (the `test-fake` feature is off); configure a real \
+         AI service instead"
+    )]
+    FakeDisabled {
+        /// Provider id from the configuration.
+        provider: String,
+    },
     /// The provider configuration is invalid.
     /// The privacy gate refused this call in the current mode.
     #[error("provider `{provider}` is disabled in private mode ({path})")]

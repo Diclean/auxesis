@@ -119,7 +119,9 @@ chrono-tz = "0.10"
 # The property oracle matches names after NFKC, as the kernel
 # does. Already a kernel dependency at this version, so a new edge only.
 unicode-normalization = "0.1"
-aux-providers = { path = "../aux-providers", features = ["test-util"] }
+# `test-fake` provides the fake provider the daemon tests configure with
+# `kind = "fake"`; a release build never enables it (resources are dev-only).
+aux-providers = { path = "../aux-providers", features = ["test-util", "test-fake"] }
 aux-engine = { path = "../aux-engine", features = ["test-util"] }
 # The hero test (`tests/skill_hero.rs`) drives the Google skill writes against a
 # loopback wiremock server, which needs the aux-google `test-util` seam.

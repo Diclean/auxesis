@@ -1,5 +1,9 @@
 //! Deterministic fake chat provider for tests and the sandbox.
 //!
+//! Compiled only with the off-by-default `test-fake` feature (tests and
+//! sandbox builds). A release build has no fake adapter: a `fake` provider
+//! entry is refused with [`crate::ProviderError::FakeDisabled`].
+//!
 //! No network, no keys. Three modes:
 //!
 //! - [`FakeProvider::scripted`] — returns the given responses in order, then

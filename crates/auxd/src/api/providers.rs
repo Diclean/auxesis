@@ -56,7 +56,8 @@ use aux_providers::key::{
 };
 use aux_providers::{
     chat_completions_url, load_providers, parse_providers, provider_name_is_key_shaped,
-    shown_base_url, shown_id_plain, ProviderConfig, ProviderKind, KEY_SHAPED_PROVIDER_NAME,
+    shown_base_url, shown_id_plain, ProviderConfig, ProviderKind, FAKE_PROVIDER_SUPPORTED,
+    KEY_SHAPED_PROVIDER_NAME,
 };
 use kernel_core::privacy::{admit_call, Destination, PathId};
 
@@ -586,6 +587,20 @@ fn env_var_collision<'a>(existing: &'a [ProviderConfig], id: &str) -> Option<&'a
         .find(|entry| entry.id != id && env_var_name(&entry.id) == var)
 }
 
+/// Refuse `kind = "fake"` in a build that has no fake adapter.
+///
+/// The fake provider is test/sandbox support (`aux-providers`'s off-by-default
+/// `test-fake` feature). A release daemon refuses the write here rather than
+/// saving a provider every turn would then fail to build.
+fn fake_kind_disabled() -> Response {
+    error::error_response(
+        StatusCode::BAD_REQUEST,
+        "fake_provider_disabled",
+        "the fake provider is a test aid and this build does not include it",
+        Some("use a real AI service, or a test build with the `test-fake` feature"),
+    )
+}
+
 /// Parse the request's `kind`, accepting both spellings of `openai-compat`.
 #[allow(clippy::result_large_err)]
 fn parse_kind(home: &Path, raw: Option<&str>) -> Result<ProviderKind, Response> {
@@ -593,7 +608,8 @@ fn parse_kind(home: &Path, raw: Option<&str>) -> Result<ProviderKind, Response> 
         None | Some("") | Some("openai-compat") | Some("openai_compat") => {
             Ok(ProviderKind::OpenAiCompat)
         }
-        Some("fake") => Ok(ProviderKind::Fake),
+        Some("fake") if FAKE_PROVIDER_SUPPORTED => Ok(ProviderKind::Fake),
+        Some("fake") => Err(fake_kind_disabled()),
         Some("acp") => Ok(ProviderKind::Acp),
         Some(other) => Err(error::error_response(
             StatusCode::BAD_REQUEST,
@@ -916,7 +932,8 @@ fn test_provider(
             None | Some("") | Some("openai-compat") | Some("openai_compat") => {
                 ProviderKind::OpenAiCompat
             }
-            Some("fake") => ProviderKind::Fake,
+            Some("fake") if FAKE_PROVIDER_SUPPORTED => ProviderKind::Fake,
+            Some("fake") => return Err(fake_kind_disabled()),
             Some(other) => {
                 return Err(error::error_response(
                     StatusCode::BAD_REQUEST,

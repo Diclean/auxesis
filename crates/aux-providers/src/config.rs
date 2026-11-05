@@ -14,6 +14,7 @@ pub(crate) use kernel_broker::is_secret_shaped;
 use kernel_broker::{classify_echo, EchoState as Echo};
 
 use crate::error::ProviderError;
+#[cfg(feature = "test-fake")]
 use crate::fake::FakeProvider;
 use crate::openai_compat::OpenAiCompat;
 use crate::preset::{expand_brain, BrainSection, OLLAMA_MODEL_ENV};
@@ -47,7 +48,9 @@ pub enum ProviderKind {
     /// OpenRouter and every custom OpenAI-compatible endpoint.
     #[serde(rename = "openai-compat")]
     OpenAiCompat,
-    /// Deterministic scripted adapter for tests and the sandbox.
+    /// Deterministic scripted adapter for tests and the sandbox. Behind the
+    /// off-by-default `test-fake` feature: a release build refuses it with
+    /// [`ProviderError::FakeDisabled`].
     #[serde(rename = "fake")]
     Fake,
     /// An ACP agent (OpenCode, Claude Code, Codex, …). ACP is a **turn-level
@@ -172,7 +175,7 @@ impl ProviderConfig {
     pub fn build_provider(&self) -> Result<Box<dyn ChatProvider>, ProviderError> {
         match self.kind {
             ProviderKind::OpenAiCompat => Ok(Box::new(OpenAiCompat::new(self)?)),
-            ProviderKind::Fake => Ok(Box::new(FakeProvider::echo(&self.id))),
+            ProviderKind::Fake => build_fake(&self.id),
             ProviderKind::Acp => Err(ProviderError::AcpBackend {
                 provider: shown_id_plain(&self.id),
             }),
@@ -187,11 +190,29 @@ impl ProviderConfig {
     ) -> Result<Box<dyn ChatProvider>, ProviderError> {
         match self.kind {
             ProviderKind::OpenAiCompat => Ok(Box::new(OpenAiCompat::with_key(self, api_key)?)),
-            ProviderKind::Fake => Ok(Box::new(FakeProvider::echo(&self.id))),
+            ProviderKind::Fake => build_fake(&self.id),
             ProviderKind::Acp => Err(ProviderError::AcpBackend {
                 provider: shown_id_plain(&self.id),
             }),
         }
+    }
+}
+
+/// Build the deterministic fake adapter for `id`.
+///
+/// The fake is test/sandbox support only: `test-fake` is off in release
+/// builds, where a `fake` entry is refused with
+/// [`ProviderError::FakeDisabled`] instead of silently shipping a canned model.
+pub(crate) fn build_fake(id: &str) -> Result<Box<dyn ChatProvider>, ProviderError> {
+    #[cfg(feature = "test-fake")]
+    {
+        Ok(Box::new(FakeProvider::echo(id)))
+    }
+    #[cfg(not(feature = "test-fake"))]
+    {
+        Err(ProviderError::FakeDisabled {
+            provider: shown_id_plain(id),
+        })
     }
 }
 

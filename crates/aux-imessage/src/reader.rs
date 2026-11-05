@@ -718,6 +718,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_read_returns_one_batch_and_the_cursor_reaches_the_rest() {
+        let (_dir, path) = fake_db();
+        let total = MAX_READ_BATCH + 5;
+        {
+            let conn = Connection::open(&path).unwrap();
+            add_chat(&conn, 1, "iMessage;-;owner");
+            add_handle(&conn, 100, "+33600000001");
+            for index in 0..total {
+                let text = format!("hello {index}");
+                add_message(
+                    &conn,
+                    index as i64 + 1000,
+                    1,
+                    100,
+                    Some(text.as_str()),
+                    None,
+                    false,
+                    None,
+                    1,
+                );
+            }
+        }
+        let spec = ChatSpec::new(vec!["+33600000001".to_string()], "iMessage;-;owner").unwrap();
+        let reader = ChatDbReader::open_read_only(&path).unwrap();
+        let first = reader.read_since(&spec, 0, 1000).unwrap();
+        assert_eq!(first.messages.len(), MAX_READ_BATCH);
+        let rest = reader
+            .read_since(&spec, first.max_seen_rowid, 1000)
+            .unwrap();
+        assert_eq!(rest.messages.len(), total - MAX_READ_BATCH);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(48))]
 
@@ -763,7 +796,18 @@ mod tests {
 
             let spec = ChatSpec::new(owner_handles.clone(), owner_chat.clone()).unwrap();
             let reader = ChatDbReader::open_read_only(&path).unwrap();
-            let batch = reader.read_since(&spec, 0, 1000).unwrap();
+            // A read returns at most MAX_READ_BATCH rows, so follow the
+            // cursor until it stops moving, as the poller does.
+            let mut batch = InboundBatch::default();
+            let mut cursor = 0;
+            loop {
+                let page = reader.read_since(&spec, cursor, MAX_READ_BATCH).unwrap();
+                if page.max_seen_rowid == cursor {
+                    break;
+                }
+                cursor = page.max_seen_rowid;
+                batch.messages.extend(page.messages);
+            }
 
             let expected = rows
                 .iter()

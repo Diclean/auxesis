@@ -176,6 +176,84 @@ fn anchored_dir_exists(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io
     }
 }
 
+/// The entry names of the directory `rel` below the verified home, listed from
+/// the fd `open_dir_anchored` opened, never from a path: a link on the way is
+/// an error, and `None` means the directory is absent.
+fn list_dir_anchored(
+    handle: &kernel_core::SandboxHome,
+    rel: &Path,
+) -> std::io::Result<Option<Vec<std::ffi::OsString>>> {
+    #[cfg(unix)]
+    let names = {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = match open_dir_anchored(handle, rel) {
+            Ok(dir) => dir,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        // `fdopendir` owns the fd it is given and `closedir` closes it: hand it a duplicate.
+        // SAFETY: `dir` is an open directory fd owned by this frame; fcntl only duplicates it.
+        let dup = unsafe { libc::fcntl(dir.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if dup < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `dup` is a fresh directory fd that nothing else owns.
+        let stream = unsafe { libc::fdopendir(dup) };
+        if stream.is_null() {
+            let err = std::io::Error::last_os_error();
+            // SAFETY: fdopendir failed, so `dup` is still ours to close.
+            unsafe { libc::close(dup) };
+            return Err(err);
+        }
+        let mut names = Vec::new();
+        let failure = loop {
+            clear_errno();
+            // SAFETY: `stream` is the open stream above; the entry is read before the next call.
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                let err = std::io::Error::last_os_error();
+                break err.raw_os_error().filter(|code| *code != 0).map(|_| err);
+            }
+            // SAFETY: `d_name` is a NUL-terminated name inside the entry just returned.
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if name != b"." && name != b".." {
+                names.push(std::ffi::OsStr::from_bytes(name).to_owned());
+            }
+        };
+        // SAFETY: `stream` is open and not used again; this closes `dup`.
+        unsafe { libc::closedir(stream) };
+        match failure {
+            Some(err) => return Err(err),
+            None => names,
+        }
+    };
+    #[cfg(not(unix))]
+    let names = match std::fs::read_dir(handle.real_path()?.join(rel)) {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<Vec<_>, _>>()?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(Some(names))
+}
+
+/// Reset errno so a null `readdir` can tell the end of the listing from a failure.
+#[cfg(unix)]
+fn clear_errno() {
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    // SAFETY: `__error` returns this thread's errno storage.
+    unsafe {
+        *libc::__error() = 0;
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    // SAFETY: `__errno_location` returns this thread's errno storage.
+    unsafe {
+        *libc::__errno_location() = 0;
+    }
+}
+
 pub(crate) fn force_private_dir(
     handle: &kernel_core::SandboxHome,
     rel: &Path,
@@ -676,10 +754,11 @@ pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
     let root = extensions_dir(home);
     let handle = kernel_core::SandboxHome::open_existing(home).ok()?;
     let mut best: Option<InstalledExtension> = None;
-    let entries = std::fs::read_dir(&root).ok()?;
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        let file_name = entry.file_name().to_string_lossy().to_string();
+    // Listed through the verified home: a link in place of `extensions/` lists nothing.
+    let names = list_dir_anchored(&handle, Path::new("extensions")).ok()??;
+    for name_on_disk in names {
+        let file_name = name_on_disk.to_string_lossy().to_string();
+        let dir = root.join(&file_name);
         let Some((dir_name, version)) = file_name.rsplit_once('@') else {
             continue;
         };
@@ -737,6 +816,16 @@ pub fn verify_installed(home: &Path, name: &str) -> Result<InstalledExtension, I
 ///
 /// Returns the number of install trees deleted. The Ledger keeps its history.
 pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
+    remove_after_open(home, name, || {})
+}
+
+/// `remove`, running `after_open` once the home handle is open: the seam the
+/// tests plant a swapped link through, as a swap after the check would.
+fn remove_after_open(
+    home: &Path,
+    name: &str,
+    after_open: impl FnOnce(),
+) -> Result<usize, InstallError> {
     if !valid_name(name) {
         return Err(InstallError::NotInstalled(name.to_owned()));
     }
@@ -768,6 +857,7 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
         }
     };
     if let Some(handle) = handle.as_ref() {
+        after_open();
         removed = remove_trees(handle, name, &mut record);
         // State, mounts and secrets are cleaned up even when a tree could not be
         // deleted, and the first failure is reported at the end.
@@ -1516,6 +1606,125 @@ mod tests {
             "{errors:?}"
         );
         assert!(outside.path().join("kept").is_file());
+    }
+
+    fn demo_state() -> crate::extensions::mount::ExtensionState {
+        crate::extensions::mount::ExtensionState {
+            name: "demo".to_owned(),
+            version: "1.0.0".to_owned(),
+            kind: "mcp".to_owned(),
+            frozen: false,
+            tools: Default::default(),
+            network: Vec::new(),
+            secrets: Vec::new(),
+            oauth: None,
+        }
+    }
+
+    // A swapped link, planted once `remove` holds its home handle, through the
+    // public path. `extensions/` exists first, so the link is the only change.
+    #[cfg(unix)]
+    fn remove_through_a_swapped_link(link: &str, outside: &Path) -> InstallError {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join("extensions")).unwrap();
+        let planted = home.path().join(link);
+        let err = remove_after_open(home.path(), "demo", || {
+            std::os::unix::fs::symlink(outside, &planted).unwrap();
+        })
+        .unwrap_err();
+        assert!(
+            std::fs::symlink_metadata(&planted).is_ok(),
+            "link not followed or unlinked"
+        );
+        err
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_refuses_a_state_dir_swapped_for_a_link_and_keeps_its_target() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("demo.json"), b"{}").unwrap();
+        let err = remove_through_a_swapped_link("extensions/state", outside.path());
+        // O_NOFOLLOW | O_DIRECTORY on a link: ELOOP on Linux, ENOTDIR on macOS.
+        let InstallError::Io(io) = &err else {
+            panic!("{err:?}")
+        };
+        assert!(
+            matches!(io.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)),
+            "{err}"
+        );
+        assert!(outside.path().join("demo.json").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_refuses_a_tree_swapped_for_a_link_and_keeps_its_target() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("kept"), b"x").unwrap();
+        let err = remove_through_a_swapped_link("extensions/demo@1.0.0", outside.path());
+        let InstallError::Io(io) = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+        assert!(err.to_string().contains("is a symlink"), "{err}");
+        assert!(outside.path().join("kept").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_refuses_a_home_holding_an_unreadable_tree_and_changes_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        if !kernel_core::sandbox_guard_active() {
+            eprintln!("skipped: the guard's home scan is what refuses a 000 tree");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let tree = extensions_dir(home.path()).join("demo@1.0.0");
+        std::fs::create_dir_all(&tree).unwrap();
+        crate::extensions::mount::store_state(home.path(), &demo_state()).unwrap();
+        let row = home.path().join("extensions/state/demo.json");
+        set_mode(&tree, 0o000).unwrap();
+        let result = remove(home.path(), "demo");
+        let unreadable = std::fs::read_dir(&tree).is_err();
+        let mode = std::fs::metadata(&tree).map(|meta| meta.permissions().mode() & 0o777);
+        set_mode(&tree, 0o700).unwrap();
+        if !unreadable {
+            eprintln!("skipped: a 000 tree is readable here (root)");
+            return;
+        }
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("refus de sandbox"), "{err}");
+        assert!(err.to_string().contains("demo@1.0.0"), "{err}");
+        assert_eq!(mode.unwrap(), 0o000, "no mode change before verification");
+        assert!(tree.is_dir(), "the tree stays");
+        assert!(row.is_file(), "the state row stays");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_extensions_listing_follows_the_verified_home_never_a_link() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("leaked@1.0.0")).unwrap();
+        let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
+        let root = Path::new("extensions");
+        assert!(
+            list_dir_anchored(&handle, root).unwrap().is_none(),
+            "absent"
+        );
+        std::fs::create_dir_all(home.path().join("extensions/demo@1.0.0")).unwrap();
+        std::fs::write(home.path().join("extensions/mounts.json"), b"{}").unwrap();
+        let mut names = list_dir_anchored(&handle, root).unwrap().unwrap();
+        names.sort();
+        assert_eq!(names, ["demo@1.0.0", "mounts.json"]);
+        // `extensions/` is swapped for a link after the handle opened.
+        std::fs::remove_dir_all(home.path().join("extensions")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join("extensions")).unwrap();
+        let err = list_dir_anchored(&handle, root).unwrap_err();
+        assert!(
+            matches!(err.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)),
+            "{err}"
+        );
     }
 
     #[cfg(unix)]

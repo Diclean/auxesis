@@ -721,6 +721,29 @@ mod tests {
         assert!(is_frozen(home.path(), "demo"));
     }
 
+    #[test]
+    fn an_oversized_state_row_freezes_and_refuses_mounts_without_a_table() {
+        let home = tempfile::tempdir().unwrap();
+        install_entry(
+            home.path(),
+            "demo",
+            super::super::catalog::Sensitivity::Public,
+        );
+        store_state(home.path(), &state("demo")).unwrap();
+        // A valid row, padded past the cap: only the size limit can refuse it.
+        let row = home.path().join("extensions/state/demo.json");
+        let mut text = std::fs::read(&row).unwrap();
+        text.resize(MAX_STATE_BYTES as usize + 1, b' ');
+        std::fs::write(&row, text).unwrap();
+        assert!(!home.path().join("extensions/mounts.json").exists());
+        assert!(is_frozen(home.path(), "demo"));
+        assert!(matches!(
+            mount(home.path(), "demo", "alice"),
+            Err(MountError::MissingState(_))
+        ));
+        assert!(!is_mounted(home.path(), "demo", "alice"));
+    }
+
     fn install_entry(home: &Path, name: &str, sensitivity: super::super::catalog::Sensitivity) {
         let entry = test_entry(name, sensitivity);
         let dir = super::super::install_dir(home, name, "1.0.0");

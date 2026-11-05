@@ -2,8 +2,8 @@
 //!
 //! The interface contract lives in `docs/providers.md`.
 //!
-//! The crate is built around the object-safe [`ChatProvider`] trait. Two
-//! adapters ship:
+//! The crate is built around the object-safe [`ChatProvider`] trait. The
+//! adapters are:
 //!
 //! - [`OpenAiCompat`] — the OpenAI `chat/completions` wire, used for DeepSeek,
 //!   LM Studio, OpenRouter and every other OpenAI-compatible
@@ -11,8 +11,10 @@
 //!   non-streaming fallback when the endpoint refuses it.
 //! - The `ollama` [`preset`] — the same adapter pointed at the local Ollama
 //!   server (`/v1`, no key), selected with `[brain] preset = "ollama"`.
-//! - [`FakeProvider`] — deterministic scripted responses for tests and the
-//!   sandbox. No network, no keys.
+//! - `FakeProvider` — deterministic scripted responses for tests and the
+//!   sandbox. No network, no keys. Behind the off-by-default `test-fake`
+//!   feature: release builds do not compile it, and a `fake` provider entry is
+//!   refused when its adapter is built.
 //!
 //! API keys are never stored in config files: [`ProviderConfig`] only carries
 //! a `key_user` reference. [`resolve_key`] looks up the macOS Keychain first
@@ -39,6 +41,7 @@ pub mod brain;
 pub mod catalog;
 pub mod config;
 pub mod error;
+#[cfg(feature = "test-fake")]
 pub mod fake;
 pub mod fallback;
 pub mod key;
@@ -64,7 +67,14 @@ pub use config::{
     KEY_SHAPED_PROVIDER_NAME,
 };
 pub use error::ProviderError;
+#[cfg(feature = "test-fake")]
 pub use fake::FakeProvider;
+
+/// Whether this build compiles the fake provider (`test-fake`).
+///
+/// Off in release binaries: a `fake` provider entry is then refused with
+/// [`ProviderError::FakeDisabled`].
+pub const FAKE_PROVIDER_SUPPORTED: bool = cfg!(feature = "test-fake");
 pub use fallback::{
     fallback_reason, is_fallback_eligible, FallbackAdmission, FallbackHop, FallbackLedger,
     FallbackProvider, KernelFallbackAdmission, NoopAdmission, NoopLedger, RecordingLedger,

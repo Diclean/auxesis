@@ -9,6 +9,10 @@ a `[brain]` preset for local Ollama, and keys looked up as `AUX_KEY_<ID>`. Phase
 their own file, adds the `anthropic` and `ollama` kinds, a capability table, fallbacks, and a
 per-agent and per-skill brain choice. There is **no OpenAI provider**.
 
+`fake` is test support. `FakeProvider` is compiled only with the off-by-default `test-fake`
+feature (tests and sandbox builds); a release binary refuses a `fake` entry with
+`ProviderError::FakeDisabled` when the adapter is built.
+
 ## 2. `~/.auxesis/providers.toml`
 
 ```toml

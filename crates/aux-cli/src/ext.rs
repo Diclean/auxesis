@@ -43,6 +43,10 @@ enum ExtAction {
         /// Accept the current tools after a freeze (owner re-approval).
         #[arg(long)]
         accept: bool,
+        /// With `--accept`: re-pin this build even though it is older than the
+        /// approved one (a newer entry is corrupt or gone).
+        #[arg(long, value_name = "VERSION", requires = "accept", requires = "name")]
+        downgrade_to: Option<String>,
     },
     /// Mount an installed extension for one agent.
     Mount {
@@ -74,7 +78,11 @@ pub fn run(args: ExtArgs, _lang: Lang) -> ExitCode {
         ExtAction::Search { text } => search(&home, &text),
         ExtAction::Show { name } => show(&home, &name),
         ExtAction::Install { name } => install(&home, &name),
-        ExtAction::Verify { name, accept } => verify(&home, name.as_deref(), accept),
+        ExtAction::Verify {
+            name,
+            accept,
+            downgrade_to,
+        } => verify(&home, name.as_deref(), accept, downgrade_to.as_deref()),
         ExtAction::Mount { name, agent } => mount(&home, &name, &agent),
         ExtAction::Unmount { name, agent } => unmount(&home, &name, &agent),
         ExtAction::Remove { name } => remove(&home, &name),
@@ -213,7 +221,19 @@ fn install(home: &Path, name: &str) -> ExitCode {
     }
 }
 
-fn verify(home: &Path, name: Option<&str>, accept: bool) -> ExitCode {
+/// Tell the owner about corrupt entries above the build that runs: they never
+/// run, and the running build is the one verified or re-pinned.
+fn warn_corrupt_newer(name: &str, running: &str, corrupt_newer: &[String]) {
+    for version in corrupt_newer {
+        let _ = writeln!(
+            std::io::stderr(),
+            "aux ext verify: warning: {name}@{version} has a corrupt entry.toml and never runs; \
+             {name}@{running} is the build checked"
+        );
+    }
+}
+
+fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&str>) -> ExitCode {
     let names: Vec<String> = match name {
         Some(name) => vec![name.to_owned()],
         // Listed through the verified home: a linked or unreadable root fails.
@@ -244,9 +264,12 @@ fn verify(home: &Path, name: Option<&str>, accept: bool) -> ExitCode {
         if accept {
             // Re-pin the current identity before clearing the freeze, so the
             // next start does not refreeze on the same drift.
-            match runtime.block_on(extensions::session::accept_current(home, &name, false)) {
-                Ok(_) => {
-                    let _ = writeln!(std::io::stdout(), "accepted {name}");
+            let accepted = extensions::session::accept_installed(home, &name, false, downgrade_to);
+            match runtime.block_on(accepted) {
+                Ok(accepted) => {
+                    let version = &accepted.state.version;
+                    warn_corrupt_newer(&name, version, &accepted.corrupt_newer);
+                    let _ = writeln!(std::io::stdout(), "accepted {name}@{version}");
                     continue;
                 }
                 Err(err) => {
@@ -256,8 +279,10 @@ fn verify(home: &Path, name: Option<&str>, accept: bool) -> ExitCode {
                 }
             }
         }
-        match extensions::verify_installed(home, &name) {
-            Ok(installed) => {
+        match extensions::verify_installed_report(home, &name) {
+            Ok(report) => {
+                let installed = report.installed;
+                warn_corrupt_newer(&name, &installed.version, &report.corrupt_newer);
                 // An upgraded build the owner did not approve is never started
                 // to be checked: only `--accept` may run it.
                 if let Err(err) = extensions::mount::require_approval(home, &installed) {
@@ -373,5 +398,26 @@ mod tests {
         assert!(reject_invalid_name("../escape").is_some());
         assert!(reject_invalid_name("").is_some());
         assert!(reject_invalid_name("datagouv-mcp").is_none());
+    }
+
+    // EXT-ANCHOR-6: an older build is re-pinned only by name, with `--accept`.
+    #[test]
+    fn downgrade_to_needs_accept_and_one_name() {
+        #[derive(Debug, clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            ext: ExtArgs,
+        }
+        let parse = |args: &[&str]| {
+            let argv = ["aux"].iter().chain(args).copied();
+            <Cli as clap::Parser>::try_parse_from(argv).map(|cli| cli.ext.action)
+        };
+        assert!(parse(&["verify", "demo", "--downgrade-to", "1.0.0"]).is_err());
+        assert!(parse(&["verify", "--accept", "--downgrade-to", "1.0.0"]).is_err());
+        let ok = parse(&["verify", "demo", "--accept", "--downgrade-to", "1.0.0"]);
+        assert!(
+            matches!(ok, Ok(ExtAction::Verify { downgrade_to: Some(ref v), .. }) if v == "1.0.0"),
+            "{ok:?}"
+        );
     }
 }

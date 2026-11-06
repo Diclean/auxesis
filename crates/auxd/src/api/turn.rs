@@ -2885,11 +2885,6 @@ fn apply_tools_ceiling(
     rules: &mut Vec<Rule>,
 ) {
     for name in constrained_names(registry) {
-        // A skill's own free-times read is no tool the model calls: its
-        // grant decides it, not the tools list.
-        if name == aux_runtime::grants::FREEBUSY_TOOL {
-            continue;
-        }
         if !lists.iter().all(|tools| listed(tools, &name)) {
             rules.push(Rule::new(agent, name, Action::Deny));
         }
@@ -5476,14 +5471,27 @@ mod m4_invite_tests {
             [[do]]\nskill = \"mail.send\"\nlevel = \"ask\"\n";
         let off = format!("{BASE}\n[[do]]\nskill = \"calendar.read\"\nlevel = \"off\"\n");
         let both = format!("{off}\n[[do]]\nskill = \"calendar.freebusy\"\nlevel = \"auto\"\n");
+        // Each refuses with the broker's deny and names the line to add.
         for grants in [BASE.to_string(), off, both] {
             MAIL_GRANTS.with(|cell| cell.set(Some(Box::leak(grants.clone().into_boxed_str()))));
-            let busy = [(0, 30), (60, 3)];
-            let ((cards, sent, _), times) =
-                availability_run("Camille Exemple", AVAILABILITY, &busy, Answer::Yes);
+            let fill = serde_json::json!({
+                "slots": { "person": "Camille Exemple", "topic": "the Q3 review" },
+                "calls": [{ "tool": "mail_send", "arguments": {
+                    "to": ["camille@exemple.fr"], "subject": AVAILABILITY.0, "body": AVAILABILITY.1 } }]
+            });
+            let content = "/availability Camille Exemple";
+            let (cards, sent, _, _, stored) = mail_skill_run(
+                content,
+                "reply-availability",
+                fill,
+                (Vec::new(), false),
+                None,
+                Answer::Yes,
+            );
             MAIL_GRANTS.with(|cell| cell.set(None));
             assert_eq!((cards.len(), sent.len()), (0, 0), "{grants}\n{cards:?}");
-            assert!(cards.iter().all(|card| !card.contains(&times)), "{grants}");
+            let hint = r#"matched: deny. This agent may not read the owner's free times: its grants need `[[do]] skill = \"calendar.freebusy\" level = \"auto\""#;
+            assert!(stored.contains(hint), "{grants}\n{stored}");
         }
     }
 

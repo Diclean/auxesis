@@ -23,11 +23,9 @@ use thiserror::Error;
 /// can only get a subset of it.
 pub const CHIEF_AGENT: &str = "main";
 
-/// The derived grant for a skill's own free-times read: the busy spans of
-/// the searched days, never a title or a guest. `calendar.read` implies it;
-/// an explicit level on either one caps it, so turning the read off turns the
-/// free times off too. It never widens the calendar scope (see
-/// [`AgentGrants::granted_level`]).
+/// The derived grant for a skill's free-times read (busy spans only).
+/// `calendar.read` implies it and either one's level caps it; it never
+/// widens the calendar scope (see [`AgentGrants::granted_level`]).
 pub const FREEBUSY_SKILL: &str = "calendar.freebusy";
 
 /// The name the broker's rules use for that read (no model ever sees it).
@@ -708,33 +706,43 @@ mod tests {
     /// `calendar.read` implies them, and either one off turns them off.
     #[test]
     fn free_times_follow_calendar_read_and_open_nothing_else() {
-        let mail = default_grants("mail").unwrap();
-        assert!(mail.check_tool("mail", FREEBUSY_TOOL).is_ok());
-        assert!(mail
-            .check_tool("mail", "apple_calendar_list_events")
-            .is_err());
-        assert!(!mail.allows_scope("calendar"));
-        let chief = default_grants(CHIEF_AGENT).unwrap();
-        assert!(chief.check_tool(CHIEF_AGENT, FREEBUSY_TOOL).is_ok());
-        let level = |grants: &mut AgentGrants, skill: &str, level| {
+        let ok = |grants: &AgentGrants, tool| grants.check_tool("a", tool).is_ok();
+        let with = |grants: &AgentGrants, skill: &str, level| {
+            let mut grants = grants.clone();
             grants.can_do.retain(|grant| grant.skill != skill);
             grants.can_do.push(DoGrant {
                 skill: skill.to_string(),
                 level,
             });
+            grants
         };
-        let mut off = mail.clone();
-        level(&mut off, "calendar.read", ActionLevel::Off);
-        assert!(off.check_tool("mail", FREEBUSY_TOOL).is_err());
-        let mut lacking = mail.clone();
-        lacking.can_do.retain(|grant| grant.skill != FREEBUSY_SKILL);
-        assert!(lacking.check_tool("mail", FREEBUSY_TOOL).is_err());
-        let mut asks = chief.clone();
-        level(&mut asks, "calendar.read", ActionLevel::Ask);
+        let (mail, chief) = (
+            default_grants("mail").unwrap(),
+            default_grants(CHIEF_AGENT).unwrap(),
+        );
+        assert!(ok(&mail, FREEBUSY_TOOL) && ok(&chief, FREEBUSY_TOOL));
+        assert!(!ok(&mail, "apple_calendar_list_events") && !mail.allows_scope("calendar"));
+        assert!(!ok(
+            &with(&mail, "calendar.read", ActionLevel::Off),
+            FREEBUSY_TOOL
+        ));
+        assert!(!ok(
+            &with(&mail, FREEBUSY_SKILL, ActionLevel::Off),
+            FREEBUSY_TOOL
+        ));
+        let asks = with(&chief, "calendar.read", ActionLevel::Ask);
         assert_eq!(
-            asks.action_for_tool(CHIEF_AGENT, FREEBUSY_TOOL),
+            asks.action_for_tool("a", FREEBUSY_TOOL),
             Ok(GrantLevel::Ask)
         );
+        // A move with the read off and the write on finds no event.
+        let calendar = with(
+            &default_grants("calendar").unwrap(),
+            "calendar.read",
+            ActionLevel::Off,
+        );
+        assert!(!ok(&calendar, "apple_calendar_list_events"));
+        assert!(ok(&calendar, "apple_calendar_update_event"));
     }
 
     #[test]

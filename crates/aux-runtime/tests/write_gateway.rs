@@ -69,6 +69,12 @@ fn allowlist(root: &Path) -> Vec<(String, String, String)> {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(|line| {
+            // `|` is the separator: a justification holding one would be cut short.
+            assert_eq!(
+                line.matches('|').count(),
+                2,
+                "allowlist line needs exactly two '|': {line}"
+            );
             let mut parts = line.split('|').map(str::trim);
             (
                 parts.next().unwrap_or_default().to_string(),

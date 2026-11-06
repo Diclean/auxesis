@@ -216,21 +216,14 @@ fn install(home: &Path, name: &str) -> ExitCode {
 fn verify(home: &Path, name: Option<&str>, accept: bool) -> ExitCode {
     let names: Vec<String> = match name {
         Some(name) => vec![name.to_owned()],
-        None => {
-            let root = extensions::extensions_dir(home);
-            let mut found = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(root) {
-                for entry in entries.flatten() {
-                    let file_name = entry.file_name().to_string_lossy().to_string();
-                    if let Some((name, _)) = file_name.rsplit_once('@') {
-                        found.push(name.to_owned());
-                    }
-                }
+        // Listed through the verified home: a linked or unreadable root fails.
+        None => match extensions::install::installed_names(home) {
+            Ok(found) => found,
+            Err(err) => {
+                let _ = writeln!(std::io::stderr(), "aux ext verify: {err}");
+                return ExitCode::FAILURE;
             }
-            found.sort();
-            found.dedup();
-            found
-        }
+        },
     };
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()

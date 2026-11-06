@@ -357,7 +357,10 @@ pub fn valid_version(version: &str) -> bool {
 ///
 /// The separator is a **double** underscore: with names that may not start,
 /// end or double a hyphen, `-` → `_` is injective, so `foo` (`EXT_FOO__`) and
-/// `foo-bar` (`EXT_FOO_BAR__`) can never share a key.
+/// `foo-bar` (`EXT_FOO_BAR__`) can never share a key. Names may not hold `_`
+/// ([`super::valid_name`]): `foo_bar` would share `foo-bar`'s prefix, and a
+/// legacy `demo_` would give `EXT_DEMO___`, which starts with `demo`'s
+/// `EXT_DEMO__`, so removing `demo` (a prefix sweep) would erase its keys.
 pub fn secret_prefix(extension: &str) -> String {
     format!("EXT_{}__", extension.to_ascii_uppercase().replace('-', "_"))
 }

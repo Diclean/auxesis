@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 
 use super::catalog::Entry;
 use super::install::InstalledExtension;
-use super::mount::{freeze, store_state, ExtensionState};
+use super::mount::{freeze, store_state, ExtensionState, StateLock};
 use super::{hex, unhex, valid_name};
 
 /// The longest single JSON-RPC line accepted from a child.
@@ -884,10 +884,15 @@ pub async fn accept_with(
     // runs or is pinned, and the freeze stays.
     let report = super::install::verify_installed_report(home, name)?;
     let installed = report.installed;
-    let mut state =
-        super::mount::load_state(home, name).ok_or_else(|| SessionError::MissingState {
+    // EXT-ANCHOR-12: read with the freeze epoch, under the row's lock.
+    let (mut state, epoch) = {
+        let lock = StateLock::acquire(home, name)?;
+        let state = super::mount::load_state(home, name);
+        let state = state.ok_or_else(|| SessionError::MissingState {
             name: name.to_owned(),
         })?;
+        (state, lock.epoch()?)
+    };
     let pin = super::mount::artefact_pin(&installed.entry);
     let why = match state.artefact.as_deref() {
         _ if installed.version != state.version => String::new(),
@@ -971,7 +976,20 @@ pub async fn accept_with(
     // Saved and shown before the child starts; it stays frozen until its
     // live tools are pinned, so a failed start runs nothing later.
     state.frozen = true;
-    store_state(home, &state)?;
+    // EXT-ANCHOR-12: stored only over the row read above, under its lock: a
+    // freeze or write since then (a daemon freezing the old row) is kept and
+    // nothing starts.
+    {
+        let lock = StateLock::acquire(home, name)?;
+        let row = super::mount::read_state(home, name).ok().flatten();
+        if lock.epoch()? != epoch || !same_row(row.as_ref(), &previous_row) {
+            return Err(SessionError::LaunchChangeRefused(format!(
+                "`{name}` changed while it was being accepted (a freeze?); it is kept \
+                 and nothing started: run `{command}` again"
+            )));
+        }
+        store_state(home, &state)?;
+    }
     // The authorized transition is audited when it is saved, so a failed
     // start still shows what the owner trusted.
     super::ledger::log(
@@ -997,28 +1015,36 @@ pub async fn accept_with(
     );
     on_trusted(&state);
     // Put the previous row back and audit why; a tool drift keeps it frozen
-    // (EXT-ANCHOR-11 r2), as `verify_identity` would. Only the row this call
-    // stored is replaced: another one (a concurrent `freeze`) is kept, and the
-    // skip logged. A failed write keeps the new, frozen row: it fails closed.
+    // (EXT-ANCHOR-11 r2), as `verify_identity` would. EXT-ANCHOR-12: checked
+    // and written under the row's lock. Only the row this call stored is
+    // replaced: another one is kept, and the skip logged; a `freeze` since the
+    // store (byte-identical on this frozen row) moved the epoch and keeps the
+    // restored row frozen. A failed write keeps the new, frozen row (fails
+    // closed) and logs `restore_failed`, never a `restored_version`.
     let restore = |outcome: &str, drift: bool| -> Result<(), SessionError> {
+        let lock = StateLock::acquire(home, name)?;
         let mut back = previous_row.clone();
-        back.frozen |= drift;
-        let ours = match super::mount::read_state(home, name) {
-            Ok(Some(row)) => serde_json::to_value(&row).ok() == serde_json::to_value(&state).ok(),
-            _ => false,
+        back.frozen |= drift || lock.epoch()? != epoch;
+        let row = super::mount::read_state(home, name).ok().flatten();
+        let ours = same_row(row.as_ref(), &state);
+        let stored = ours.then(|| store_state(home, &back));
+        drop(lock);
+        let restored = matches!(stored, Some(Ok(())));
+        let frozen = match restored {
+            true => back.frozen,
+            false => row.as_ref().is_none_or(|row| row.frozen),
         };
-        let row = serde_json::json!({
+        let audit = serde_json::json!({
             "name": name,
             "outcome": outcome,
             "refused_version": state.version,
-            "restored_version": ours.then_some(&back.version),
+            "restored_version": restored.then_some(&back.version),
+            "restore_failed": matches!(stored, Some(Err(_))),
             "kept_current": !ours,
-            "frozen": back.frozen,
+            "frozen": frozen,
         });
-        super::ledger::log(home, super::ledger::VERIFY, &row);
-        if ours {
-            store_state(home, &back)?;
-        }
+        super::ledger::log(home, super::ledger::VERIFY, &audit);
+        stored.transpose()?;
         Ok(())
     };
     let started = session_for(
@@ -1053,9 +1079,15 @@ pub async fn accept_with(
             super::mount::remove_from_all_mounts(home, name)?;
         }
         restore("tools_refused", drift)?;
-        let command = super::mount::accept_command(&previous_row, &installed);
+        // EXT-ANCHOR-12: the live tools are known here, so `tools` is named
+        // only on a drift, never for a frozen row whose tools match the pin.
+        let unfrozen = ExtensionState {
+            frozen: false,
+            ..previous_row.clone()
+        };
+        let command = super::mount::accept_command(&unfrozen, &installed);
         let message = match tools_changed.is_empty() {
-            true => format!("`{name}` has no changed tool: drop `tools` from `{command}`"),
+            true => format!("`{name}` has no changed tool: drop `tools`, run `{command}`"),
             false => format!(
                 "`{name}` changed tools since approval ({}); the approved row is kept: \
                  re-trust them only with `{}`",
@@ -1065,9 +1097,22 @@ pub async fn accept_with(
         };
         return Err(SessionError::LaunchChangeRefused(message));
     }
+    let pinned_row = state.clone();
     state.tools = pins;
     state.frozen = false;
-    let stored = store_state(home, &state);
+    // EXT-ANCHOR-12: unfrozen only over the row stored above with no freeze
+    // since; a freeze that landed while the build started is kept.
+    let stored = StateLock::acquire(home, name)
+        .map_err(SessionError::from)
+        .and_then(|lock| {
+            let row = super::mount::read_state(home, name).ok().flatten();
+            if lock.epoch()? != epoch || !same_row(row.as_ref(), &pinned_row) {
+                return Err(SessionError::LaunchChangeRefused(format!(
+                "`{name}` was frozen or changed while it started; it is kept: run `{command}` again"
+            )));
+            }
+            Ok(store_state(home, &state)?)
+        });
     session.stop().await;
     stored?;
     // Logged once the unfrozen pin is saved: a failed save never reads as started.
@@ -1077,6 +1122,11 @@ pub async fn accept_with(
         state,
         corrupt_newer: report.corrupt_newer,
     })
+}
+
+/// Whether `row` is exactly `ours`, field by field.
+fn same_row(row: Option<&ExtensionState>, ours: &ExtensionState) -> bool {
+    row.is_some_and(|row| serde_json::to_value(row).ok() == serde_json::to_value(ours).ok())
 }
 
 /// `added "x", removed "y", changed "z"`: every tool whose pin differs.

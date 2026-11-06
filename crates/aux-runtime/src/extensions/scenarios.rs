@@ -1429,13 +1429,36 @@ async fn accept_refuses_a_new_tool_until_tools_is_named() {
     );
     assert!(!is_frozen(home.path(), "demo"), "a working extension stays");
     assert!(is_mounted(home.path(), "demo", "alice"));
+    // EXT-ANCHOR-12: a frozen row whose live tools match the pin is fixed by a
+    // plain `--accept`: the advice never names `tools` nor leaves an empty
+    // `--accept-change`.
+    freeze(home.path(), "demo", "no drift").unwrap();
+    let again = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    let again = again.unwrap_err().to_string();
+    let plain = "drop `tools`, run `aux ext verify demo --accept`";
+    assert!(again.ends_with(plain), "{again}");
+    super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap();
+    assert!(!is_frozen(home.path(), "demo"));
+}
+
+/// The one VERIFY audit row of `outcome`, parsed.
+fn audit_row(home: &Path, outcome: &str) -> serde_json::Value {
+    let rows = super::ledger::payloads(home, super::ledger::VERIFY);
+    let rows: Vec<serde_json::Value> = (rows.iter())
+        .filter_map(|row| serde_json::from_str(row).ok())
+        .filter(|row: &serde_json::Value| row["outcome"] == outcome)
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows[0].clone()
 }
 
 // EXT-ANCHOR-11: a refused `--accept` keeps the approval on v1. v2 adds a host
 // and changes a tool; `--accept-change network` passes the first check, starts
 // v2 and is refused on its tools: v1's row comes back, frozen on the drift
-// (r2), and v2 is unmounted. v2 stays the highest build: using v1 needs
-// `--downgrade-to 1.0.0` or removing v2.
+// (r2), and v2 is unmounted. v2 stays the highest build, so only removing v2
+// reaches v1 (`--downgrade-to 1.0.0` names the approved build: refused).
 #[tokio::test]
 async fn a_refused_accept_keeps_the_approved_build() {
     let home = tempfile::tempdir().unwrap();
@@ -1462,6 +1485,11 @@ async fn a_refused_accept_keeps_the_approved_build() {
         ..before
     };
     assert_eq!(format!("{kept:?}"), format!("{frozen:?}"));
+    // EXT-ANCHOR-12: both builds in the same audit row.
+    let audit = audit_row(home.path(), "tools_refused");
+    assert_eq!(audit["refused_version"], "2.0.0", "{audit}");
+    assert_eq!(audit["restored_version"], "1.0.0", "{audit}");
+    assert_eq!(audit["frozen"], true, "{audit}");
     assert!(!is_mounted(home.path(), "demo", "alice"), "drift unmounts");
     let refused = mount(home.path(), "demo", "alice");
     assert!(
@@ -1526,13 +1554,98 @@ async fn a_failed_start_puts_the_approved_row_back() {
     assert!(started.is_err());
     let kept = load_state(home.path(), "demo").unwrap();
     assert_eq!(format!("{kept:?}"), format!("{before:?}"));
-    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY);
-    let audit = r#""refused_version":"2.0.0","restored_version":"1.0.0""#;
-    let audited = rows.iter().any(|row| row.contains("start_failed"));
-    assert!(
-        audited && rows.iter().any(|row| row.contains(audit)),
-        "{rows:?}"
-    );
+    let audit = audit_row(home.path(), "start_failed");
+    assert_eq!(audit["refused_version"], "2.0.0", "{audit}");
+    assert_eq!(audit["restored_version"], "1.0.0", "{audit}");
+    assert_eq!(audit["restore_failed"], false, "{audit}");
     let err = mount(home.path(), "demo", "alice").unwrap_err().to_string();
     assert!(err.contains("the approved 1.0.0"), "{err}");
+}
+
+/// v1 installed, then a v2 that exits at once with a new host: `--accept`
+/// stores the v2 pin, calls `planted` (between the store and the restore)
+/// and fails to start.
+async fn failed_accept_with(home: &Path, planted: impl FnOnce(&ExtensionState)) -> ExtensionState {
+    install_fixture(home, "demo", &fixture_script("Ping the fixture")).await;
+    let before = load_state(home, "demo").unwrap();
+    let v2 = "#!/bin/sh\nexit 1\n";
+    let mut entry = fixture_entry("demo", v2.as_bytes(), "2.0.0", Sensitivity::Public);
+    entry.tools[0].network = vec!["b.example:443".to_owned()];
+    install_upgrade(home, entry, v2).await;
+    let options = super::session::AcceptOptions {
+        downgrade_to: Some("2.0.0"),
+        launch_change: &["network".to_owned()],
+        ..Default::default()
+    };
+    let started = super::session::accept_with(home, "demo", &options, planted).await;
+    assert!(started.is_err());
+    before
+}
+
+// EXT-ANCHOR-12: a daemon `freeze` of the stored v2 row (byte-identical: it is
+// already frozen) lands before the failed start's restore. The epoch moved:
+// v1's row comes back frozen, never unfrozen.
+#[tokio::test]
+async fn a_freeze_before_the_restore_is_kept() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().to_path_buf();
+    let freeze_v2 = |state: &ExtensionState| {
+        assert!(state.frozen && state.version == "2.0.0");
+        freeze(&path, "demo", "daemon drift").unwrap();
+    };
+    let before = failed_accept_with(home.path(), freeze_v2).await;
+    let kept = load_state(home.path(), "demo").unwrap();
+    let frozen = ExtensionState {
+        frozen: true,
+        ..before
+    };
+    assert_eq!(format!("{kept:?}"), format!("{frozen:?}"));
+    let audit = audit_row(home.path(), "start_failed");
+    assert_eq!(audit["restored_version"], "1.0.0", "{audit}");
+    assert_eq!(audit["frozen"], true, "{audit}");
+}
+
+// EXT-ANCHOR-12: another row written between the store and the restore is
+// kept as it is: the audit says `kept_current` and restores nothing.
+#[tokio::test]
+async fn another_row_before_the_restore_is_kept_current() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().to_path_buf();
+    let other = std::sync::Mutex::new(None);
+    let plant = |state: &ExtensionState| {
+        let row = ExtensionState {
+            version: "9.9.9".to_owned(),
+            ..state.clone()
+        };
+        store_state(&path, &row).unwrap();
+        *other.lock().unwrap() = Some(row);
+    };
+    failed_accept_with(home.path(), plant).await;
+    let kept = load_state(home.path(), "demo").unwrap();
+    let planted = other.lock().unwrap().clone().unwrap();
+    assert_eq!(format!("{kept:?}"), format!("{planted:?}"));
+    let audit = audit_row(home.path(), "start_failed");
+    assert_eq!(audit["kept_current"], true, "{audit}");
+    assert_eq!(
+        audit["restored_version"],
+        serde_json::Value::Null,
+        "{audit}"
+    );
+    assert_eq!(audit["refused_version"], "2.0.0", "{audit}");
+}
+
+// EXT-ANCHOR-11 r2 / 12: `discover_session` refuses a frozen row as a mount
+// does, before the build starts.
+#[tokio::test]
+async fn discover_session_refuses_a_frozen_row() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    freeze(home.path(), "demo", "test").unwrap();
+    let options = SessionOptions::default();
+    let started = super::session::discover_session(home.path(), "demo", &options).await;
+    let frozen = matches!(
+        &started,
+        Err(super::session::SessionError::Mount(super::mount::MountError::Frozen(name))) if name == "demo"
+    );
+    assert!(frozen, "{:?}", started.err());
 }

@@ -145,7 +145,8 @@ pub fn changed_trust_fields(
 /// The exact `aux ext verify` command that re-trusts `installed` over `state`:
 /// `--downgrade-to` for another build, `--accept-legacy` for a row without a
 /// launch pin, `--accept-change` with every changed trust field (`tools`
-/// for a frozen row).
+/// for a frozen row: its live tools are unknown before the build starts; the
+/// `tools` refusal, which lists them, prints plain `--accept` when they match).
 pub fn accept_command(state: &ExtensionState, installed: &InstalledExtension) -> String {
     let name = &installed.name;
     // A directory name is not a catalog version: it never enters a command.
@@ -289,6 +290,63 @@ pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
     handle.create_dir_all(dirs)?;
     super::install::force_private_dir(&handle, dirs)?;
     handle.write_atomic(&state_rel(&state.name), text.as_bytes(), 0o600)
+}
+
+/// EXT-ANCHOR-12: `extensions/state/<name>.lock`, `flock`ed (std
+/// [`std::fs::File::lock`]) around each row write by [`freeze`] and
+/// `--accept`, so a compare-then-write is atomic. Its length is the freeze
+/// epoch: each `freeze` appends one byte under the lock, so a freeze that
+/// leaves the row byte-identical (an already frozen row) is still seen.
+/// Never held across an `.await` or a child start. Released on drop.
+pub(crate) struct StateLock(std::fs::File);
+
+impl StateLock {
+    /// Block until this process holds the lock of `name`. The file is opened
+    /// fd-relative, `O_NOFOLLOW | O_NONBLOCK` (a planted FIFO never hangs),
+    /// and must be a regular file.
+    pub(crate) fn acquire(home: &Path, name: &str) -> std::io::Result<Self> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let handle = kernel_core::SandboxHome::open(home)?;
+        let dirs = Path::new("extensions/state");
+        handle.create_dir_all(dirs)?;
+        super::install::force_private_dir(&handle, dirs)?;
+        let dir = handle.open_dir(dirs)?;
+        let leaf = std::ffi::CString::new(format!("{name}.lock")).map_err(std::io::Error::other)?;
+        let flags = libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+        // `openat` is variadic: the mode goes as `c_uint`.
+        const MODE: libc::c_uint = 0o600;
+        // SAFETY: `dir` is an open directory fd and `leaf` NUL-terminated.
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                leaf.as_ptr(),
+                flags | libc::O_CLOEXEC,
+                MODE,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        if !file.metadata()?.is_file() {
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        file.lock()?;
+        Ok(Self(file))
+    }
+
+    /// The freeze epoch: how many freezes this lock file has seen.
+    pub(crate) fn epoch(&self) -> std::io::Result<u64> {
+        Ok(self.0.metadata()?.len())
+    }
+
+    fn bump(&self) -> std::io::Result<()> {
+        use std::io::{Seek, Write};
+        let mut file = &self.0;
+        file.seek(std::io::SeekFrom::End(0))?;
+        file.write_all(b"\n")
+    }
 }
 
 /// `extensions/state/<name>.last.json`: the approval a `remove` keeps
@@ -640,11 +698,21 @@ pub fn remove_from_all_mounts(home: &Path, name: &str) -> std::io::Result<()> {
 /// The table is read first, the flag written first (fail closed): an unreadable
 /// table mounts nothing and is never rewritten; the freeze is logged, the table reported.
 pub fn freeze(home: &Path, name: &str, reason: &str) -> Result<(), MountError> {
+    load_state(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
+    // EXT-ANCHOR-12: read, bumped and written under the row's lock; the epoch
+    // moves first. A lock that cannot be taken or bumped never stops the
+    // freeze (fail closed): it is written and unmounted, then the error returned.
+    let lock = StateLock::acquire(home, name);
     let mut state =
         load_state(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
     let table = load_mounts(home);
     state.frozen = true;
+    let bumped = lock
+        .as_ref()
+        .map_err(|err| std::io::Error::from(err.kind()))
+        .and_then(StateLock::bump);
     store_state(home, &state)?;
+    drop(lock);
     ledger::log(
         home,
         "ext.frozen",
@@ -652,7 +720,7 @@ pub fn freeze(home: &Path, name: &str, reason: &str) -> Result<(), MountError> {
     );
     table?;
     remove_from_all_mounts(home, name)?;
-    Ok(())
+    bumped.map_err(MountError::Io)
 }
 
 /// Clear a freeze with no re-hash, diff or print: a test shortcut only. The
@@ -971,6 +1039,31 @@ mod tests {
         store_mounts(home.path(), &MountTable::default()).unwrap();
         let mode = std::fs::metadata(&root).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
+    }
+
+    // EXT-ANCHOR-12: every freeze moves the epoch, even on a frozen row whose
+    // bytes it leaves as they were; a FIFO lock file is refused, never waited on.
+    #[test]
+    fn each_freeze_moves_the_epoch() {
+        let home = tempfile::tempdir().unwrap();
+        store_state(home.path(), &state("demo")).unwrap();
+        let epoch = || {
+            StateLock::acquire(home.path(), "demo")
+                .unwrap()
+                .epoch()
+                .unwrap()
+        };
+        let start = epoch();
+        freeze(home.path(), "demo", "one").unwrap();
+        let row = std::fs::read(home.path().join("extensions/state/demo.json")).unwrap();
+        freeze(home.path(), "demo", "two").unwrap();
+        let again = std::fs::read(home.path().join("extensions/state/demo.json")).unwrap();
+        assert_eq!(row, again, "the frozen row is byte-identical");
+        assert_eq!(epoch(), start + 2);
+        let fifo = home.path().join("extensions/state/other.lock");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
+        assert!(StateLock::acquire(home.path(), "other").is_err());
     }
 
     fn unreadable_table(home: &Path) -> PathBuf {

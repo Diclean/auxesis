@@ -528,28 +528,9 @@ fn remove(home: &Path, name: &str, forget: bool) -> ExitCode {
     if let Some(code) = reject_invalid_name(name) {
         return code;
     }
-    // Read before the row goes: a corrupt row is never kept as `.last`.
-    let corrupt_row = extensions::install::approval_row_is_corrupt(home, name);
-    let removed = match forget {
-        true => extensions::install::remove_and_forget(home, name),
-        false => extensions::remove(home, name),
-    };
-    match removed {
-        Ok(removed) => {
-            extensions::ledger::log(
-                home,
-                extensions::ledger::REMOVE,
-                &serde_json::json!({"name": name, "removed": removed, "forget": forget}),
-            );
-            let _ = writeln!(std::io::stdout(), "removed {name} ({removed} install(s))");
-            if !forget {
-                let kept = extensions::install::kept_approval(home, name);
-                let _ = write!(
-                    std::io::stdout(),
-                    "{}",
-                    remove_notes(name, corrupt_row, kept)
-                );
-            }
+    match remove_report(home, name, forget) {
+        Ok(text) => {
+            let _ = write!(std::io::stdout(), "{text}");
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -557,6 +538,31 @@ fn remove(home: &Path, name: &str, forget: bool) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `remove` and what it prints on success.
+fn remove_report(
+    home: &Path,
+    name: &str,
+    forget: bool,
+) -> Result<String, extensions::install::InstallError> {
+    // Read before the row goes: a corrupt row is never kept as `.last`.
+    let corrupt_row = extensions::install::approval_row_is_corrupt(home, name);
+    let removed = match forget {
+        true => extensions::install::remove_and_forget(home, name),
+        false => extensions::remove(home, name),
+    }?;
+    extensions::ledger::log(
+        home,
+        extensions::ledger::REMOVE,
+        &serde_json::json!({"name": name, "removed": removed, "forget": forget}),
+    );
+    let mut text = format!("removed {name} ({removed} install(s))\n");
+    if !forget {
+        let kept = extensions::install::kept_approval(home, name);
+        text.push_str(&remove_notes(name, corrupt_row, kept));
+    }
+    Ok(text)
 }
 
 /// What a plain `remove` says about the approval it keeps (EXT-ANCHOR-11):
@@ -784,6 +790,34 @@ mod tests {
         );
         assert!(corrupt.contains("demo.last is unreadable"), "{corrupt}");
         assert!(corrupt.ends_with(forget), "{corrupt}");
+    }
+
+    // EXT-ANCHOR-12: a link or FIFO approval row is warned about through the
+    // real `remove`, never a hand-set flag, and is gone after it.
+    #[cfg(unix)]
+    #[test]
+    fn remove_warns_on_a_link_or_fifo_row() {
+        for kind in ["link", "fifo"] {
+            if kind == "link" && kernel_core::sandbox_guard_active() {
+                continue;
+            }
+            let home = tempfile::tempdir().unwrap();
+            let dir = home.path().join("extensions/state");
+            std::fs::create_dir_all(&dir).unwrap();
+            let row = dir.join("demo.json");
+            match kind {
+                "link" => std::os::unix::fs::symlink(home.path().join("gone"), &row).unwrap(),
+                _ => assert!(std::process::Command::new("mkfifo")
+                    .arg(&row)
+                    .status()
+                    .unwrap()
+                    .success()),
+            }
+            let text = remove_report(home.path(), "demo", false).unwrap();
+            let warning = "warning: the approval row of demo is corrupt and was not kept";
+            assert!(text.contains(warning), "{kind}: {text}");
+            assert!(std::fs::symlink_metadata(&row).is_err(), "{kind} row gone");
+        }
     }
 
     #[test]

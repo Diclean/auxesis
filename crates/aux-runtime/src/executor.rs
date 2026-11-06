@@ -1640,7 +1640,7 @@ impl Executor<'_> {
             return Err(format!(
                 "{reason}. This agent may not read the owner's free times: its grants need \
                  `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read \
-                 not off)"
+                 not off), and an agent with a tools list needs `calendar_freebusy` in it"
             ));
         }
         Err(reason)

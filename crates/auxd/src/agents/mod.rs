@@ -634,11 +634,12 @@ pub(crate) fn is_shipped_skill(agent: &str, name: &str) -> bool {
 /// The hash is the first 16 hex characters of the BLAKE3 of the shipped bytes.
 /// Every shipped file that changes adds its old hash here, in the same commit
 /// that changes it.
-const PAST_SHIPPED_HASHES: [(&str, &str, &str); 10] = [
+const PAST_SHIPPED_HASHES: [(&str, &str, &str); 11] = [
     ("calendar", "agent.md", "eae3a046eee2a171"),
     ("calendar", "agent.md", "2a4d1d80176dc3b7"),
     ("mail", "agent.md", "2546a133a8b8cdec"),
     ("mail", "agent.md", "b255a6a7a44afd92"),
+    ("mail", "agent.md", "53b8436b4290542c"),
     ("documents", "agent.md", "adf17956714da82c"),
     ("calendar", "skills/send-invite.md", "7dbc5035db053257"),
     ("mail", "skills/follow-up.md", "f48e1767c6ec0e33"),
@@ -2163,6 +2164,22 @@ level = "auto"
             std::fs::read_to_string(&file).unwrap(),
             "the owner's own words"
         );
+    }
+
+    /// EXECUTOR-READS: the Mail agent.md shipped before `calendar_freebusy`
+    /// joined its tools list is updated on an existing home, so free times keep
+    /// working after an upgrade.
+    #[test]
+    fn the_mail_agent_shipped_before_freebusy_is_updated() {
+        const OLD: &str = include_str!("../../tests/data/mail-agent-pre-160.md");
+        const CURRENT: &str = include_str!("mail/agent.md");
+        assert!(CURRENT.contains("calendar_freebusy"));
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("agents/mail/agent.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, OLD).unwrap();
+        install_shipped_files(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), CURRENT);
     }
 
     #[test]

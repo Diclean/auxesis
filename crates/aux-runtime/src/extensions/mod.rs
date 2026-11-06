@@ -74,6 +74,28 @@ pub const CATALOG_PUBKEY: [u8; 32] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
+/// `text` safe on one terminal line: a control, bidi (U+202A–E, U+2066–9,
+/// U+200E/F, U+061C) or invisible format character is shown as `\u{..}`.
+pub fn escape_text(text: &str) -> String {
+    let hidden = |c: char| {
+        c.is_control()
+            || matches!(c, '\u{061c}' | '\u{00ad}' | '\u{feff}')
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}')
+            || matches!(c, '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206f}')
+    };
+    text.chars()
+        .map(|c| match hidden(c) {
+            true => format!("\\u{{{:x}}}", u32::from(c)),
+            false => c.to_string(),
+        })
+        .collect()
+}
+
+/// A value JSON-quoted, then [`escape_text`]: never rendered, never reordered.
+pub fn quoted<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    escape_text(&serde_json::to_string(value).unwrap_or_else(|_| "none".to_owned()))
+}
+
 /// `~/.auxesis/extensions/` — every install, the identity rows and the mounts.
 pub fn extensions_dir(home: &Path) -> PathBuf {
     home.join("extensions")

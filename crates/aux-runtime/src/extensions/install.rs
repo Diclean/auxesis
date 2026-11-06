@@ -73,6 +73,12 @@ pub enum InstallError {
     /// The extension is not installed.
     #[error("extension `{0}` is not installed")]
     NotInstalled(String),
+    /// The approval row cannot be read back: an install never overwrites it.
+    #[error(
+        "the approval row extensions/state/{0}.json is unreadable or corrupt; \
+         nothing installed, the row is kept"
+    )]
+    StateUnreadable(String),
 }
 
 /// One installed extension on disk.
@@ -411,6 +417,11 @@ pub async fn install(
     if entry.run.transport != Transport::Stdio {
         return Err(InstallError::Phase1("http transport".to_owned()));
     }
+    // EXT-ANCHOR-9 r2: an approval row that cannot be read is refused before
+    // anything is fetched or written; `pin_extension` never overwrites a row.
+    if options.pin && super::mount::read_state(home, &entry.name).is_err() {
+        return Err(InstallError::StateUnreadable(entry.name.clone()));
+    }
 
     let bytes = fetch_artifact(entry, options.allow_loopback).await?;
     let actual = hex(&Sha256::digest(&bytes));
@@ -496,6 +507,8 @@ pub async fn install(
     };
 
     if options.pin {
+        // Over an approval row this pins and starts nothing: the upgrade keeps
+        // the owner's old yes until `aux ext verify --accept` names its changes.
         // A server that cannot be pinned is not installed: its tree goes too.
         if let Err(err) =
             super::session::pin_extension(home, &installed, options.allow_loopback).await

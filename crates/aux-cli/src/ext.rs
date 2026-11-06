@@ -48,18 +48,24 @@ enum ExtAction {
         /// or gone, or a row from before the artefact pin).
         #[arg(long, value_name = "VERSION", requires = "accept", requires = "name")]
         downgrade_to: Option<String>,
-        /// With `--accept`: re-trust these changed launch fields, comma
-        /// separated (e.g. `run.args,run.command`). A plain `--accept` refuses
-        /// any change to `source.type`, `kind`, `sensitivity` or `[run]`, and
-        /// this list must name exactly the fields that changed.
+        /// With `--accept`: re-trust these changed fields, comma separated
+        /// (e.g. `run.args,network`). A plain `--accept` refuses any change to
+        /// `source.type`, `kind`, `sensitivity` or `[run]`, a new host
+        /// (`network`), a new secret name (`secrets`) or another `[oauth]`
+        /// table (`oauth`), and this list must name exactly what changed.
         #[arg(
             long,
+            alias = "accept-launch-change",
             value_name = "FIELDS",
             value_delimiter = ',',
             requires = "accept",
             requires = "name"
         )]
-        accept_launch_change: Vec<String>,
+        accept_change: Vec<String>,
+        /// With `--accept`: trust a row approved before launch pins existed;
+        /// its command, args and source are printed before it starts.
+        #[arg(long, requires = "accept", requires = "name")]
+        accept_legacy: bool,
     },
     /// Mount an installed extension for one agent.
     Mount {
@@ -95,12 +101,14 @@ pub fn run(args: ExtArgs, _lang: Lang) -> ExitCode {
             name,
             accept,
             downgrade_to,
-            accept_launch_change,
+            accept_change,
+            accept_legacy,
         } => {
             let options = extensions::session::AcceptOptions {
                 allow_loopback: false,
                 downgrade_to: downgrade_to.as_deref(),
-                launch_change: &accept_launch_change,
+                launch_change: &accept_change,
+                legacy: accept_legacy,
             };
             verify(&home, name.as_deref(), accept, &options)
         }
@@ -172,10 +180,10 @@ fn show(home: &Path, name: &str) -> ExitCode {
     for tool in &entry.tools {
         let _ = writeln!(
             std::io::stdout(),
-            "tool: {} network=[{}] secrets=[{}]",
-            tool.name,
-            tool.network.join(","),
-            tool.secrets.join(",")
+            "tool: {} network={} secrets={}",
+            json(&tool.name),
+            json(&tool.network),
+            json(&tool.secrets)
         );
     }
     ExitCode::SUCCESS
@@ -228,6 +236,14 @@ fn install(home: &Path, name: &str) -> ExitCode {
                 installed.name,
                 installed.version
             );
+            // EXT-ANCHOR-9 r2: an upgrade over an approval keeps the old yes and
+            // was not started; the owner re-trusts it by name.
+            if let Err(err) = extensions::mount::require_approval(home, &installed) {
+                let _ = writeln!(
+                    std::io::stdout(),
+                    "not started: it needs verify --accept before it runs ({err})"
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -263,25 +279,34 @@ fn serde_name<T: serde::Serialize>(value: &T) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-/// What an `--accept` now trusts: the artefact sha256, the hosts granted, and
-/// how it runs, so the owner sees the pin before the build starts.
+/// A value JSON-quoted: an ANSI escape, a newline or a bidi control inside
+/// it is shown escaped, never rendered, so it cannot spoof another line.
+fn json<T: serde::Serialize + ?Sized>(value: &T) -> String {
+    extensions::quoted(value)
+}
+
+/// What an `--accept` now trusts: the artefact sha256, the hosts, secret
+/// names and OAuth endpoints granted, and how it runs, so the owner sees the
+/// pin before the build starts.
 fn trusted_summary(state: &extensions::ExtensionState) -> String {
     let none = || "none".to_owned();
     let hosts = match state.network.is_empty() {
         true => none(),
-        false => state.network.join(", "),
+        false => json(&state.network),
     };
     let mut out = format!(
-        "  sha256: {}\n  hosts: {hosts}\n",
-        state.artefact.clone().unwrap_or_else(none)
+        "  sha256: {}\n  hosts: {hosts}\n  secrets: {}\n  oauth: {}\n",
+        state.artefact.clone().unwrap_or_else(none),
+        json(&state.secrets),
+        state.oauth.as_ref().map_or_else(none, json),
     );
     if let Some(launch) = &state.launch {
         // Args as a JSON list: a space inside one arg stays visible.
-        let args = serde_json::to_string(&launch.run.args).unwrap_or_else(|_| none());
+        let args = json(&launch.run.args);
         out.push_str(&format!(
             "  command: {}\n  args: {args}\n  kind: {}\n  transport: {}\n  \
              source: {}\n  sensitivity: {}\n",
-            launch.run.command,
+            json(&launch.run.command),
             serde_name(&launch.kind),
             serde_name(&launch.run.transport),
             serde_name(&launch.source),
@@ -506,14 +531,28 @@ mod tests {
             "--accept-launch-change",
             "run.args,run.command",
         ]);
-        let Ok(ExtAction::Verify {
-            accept_launch_change,
-            ..
-        }) = &ok
-        else {
+        // EXT-ANCHOR-9: `--accept-change` is the name, the old one an alias.
+        let Ok(ExtAction::Verify { accept_change, .. }) = &ok else {
             panic!("{ok:?}");
         };
-        assert_eq!(*accept_launch_change, ["run.args", "run.command"]);
+        assert_eq!(*accept_change, ["run.args", "run.command"]);
+        let ok = parse(&["verify", "demo", "--accept", "--accept-change", "secrets"]);
+        let Ok(ExtAction::Verify { accept_change, .. }) = &ok else {
+            panic!("{ok:?}");
+        };
+        assert_eq!(*accept_change, ["secrets"]);
+        assert!(parse(&["verify", "demo", "--accept-legacy"]).is_err());
+        let ok = parse(&["verify", "demo", "--accept", "--accept-legacy"]);
+        assert!(
+            matches!(
+                ok,
+                Ok(ExtAction::Verify {
+                    accept_legacy: true,
+                    ..
+                })
+            ),
+            "{ok:?}"
+        );
     }
 
     // EXT-ANCHOR-8: the summary names every trusted value, with the
@@ -527,8 +566,11 @@ mod tests {
             kind: "mcp".to_owned(),
             frozen: false,
             tools: Default::default(),
-            network: vec!["a.example:443".to_owned(), "b.example:443".to_owned()],
-            secrets: Vec::new(),
+            network: vec![
+                "a.example:443".to_owned(),
+                "b\u{202e}.example:443".to_owned(),
+            ],
+            secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
             oauth: None,
             artefact: Some("ab".repeat(32)),
             launch: Some(extensions::mount::LaunchPin {
@@ -537,7 +579,7 @@ mod tests {
                 sensitivity: Sensitivity::Sensitive,
                 run: Run {
                     transport: Transport::Http,
-                    command: "server".to_owned(),
+                    command: "server\u{1b}[2K\n  sha256: forged".to_owned(),
                     args: vec!["-c".to_owned(), "a b".to_owned()],
                 },
             }),
@@ -545,8 +587,12 @@ mod tests {
         let text = trusted_summary(&state);
         for line in [
             format!("  sha256: {}\n", "ab".repeat(32)),
-            "  hosts: a.example:443, b.example:443\n".to_owned(),
-            "  command: server\n".to_owned(),
+            // EXT-ANCHOR-9 r2: hosts escaped like the rest, bidi as `\u{..}`.
+            "  hosts: [\"a.example:443\",\"b\\u{202e}.example:443\"]\n".to_owned(),
+            "  secrets: [\"EXT_DEMO__TOKEN\"]\n".to_owned(),
+            "  oauth: none\n".to_owned(),
+            // EXT-ANCHOR-9: escaped like args, never a raw ANSI or new line.
+            "  command: \"server\\u001b[2K\\n  sha256: forged\"\n".to_owned(),
             "  args: [\"-c\",\"a b\"]\n".to_owned(),
             "  kind: skill-pack\n".to_owned(),
             "  transport: http\n".to_owned(),
@@ -555,7 +601,17 @@ mod tests {
         ] {
             assert!(text.contains(&line), "{line:?} in {text}");
         }
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\u{202e}'),
+            "{text}"
+        );
+        let sha_lines = text.lines().filter(|l| l.starts_with("  sha256:"));
+        assert_eq!(sha_lines.count(), 1, "no forged line: {text}");
         (state.network, state.artefact, state.launch) = (Vec::new(), None, None);
-        assert_eq!(trusted_summary(&state), "  sha256: none\n  hosts: none\n");
+        state.secrets.clear();
+        assert_eq!(
+            trusted_summary(&state),
+            "  sha256: none\n  hosts: none\n  secrets: []\n  oauth: none\n"
+        );
     }
 }

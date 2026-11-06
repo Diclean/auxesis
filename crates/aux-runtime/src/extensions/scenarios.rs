@@ -137,21 +137,25 @@ fn write_script(dir: &Path, name: &str, script: &str) -> PathBuf {
 
 /// Install the fixture entry end to end and return the home/name.
 async fn install_fixture(home: &Path, name: &str, script: &str) -> Entry {
+    try_install_fixture(home, name, script)
+        .await
+        .expect("fixture installs")
+}
+
+async fn try_install_fixture(
+    home: &Path,
+    name: &str,
+    script: &str,
+) -> Result<Entry, super::InstallError> {
     let scratch = tempfile::tempdir().unwrap();
     let path = write_script(scratch.path(), "server", script);
     let mut entry = fixture_entry(name, script.as_bytes(), "1.0.0", Sensitivity::Public);
     entry.source.package = path.to_string_lossy().into_owned();
-    install(
-        home,
-        &entry,
-        &InstallOptions {
-            allow_loopback: true,
-            pin: true,
-        },
-    )
-    .await
-    .expect("fixture installs");
-    entry
+    let options = InstallOptions {
+        allow_loopback: true,
+        pin: true,
+    };
+    install(home, &entry, &options).await.map(|_| entry)
 }
 
 #[tokio::test]
@@ -424,7 +428,7 @@ async fn reinstall_keeps_a_freeze_until_accept() {
     install_fixture(home.path(), "demo", &script).await;
     freeze(home.path(), "demo", "drift").unwrap();
     assert!(is_frozen(home.path(), "demo"));
-    // A reinstall re-pins the tools but must not clear the freeze.
+    // A reinstall leaves the approval row as it is: the freeze stays.
     install_fixture(home.path(), "demo", &script).await;
     assert!(
         is_frozen(home.path(), "demo"),
@@ -433,6 +437,7 @@ async fn reinstall_keeps_a_freeze_until_accept() {
     #[cfg(unix)]
     {
         let state = home.path().join("extensions/state/demo.json");
+        let row = std::fs::read(&state).unwrap();
         for kind in ["fifo", "garbage"] {
             std::fs::remove_file(&state).unwrap();
             if kind == "fifo" {
@@ -445,8 +450,17 @@ async fn reinstall_keeps_a_freeze_until_accept() {
                 std::fs::write(&state, b"not json").unwrap();
             }
             assert!(is_frozen(home.path(), "demo"), "{kind}");
-            install_fixture(home.path(), "demo", &script).await;
+            // EXT-ANCHOR-9 r2: an unreadable row is refused by name, never
+            // overwritten by an install.
+            let err = try_install_fixture(home.path(), "demo", &script).await;
+            let err = err.expect_err("refused").to_string();
+            assert!(err.contains("extensions/state/demo.json"), "{kind}: {err}");
             assert!(is_frozen(home.path(), "demo"), "reinstall over {kind}");
+            if kind == "garbage" {
+                assert_eq!(std::fs::read(&state).unwrap(), b"not json", "row kept");
+            }
+            std::fs::remove_file(&state).unwrap();
+            std::fs::write(&state, &row).unwrap();
         }
     }
     accept(home.path(), "demo").unwrap();
@@ -457,7 +471,8 @@ async fn reinstall_keeps_a_freeze_until_accept() {
         std::fs::remove_file(&state).unwrap();
         std::os::unix::fs::symlink(home.path().join("nothing"), &state).unwrap();
         if !kernel_core::sandbox_guard_active() {
-            install_fixture(home.path(), "demo", &script).await;
+            let refused = try_install_fixture(home.path(), "demo", &script).await;
+            assert!(refused.is_err(), "a linked row is never overwritten");
         }
         assert!(is_frozen(home.path(), "demo"), "a link must read frozen");
     }
@@ -581,7 +596,9 @@ async fn accept_refuses_a_silent_downgrade_past_a_corrupt_newer_entry() {
     let home = tempfile::tempdir().unwrap();
     install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
     let mut state = load_state(home.path(), "demo").unwrap();
+    let running_sha = state.artefact.clone().unwrap();
     state.version = "2.0.0".to_owned();
+    state.artefact = Some("ab".repeat(32));
     state.frozen = true;
     store_state(home.path(), &state).unwrap();
     let newer = extensions_dir(home.path()).join("demo@2.0.0");
@@ -603,6 +620,14 @@ async fn accept_refuses_a_silent_downgrade_past_a_corrupt_newer_entry() {
     assert_eq!(accepted.state.version, "1.0.0");
     assert_eq!(accepted.corrupt_newer, ["2.0.0"]);
     assert!(!is_frozen(home.path(), "demo"));
+    // EXT-ANCHOR-9: the audit names the replaced bytes, not the new ones.
+    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY);
+    let old = format!(r#""previous_sha256":"{}""#, "ab".repeat(32));
+    let new = format!(r#""sha256":"{running_sha}""#);
+    assert!(
+        rows.iter().any(|r| r.contains(&old) && r.contains(&new)),
+        "{rows:?}"
+    );
 }
 
 // EXT-ANCHOR-7: the guard compares the exact version string, never an order
@@ -826,21 +851,18 @@ fn sandbox_allows_only_the_proxy_port_and_proxy_refuses_other_hosts() {
     );
 }
 
-/// Install `entry` from `script` without re-pinning (an upgrade on disk).
-async fn install_unpinned(home: &Path, mut entry: Entry, script: &str) {
+/// Install `entry` from `script` the way `aux ext install` does (`pin: true`).
+async fn install_upgrade(home: &Path, mut entry: Entry, script: &str) {
     let scratch = tempfile::tempdir().unwrap();
     let path = write_script(scratch.path(), "server", script);
     entry.source.package = path.to_string_lossy().into_owned();
-    install(
-        home,
-        &entry,
-        &InstallOptions {
-            allow_loopback: true,
-            pin: false,
-        },
-    )
-    .await
-    .expect("upgrade installs");
+    let options = InstallOptions {
+        allow_loopback: true,
+        ..InstallOptions::default()
+    };
+    install(home, &entry, &options)
+        .await
+        .expect("upgrade installs");
 }
 
 #[tokio::test]
@@ -868,10 +890,15 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
         vec!["a.example:443"]
     );
 
-    // v2 widens the allowlist; it is installed without a new approval.
+    // v2 widens the allowlist; installed as the CLI does, it keeps v1's yes.
     let mut v2 = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
     v2.tools[0].network = vec!["a.example:443".to_owned(), "b.example:443".to_owned()];
-    install_unpinned(home.path(), v2, &script).await;
+    install_upgrade(home.path(), v2, &script).await;
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert_eq!(
+        (kept.version.as_str(), kept.network),
+        ("1.0.0", vec!["a.example:443".to_owned()])
+    );
     assert_eq!(
         load_installed(home.path(), "demo").unwrap().version,
         "2.0.0"
@@ -879,6 +906,7 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
 
     let err = mount(home.path(), "demo", "bob").unwrap_err();
     assert!(err.to_string().starts_with("approval_required"), "{err}");
+    assert!(err.to_string().contains("--accept-change network"), "{err}");
     assert!(!is_mounted(home.path(), "demo", "bob"));
     let Err(err) =
         super::session::discover_session(home.path(), "demo", &SessionOptions::default()).await
@@ -898,7 +926,17 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
     // The owner's yes, naming v2, pins its version and hosts; the next start passes.
     let accept = |to| super::session::accept_installed(home.path(), "demo", false, to);
     assert!(accept(None).await.is_err(), "another build needs its name");
-    let state = accept(Some("2.0.0")).await.unwrap().state;
+    // EXT-ANCHOR-9: the new host is named too, never re-pinned silently.
+    let err = accept(Some("2.0.0")).await.unwrap_err().to_string();
+    assert!(err.contains("--accept-change network"), "{err}");
+    assert!(err.contains("new network \"b.example:443\""), "{err}");
+    let options = super::session::AcceptOptions {
+        downgrade_to: Some("2.0.0"),
+        launch_change: &["network".to_owned()],
+        ..Default::default()
+    };
+    let accepted = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    let state = accepted.unwrap().state;
     assert_eq!(state.version, "2.0.0");
     assert_eq!(state.network, vec!["a.example:443", "b.example:443"]);
     mount(home.path(), "demo", "bob").unwrap();
@@ -911,15 +949,34 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
     let mut v3 = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
     v3.tools[0].network = vec!["a.example:443".to_owned()];
     v3.tools[0].secrets = vec!["EXT_DEMO__EXTRA".to_owned()];
-    install_unpinned(home.path(), v3, &script).await;
-    let err = mount(home.path(), "demo", "carol").unwrap_err();
-    assert!(err.to_string().contains("EXT_DEMO__EXTRA"), "{err}");
+    install_upgrade(home.path(), v3, &script).await;
+    let kept = load_state(home.path(), "demo").unwrap().secrets;
+    assert_eq!(kept, vec!["EXT_DEMO__TOKEN"], "the v2 yes is kept");
+    let err = mount(home.path(), "demo", "carol").unwrap_err().to_string();
+    assert!(
+        err.contains("new secret names: \"EXT_DEMO__EXTRA\""),
+        "{err}"
+    );
+    assert!(err.contains("--accept-change secrets"), "{err}");
     let host = ExtensionHost::start(home.path()).await;
     assert!(
         host.running().is_empty(),
         "a new secret name must not start"
     );
     host.stop().await;
+    let err = accept(None).await.unwrap_err().to_string();
+    assert!(err.contains("new secrets \"EXT_DEMO__EXTRA\""), "{err}");
+    let options = super::session::AcceptOptions {
+        launch_change: &["secrets".to_owned()],
+        ..Default::default()
+    };
+    let accepted = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    let secrets = accepted.unwrap().state.secrets;
+    assert!(
+        secrets.contains(&"EXT_DEMO__EXTRA".to_owned()),
+        "{secrets:?}"
+    );
+    mount(home.path(), "demo", "carol").unwrap();
 }
 
 async fn assert_starts(home: &Path, want: bool) {
@@ -970,7 +1027,7 @@ async fn approval_binds_the_launch_fields_of_entry_toml() {
     // EXT-ANCHOR-8: a plain `--accept` refuses it; naming the field re-trusts it.
     let err = super::session::accept_current(home.path(), "demo", false).await;
     let err = err.unwrap_err().to_string();
-    assert!(err.contains("--accept-launch-change sensitivity"), "{err}");
+    assert!(err.contains("--accept-change sensitivity"), "{err}");
     let fields = ["sensitivity".to_owned()];
     let pinned = accept_launch(home.path(), &fields).await;
     assert!(pinned.unwrap().state.launch.is_some());
@@ -984,10 +1041,29 @@ async fn approval_binds_the_launch_fields_of_entry_toml() {
     store_state(home.path(), &state).unwrap();
     let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
     assert!(err.contains("no approved launch"), "{err}");
+    assert!(err.contains("demo --accept --accept-legacy`"), "{err}");
     assert_starts(home.path(), false).await;
-    super::session::accept_current(home.path(), "demo", false)
+    // EXT-ANCHOR-9: a plain `--accept` never trusts it unnamed.
+    let err = super::session::accept_current(home.path(), "demo", false).await;
+    let err = err.unwrap_err().to_string();
+    assert!(err.contains("--accept-legacy"), "{err}");
+    assert!(load_state(home.path(), "demo").unwrap().launch.is_none());
+    let legacy = super::session::AcceptOptions {
+        legacy: true,
+        ..Default::default()
+    };
+    super::session::accept_with(home.path(), "demo", &legacy, |_| {})
         .await
         .unwrap();
+    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY);
+    assert!(
+        rows.iter().any(|r| r.contains(r#""legacy":true"#)),
+        "{rows:?}"
+    );
+    // The flag on a pinned row is refused.
+    let again = super::session::accept_with(home.path(), "demo", &legacy, |_| {}).await;
+    let again = again.unwrap_err().to_string();
+    assert!(again.contains("drop `--accept-legacy`"), "{again}");
     mount(home.path(), "demo", "bob").unwrap();
     assert_starts(home.path(), true).await;
 }
@@ -1033,7 +1109,7 @@ async fn accept_refuses_a_tampered_run_args_and_starts_nothing() {
     );
     let err = err.to_string();
     assert!(err.contains("(run.args)"), "{err}");
-    assert!(err.contains("--accept-launch-change run.args"), "{err}");
+    assert!(err.contains("--accept-change run.args"), "{err}");
     let wrong = accept_launch(home.path(), &["run.command".to_owned()]).await;
     assert!(wrong.unwrap_err().to_string().contains("run.args"));
     let kept = load_state(home.path(), "demo").unwrap();
@@ -1071,7 +1147,117 @@ async fn accept_refuses_a_tampered_run_args_and_starts_nothing() {
     // A flag on a build with no launch change is refused.
     let again = accept_launch(home.path(), &fields).await.unwrap_err();
     assert!(
-        again.to_string().contains("no changed launch field"),
+        again.to_string().contains("no changed trust field"),
         "{again}"
     );
+}
+
+/// Install `demo` with a fixture that creates `ran` in its work dir (the one
+/// place a child writes) when it starts; the install's own start is cleared.
+async fn install_marked(home: &Path) -> PathBuf {
+    let line = "#!/bin/sh\ncommand : > ran 2>/dev/null\n";
+    let script = fixture_script("Ping the fixture").replacen("#!/bin/sh\n", line, 1);
+    install_fixture(home, "demo", &script).await;
+    let marker = load_installed(home, "demo").unwrap().work_dir().join("ran");
+    std::fs::remove_file(&marker).expect("the fixture marks its start");
+    marker
+}
+
+/// Rewrite the installed entry.toml of `demo`.
+fn rewrite_entry(home: &Path, edit: impl FnOnce(&mut Entry)) {
+    let installed = load_installed(home, "demo").unwrap();
+    let mut entry = installed.entry.clone();
+    edit(&mut entry);
+    std::fs::write(
+        installed.dir.join("entry.toml"),
+        toml::to_string(&entry).unwrap(),
+    )
+    .unwrap();
+}
+
+// EXT-ANCHOR-9: a new secret name with the same binary is a trust change. A
+// plain `--accept` refuses it, names the field, starts nothing and pins
+// nothing; the mount refusal suggests the exact command.
+#[tokio::test]
+async fn accept_refuses_a_new_secret_name_and_starts_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let marker = install_marked(home.path()).await;
+    let before = load_state(home.path(), "demo").unwrap();
+    let rows_before = super::ledger::payloads(home.path(), super::ledger::VERIFY).len();
+    rewrite_entry(home.path(), |entry| {
+        entry.tools[0].secrets.push("EXT_DEMO__EXTRA".to_owned());
+    });
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    assert!(
+        err.contains("`aux ext verify demo --accept --accept-change secrets`"),
+        "{err}"
+    );
+    let err = super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("(secrets)"), "{err}");
+    assert!(err.contains("--accept-change secrets"), "{err}");
+    assert!(!marker.exists(), "nothing started");
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert_eq!(kept.secrets, before.secrets, "nothing re-pinned");
+    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY).len();
+    assert_eq!(rows, rows_before, "no approval audited");
+}
+
+// EXT-ANCHOR-9: naming a subset of the changed launch fields is refused, and
+// the refusal names the exact list.
+#[tokio::test]
+async fn accept_refuses_a_subset_of_the_changed_launch_fields() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    let before = load_state(home.path(), "demo").unwrap();
+    // npm: the binary re-hash, which would refuse first, is skipped.
+    rewrite_entry(home.path(), |entry| {
+        entry.source.kind = SourceType::Npm;
+        entry.run.command = "other".to_owned();
+        entry.run.args = vec!["--evil".to_owned()];
+    });
+    let err = accept_launch(home.path(), &["run.args".to_owned()]).await;
+    let err = err.unwrap_err().to_string();
+    assert!(
+        err.contains("--accept-change source.type,run.command,run.args`"),
+        "{err}"
+    );
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert_eq!(kept.launch, before.launch, "nothing re-pinned");
+}
+
+// EXT-ANCHOR-9: the pin is saved, audited and shown before the child runs;
+// the start is audited after it.
+#[tokio::test]
+async fn accept_prints_and_audits_before_the_child_starts() {
+    let home = tempfile::tempdir().unwrap();
+    let marker = install_marked(home.path()).await;
+    let events = std::cell::RefCell::new(Vec::new());
+    let outcomes = |home: &Path| {
+        super::ledger::payloads(home, super::ledger::VERIFY)
+            .into_iter()
+            .filter_map(|row| {
+                let row: serde_json::Value = serde_json::from_str(&row).ok()?;
+                Some(row["outcome"].as_str()?.to_owned())
+            })
+            .collect::<Vec<_>>()
+    };
+    let options = super::session::AcceptOptions::default();
+    super::session::accept_with(home.path(), "demo", &options, |_| {
+        let ran = marker.exists();
+        events.borrow_mut().push(format!("trusted ran={ran}"));
+        events.borrow_mut().extend(outcomes(home.path()));
+    })
+    .await
+    .unwrap();
+    events
+        .borrow_mut()
+        .push(format!("done ran={}", marker.exists()));
+    assert_eq!(
+        events.into_inner(),
+        ["trusted ran=false", "pinned", "done ran=true"]
+    );
+    assert_eq!(outcomes(home.path()), ["pinned", "started"]);
 }

@@ -743,16 +743,30 @@ pub fn pinned_tools(tools: &[RemoteTool]) -> Vec<ToolPin> {
         .collect()
 }
 
-/// Pin the identities of an installed extension and persist its state.
+/// Pin the identities of an installed extension and persist its state: the
+/// install-time yes, for an extension with no approval row only.
+///
+/// An existing row is the owner's yes to one build: it is returned untouched
+/// and the new build is **not started** (an upgrade waits for
+/// `aux ext verify --accept`, which names its changes). An unreadable or
+/// corrupt row is refused and kept.
 pub async fn pin_extension(
     home: &Path,
     installed: &InstalledExtension,
     allow_loopback: bool,
 ) -> Result<ExtensionState, SessionError> {
+    match super::mount::read_state(home, &installed.name) {
+        Ok(None) => {}
+        Ok(Some(state)) => return Ok(state),
+        Err(_) => {
+            let name = installed.name.clone();
+            return Err(super::install::InstallError::StateUnreadable(name).into());
+        }
+    }
     let session = session_for(home, installed, &SessionOptions { allow_loopback }).await?;
     let pins = pinned_tools(&session.tools);
-    // A reinstall re-pins the tools but never clears a freeze: only the owner's
-    // `aux ext verify --accept` does that. An unreadable row counts as frozen.
+    // Never clears a freeze: only the owner's `aux ext verify --accept` does
+    // that. An unreadable row counts as frozen.
     let frozen = super::mount::is_frozen(home, &installed.name);
     let state = ExtensionState {
         name: installed.name.clone(),
@@ -814,7 +828,7 @@ pub async fn accept_installed(
     let options = AcceptOptions {
         allow_loopback,
         downgrade_to,
-        launch_change: &[],
+        ..Default::default()
     };
     accept_with(home, name, &options, |_| {}).await
 }
@@ -826,15 +840,20 @@ pub struct AcceptOptions<'a> {
     pub allow_loopback: bool,
     /// `--downgrade-to`: the exact build other than the approved one.
     pub downgrade_to: Option<&'a str>,
-    /// `--accept-launch-change`: the launch fields re-trusted, exactly the
-    /// ones that changed since the pin ([`super::mount::LaunchPin`]).
+    /// `--accept-change` (alias `--accept-launch-change`): the trust fields
+    /// re-trusted, exactly the ones that changed since the pin: launch fields
+    /// ([`super::mount::LaunchPin`]), `network`, `secrets`, `oauth`.
     pub launch_change: &'a [String],
+    /// `--accept-legacy`: trust a row written before the launch pin.
+    pub legacy: bool,
 }
 
-/// [`accept_installed`] with every owner flag. The launch diff is checked
+/// [`accept_installed`] with every owner flag. The trust diff is checked
 /// before anything starts: a changed `source.type`, `kind`, `sensitivity` or
-/// `[run]` field is refused ([`SessionError::LaunchChangeRefused`]) unless
-/// `launch_change` names exactly the changed fields. The new pin is saved
+/// `[run]` field, a new host or secret name, or another `[oauth]` table is
+/// refused ([`SessionError::LaunchChangeRefused`]) unless `launch_change`
+/// names exactly the changed fields; a row without a launch pin needs
+/// `legacy`. The new pin is saved
 /// (still frozen) and handed to `on_trusted` **before** the child starts, so
 /// the owner sees what they trust before it runs; the freeze clears once the
 /// live tools are pinned.
@@ -860,45 +879,53 @@ pub async fn accept_with(
         None => " (no approved artefact sha256 is pinned)".to_owned(),
     };
     let other = installed.version != state.version || !why.is_empty();
+    let command = super::mount::accept_command(&state, &installed);
     if options.downgrade_to != other.then_some(installed.version.as_str()) {
         let fix = match other {
-            true => format!(
-                "another build is re-pinned only by \
-                 `aux ext verify {name} --accept --downgrade-to {}`",
-                installed.version
-            ),
-            false => format!("this is the approved build: `aux ext verify {name} --accept`"),
+            true => format!("another build is re-pinned only by `{command}`"),
+            false => format!("this is the approved build: `{command}`"),
         };
         let (installed, approved) = (installed.version, &state.version);
         return Err(SessionError::DowngradeRefused {
-            message: format!("`{name}` runs {installed}, approved {approved}{why}: {fix}"),
+            message: format!(
+                "`{name}` runs {}, approved {}{why}: {fix}",
+                super::escape_text(&installed),
+                super::escape_text(approved)
+            ),
             installed,
             corrupt_newer: report.corrupt_newer,
         });
     }
     let launch = super::mount::launch_pin(&installed.entry);
-    // A row written before the launch pin has nothing to diff: it is pinned
-    // here, with the values printed before the child starts.
-    let changed = state.launch.as_ref().map_or_else(Vec::new, |pinned| {
-        super::mount::changed_launch_fields(pinned, &launch)
-    });
+    // A row written before the launch pin has nothing to diff: the owner says
+    // so by name, and the values are printed before the child starts.
+    let legacy = state.launch.is_none();
+    if options.legacy != legacy {
+        let message = match legacy {
+            true => format!(
+                "`{name}` has no approved launch (command, type, sensitivity) pinned; \
+                 nothing started: trust it only with `{command}`"
+            ),
+            false => format!("`{name}` has an approved launch pin: drop `--accept-legacy`"),
+        };
+        return Err(SessionError::LaunchChangeRefused(message));
+    }
+    let changed = super::mount::changed_trust_fields(&state, &installed.entry);
     let named: BTreeSet<&str> = options.launch_change.iter().map(String::as_str).collect();
     if named != changed.iter().copied().collect() {
-        let fields = changed.join(",");
         let message = match (changed.is_empty(), named.is_empty()) {
-            (true, _) => {
-                format!("`{name}` has no changed launch field: drop `--accept-launch-change`")
-            }
+            (true, _) => format!("`{name}` has no changed trust field: drop `--accept-change`"),
             (false, true) => format!(
-                "`{name}` changed launch fields since approval ({}); nothing started: \
-                 re-trust them only with `aux ext verify {name} --accept \
-                 --accept-launch-change {fields}`",
-                changed.join(", ")
+                "`{name}` changed trust fields since approval ({}){}; nothing started: \
+                 re-trust them only with `{command}`",
+                changed.join(", "),
+                new_values(&state, &installed.entry),
             ),
             (false, false) => format!(
-                "`--accept-launch-change {}` does not name the changed launch fields of \
-                 `{name}`: `--accept-launch-change {fields}`",
-                options.launch_change.join(",")
+                "`--accept-change {}` does not name the changed trust fields of \
+                 `{name}`{}: `{command}`",
+                super::escape_text(&options.launch_change.join(",")),
+                new_values(&state, &installed.entry),
             ),
         };
         return Err(SessionError::LaunchChangeRefused(message));
@@ -922,23 +949,8 @@ pub async fn accept_with(
     // live tools are pinned, so a failed start runs nothing later.
     state.frozen = true;
     store_state(home, &state)?;
-    on_trusted(&state);
-    let session = session_for(
-        home,
-        &installed,
-        &SessionOptions {
-            allow_loopback: options.allow_loopback,
-        },
-    )
-    .await?;
-    let pins = pinned_tools(&session.tools);
-    state.tools = pins
-        .into_iter()
-        .map(|pin| (pin.name, pin.identity))
-        .collect();
-    state.frozen = false;
-    store_state(home, &state)?;
-    session.stop().await;
+    // The authorized transition is audited when it is saved, so a failed
+    // start still shows what the owner trusted.
     super::ledger::log(
         home,
         super::ledger::VERIFY,
@@ -946,6 +958,7 @@ pub async fn accept_with(
             "name": name,
             "version": state.version,
             "accepted": true,
+            "outcome": "pinned",
             "previous": previous,
             // The approved bytes, and the ones they replace (none on a row
             // written before the artefact pin).
@@ -953,14 +966,50 @@ pub async fn accept_with(
             "previous_sha256": previous_sha256,
             // The owner named a build other than the approved one.
             "downgrade": other,
-            // The launch fields the owner re-trusted by name.
+            // The row had no launch pin; the owner trusted it by name.
+            "legacy": legacy,
+            // The trust fields the owner re-trusted by name.
             "launch_change": changed,
         }),
     );
+    on_trusted(&state);
+    let outcome = |outcome: &str| {
+        let row = serde_json::json!({"name": name, "version": state.version, "outcome": outcome});
+        super::ledger::log(home, super::ledger::VERIFY, &row);
+    };
+    let started = session_for(
+        home,
+        &installed,
+        &SessionOptions {
+            allow_loopback: options.allow_loopback,
+        },
+    )
+    .await;
+    let session = started.inspect_err(|_| outcome("start_failed"))?;
+    let pins = pinned_tools(&session.tools);
+    state.tools = pins
+        .into_iter()
+        .map(|pin| (pin.name, pin.identity))
+        .collect();
+    state.frozen = false;
+    let stored = store_state(home, &state);
+    session.stop().await;
+    stored?;
+    // Logged once the unfrozen pin is saved: a failed save never reads as started.
+    outcome("started");
     Ok(Accepted {
         state,
         corrupt_newer: report.corrupt_newer,
     })
+}
+
+/// `: new network "h:443", secrets "EXT_X__K"` for the refusal, or nothing.
+fn new_values(state: &ExtensionState, entry: &Entry) -> String {
+    let values = super::mount::new_trust_values(state, entry);
+    match values.is_empty() {
+        true => String::new(),
+        false => format!(": new {}", values.join(", ")),
+    }
 }
 
 /// Compare a live tool list against the pinned identities.

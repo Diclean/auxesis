@@ -110,6 +110,74 @@ pub(crate) fn changed_launch_fields(pinned: &LaunchPin, now: &LaunchPin) -> Vec<
     changed
 }
 
+/// Every field an owner must name to re-trust `entry` over `state`
+/// (`--accept-change`): the changed launch fields, plus `network` for a new
+/// host, `secrets` for a new secret name and `oauth` for any `[oauth]` change.
+/// A narrower host or secret set is not a change.
+pub fn changed_trust_fields(
+    state: &ExtensionState,
+    entry: &super::catalog::Entry,
+) -> Vec<&'static str> {
+    let mut changed = state.launch.as_ref().map_or_else(Vec::new, |pinned| {
+        changed_launch_fields(pinned, &launch_pin(entry))
+    });
+    if network_pins(entry)
+        .iter()
+        .any(|host| !state.network.contains(host))
+    {
+        changed.push("network");
+    }
+    if entry
+        .secret_names()
+        .iter()
+        .any(|name| !state.secrets.contains(name))
+    {
+        changed.push("secrets");
+    }
+    if state.oauth != entry.oauth {
+        changed.push("oauth");
+    }
+    changed
+}
+
+/// The exact `aux ext verify` command that re-trusts `installed` over `state`:
+/// `--downgrade-to` for another build, `--accept-legacy` for a row without a
+/// launch pin, `--accept-change` with every changed trust field.
+pub fn accept_command(state: &ExtensionState, installed: &InstalledExtension) -> String {
+    let name = &installed.name;
+    // A directory name is not a catalog version: it never enters a command.
+    if !super::catalog::valid_version(&installed.version) {
+        return format!("aux ext remove {name} && aux ext install {name}");
+    }
+    let mut command = format!("aux ext verify {name} --accept");
+    let same_bytes = state.artefact.as_deref() == Some(artefact_pin(&installed.entry).as_str());
+    if installed.version != state.version || !same_bytes {
+        command.push_str(&format!(" --downgrade-to {}", installed.version));
+    }
+    if state.launch.is_none() {
+        command.push_str(" --accept-legacy");
+    }
+    let changed = changed_trust_fields(state, &installed.entry);
+    if !changed.is_empty() {
+        command.push_str(&format!(" --accept-change {}", changed.join(",")));
+    }
+    command
+}
+
+/// Each host and secret name `entry` adds over `state`, JSON-quoted and
+/// escaped: the owner sees every new value, not only its field.
+pub fn new_trust_values(state: &ExtensionState, entry: &super::catalog::Entry) -> Vec<String> {
+    let hosts = network_pins(entry)
+        .into_iter()
+        .filter(|host| !state.network.contains(host));
+    let hosts = hosts.map(|host| format!("network {}", super::quoted(&host)));
+    let secrets = entry.secret_names().into_iter();
+    let secrets = secrets.filter(|name| !state.secrets.contains(name));
+    hosts
+        .chain(secrets.map(|name| format!("secrets {}", super::quoted(&name))))
+        .collect()
+}
+
 /// The artefact sha256 an approval pins: the entry's `source.sha256`,
 /// lowercase. For a binary it is the re-hashed file's (`verify_installed`
 /// refuses any other bytes); for an npm/uv tree it is the tarball's, checked
@@ -135,12 +203,16 @@ pub enum MountError {
     PrivateMode(String),
     /// The installed version, network allowlist or secret names differ from
     /// what the owner approved; only `aux ext verify --accept` clears it.
-    #[error("approval_required: extension `{name}` changed since approval ({reason}); run `aux ext verify --accept {name}`")]
+    #[error(
+        "approval_required: extension `{name}` changed since approval ({reason}); run `{fix}`"
+    )]
     ApprovalRequired {
         /// Extension name.
         name: String,
         /// Content-free reason: what changed.
         reason: String,
+        /// The exact command that re-trusts it ([`accept_command`]).
+        fix: String,
     },
     /// The install could not be checked for another reason than other bytes:
     /// no `--accept` fixes it, so none is suggested.
@@ -211,7 +283,10 @@ pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
     handle.write_atomic(&state_rel(&state.name), text.as_bytes(), 0o600)
 }
 
-fn read_state(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io::Error> {
+pub(crate) fn read_state(
+    home: &Path,
+    name: &str,
+) -> Result<Option<ExtensionState>, std::io::Error> {
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => handle,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -220,9 +295,11 @@ fn read_state(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io
     match super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES) {
         super::ReadAt::Absent => Ok(None),
         super::ReadAt::Unreadable => Err(std::io::ErrorKind::InvalidData.into()),
-        super::ReadAt::Text(text) => serde_json::from_str(&text)
-            .map(Some)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData)),
+        // A row naming another extension is never this one's approval.
+        super::ReadAt::Text(text) => match serde_json::from_str::<ExtensionState>(&text) {
+            Ok(state) if state.name == name => Ok(Some(state)),
+            _ => Err(std::io::ErrorKind::InvalidData.into()),
+        },
     }
 }
 
@@ -234,7 +311,8 @@ pub(crate) fn state_row_is_corrupt(home: &Path, name: &str) -> bool {
     };
     matches!(
         super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES),
-        super::ReadAt::Text(text) if serde_json::from_str::<ExtensionState>(&text).is_err()
+        super::ReadAt::Text(text) if !serde_json::from_str::<ExtensionState>(&text)
+            .is_ok_and(|state| state.name == name)
     )
 }
 
@@ -340,12 +418,14 @@ pub fn check_approval(
         Err(MountError::ApprovalRequired {
             name: installed.name.clone(),
             reason,
+            fix: accept_command(state, installed),
         })
     };
     if installed.version != state.version || installed.entry.version != state.version {
         return refuse(format!(
             "version {} is not the approved {}",
-            installed.version, state.version
+            super::escape_text(&installed.version),
+            super::escape_text(&state.version)
         ));
     }
     let pin = artefact_pin(&installed.entry);
@@ -372,6 +452,7 @@ pub fn check_approval(
     let wider: Vec<String> = network_pins(&installed.entry)
         .into_iter()
         .filter(|host| !state.network.contains(host))
+        .map(|host| super::quoted(&host))
         .collect();
     if !wider.is_empty() {
         return refuse(format!("new network hosts: {}", wider.join(", ")));
@@ -381,6 +462,7 @@ pub fn check_approval(
         .secret_names()
         .into_iter()
         .filter(|name| !state.secrets.contains(name))
+        .map(|name| super::quoted(&name))
         .collect();
     if !new_secrets.is_empty() {
         return refuse(format!("new secret names: {}", new_secrets.join(", ")));
@@ -415,16 +497,19 @@ pub fn require_approval(
     Ok(state)
 }
 
-/// A re-hash refusal as a mount error. Only other bytes ask the owner for
-/// `--accept` (the reason carries both hashes); a read failure is IO and never
-/// does, since a re-approval cannot fix it.
+/// A re-hash refusal as a mount error. Only other bytes ask the owner for a
+/// reinstall (the reason carries both hashes); a read failure is IO and never
+/// does, since a reinstall cannot fix it.
 fn install_refusal(name: &str, err: super::install::InstallError) -> MountError {
     use super::install::InstallError;
     match err {
         InstallError::NotInstalled(_) => MountError::NotInstalled(name.to_owned()),
+        // `--accept` re-hashes first and refuses the same bytes: only a
+        // reinstall of the catalog build puts the approved bytes back.
         InstallError::HashMismatch { .. } => MountError::ApprovalRequired {
             name: name.to_owned(),
             reason: err.to_string(),
+            fix: format!("aux ext install {name}"),
         },
         InstallError::Io(err) => MountError::Io(err),
         other => MountError::Unverified {
@@ -544,8 +629,10 @@ pub fn freeze(home: &Path, name: &str, reason: &str) -> Result<(), MountError> {
     Ok(())
 }
 
-/// Clear a freeze after the owner re-approves (`aux ext verify --accept`).
-pub fn accept(home: &Path, name: &str) -> Result<(), MountError> {
+/// Clear a freeze with no re-hash, diff or print: a test shortcut only. The
+/// owner's path is `session::accept_with` (`aux ext verify --accept`).
+#[cfg(test)]
+pub(crate) fn accept(home: &Path, name: &str) -> Result<(), MountError> {
     let mut state =
         load_state(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
     state.frozen = false;
@@ -820,6 +907,24 @@ mod tests {
         ));
     }
 
+    // EXT-ANCHOR-9: a row naming another extension is never this one's pin.
+    #[test]
+    fn a_state_row_naming_another_extension_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let public = super::super::catalog::Sensitivity::Public;
+        install_entry(home.path(), "demo", public);
+        store_state(home.path(), &state("other")).unwrap();
+        let dir = home.path().join("extensions/state");
+        std::fs::copy(dir.join("other.json"), dir.join("demo.json")).unwrap();
+        assert!(load_state(home.path(), "demo").is_none());
+        assert!(is_frozen(home.path(), "demo"), "fails closed");
+        assert!(state_row_is_corrupt(home.path(), "demo"));
+        assert!(matches!(
+            mount(home.path(), "demo", "alice"),
+            Err(MountError::MissingState(_))
+        ));
+    }
+
     #[test]
     fn mounting_an_unknown_extension_is_refused() {
         let home = tempfile::tempdir().unwrap();
@@ -987,6 +1092,22 @@ mod tests {
         )
         .unwrap();
         check_approval(&pinned, &installed("1.0.0", &["a.example:443"], &[])).unwrap();
+    }
+
+    // EXT-ANCHOR-9 r2: a directory version is never put in a command, and a
+    // bidi character in it is shown as `\u{..}`.
+    #[test]
+    fn a_bad_directory_version_is_escaped_and_never_suggested() {
+        let build = installed("2.0.0\u{202e}x", &[], &[]);
+        let fix = "aux ext remove demo && aux ext install demo";
+        assert_eq!(accept_command(&state("demo"), &build), fix);
+        let err = check_approval(&state("demo"), &build)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("2.0.0\\u{202e}x") && !err.contains('\u{202e}'),
+            "{err}"
+        );
     }
 
     #[test]

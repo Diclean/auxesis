@@ -15,7 +15,7 @@ use aux_runtime::extensions::install::{install, load_installed, InstallOptions};
 use aux_runtime::extensions::mount::{
     artefact_pin, launch_pin, network_pins, store_state, ExtensionState,
 };
-use aux_runtime::extensions::session::{accept_current, accept_installed};
+use aux_runtime::extensions::session::{accept_installed, accept_with, AcceptOptions};
 use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions};
 use common::{http, HttpResponse};
@@ -511,7 +511,19 @@ async fn oauth_refuses_unapproved_upgrades_before_reading_tokens_or_starting_a_f
 
     // The real owner-accept path, naming v2, re-pins it before OAuth proceeds.
     store_state(&api.home, &v1_pin).unwrap();
-    accept_installed(&api.home, NAME, true, Some("2.0.0"))
+    // EXT-ANCHOR-9: the new secret name (and any new host) is named too.
+    let err = accept_installed(&api.home, NAME, true, Some("2.0.0")).await;
+    assert!(err.unwrap_err().to_string().contains("secrets"));
+    let v2 = load_installed(&api.home, NAME).unwrap().entry;
+    let changed = aux_runtime::extensions::mount::changed_trust_fields(&v1_pin, &v2);
+    let changed: Vec<String> = changed.into_iter().map(str::to_owned).collect();
+    let options = AcceptOptions {
+        allow_loopback: true,
+        downgrade_to: Some("2.0.0"),
+        launch_change: &changed,
+        ..Default::default()
+    };
+    accept_with(&api.home, NAME, &options, |_| {})
         .await
         .expect("accept v2");
     let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;
@@ -688,13 +700,22 @@ async fn a_same_version_oauth_endpoint_change_needs_approval_before_any_code_is_
     }
     assert_eq!(response.status, 409, "moved token URL: {}", response.body);
     assert_eq!(response.json()["error"]["code"], "approval_required");
+    // EXT-ANCHOR-9: the refusal names the exact command, field included.
+    let fix = format!("aux ext verify {NAME} --accept --accept-change oauth");
+    assert!(response.body.contains(&fix), "{}", response.body);
     assert!(
         moved.received_requests().await.unwrap().is_empty(),
         "the authorization code reached the moved token endpoint"
     );
 
     // The owner's one-time accept records the current table; then it starts.
-    accept_current(&api.home, NAME, true)
+    let oauth = ["oauth".to_owned()];
+    let options = AcceptOptions {
+        allow_loopback: true,
+        launch_change: &oauth,
+        ..Default::default()
+    };
+    accept_with(&api.home, NAME, &options, |_| {})
         .await
         .expect("accept the moved endpoint");
     let accepted = aux_runtime::extensions::mount::load_state(&api.home, NAME).unwrap();

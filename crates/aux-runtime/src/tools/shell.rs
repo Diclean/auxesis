@@ -516,9 +516,26 @@ fn all_pids() -> Vec<i32> {
 #[cfg(target_os = "macos")]
 const _: () = assert!(std::mem::size_of::<libc::proc_bsdinfo>() == 136);
 
+/// What one `(ppid, uid, start)` read of a pid answered. `Gone`: no such pid, a
+/// zombie, or not this scan's business (another user's). `Failed`: the read
+/// went wrong (`ENOMEM`, a short read, ...) and says nothing about the pid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lookup {
+    Found((i32, u32, u64)),
+    Gone,
+    Failed,
+}
+
 /// `(ppid, uid, start time in microseconds)` of a live process.
-#[cfg(target_os = "macos")]
 fn pid_ppid_uid_start(pid: i32) -> Option<(i32, u32, u64)> {
+    match pid_lookup(pid) {
+        Lookup::Found(answer) => Some(answer),
+        Lookup::Gone | Lookup::Failed => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn pid_lookup(pid: i32) -> Lookup {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
     // SAFETY: `info` is a live, correctly sized buffer and `proc_pidinfo`
@@ -532,43 +549,110 @@ fn pid_ppid_uid_start(pid: i32) -> Option<(i32, u32, u64)> {
             size,
         )
     };
-    // Anything but the whole struct counts as gone: never signal on a guess.
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    // Anything but the whole struct is no identity: never signal on a guess.
     if !pidfdinfo_filled_buffer(n, size as usize) {
-        return None;
+        return match (n <= 0, errno) {
+            (true, Some(libc::ESRCH)) => Lookup::Gone,
+            // This query has an owner check: another user's process answers
+            // `EPERM`. Only the owner-free short query can tell it from a
+            // same-user ppid-1 process this scan must read.
+            (true, Some(libc::EPERM)) => owner_free_lookup(pid),
+            _ => Lookup::Failed,
+        };
     }
     // SAFETY: zeroed, then fully written (checked above); any bytes are a
     // valid value of this integer-only struct.
     let info = unsafe { info.assume_init() };
     let (sec, usec) = (info.pbi_start_tvsec, info.pbi_start_tvusec);
     let start = sec.saturating_mul(1_000_000).saturating_add(usec);
-    Some((info.pbi_ppid as i32, info.pbi_uid, start))
+    Lookup::Found((info.pbi_ppid as i32, info.pbi_uid, start))
+}
+
+/// The `EPERM` follow-up of [`pid_lookup`]: `PROC_PIDT_SHORTBSDINFO` has no
+/// owner check. A pid it describes as a zombie or as not ours (another uid, or
+/// not parented by launchd) is `Gone` to a marker scan; a same-user ppid-1 pid
+/// the full query refused, or any pid it cannot describe either, is `Failed`.
+#[cfg(target_os = "macos")]
+fn owner_free_lookup(pid: i32) -> Lookup {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>() as i32;
+    // SAFETY: `info` is a live, correctly sized buffer and `proc_pidinfo`
+    // writes at most `size` bytes into it.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            1,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    if n != size {
+        return match (n <= 0, errno) {
+            (true, Some(libc::ESRCH)) => Lookup::Gone,
+            _ => Lookup::Failed,
+        };
+    }
+    // SAFETY: the kernel wrote the whole struct (checked above).
+    let info = unsafe { info.assume_init() };
+    // SAFETY: `geteuid` is a side-effect-free read of the effective uid.
+    let ours = info.pbsi_uid == unsafe { libc::geteuid() };
+    match info.pbsi_status == libc::SZOMB || info.pbsi_ppid != 1 || !ours {
+        true => Lookup::Gone,
+        false => Lookup::Failed,
+    }
+}
+
+/// A failed `/proc` read of a pid: gone (`ESRCH`, `ENOENT`) or unreadable.
+#[cfg(any(target_os = "linux", test))]
+fn proc_read_lookup(errno: Option<i32>) -> Lookup {
+    match fd_dir_unknown(errno) {
+        Holds::No => Lookup::Gone,
+        _ => Lookup::Failed,
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn pid_ppid_uid_start(pid: i32) -> Option<(i32, u32, u64)> {
+fn pid_lookup(pid: i32) -> Lookup {
     // `MetadataExt` provides `uid()`; import it here (the macOS arm of this
     // function uses `proc_pidinfo` instead, which is why the import cannot
     // live at module scope on all platforms).
     use std::os::unix::fs::MetadataExt;
 
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let close = stat.rfind(')')?;
+    // Bytes, not a `String` read: a comm with non-UTF-8 bytes is no failure.
+    let stat = match std::fs::read(format!("/proc/{pid}/stat")) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(err) => return proc_read_lookup(err.raw_os_error()),
+    };
+    let Some(close) = stat.rfind(')') else {
+        return Lookup::Failed;
+    };
     let mut fields = stat[close + 1..].split_whitespace();
     // A zombie cannot fork; macOS reports it as `ESRCH`.
-    if fields.next()? == "Z" {
-        return None;
+    match fields.next() {
+        Some("Z") => return Lookup::Gone,
+        None => return Lookup::Failed,
+        Some(_) => {}
     }
-    let ppid: i32 = fields.next()?.parse().ok()?;
+    let Some(ppid) = fields.next().and_then(|f| f.parse::<i32>().ok()) else {
+        return Lookup::Failed;
+    };
     // Start time (field 22 overall: 17 more fields after ppid) as clock
     // ticks; good enough for the "started before this call" filter.
-    let start: u64 = fields.nth(17)?.parse().ok()?;
-    let uid = std::fs::metadata(format!("/proc/{pid}")).ok()?.uid();
-    Some((ppid, uid, start))
+    let Some(start) = fields.nth(17).and_then(|f| f.parse::<u64>().ok()) else {
+        return Lookup::Failed;
+    };
+    match std::fs::metadata(format!("/proc/{pid}")) {
+        Ok(metadata) => Lookup::Found((ppid, metadata.uid(), start)),
+        Err(err) => proc_read_lookup(err.raw_os_error()),
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn pid_ppid_uid_start(_pid: i32) -> Option<(i32, u32, u64)> {
-    None
+fn pid_lookup(_pid: i32) -> Lookup {
+    Lookup::Gone
 }
 
 /// What the kernel can say right now about a pid from the process listing.
@@ -714,6 +798,38 @@ fn pidfdinfo_filled_buffer(rc: libc::c_int, expected: usize) -> bool {
     expected > 0 && rc == expected as libc::c_int
 }
 
+/// What one `proc_pidfdinfo` call answered.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FdInfo {
+    /// The whole struct was written.
+    Full,
+    /// This descriptor cannot be the marker file: it closed since the list
+    /// (`EBADF`), is not a vnode (xnu answers `EBADF` for pipes, sockets and
+    /// kqueues too), or the kernel's struct is smaller than ours.
+    Skip,
+    /// The process is gone (`ESRCH`): it holds nothing.
+    Gone,
+    /// The call failed some other way (`ENOMEM`, `EPERM`, no errno, ...): the
+    /// descriptor could not be read, so the walk is cut.
+    Unknown,
+}
+
+/// Sorts one `proc_pidfdinfo` answer: `rc` bytes written of `expected`, then
+/// `errno` (cleared before the call). Pure, so tested on every OS.
+#[cfg(any(target_os = "macos", test))]
+fn fd_info_outcome(rc: libc::c_int, expected: usize, errno: Option<i32>) -> FdInfo {
+    match rc {
+        _ if pidfdinfo_filled_buffer(rc, expected) => FdInfo::Full,
+        rc if rc > 0 => FdInfo::Skip,
+        _ => match errno {
+            Some(libc::ESRCH) => FdInfo::Gone,
+            Some(libc::EBADF) => FdInfo::Skip,
+            _ => FdInfo::Unknown,
+        },
+    }
+}
+
 /// What a descriptor walk found. `Cut` is not `No`: the deadline stopped the
 /// walk before every descriptor was read, so the answer is unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -781,6 +897,11 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
             continue;
         }
         let mut info = std::mem::MaybeUninit::<VnodeFdInfo>::zeroed();
+        // Cleared first, like the list call: only a failed call may set it.
+        // SAFETY: `__error` returns this thread's errno slot, always valid.
+        unsafe {
+            *libc::__error() = 0;
+        }
         // SAFETY: `info` is a live, correctly sized `MaybeUninit` and
         // `proc_pidfdinfo` writes at most `size_of::<VnodeFdInfo>()` bytes
         // into it.
@@ -793,10 +914,14 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
                 std::mem::size_of::<VnodeFdInfo>() as libc::c_int,
             )
         };
-        // A partial write means the kernel's struct is smaller than ours: the
-        // uninitialised tail must never be read.
-        if !pidfdinfo_filled_buffer(rc, std::mem::size_of::<VnodeFdInfo>()) {
-            continue;
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        match fd_info_outcome(rc, std::mem::size_of::<VnodeFdInfo>(), errno) {
+            FdInfo::Full => {}
+            // A partial write means the kernel's struct is smaller than ours:
+            // the uninitialised tail must never be read.
+            FdInfo::Skip => continue,
+            FdInfo::Gone => return Holds::No,
+            FdInfo::Unknown => return Holds::Cut,
         }
         // SAFETY: the check above proved the kernel wrote every byte of
         // `info`, so it is fully initialised.
@@ -818,6 +943,11 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
 /// (`No`); any other failure (`ENOMEM`, `EPERM`, unknown errno, ...) means the
 /// descriptors could not be read at all, which is `Cut`. `None` for a usable
 /// list. Pure, so tested on every OS.
+///
+/// Assumes libproc's contract "error implies errno set". The caller clears
+/// errno before the call, so only `0` with errno still `0` reads as an empty
+/// list; an error that returned `0` and left errno alone would be taken for
+/// one too (libproc is not known to do that), while `-1` with no errno is `Cut`.
 #[cfg(any(target_os = "macos", test))]
 fn fd_list_unknown(n: i32, errno: Option<i32>) -> Option<Holds> {
     match n > 0 {
@@ -848,12 +978,20 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
         Ok(entries) => entries,
         Err(err) => return fd_dir_unknown(err.raw_os_error()),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             return Holds::Cut;
         }
-        let Ok(metadata) = std::fs::metadata(entry.path()) else {
-            continue;
+        // An entry or a descriptor that vanished (`ENOENT`: it closed since
+        // the listing; `ESRCH`: the process is gone) holds nothing; any other
+        // failure left it unread, which is `Cut`.
+        let metadata = entry.and_then(|entry| std::fs::metadata(entry.path()));
+        let metadata = match metadata {
+            Ok(metadata) => metadata,
+            Err(err) => match fd_dir_unknown(err.raw_os_error()) {
+                Holds::Cut => return Holds::Cut,
+                _ => continue,
+            },
         };
         if metadata.dev() == marker.dev && metadata.ino() == marker.ino {
             return Holds::Yes;
@@ -898,10 +1036,14 @@ fn orphan_pids_holding_marker_until(
         min_start,
         pids,
         deadline,
-        &pid_ppid_uid_start,
+        &pid_lookup,
         &process_holds_marker,
     )
 }
+
+/// The process read of one candidate pid: [`pid_lookup`], or a test's
+/// stand-in for it.
+type OrphanLookup<'a> = &'a dyn Fn(i32) -> Lookup;
 
 /// What a descriptor walk of one pid answers: [`process_holds_marker`], or a
 /// test's stand-in for it.
@@ -909,13 +1051,14 @@ type HoldsProbe<'a> = &'a dyn Fn(i32, &Marker, Option<Instant>) -> Holds;
 
 /// [`orphan_pids_holding_marker_until`] with the process lookup and the
 /// descriptor walk injected, so a test can make a pid unreadable before the
-/// deadline.
+/// deadline. A pid whose lookup `Failed` is unknown, like a cut walk: the
+/// scan goes on but reports itself incomplete.
 fn scan_orphans(
     marker: &Marker,
     min_start: u64,
     pids: &[i32],
     deadline: Option<Instant>,
-    lookup: StartLookup<'_>,
+    lookup: OrphanLookup<'_>,
     holds: HoldsProbe<'_>,
 ) -> (Vec<TrackedPid>, bool) {
     let me = unsafe { libc::geteuid() };
@@ -930,8 +1073,13 @@ fn scan_orphans(
         if pid == own {
             continue;
         }
-        let Some((ppid, uid, started)) = lookup(pid) else {
-            continue;
+        let (ppid, uid, started) = match lookup(pid) {
+            Lookup::Found(answer) => answer,
+            Lookup::Gone => continue,
+            Lookup::Failed => {
+                complete = false;
+                continue;
+            }
         };
         if ppid != 1 || uid != me {
             continue;
@@ -1148,6 +1296,22 @@ fn kill_process_tree(
     kill_process_tree_with(root, marker, &pid_ppid_uid_start, seen)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the pid listing the kill's final marker pass reads.
+    static FINAL_PASS_PIDS: std::cell::RefCell<Option<Vec<i32>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The pid listing of the kill's final marker pass: [`all_pids`], or a test's.
+fn final_pass_pids() -> Vec<i32> {
+    #[cfg(test)]
+    if let Some(pids) = FINAL_PASS_PIDS.with(|pids| pids.borrow().clone()) {
+        return pids;
+    }
+    all_pids()
+}
+
 fn kill_process_tree_with(
     root: Option<&mut tokio::process::Child>,
     marker: &Marker,
@@ -1222,7 +1386,7 @@ fn kill_process_tree_with(
         // final marker pass; the session sweep inside `tracked_pids` covers
         // anything that re-setsid'd while an ancestor stayed alive. Each pid is
         // recorded and re-checked right before its signal.
-        let all = all_pids();
+        let all = final_pass_pids();
         let (orphans, scanned) = orphan_pids_holding_marker_until(marker, 0, &all, None);
         // An empty listing means the syscall failed (this process is always
         // in it): nothing was scanned, so the pass is not complete.
@@ -1265,6 +1429,9 @@ enum Sweep {
     /// A cap was reached with this many processes still found and signalled;
     /// each may have forked between that scan and its SIGKILL.
     Incomplete(usize),
+    /// The kill's final marker pass could not read every process, so a
+    /// holder may have stayed hidden.
+    Unchecked,
     /// The sweep could not describe processes, for this reason.
     Unavailable(Undescribed),
     /// The call saw more than [`MAX_SEEN_PIDS`] processes.
@@ -1305,6 +1472,8 @@ impl Undescribed {
     }
 }
 
+const UNCHECKED_NOTE: &str = "[cleanup incomplete: some processes could not be checked]";
+
 impl Sweep {
     /// The note for a sweep that did not prove the tree empty, on either path.
     fn note(self, passes: usize, time: Duration) -> Option<String> {
@@ -1314,6 +1483,7 @@ impl Sweep {
             Self::Incomplete(survivors) => Some(format!(
                 "[cleanup incomplete: sweep hit its {passes}-pass/{ms} ms cap with {survivors} process(es) still signalled]"
             )),
+            Self::Unchecked => Some(UNCHECKED_NOTE.to_string()),
             Self::Unavailable(why) => Some(why.note().to_string()),
             Self::SeenCap => Some(format!(
                 "[cleanup incomplete: over {MAX_SEEN_PIDS} processes seen]"
@@ -1673,7 +1843,9 @@ static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
 /// The late queue's length cap. The no-thread fallback runs the whole queue
 /// inline, so the cap bounds that batch to [`LATE_INLINE_BUDGET`] plus this many
 /// [`LATE_MARKER_RESERVE`]s. A reaper pushed past it makes the oldest one take
-/// its fast kill at once, on the caller's thread: it is never dropped unkilled.
+/// its fast kill at once, on the caller's thread; if that pass was cut, the
+/// oldest goes back on the queue (see [`overflow_fast_kill`]): it is never
+/// dropped unkilled.
 const LATE_QUEUE_MAX: usize = 8;
 
 fn late_retries() -> std::sync::MutexGuard<'static, (bool, VecDeque<TreeReaper>)> {
@@ -1735,9 +1907,9 @@ thread_local! {
     static MARKER_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The no-thread fallback's seen-set budget: every queued reaper's seen loop
-/// shares these 250 ms. The marker pass then gets at least
-/// [`LATE_MARKER_RESERVE`] more, once for the whole batch.
+/// The seen-set budget of a fast kill: the no-thread fallback's queued reapers
+/// share these 250 ms in one batch, and an overflowed reaper gets them alone.
+/// Each marker pass then gets [`LATE_MARKER_RESERVE`] more, per reaper.
 const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
 
 /// The time each reaper's marker pass gets, counted from the shared seen
@@ -1768,25 +1940,25 @@ fn spawn_late_thread() -> std::io::Result<()> {
 /// then its seen processes while [`LATE_INLINE_BUDGET`] lasts, then one marker
 /// pass of its own, with a [`LATE_MARKER_RESERVE`] after the budget's end (or
 /// after its own start, once that has passed). The queue holds at most
-/// [`LATE_QUEUE_MAX`] reapers, so that batch costs at most the budget plus
-/// that many reserves.
+/// [`LATE_QUEUE_MAX`] reapers (plus one requeued overflow, see
+/// [`overflow_fast_kill`]), so that batch costs at most the budget plus that
+/// many reserves.
 fn late_retry(reaper: TreeReaper) {
-    let mut queue = late_retries();
-    queue.1.push_back(reaper);
-    let overflow = match queue.1.len() > LATE_QUEUE_MAX {
-        true => queue.1.pop_front(),
-        false => None,
+    let overflow = {
+        let mut queue = late_retries();
+        queue.1.push_back(reaper);
+        match queue.1.len() > LATE_QUEUE_MAX {
+            true => queue.1.pop_front(),
+            false => None,
+        }
     };
-    let running = std::mem::replace(&mut queue.0, true);
-    let pending = queue.1.len();
-    drop(queue);
     if let Some(oldest) = overflow {
-        let over_budget = fast_kill_all(vec![oldest], Instant::now() + LATE_INLINE_BUDGET);
-        tracing::warn!(
-            over_budget,
-            "shell: the late-retry queue is full ({LATE_QUEUE_MAX}); the oldest reaper got its fast kill now"
-        );
+        overflow_fast_kill(oldest);
     }
+    let (running, pending) = {
+        let mut queue = late_retries();
+        (std::mem::replace(&mut queue.0, true), queue.1.len())
+    };
     if running {
         return;
     }
@@ -1805,6 +1977,31 @@ fn late_retry(reaper: TreeReaper) {
              over_budget of their seen processes or marker passes were skipped"
         );
     }
+}
+
+/// The overflowed reaper's fast kill, on the caller's thread. A pass that was
+/// cut (a skipped seen entry, or a marker pass that did not read every pid)
+/// leaves an escapee that may still run, so the reaper fails closed: it goes
+/// back to the FRONT of the queue, past the cap, for the late thread's full
+/// retry, and its cleanup note is logged. A complete pass is the end of it.
+/// The queue grows by one reaper per cut pass at most, and only until the late
+/// thread (or the no-thread fallback in [`late_retry`]) takes it.
+fn overflow_fast_kill(mut oldest: TreeReaper) {
+    let deadline = Instant::now() + LATE_INLINE_BUDGET;
+    let skipped = oldest.fast_kill(deadline, deadline + LATE_MARKER_RESERVE);
+    if skipped == 0 {
+        tracing::warn!(
+            "shell: the late-retry queue is full ({LATE_QUEUE_MAX}); the oldest reaper got its fast kill now"
+        );
+        return;
+    }
+    tracing::warn!(
+        skipped,
+        note = UNCHECKED_NOTE,
+        "shell: the late-retry queue is full ({LATE_QUEUE_MAX}); the oldest reaper's fast kill \
+         was cut, so it stays queued for the full retry"
+    );
+    late_retries().1.push_front(oldest);
 }
 
 /// A fast kill of every reaper: seen loops until `deadline`, then each
@@ -1937,7 +2134,7 @@ impl TreeReaper {
                 ),
                 // No scan to judge by: the kill's own final pass decides.
                 None if killed => Sweep::Clean,
-                None => Sweep::Incomplete(0),
+                None => Sweep::Unchecked,
             };
             (self, sweep)
         })
@@ -1960,7 +2157,7 @@ impl TreeReaper {
         if self.child.as_ref().is_some_and(|c| c.id().is_some()) {
             return match self.sweep_now() {
                 true => None,
-                false => Some(Sweep::Incomplete(0)),
+                false => Some(Sweep::Unchecked),
             };
         }
         self.root?;
@@ -3534,6 +3731,19 @@ mod tests {
                 &mut HashSet::new(),
                 &|pass| {
                     passes.set(pass + 1);
+                    // SIGKILL only schedules a process's death. A helper still
+                    // dying when pass 2 reads `seen` is "found" again and
+                    // costs a fourth pass (the 2026-11-05 macOS CI flake), so
+                    // pass 2 starts only once pass 1's kill has landed: the
+                    // helper reads as gone (a zombie) before any pass looks.
+                    if pass == 2 {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                        while pid_ppid_uid_start(helper).is_some()
+                            && std::time::Instant::now() < deadline
+                        {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
                     if pass == 1 {
                         vec![helper]
                     } else {
@@ -4206,6 +4416,39 @@ await(q(bg.pid));
     /// Serialises the tests that drive the global late-retry queue.
     static LATE_QUEUE_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    /// Runs a reset on drop, also after a panic, so one failing test cannot
+    /// poison the next through a seam it set.
+    struct OnDrop(fn());
+
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+
+    /// The late queue is busy (pushes only queue, no thread drains) until the
+    /// guard drops; then it is emptied and idle again.
+    fn queue_busy() -> OnDrop {
+        late_retries().0 = true;
+        OnDrop(|| {
+            let mut queue = late_retries();
+            queue.1.clear();
+            queue.0 = false;
+        })
+    }
+
+    /// The next `n` marker scans of this thread are incomplete until it drops.
+    fn scans_incomplete(n: usize) -> OnDrop {
+        MARKER_SCANS_INCOMPLETE.with(|left| left.set(n));
+        OnDrop(|| MARKER_SCANS_INCOMPLETE.with(|left| left.set(0)))
+    }
+
+    /// The final marker pass of the kill reads `pids` until the guard drops.
+    fn final_pass_listing(pids: Vec<i32>) -> OnDrop {
+        FINAL_PASS_PIDS.with(|seam| *seam.borrow_mut() = Some(pids));
+        OnDrop(|| FINAL_PASS_PIDS.with(|seam| *seam.borrow_mut() = None))
+    }
+
     /// SHELL-SWEEP-6 (1): the late-retry thread cannot be spawned. Every
     /// queued reaper still gets a kill: each root's group (a shell and its
     /// `sleep`) is gone, and none of them is left in the queue.
@@ -4520,7 +4763,7 @@ await(q(bg.pid));
     fn a_cut_pid_before_the_deadline_is_skipped_and_the_scan_reports_incomplete() {
         let me = unsafe { libc::geteuid() };
         let (marker, _pin) = pinned_marker();
-        let orphan = |_pid: i32| Some((1, me, 5));
+        let orphan = |_pid: i32| Lookup::Found((1, me, 5));
         let answer = |cut: i32, hit: i32| {
             move |pid: i32, _: &Marker, _: Option<Instant>| match pid {
                 p if p == cut => Holds::Cut,
@@ -4562,12 +4805,13 @@ await(q(bg.pid));
                 MAX_SWEEP_TIME,
             )
         };
-        MARKER_SCANS_INCOMPLETE.with(|left| left.set(usize::MAX));
+        let forced = scans_incomplete(usize::MAX);
         assert_eq!(sweep(3), Sweep::Incomplete(0));
         // Two incomplete passes, then a complete one that proves it empty.
-        MARKER_SCANS_INCOMPLETE.with(|left| left.set(2));
+        drop(forced);
+        let forced = scans_incomplete(2);
         assert_eq!(sweep(5), Sweep::Clean);
-        MARKER_SCANS_INCOMPLETE.with(|left| left.set(0));
+        drop(forced);
         assert_eq!(sweep(3), Sweep::Clean);
 
         // The unreaped root's retry runs the tree kill, whose final pass was cut.
@@ -4579,10 +4823,17 @@ await(q(bg.pid));
             .spawn()
             .unwrap();
         let mut reaper = TreeReaper::new(root, marker).holding(pin);
-        MARKER_SCANS_INCOMPLETE.with(|left| left.set(usize::MAX));
-        assert_eq!(reaper.retry(), Some(Sweep::Incomplete(0)));
-        MARKER_SCANS_INCOMPLETE.with(|left| left.set(0));
+        let forced = scans_incomplete(usize::MAX);
+        let retried = reaper.retry();
+        drop(forced);
         reaper.reap().await;
+        // Its own note, not the cap's "0 process(es) still signalled".
+        assert_eq!(retried, Some(Sweep::Unchecked));
+        let note = Sweep::Unchecked
+            .note(MAX_SWEEP_PASSES, MAX_SWEEP_TIME)
+            .unwrap();
+        assert_eq!(note, UNCHECKED_NOTE);
+        assert!(!note.contains("cap"), "{note}");
     }
 
     /// SHELL-SWEEP-9 (4): the late queue holds at most [`LATE_QUEUE_MAX`]
@@ -4595,7 +4846,7 @@ await(q(bg.pid));
         let _serial = LATE_QUEUE_TEST.lock().await;
         late_queue_idle().await;
         // Busy: pushes only queue, no thread drains them under the test.
-        late_retries().0 = true;
+        let _busy = queue_busy();
         let mut root = std::process::Command::new("/bin/sh");
         root.args(["-c", "sleep 60 & wait"]).process_group(0);
         let mut root = tokio::process::Command::from(root);
@@ -4622,18 +4873,188 @@ await(q(bg.pid));
         );
         late_retry(idle_reaper(marker));
         let (queued, kept) = (len(), held(root_pid));
-        {
-            let mut queue = late_retries();
-            queue.1.clear();
-            queue.0 = false;
-        }
-        assert_eq!(queued, LATE_QUEUE_MAX, "the queue grew past its cap");
-        assert!(!kept, "the oldest reaper was not taken off the queue");
+        // A pass cut on a loaded host requeues the oldest (see
+        // `overflow_fast_kill`): that, and only that, may exceed the cap.
+        assert_eq!(
+            queued,
+            LATE_QUEUE_MAX + usize::from(kept),
+            "the queue grew past its cap"
+        );
         assert!(
             gone_tracked(sleeper, Duration::from_secs(2)).await,
             "the overflowed reaper's process {} was never killed",
             sleeper.pid
         );
+    }
+
+    /// A double-forked `setsid()` process (reparented to launchd) that holds
+    /// `marker_file`, as a command's escapee does; macOS, where orphans always
+    /// reparent to pid 1.
+    #[cfg(target_os = "macos")]
+    fn spawn_marker_holder(
+        dir: &std::path::Path,
+        marker_file: &std::fs::File,
+    ) -> (Spawned, TrackedPid) {
+        let pid_file = dir.join("escapee.pid");
+        let script = format!(
+            "exec /usr/bin/perl -MPOSIX -e 'exit 0 if fork; exit 0 if fork; POSIX::setsid; \
+             open F, q(>{}); print F $$; close F; exec q(sleep), q(60)'",
+            pid_file.display()
+        );
+        let mut starter = std::process::Command::new("/bin/sh");
+        starter
+            .args(["-c", &script])
+            .stdin(std::process::Stdio::null());
+        starter.stdout(marker_file.try_clone().unwrap());
+        let mut guard = Spawned(vec![starter.spawn().unwrap()], Vec::new());
+        let escapee = (0..500).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            let raw = std::fs::read_to_string(&pid_file).ok()?;
+            let pid = raw.trim().parse::<i32>().ok()?;
+            let (ppid, _, _) = pid_ppid_uid_start(pid)?;
+            (ppid == 1).then(|| TrackedPid::of(pid)).flatten()
+        });
+        let escapee = escapee.expect("the escapee never reparented");
+        guard.1.push(escapee);
+        (guard, escapee)
+    }
+
+    /// SHELL-SWEEP-10 (1): an overflowed reaper whose fast kill was cut stays
+    /// queued (at the front, past the cap). On macOS the late thread's full
+    /// retry then kills the holder the cut pass missed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_overflowed_reaper_with_a_cut_fast_kill_stays_queued_and_kills_later() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        late_queue_idle().await;
+        let _busy = queue_busy();
+        let (marker, marker_file) = pinned_marker();
+        #[cfg(target_os = "macos")]
+        let dir = tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        let (_holder, escapee) = spawn_marker_holder(dir.path(), &marker_file);
+
+        // The oldest reaper names the holder only through its marker. Its
+        // `root` is a tag no process has: `retry` then runs the marker sweep.
+        let tag = i32::MAX - 7;
+        let mut oldest = idle_reaper(marker);
+        oldest.root = Some(tag);
+        oldest.marker_file = Some(marker_file);
+        late_retry(oldest);
+        for _ in 1..LATE_QUEUE_MAX {
+            late_retry(idle_reaper(pinned_marker().0));
+        }
+        // The overflow's one marker pass is cut.
+        let forced = scans_incomplete(1);
+        late_retry(idle_reaper(pinned_marker().0));
+        drop(forced);
+        let (len, front) = {
+            let queue = late_retries();
+            (queue.1.len(), queue.1.front().and_then(|r| r.root))
+        };
+        assert_eq!(len, LATE_QUEUE_MAX + 1, "the cut reaper was dropped");
+        assert_eq!(front, Some(tag), "the cut reaper is not first in line");
+        #[cfg(target_os = "macos")]
+        assert!(
+            escapee.still_same(&pid_ppid_uid_start),
+            "the cut pass was not cut"
+        );
+
+        // The late thread's turn, on this thread: the full retry finds the
+        // holder by its marker and kills it.
+        drain_late_retries();
+        assert!(late_retries().1.is_empty());
+        #[cfg(target_os = "macos")]
+        assert!(
+            gone_tracked(escapee, Duration::from_secs(2)).await,
+            "the requeued reaper never killed its holder {}",
+            escapee.pid
+        );
+    }
+
+    /// SHELL-SWEEP-10 (2): a pid whose process read `Failed` (not `Gone`) makes
+    /// the scan incomplete, yet the scan goes on and still finds the holder
+    /// after it. A pid that is `Gone` costs nothing.
+    #[test]
+    fn a_failed_lookup_makes_the_scan_incomplete() {
+        let me = unsafe { libc::geteuid() };
+        let (marker, _pin) = pinned_marker();
+        let (failed, gone, hit) = (i32::MAX - 1, i32::MAX - 2, i32::MAX - 3);
+        let lookup = |pid: i32| match pid {
+            p if p == failed => Lookup::Failed,
+            p if p == gone => Lookup::Gone,
+            _ => Lookup::Found((1, me, 5)),
+        };
+        let holds = |pid: i32, _: &Marker, _: Option<Instant>| match pid == hit {
+            true => Holds::Yes,
+            false => Holds::No,
+        };
+        let far = Some(Instant::now() + Duration::from_secs(60));
+        let scan = |pids: &[i32]| scan_orphans(&marker, 0, pids, far, &lookup, &holds);
+        let (found, complete) = scan(&[failed, hit]);
+        assert_eq!(found, vec![TrackedPid { pid: hit, start: 5 }]);
+        assert!(!complete, "a failed lookup read as a complete scan");
+        let (found, complete) = scan(&[gone, hit]);
+        assert_eq!(found.len(), 1);
+        assert!(complete, "a pid that is gone made the scan incomplete");
+    }
+
+    /// SHELL-SWEEP-10 (2): the real lookup tells a pid that is gone from one it
+    /// cannot read, and reads this process.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_real_lookup_sorts_gone_from_found() {
+        assert_eq!(pid_lookup(i32::MAX), Lookup::Gone);
+        let own = std::process::id() as i32;
+        assert!(matches!(pid_lookup(own), Lookup::Found(_)));
+        assert_eq!(proc_read_lookup(Some(libc::ENOENT)), Lookup::Gone);
+        assert_eq!(proc_read_lookup(Some(libc::ENOMEM)), Lookup::Failed);
+    }
+
+    /// SHELL-SWEEP-10 (3): one `proc_pidfdinfo` answer that failed for any
+    /// reason but "the process is gone" or "this fd is no vnode / closed" cuts
+    /// the walk; the partial-write guard still skips the entry.
+    #[test]
+    fn an_unreadable_fd_entry_cuts_the_walk() {
+        const SIZE: usize = 200;
+        let size = SIZE as libc::c_int;
+        assert_eq!(fd_info_outcome(size, SIZE, Some(0)), FdInfo::Full);
+        assert_eq!(fd_info_outcome(size - 8, SIZE, Some(0)), FdInfo::Skip);
+        assert_eq!(fd_info_outcome(-1, SIZE, Some(libc::ESRCH)), FdInfo::Gone);
+        assert_eq!(fd_info_outcome(-1, SIZE, Some(libc::EBADF)), FdInfo::Skip);
+        for errno in [libc::ENOMEM, libc::EPERM, libc::EIO, libc::EINVAL, 0] {
+            assert_eq!(fd_info_outcome(-1, SIZE, Some(errno)), FdInfo::Unknown);
+            assert_eq!(fd_info_outcome(0, SIZE, Some(errno)), FdInfo::Unknown);
+        }
+        assert_eq!(fd_info_outcome(-1, SIZE, None), FdInfo::Unknown);
+        // The Linux walk sorts a failed entry the same way: gone is `No`.
+        assert_eq!(fd_dir_unknown(Some(libc::ENOENT)), Holds::No);
+        assert_eq!(fd_dir_unknown(Some(libc::EIO)), Holds::Cut);
+    }
+
+    /// SHELL-SWEEP-10 (5): an empty pid listing in the kill's final marker
+    /// pass (the syscall failed: this process is always in a real one) is not
+    /// a complete pass; a listing that was read is.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_empty_listing_in_the_final_pass_is_not_complete() {
+        use std::os::unix::process::CommandExt;
+        let (marker, _pin) = pinned_marker();
+        let kill = |listing: Vec<i32>| async {
+            let mut root = std::process::Command::new("sleep");
+            root.arg("60").process_group(0);
+            let mut root = tokio::process::Command::from(root)
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let seam = final_pass_listing(listing);
+            let complete = kill_process_tree(Some(&mut root), &marker, &mut HashSet::new());
+            drop(seam);
+            let _ = root.wait().await;
+            complete
+        };
+        assert!(!kill(Vec::new()).await, "an empty listing read as complete");
+        assert!(kill(vec![std::process::id() as i32]).await);
     }
 
     /// SHELL-SWEEP-9 (3): an unreadable `/proc/<pid>/fd` is unknown (`Cut`),

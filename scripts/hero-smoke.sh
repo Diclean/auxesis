@@ -277,8 +277,10 @@ PY
   local i
   for i in $(seq 1 50); do [ -s "$WORK/recorder.port" ] && break; sleep 0.1; done
   [ -s "$WORK/recorder.port" ] || red "the provider recorder did not start"
+  # The recorder runs on this Mac, so its model is priced at 0: since #87 an
+  # unpriced model is refused while the money cap applies.
   # Private mode: the owner's contact's e-mail must be tokenised before the provider sees it; the name passes as written.
-  printf 'version = 1\ndefault_agent = "main"\n\n[privacy]\nmode = "private"\n\n[[providers]]\nid = "fakey"\nbase_url = "http://127.0.0.1:%s/v1"\nmodel = "fake-model"\nkind = "openai-compat"\n' \
+  printf 'version = 1\ndefault_agent = "main"\n\n[privacy]\nmode = "private"\n\n[[providers]]\nid = "fakey"\nbase_url = "http://127.0.0.1:%s/v1"\nmodel = "fake-model"\nkind = "openai-compat"\n\n[prices.models."fake-model"]\ninput_cents_per_million = 0\noutput_cents_per_million = 0\n' \
     "$(cat "$WORK/recorder.port")" >"$WORK/home/.auxesis/config.toml"
   (umask 077; printf 'AUX_KEY_FAKEY=fictional-key\n' >"$WORK/home/.auxesis/.env")
   # The client card matches the fixture mail and meeting by this second address
@@ -470,7 +472,7 @@ step_m3_skill_setup() {
   STEP="m3-skill-setup"
   local agent_dir="$WORK/home/.auxesis/agents/main"
   mkdir -p "$agent_dir/skills"
-  printf -- '---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\ntools:\n  - crm.search\n  - crm.get\n  - crm.log_interaction\n  - docs.ingest\n  - calendar.list_events\n  - calendar.create_event\n  - calendar.update_event\n  - reminders.list\n  - mail.list\n  - mail.search\n  - mail.thread\n  - mail.read\n  - mail.draft\n  - mail.send\n  - recall\n  - remember\n  - suggest_memory\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nHero smoke assistant.\n' \
+  printf -- '---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\ntools:\n  - crm.search\n  - crm.get\n  - crm.log_interaction\n  - docs.ingest\n  - calendar.list_events\n  - calendar.create_event\n  - calendar.update_event\n  - reminders.list\n  - mail.list\n  - mail.search\n  - mail.thread\n  - mail.read\n  - mail.draft\n  - mail.send\n  - calendar_freebusy\n  - recall\n  - remember\n  - suggest_memory\nrecipients:\n  policy: known-contacts\n  allowlist: []\n---\nHero smoke assistant.\n' \
     >"$agent_dir/agent.md"
   cp "$REPO_ROOT/crates/aux-runtime/src/skills/fixtures/skills/log-interaction.md" "$agent_dir/skills/log-interaction.md"
 }

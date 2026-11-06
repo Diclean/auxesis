@@ -180,10 +180,10 @@ fn show(home: &Path, name: &str) -> ExitCode {
     for tool in &entry.tools {
         let _ = writeln!(
             std::io::stdout(),
-            "tool: {} network=[{}] secrets=[{}]",
-            tool.name,
-            tool.network.join(","),
-            tool.secrets.join(",")
+            "tool: {} network={} secrets={}",
+            json(&tool.name),
+            json(&tool.network),
+            json(&tool.secrets)
         );
     }
     ExitCode::SUCCESS
@@ -236,6 +236,14 @@ fn install(home: &Path, name: &str) -> ExitCode {
                 installed.name,
                 installed.version
             );
+            // EXT-ANCHOR-9 r2: an upgrade over an approval keeps the old yes and
+            // was not started; the owner re-trusts it by name.
+            if let Err(err) = extensions::mount::require_approval(home, &installed) {
+                let _ = writeln!(
+                    std::io::stdout(),
+                    "not started: it needs verify --accept before it runs ({err})"
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -271,10 +279,10 @@ fn serde_name<T: serde::Serialize>(value: &T) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-/// A value JSON-quoted: an ANSI escape or a newline inside it is shown
-/// escaped, never rendered, so it cannot spoof another summary line.
+/// A value JSON-quoted: an ANSI escape, a newline or a bidi control inside
+/// it is shown escaped, never rendered, so it cannot spoof another line.
 fn json<T: serde::Serialize + ?Sized>(value: &T) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "none".to_owned())
+    extensions::quoted(value)
 }
 
 /// What an `--accept` now trusts: the artefact sha256, the hosts, secret
@@ -284,7 +292,7 @@ fn trusted_summary(state: &extensions::ExtensionState) -> String {
     let none = || "none".to_owned();
     let hosts = match state.network.is_empty() {
         true => none(),
-        false => state.network.join(", "),
+        false => json(&state.network),
     };
     let mut out = format!(
         "  sha256: {}\n  hosts: {hosts}\n  secrets: {}\n  oauth: {}\n",
@@ -558,7 +566,10 @@ mod tests {
             kind: "mcp".to_owned(),
             frozen: false,
             tools: Default::default(),
-            network: vec!["a.example:443".to_owned(), "b.example:443".to_owned()],
+            network: vec![
+                "a.example:443".to_owned(),
+                "b\u{202e}.example:443".to_owned(),
+            ],
             secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
             oauth: None,
             artefact: Some("ab".repeat(32)),
@@ -576,7 +587,8 @@ mod tests {
         let text = trusted_summary(&state);
         for line in [
             format!("  sha256: {}\n", "ab".repeat(32)),
-            "  hosts: a.example:443, b.example:443\n".to_owned(),
+            // EXT-ANCHOR-9 r2: hosts escaped like the rest, bidi as `\u{..}`.
+            "  hosts: [\"a.example:443\",\"b\\u{202e}.example:443\"]\n".to_owned(),
             "  secrets: [\"EXT_DEMO__TOKEN\"]\n".to_owned(),
             "  oauth: none\n".to_owned(),
             // EXT-ANCHOR-9: escaped like args, never a raw ANSI or new line.
@@ -589,7 +601,10 @@ mod tests {
         ] {
             assert!(text.contains(&line), "{line:?} in {text}");
         }
-        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains('\u{202e}'),
+            "{text}"
+        );
         let sha_lines = text.lines().filter(|l| l.starts_with("  sha256:"));
         assert_eq!(sha_lines.count(), 1, "no forged line: {text}");
         (state.network, state.artefact, state.launch) = (Vec::new(), None, None);

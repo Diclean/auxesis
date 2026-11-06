@@ -385,6 +385,11 @@ pub fn valid_secret_name(extension: &str, secret: &str) -> bool {
 
 /// Parse `host:port` (case-insensitive host, no wildcard).
 pub fn parse_host_port(text: &str) -> Option<(String, u16)> {
+    // Printable ASCII only: no whitespace, control, bidi or other format
+    // character can hide in a host the owner approves (an IDN is punycode).
+    if !text.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return None;
+    }
     let (host, port) = text.rsplit_once(':')?;
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if host.is_empty() || host.contains('/') {
@@ -775,6 +780,26 @@ fs = []
         assert_eq!(parse_host_port("example.org"), None);
         assert_eq!(parse_host_port("example.org:0"), None);
         assert_eq!(parse_host_port("example.org:notaport"), None);
+        // EXT-ANCHOR-9 r2: no whitespace, control, bidi or format character.
+        for host in [
+            " example.org:443",
+            "example.org:443 ",
+            "exa mple.org:443",
+            "example.org\t:443",
+            "example.org\u{1b}[2K:443",
+            "evil\u{202e}gro.example:443",
+            "evil\u{2066}.example:443",
+            "zero\u{200b}width.example:443",
+            "bom\u{feff}.example:443",
+            "café.example:443",
+        ] {
+            assert_eq!(parse_host_port(host), None, "{host:?}");
+        }
+        assert_eq!(
+            super::super::escape_text("a\u{202e}b\u{1b}c"),
+            "a\\u{202e}b\\u{1b}c"
+        );
+        assert_eq!(super::super::quoted("x\u{2069}"), "\"x\\u{2069}\"");
     }
 
     #[test]

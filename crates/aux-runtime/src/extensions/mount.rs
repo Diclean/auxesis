@@ -145,6 +145,10 @@ pub fn changed_trust_fields(
 /// launch pin, `--accept-change` with every changed trust field.
 pub fn accept_command(state: &ExtensionState, installed: &InstalledExtension) -> String {
     let name = &installed.name;
+    // A directory name is not a catalog version: it never enters a command.
+    if !super::catalog::valid_version(&installed.version) {
+        return format!("aux ext remove {name} && aux ext install {name}");
+    }
     let mut command = format!("aux ext verify {name} --accept");
     let same_bytes = state.artefact.as_deref() == Some(artefact_pin(&installed.entry).as_str());
     if installed.version != state.version || !same_bytes {
@@ -158,6 +162,20 @@ pub fn accept_command(state: &ExtensionState, installed: &InstalledExtension) ->
         command.push_str(&format!(" --accept-change {}", changed.join(",")));
     }
     command
+}
+
+/// Each host and secret name `entry` adds over `state`, JSON-quoted and
+/// escaped: the owner sees every new value, not only its field.
+pub fn new_trust_values(state: &ExtensionState, entry: &super::catalog::Entry) -> Vec<String> {
+    let hosts = network_pins(entry)
+        .into_iter()
+        .filter(|host| !state.network.contains(host));
+    let hosts = hosts.map(|host| format!("network {}", super::quoted(&host)));
+    let secrets = entry.secret_names().into_iter();
+    let secrets = secrets.filter(|name| !state.secrets.contains(name));
+    hosts
+        .chain(secrets.map(|name| format!("secrets {}", super::quoted(&name))))
+        .collect()
 }
 
 /// The artefact sha256 an approval pins: the entry's `source.sha256`,
@@ -265,7 +283,10 @@ pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
     handle.write_atomic(&state_rel(&state.name), text.as_bytes(), 0o600)
 }
 
-fn read_state(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io::Error> {
+pub(crate) fn read_state(
+    home: &Path,
+    name: &str,
+) -> Result<Option<ExtensionState>, std::io::Error> {
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => handle,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -403,7 +424,8 @@ pub fn check_approval(
     if installed.version != state.version || installed.entry.version != state.version {
         return refuse(format!(
             "version {} is not the approved {}",
-            installed.version, state.version
+            super::escape_text(&installed.version),
+            super::escape_text(&state.version)
         ));
     }
     let pin = artefact_pin(&installed.entry);
@@ -430,6 +452,7 @@ pub fn check_approval(
     let wider: Vec<String> = network_pins(&installed.entry)
         .into_iter()
         .filter(|host| !state.network.contains(host))
+        .map(|host| super::quoted(&host))
         .collect();
     if !wider.is_empty() {
         return refuse(format!("new network hosts: {}", wider.join(", ")));
@@ -439,6 +462,7 @@ pub fn check_approval(
         .secret_names()
         .into_iter()
         .filter(|name| !state.secrets.contains(name))
+        .map(|name| super::quoted(&name))
         .collect();
     if !new_secrets.is_empty() {
         return refuse(format!("new secret names: {}", new_secrets.join(", ")));
@@ -473,17 +497,19 @@ pub fn require_approval(
     Ok(state)
 }
 
-/// A re-hash refusal as a mount error. Only other bytes ask the owner for
-/// `--accept` (the reason carries both hashes); a read failure is IO and never
-/// does, since a re-approval cannot fix it.
+/// A re-hash refusal as a mount error. Only other bytes ask the owner for a
+/// reinstall (the reason carries both hashes); a read failure is IO and never
+/// does, since a reinstall cannot fix it.
 fn install_refusal(name: &str, err: super::install::InstallError) -> MountError {
     use super::install::InstallError;
     match err {
         InstallError::NotInstalled(_) => MountError::NotInstalled(name.to_owned()),
+        // `--accept` re-hashes first and refuses the same bytes: only a
+        // reinstall of the catalog build puts the approved bytes back.
         InstallError::HashMismatch { .. } => MountError::ApprovalRequired {
             name: name.to_owned(),
             reason: err.to_string(),
-            fix: format!("aux ext verify {name} --accept"),
+            fix: format!("aux ext install {name}"),
         },
         InstallError::Io(err) => MountError::Io(err),
         other => MountError::Unverified {
@@ -1066,6 +1092,22 @@ mod tests {
         )
         .unwrap();
         check_approval(&pinned, &installed("1.0.0", &["a.example:443"], &[])).unwrap();
+    }
+
+    // EXT-ANCHOR-9 r2: a directory version is never put in a command, and a
+    // bidi character in it is shown as `\u{..}`.
+    #[test]
+    fn a_bad_directory_version_is_escaped_and_never_suggested() {
+        let build = installed("2.0.0\u{202e}x", &[], &[]);
+        let fix = "aux ext remove demo && aux ext install demo";
+        assert_eq!(accept_command(&state("demo"), &build), fix);
+        let err = check_approval(&state("demo"), &build)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("2.0.0\\u{202e}x") && !err.contains('\u{202e}'),
+            "{err}"
+        );
     }
 
     #[test]

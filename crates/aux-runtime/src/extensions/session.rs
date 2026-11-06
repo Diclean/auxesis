@@ -743,16 +743,30 @@ pub fn pinned_tools(tools: &[RemoteTool]) -> Vec<ToolPin> {
         .collect()
 }
 
-/// Pin the identities of an installed extension and persist its state.
+/// Pin the identities of an installed extension and persist its state: the
+/// install-time yes, for an extension with no approval row only.
+///
+/// An existing row is the owner's yes to one build: it is returned untouched
+/// and the new build is **not started** (an upgrade waits for
+/// `aux ext verify --accept`, which names its changes). An unreadable or
+/// corrupt row is refused and kept.
 pub async fn pin_extension(
     home: &Path,
     installed: &InstalledExtension,
     allow_loopback: bool,
 ) -> Result<ExtensionState, SessionError> {
+    match super::mount::read_state(home, &installed.name) {
+        Ok(None) => {}
+        Ok(Some(state)) => return Ok(state),
+        Err(_) => {
+            let name = installed.name.clone();
+            return Err(super::install::InstallError::StateUnreadable(name).into());
+        }
+    }
     let session = session_for(home, installed, &SessionOptions { allow_loopback }).await?;
     let pins = pinned_tools(&session.tools);
-    // A reinstall re-pins the tools but never clears a freeze: only the owner's
-    // `aux ext verify --accept` does that. An unreadable row counts as frozen.
+    // Never clears a freeze: only the owner's `aux ext verify --accept` does
+    // that. An unreadable row counts as frozen.
     let frozen = super::mount::is_frozen(home, &installed.name);
     let state = ExtensionState {
         name: installed.name.clone(),
@@ -873,7 +887,11 @@ pub async fn accept_with(
         };
         let (installed, approved) = (installed.version, &state.version);
         return Err(SessionError::DowngradeRefused {
-            message: format!("`{name}` runs {installed}, approved {approved}{why}: {fix}"),
+            message: format!(
+                "`{name}` runs {}, approved {}{why}: {fix}",
+                super::escape_text(&installed),
+                super::escape_text(approved)
+            ),
             installed,
             corrupt_newer: report.corrupt_newer,
         });
@@ -898,14 +916,16 @@ pub async fn accept_with(
         let message = match (changed.is_empty(), named.is_empty()) {
             (true, _) => format!("`{name}` has no changed trust field: drop `--accept-change`"),
             (false, true) => format!(
-                "`{name}` changed trust fields since approval ({}); nothing started: \
+                "`{name}` changed trust fields since approval ({}){}; nothing started: \
                  re-trust them only with `{command}`",
-                changed.join(", ")
+                changed.join(", "),
+                new_values(&state, &installed.entry),
             ),
             (false, false) => format!(
                 "`--accept-change {}` does not name the changed trust fields of \
-                 `{name}`: `{command}`",
-                options.launch_change.join(",")
+                 `{name}`{}: `{command}`",
+                super::escape_text(&options.launch_change.join(",")),
+                new_values(&state, &installed.entry),
             ),
         };
         return Err(SessionError::LaunchChangeRefused(message));
@@ -966,19 +986,30 @@ pub async fn accept_with(
     )
     .await;
     let session = started.inspect_err(|_| outcome("start_failed"))?;
-    outcome("started");
     let pins = pinned_tools(&session.tools);
     state.tools = pins
         .into_iter()
         .map(|pin| (pin.name, pin.identity))
         .collect();
     state.frozen = false;
-    store_state(home, &state)?;
+    let stored = store_state(home, &state);
     session.stop().await;
+    stored?;
+    // Logged once the unfrozen pin is saved: a failed save never reads as started.
+    outcome("started");
     Ok(Accepted {
         state,
         corrupt_newer: report.corrupt_newer,
     })
+}
+
+/// `: new network "h:443", secrets "EXT_X__K"` for the refusal, or nothing.
+fn new_values(state: &ExtensionState, entry: &Entry) -> String {
+    let values = super::mount::new_trust_values(state, entry);
+    match values.is_empty() {
+        true => String::new(),
+        false => format!(": new {}", values.join(", ")),
+    }
 }
 
 /// Compare a live tool list against the pinned identities.

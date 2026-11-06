@@ -137,21 +137,25 @@ fn write_script(dir: &Path, name: &str, script: &str) -> PathBuf {
 
 /// Install the fixture entry end to end and return the home/name.
 async fn install_fixture(home: &Path, name: &str, script: &str) -> Entry {
+    try_install_fixture(home, name, script)
+        .await
+        .expect("fixture installs")
+}
+
+async fn try_install_fixture(
+    home: &Path,
+    name: &str,
+    script: &str,
+) -> Result<Entry, super::InstallError> {
     let scratch = tempfile::tempdir().unwrap();
     let path = write_script(scratch.path(), "server", script);
     let mut entry = fixture_entry(name, script.as_bytes(), "1.0.0", Sensitivity::Public);
     entry.source.package = path.to_string_lossy().into_owned();
-    install(
-        home,
-        &entry,
-        &InstallOptions {
-            allow_loopback: true,
-            pin: true,
-        },
-    )
-    .await
-    .expect("fixture installs");
-    entry
+    let options = InstallOptions {
+        allow_loopback: true,
+        pin: true,
+    };
+    install(home, &entry, &options).await.map(|_| entry)
 }
 
 #[tokio::test]
@@ -424,7 +428,7 @@ async fn reinstall_keeps_a_freeze_until_accept() {
     install_fixture(home.path(), "demo", &script).await;
     freeze(home.path(), "demo", "drift").unwrap();
     assert!(is_frozen(home.path(), "demo"));
-    // A reinstall re-pins the tools but must not clear the freeze.
+    // A reinstall leaves the approval row as it is: the freeze stays.
     install_fixture(home.path(), "demo", &script).await;
     assert!(
         is_frozen(home.path(), "demo"),
@@ -433,6 +437,7 @@ async fn reinstall_keeps_a_freeze_until_accept() {
     #[cfg(unix)]
     {
         let state = home.path().join("extensions/state/demo.json");
+        let row = std::fs::read(&state).unwrap();
         for kind in ["fifo", "garbage"] {
             std::fs::remove_file(&state).unwrap();
             if kind == "fifo" {
@@ -445,8 +450,17 @@ async fn reinstall_keeps_a_freeze_until_accept() {
                 std::fs::write(&state, b"not json").unwrap();
             }
             assert!(is_frozen(home.path(), "demo"), "{kind}");
-            install_fixture(home.path(), "demo", &script).await;
+            // EXT-ANCHOR-9 r2: an unreadable row is refused by name, never
+            // overwritten by an install.
+            let err = try_install_fixture(home.path(), "demo", &script).await;
+            let err = err.err().expect("refused").to_string();
+            assert!(err.contains("extensions/state/demo.json"), "{kind}: {err}");
             assert!(is_frozen(home.path(), "demo"), "reinstall over {kind}");
+            if kind == "garbage" {
+                assert_eq!(std::fs::read(&state).unwrap(), b"not json", "row kept");
+            }
+            std::fs::remove_file(&state).unwrap();
+            std::fs::write(&state, &row).unwrap();
         }
     }
     accept(home.path(), "demo").unwrap();
@@ -457,7 +471,8 @@ async fn reinstall_keeps_a_freeze_until_accept() {
         std::fs::remove_file(&state).unwrap();
         std::os::unix::fs::symlink(home.path().join("nothing"), &state).unwrap();
         if !kernel_core::sandbox_guard_active() {
-            install_fixture(home.path(), "demo", &script).await;
+            let refused = try_install_fixture(home.path(), "demo", &script).await;
+            assert!(refused.is_err(), "a linked row is never overwritten");
         }
         assert!(is_frozen(home.path(), "demo"), "a link must read frozen");
     }
@@ -836,21 +851,18 @@ fn sandbox_allows_only_the_proxy_port_and_proxy_refuses_other_hosts() {
     );
 }
 
-/// Install `entry` from `script` without re-pinning (an upgrade on disk).
-async fn install_unpinned(home: &Path, mut entry: Entry, script: &str) {
+/// Install `entry` from `script` the way `aux ext install` does (`pin: true`).
+async fn install_upgrade(home: &Path, mut entry: Entry, script: &str) {
     let scratch = tempfile::tempdir().unwrap();
     let path = write_script(scratch.path(), "server", script);
     entry.source.package = path.to_string_lossy().into_owned();
-    install(
-        home,
-        &entry,
-        &InstallOptions {
-            allow_loopback: true,
-            pin: false,
-        },
-    )
-    .await
-    .expect("upgrade installs");
+    let options = InstallOptions {
+        allow_loopback: true,
+        ..InstallOptions::default()
+    };
+    install(home, &entry, &options)
+        .await
+        .expect("upgrade installs");
 }
 
 #[tokio::test]
@@ -878,10 +890,15 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
         vec!["a.example:443"]
     );
 
-    // v2 widens the allowlist; it is installed without a new approval.
+    // v2 widens the allowlist; installed as the CLI does, it keeps v1's yes.
     let mut v2 = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
     v2.tools[0].network = vec!["a.example:443".to_owned(), "b.example:443".to_owned()];
-    install_unpinned(home.path(), v2, &script).await;
+    install_upgrade(home.path(), v2, &script).await;
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert_eq!(
+        (kept.version.as_str(), kept.network),
+        ("1.0.0", vec!["a.example:443".to_owned()])
+    );
     assert_eq!(
         load_installed(home.path(), "demo").unwrap().version,
         "2.0.0"
@@ -889,6 +906,7 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
 
     let err = mount(home.path(), "demo", "bob").unwrap_err();
     assert!(err.to_string().starts_with("approval_required"), "{err}");
+    assert!(err.to_string().contains("--accept-change network"), "{err}");
     assert!(!is_mounted(home.path(), "demo", "bob"));
     let Err(err) =
         super::session::discover_session(home.path(), "demo", &SessionOptions::default()).await
@@ -911,6 +929,7 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
     // EXT-ANCHOR-9: the new host is named too, never re-pinned silently.
     let err = accept(Some("2.0.0")).await.unwrap_err().to_string();
     assert!(err.contains("--accept-change network"), "{err}");
+    assert!(err.contains("new network \"b.example:443\""), "{err}");
     let options = super::session::AcceptOptions {
         downgrade_to: Some("2.0.0"),
         launch_change: &["network".to_owned()],
@@ -930,15 +949,29 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
     let mut v3 = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
     v3.tools[0].network = vec!["a.example:443".to_owned()];
     v3.tools[0].secrets = vec!["EXT_DEMO__EXTRA".to_owned()];
-    install_unpinned(home.path(), v3, &script).await;
-    let err = mount(home.path(), "demo", "carol").unwrap_err();
-    assert!(err.to_string().contains("EXT_DEMO__EXTRA"), "{err}");
+    install_upgrade(home.path(), v3, &script).await;
+    assert!(load_state(home.path(), "demo").unwrap().secrets.is_empty());
+    let err = mount(home.path(), "demo", "carol").unwrap_err().to_string();
+    assert!(
+        err.contains("new secret names: \"EXT_DEMO__EXTRA\""),
+        "{err}"
+    );
+    assert!(err.contains("--accept-change secrets"), "{err}");
     let host = ExtensionHost::start(home.path()).await;
     assert!(
         host.running().is_empty(),
         "a new secret name must not start"
     );
     host.stop().await;
+    let err = accept(None).await.unwrap_err().to_string();
+    assert!(err.contains("new secrets \"EXT_DEMO__EXTRA\""), "{err}");
+    let options = super::session::AcceptOptions {
+        launch_change: &["secrets".to_owned()],
+        ..Default::default()
+    };
+    let accepted = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    assert_eq!(accepted.unwrap().state.secrets, vec!["EXT_DEMO__EXTRA"]);
+    mount(home.path(), "demo", "carol").unwrap();
 }
 
 async fn assert_starts(home: &Path, want: bool) {

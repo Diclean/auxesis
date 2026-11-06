@@ -620,7 +620,8 @@ mod tests {
 
         // Read the moment the caller would abort: the sweep is already done.
         let late = read_pid(&pidfile.0);
-        let signalled = late.is_some_and(|pid| !alive(pid) || is_zombie(pid));
+        // main aborts on false, so only then is the sweep checked at this point.
+        let signalled = !settled && late.is_some_and(|pid| !alive(pid) || is_zombie(pid));
         let swept = late.is_some_and(wait_for_exit);
         // Clean up (and the guards do it again on the way out) even when the
         // assertions below fail: a regression here must not leak a sleeper
@@ -641,7 +642,6 @@ mod tests {
             swept,
             "a child spawned during the grace must be swept after it"
         );
-        assert!(!settled, "the grace's result comes back");
         assert!(signalled, "swept before the caller can abort on it");
     }
 

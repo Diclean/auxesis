@@ -143,9 +143,11 @@ impl StoreTurnHost {
             "agent": self.agent.as_str(),
             "reason": crate::scrub::scrub_agent_text(reason),
         });
-        if let Err(err) =
+        // Past the stop gate: after a stop the marker is dropped, not written.
+        let marked = aux_engine::gated_usage_write(|| {
             lock_store(&self.store).log_event("usage.settle_failed", &payload.to_string())
-        {
+        });
+        if let Err(err) = marked {
             tracing::warn!(error = %err, "acp: could not record the failed settle marker");
         }
     }
@@ -175,12 +177,14 @@ impl TurnHost for StoreTurnHost {
             tokens_out: 0,
             usd_cents: cost_cents,
         };
-        let store = lock_store(&self.store);
-        let day = store.local_day()?;
-        let outcome =
-            store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)?;
-        // Unlocked first: a held reservation settles through this same lock.
-        drop(store);
+        // Past the stop gate, from the first store access: after a stop there
+        // is no reservation, so the turn makes no model call (fail closed).
+        // The lock is released inside it: a held reservation settles through it.
+        let outcome = aux_engine::gated_usage_write(|| {
+            let store = lock_store(&self.store);
+            let day = store.local_day()?;
+            store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)
+        })?;
         match outcome {
             ReserveOutcome::Reserved(inner) => Ok(Some(TurnReservation {
                 inner: HeldReservation::new(Arc::clone(&self.store), inner),
@@ -226,21 +230,23 @@ impl TurnHost for StoreTurnHost {
                 // turn's identity, so its receipt carries the cost. Taking the
                 // pending estimate makes a second settle record nothing more.
                 if let Some(cost_cents) = self.pending_cost_cents.take() {
-                    let store = lock_store(&self.store);
-                    match self.run_id.as_deref() {
-                        Some(run_id) => store
-                            .record_usage_for(
-                                run_id,
-                                &self.agent,
-                                UsageKind::UsdCents,
-                                cost_cents,
-                                "cents",
-                            )
-                            .map(|_| ()),
-                        None => store
-                            .record_usage(&self.agent, UsageKind::UsdCents, cost_cents, "cents")
-                            .map(|_| ()),
-                    }
+                    aux_engine::gated_usage_write(|| {
+                        let store = lock_store(&self.store);
+                        match self.run_id.as_deref() {
+                            Some(run_id) => store
+                                .record_usage_for(
+                                    run_id,
+                                    &self.agent,
+                                    UsageKind::UsdCents,
+                                    cost_cents,
+                                    "cents",
+                                )
+                                .map(|_| ()),
+                            None => store
+                                .record_usage(&self.agent, UsageKind::UsdCents, cost_cents, "cents")
+                                .map(|_| ()),
+                        }
+                    })
                 } else {
                     Ok(())
                 }

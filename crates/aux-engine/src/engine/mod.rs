@@ -12,9 +12,11 @@
 mod approvals;
 mod budget;
 pub(crate) use budget::{
-    admit, call_estimate, day_denied, request_model, usage_actual, usage_write,
+    admit, admitted, call_estimate, day_denied, request_model, usage_actual, usage_write,
 };
-pub use budget::{stop_settle_worker, watch_held_reservations, HeldReservation, SettleStore};
+pub use budget::{
+    gated_usage_write, stop_settle_worker, watch_held_reservations, HeldReservation, SettleStore,
+};
 mod context;
 mod privacy;
 mod session;

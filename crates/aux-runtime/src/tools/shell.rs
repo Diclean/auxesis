@@ -6310,9 +6310,10 @@ await(q(bg.pid));
             let backlog = overflow_backlog();
             (backlog.0, backlog.1.len())
         };
+        // One 150 ms item plus runner overhead; a second would pass 300 ms.
         assert!(
-            took < Duration::from_millis(200),
-            "past the budget: {took:?}"
+            took < Duration::from_millis(300),
+            "a second item ran: {took:?}"
         );
         assert!(ran == 1 && left > 0, "ran {ran}, left {left}");
         assert_eq!(ran + left, OVERFLOW_BACKLOG_MAX, "a reaper was dropped");

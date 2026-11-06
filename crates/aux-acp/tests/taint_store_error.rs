@@ -105,4 +105,7 @@ async fn a_taint_mark_that_fails_for_a_store_reason_fails_the_turn_and_stores_no
     );
     let rows = store.lock().unwrap().list_messages(session.id).unwrap();
     assert!(rows.is_empty(), "no answer was stored: {rows:?}");
+    // Stop the settle worker before the process exits, as auxd does: a store
+    // write still running at exit races SQLCipher's exit hook (SIGSEGV on CI).
+    assert!(aux_engine::stop_settle_worker(Duration::from_secs(10)));
 }

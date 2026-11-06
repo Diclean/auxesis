@@ -2,7 +2,7 @@
 //! date, the local UTC offset, and the ranges the owner means by "this week".
 //! Date and offset only: no place, no clock time, nothing about the owner.
 
-use chrono::{DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, TimeZone};
 
 /// The sentence for `now`, read in its own offset: the weekday, the date and
 /// the offset (`+02:00`). Two shapes are avoided, both measured through the
@@ -21,6 +21,41 @@ pub fn today_line(now: DateTime<FixedOffset>) -> String {
 /// The line for the wall clock now, in the local offset.
 pub fn today_line_now() -> String {
     today_line(Local::now().fixed_offset())
+}
+
+/// A mail `Date:` header as the owner's wall clock in `zone`, with the offset
+/// that applied on that date: `Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)`.
+/// The offset is the zone's rule at that instant, not today's, so a summer
+/// mail read in winter still shows its summer offset. `None` when `raw` is not
+/// an RFC 2822 date: the caller keeps the header as written.
+///
+/// The model used to get the sender's raw header (`… 12:59:00 +0000`) and
+/// converted it itself, with only today's offset, so one mail read at
+/// 14:59, 15:59 or 16:59 from run to run.
+pub fn mail_time_in<Z: TimeZone>(raw: &str, zone: &Z) -> Option<String>
+where
+    Z::Offset: std::fmt::Display,
+{
+    let sent = DateTime::parse_from_rfc2822(raw.trim()).ok()?;
+    let local = sent.with_timezone(zone);
+    Some(format!(
+        "{} (local time, UTC{})",
+        local.format("%a, %-d %b %Y %H:%M"),
+        local.format("%:z")
+    ))
+}
+
+/// [`mail_time_in`] in the owner's system zone (the IANA name when the Mac
+/// names one, else the system's local rules), and `raw` unchanged when it is
+/// not a date.
+pub fn mail_time_local(raw: &str) -> String {
+    let named = crate::skills::event_time::owner_time_zone()
+        .and_then(|name| name.parse::<chrono_tz::Tz>().ok());
+    let shown = match named {
+        Some(zone) => mail_time_in(raw, &zone),
+        None => mail_time_in(raw, &Local),
+    };
+    shown.unwrap_or_else(|| raw.to_string())
 }
 
 /// The date context the model gets at the start of every turn: today's line,
@@ -72,7 +107,6 @@ fn span(from: NaiveDate, to: NaiveDate) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{FixedOffset, TimeZone};
 
     /// The line depends only on the instant it is given, so a fixed instant
     /// keeps the test independent of the wall clock.
@@ -102,6 +136,43 @@ mod tests {
         let line = today_line(instant);
         assert!(!line.contains("09:30"), "{line}");
         assert!(!line.contains('/'), "a zone name is not offered: {line}");
+    }
+
+    /// The mail from 15 October was shown at 14:59, 15:59 and 16:59 on
+    /// different runs: the model got `12:59 +0000` and only today's offset.
+    /// The time now comes converted with the offset of that date (CEST), also
+    /// when it is read in November (CET).
+    #[test]
+    fn a_mail_time_carries_the_offset_of_its_own_date() {
+        let paris = chrono_tz::Europe::Paris;
+        let summer = mail_time_in("Thu, 15 Oct 2026 12:59:00 +0000", &paris);
+        assert_eq!(
+            summer.as_deref(),
+            Some("Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)")
+        );
+        let winter = mail_time_in("Sat, 7 Nov 2026 12:59:00 +0000", &paris);
+        assert_eq!(
+            winter.as_deref(),
+            Some("Sat, 7 Nov 2026 13:59 (local time, UTC+01:00)")
+        );
+        // The sender's own offset is converted, not trusted as the owner's.
+        let sent = mail_time_in("Thu, 15 Oct 2026 08:59:00 -0400", &paris);
+        assert_eq!(
+            sent.as_deref(),
+            Some("Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)")
+        );
+    }
+
+    /// A header that is not a date is kept as written, never guessed.
+    #[test]
+    fn a_header_that_is_not_a_date_is_kept() {
+        assert_eq!(
+            mail_time_in("yesterday-ish", &chrono_tz::Europe::Paris),
+            None
+        );
+        assert_eq!(mail_time_local("yesterday-ish"), "yesterday-ish");
+        let local = mail_time_local("Thu, 15 Oct 2026 12:59:00 +0000");
+        assert!(local.contains("(local time, UTC"), "{local}");
     }
 
     /// A Paris instant on a given day. Paris is CET (+01:00) at midday on

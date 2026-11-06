@@ -124,6 +124,20 @@ fn a_large_body_is_truncated_with_the_kernel_marker() {
 }
 
 #[test]
+fn the_date_line_is_local_time_with_its_offset_never_the_raw_header() {
+    let mut item = item_with_text("Thanks, looks good");
+    item.date = "Thu, 15 Oct 2026 12:59:00 +0000".to_string();
+    let rendered = render_untrusted(&item, &Limits::default());
+    // Whatever zone the host is in, the model reads a wall clock and its
+    // offset, not the sender's header to convert with today's offset.
+    assert!(rendered.contains("(local time, UTC"), "{rendered}");
+    assert!(!rendered.contains("+0000"), "{rendered}");
+    item.date = "not a date".to_string();
+    let rendered = render_untrusted(&item, &Limits::default());
+    assert!(rendered.contains("date: not a date"), "{rendered}");
+}
+
+#[test]
 fn render_untrusted_always_starts_with_the_banner_even_when_empty() {
     let rendered = render_untrusted(&item_with_text(""), &Limits::default());
     assert!(rendered.starts_with(UNTRUSTED_MAIL_TAG));

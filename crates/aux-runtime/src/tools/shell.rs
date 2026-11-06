@@ -1539,7 +1539,7 @@ fn late_retry_logged(reaper: &mut TreeReaper) {
     }
 }
 
-/// Runs the queued retries one by one until the queue is empty; the last
+/// Runs the queued retries one by one until the queue is empty; the empty
 /// pop marks the late-retry thread idle under the same lock.
 fn drain_late_retries() {
     loop {
@@ -1558,13 +1558,22 @@ fn drain_late_retries() {
 
 #[cfg(test)]
 thread_local! {
-    /// Test seam: the late-retry thread cannot be spawned on this thread.
-    static FAIL_LATE_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Test seam: the late-retry thread cannot be spawned on this thread;
+    /// the count says how often the seam refused.
+    static FAIL_LATE_SPAWN: std::cell::Cell<(bool, usize)> =
+        const { std::cell::Cell::new((false, 0)) };
 }
+
+/// Total time the no-thread fallback spends on seen-set kills.
+const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
 
 fn spawn_late_thread() -> std::io::Result<()> {
     #[cfg(test)]
-    if FAIL_LATE_SPAWN.with(std::cell::Cell::get) {
+    if FAIL_LATE_SPAWN.with(|seam| {
+        let (fail, refused) = seam.get();
+        seam.set((fail, refused + usize::from(fail)));
+        fail
+    }) {
         return Err(std::io::Error::other("test seam: no late-retry thread"));
     }
     std::thread::Builder::new()
@@ -1574,9 +1583,10 @@ fn spawn_late_thread() -> std::io::Result<()> {
 }
 
 /// Queues `reaper`'s retry (first in, first out) for the late-retry thread,
-/// starting it if needed. No thread: this caller drains the whole queue
-/// inline, still marked busy so no second late thread starts meanwhile, and
-/// every queued reaper (those queued later included) gets its retry.
+/// starting it if needed. No thread: the caller (a turn thread or a tokio
+/// worker) takes the whole queue and marks it idle, then gives every reaper
+/// only a fast kill, never the up-to-2 s sweep: each unreaped root's group,
+/// then its seen processes while [`LATE_INLINE_BUDGET`] lasts.
 fn late_retry(reaper: TreeReaper) {
     let mut queue = late_retries();
     queue.1.push_back(reaper);
@@ -1586,8 +1596,24 @@ fn late_retry(reaper: TreeReaper) {
     let pending = queue.1.len();
     drop(queue);
     if let Err(err) = spawn_late_thread() {
-        tracing::error!(%err, pending, "shell: no late-retry thread; the retries run inline");
-        drain_late_retries();
+        let queued: Vec<TreeReaper> = {
+            let mut queue = late_retries();
+            queue.0 = false;
+            queue.1.drain(..).collect()
+        };
+        let deadline = std::time::Instant::now() + LATE_INLINE_BUDGET;
+        let mut over_budget = 0usize;
+        for mut reaper in queued {
+            let in_budget = std::time::Instant::now() < deadline;
+            over_budget += usize::from(!in_budget);
+            reaper.fast_kill(in_budget);
+        }
+        tracing::error!(
+            %err,
+            pending,
+            over_budget,
+            "shell: no late-retry thread; the queued reapers got a group kill only"
+        );
     }
 }
 
@@ -1737,6 +1763,31 @@ impl TreeReaper {
         )
     }
 
+    /// The no-thread fallback, with no scan: SIGKILL the still-unreaped root's
+    /// group (pinned by the root) and, when `seen_too`, every seen process
+    /// re-checked as the same process. Then disarm.
+    fn fast_kill(&mut self, seen_too: bool) {
+        self.armed = false;
+        #[cfg(unix)]
+        {
+            if let Some(pid) = self.child.as_ref().and_then(|child| child.id()) {
+                // SAFETY: the root is held unreaped, so `-pid` names its group.
+                unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            }
+            let lookup = &pid_ppid_uid_start;
+            for tracked in self
+                .seen
+                .iter()
+                .filter(|t| seen_too && t.still_same(lookup))
+            {
+                // SAFETY: SIGKILL of a seen process, re-checked just before.
+                unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = seen_too;
+    }
+
     /// End of a call: an armed reaper retries on a blocking thread, and the
     /// call returns only after it, with the retry's sweep. A panic is the error.
     async fn retire(mut self) -> Result<Option<Sweep>, tokio::task::JoinError> {
@@ -1803,10 +1854,11 @@ fn wait_exited_unreaped(_pid: i32) -> std::io::Result<()> {
 }
 
 /// Poll (signal 0) until group `pgid` is empty, at most `max_time`. The root
-/// is reaped by now, so once its group empties the id may name a new group:
-/// signal 0 sends nothing, so a recycled id can only read as "not empty",
-/// which adds a note and keeps the reaper armed. Its retry, the root reaped,
-/// never signals a group or session by that id (marker and seen set only).
+/// is reaped by now, so once its group empties the id may name a new group.
+/// Signal 0 sends nothing, so a recycled id only changes the answer: "not
+/// empty" adds a note and keeps the reaper armed, "empty" is the truth for
+/// the original group. Its retry, the root reaped, never signals a group or
+/// session by that id (marker and seen set only).
 async fn wait_group_empty(pgid: i32, max_time: Duration) -> bool {
     #[cfg(unix)]
     {
@@ -3840,6 +3892,7 @@ await(q(bg.pid));
     #[cfg(unix)]
     #[tokio::test]
     async fn a_late_retry_never_kills_the_session_of_a_reused_root_pid() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
         let leader =
             "exec /usr/bin/perl -MPOSIX -e 'POSIX::setsid; exec q(sh), q(-c), q(sleep 60 & wait)'";
         let mut guard = Spawned(vec![spawn_sh(leader)], Vec::new());
@@ -3874,13 +3927,17 @@ await(q(bg.pid));
         );
     }
 
+    /// Serialises the tests that drive the global late-retry queue.
+    static LATE_QUEUE_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// SHELL-SWEEP-6 (1): the late-retry thread cannot be spawned. Every
-    /// queued reaper still gets its retry: each root's group (a shell and its
-    /// `sleep`) is gone, and the queue is left empty and idle.
+    /// queued reaper still gets a kill: each root's group (a shell and its
+    /// `sleep`) is gone, and none of them is left in the queue.
     #[cfg(unix)]
     #[tokio::test]
-    async fn no_late_thread_still_retries_every_queued_reaper() {
+    async fn no_late_thread_still_kills_every_queued_reaper() {
         use std::os::unix::process::CommandExt;
+        let _serial = LATE_QUEUE_TEST.lock().await;
         for _ in 0..1000 {
             if !late_retries().0 {
                 break;
@@ -3888,11 +3945,13 @@ await(q(bg.pid));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let mut reapers = Vec::new();
+        let mut roots = Vec::new();
         let mut sleepers = Spawned(Vec::new(), Vec::new());
         for _ in 0..3 {
             let mut root = std::process::Command::new("/bin/sh");
             root.args(["-c", "sleep 60 & wait"]).process_group(0);
-            let root = tokio::process::Command::from(root).spawn().unwrap();
+            let mut root = tokio::process::Command::from(root);
+            let root = root.kill_on_drop(true).spawn().unwrap();
             let pid = root.id().unwrap() as i32;
             let sleeper = (0..500).find_map(|_| {
                 std::thread::sleep(Duration::from_millis(10));
@@ -3900,18 +3959,25 @@ await(q(bg.pid));
             });
             let sleeper = TrackedPid::of(sleeper.expect("the root never forked")).unwrap();
             sleepers.1.push(sleeper);
-            let mut reaper = TreeReaper::new(
-                root,
-                Marker::from_file(&tempfile::tempfile().unwrap()).unwrap(),
-            );
+            roots.push(Some(pid));
+            let marker_file = tempfile::tempfile().unwrap();
+            let marker = Marker::from_file(&marker_file).unwrap();
+            let mut reaper = TreeReaper::new(root, marker).holding(marker_file);
             reaper.disarm();
             reapers.push(reaper);
         }
         let last = reapers.pop().unwrap();
         late_retries().1.extend(reapers);
-        FAIL_LATE_SPAWN.with(|fail| fail.set(true));
+        FAIL_LATE_SPAWN.with(|seam| seam.set((true, 0)));
         late_retry(last);
-        FAIL_LATE_SPAWN.with(|fail| fail.set(false));
+        let (_, refused) = FAIL_LATE_SPAWN.with(|seam| seam.replace((false, 0)));
+        assert_eq!(refused, 1, "the spawn-failure path never ran");
+        let left = late_retries()
+            .1
+            .iter()
+            .filter(|r| roots.contains(&r.root))
+            .count();
+        assert_eq!(left, 0, "queued reapers were left in the queue");
         for sleeper in &sleepers.1 {
             let gone = gone_within(sleeper.pid, Duration::from_secs(2)).await;
             assert!(
@@ -3923,8 +3989,9 @@ await(q(bg.pid));
     }
 
     /// SHELL-SWEEP-6 (3): a sweep left not clean keeps the reaper armed; its
-    /// retry runs after the reap, so it can only end `NoSession`, and that
-    /// note reaches the output after "[after the retry]".
+    /// retry runs after the reap, so it is never clean: its note reaches the
+    /// output after "[after the retry]", the no-session one unless the
+    /// machine-wide sweep found something else to report.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_retry_after_the_reap_notes_no_session() {
@@ -3936,8 +4003,11 @@ await(q(bg.pid));
             .run(&json!({"command": "echo hi"}), &ctx(dir.path()))
             .await
             .unwrap();
-        let want = format!("[after the retry] {}", Undescribed::NoSession.note());
-        assert!(out.content.contains(&want), "content: {}", out.content);
+        let text = &out.content;
+        let after = text.split("[after the retry] ").nth(1);
+        let after = after.unwrap_or_else(|| panic!("no retry note: {text}"));
+        let no_session = after.starts_with(Undescribed::NoSession.note());
+        assert!(no_session || after.starts_with("[cleanup "), "{text}");
         assert!(!out.is_error, "content: {}", out.content);
     }
 

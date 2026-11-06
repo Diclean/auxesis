@@ -1227,17 +1227,23 @@ fn parent_in_call(parent: i32, seen: &HashSet<TrackedPid>) -> bool {
 /// through more is stopped and reported, not tracked forever.
 const MAX_SEEN_PIDS: usize = 4 * MAX_COMMAND_PROCESSES;
 
-/// Adds `more` to `seen`. A full set first forgets gone pids; `false` means
-/// it is still full: the caller kills what it knows and reports the cap.
+/// Adds `more` to `seen`. A full set first forgets the pids proven gone
+/// (`ESRCH`); a pid `kill(pid, 0)` cannot answer for (`EPERM`) stays, never
+/// counted as gone. `false` means it is still full: the caller kills what it
+/// knows and reports the cap.
 fn remember(seen: &mut HashSet<TrackedPid>, more: impl IntoIterator<Item = TrackedPid>) -> bool {
     let mut pruned = false;
     for tracked in more {
         if seen.len() >= MAX_SEEN_PIDS && !seen.contains(&tracked) {
             if !pruned {
                 pruned = true;
-                // SAFETY: signal 0 sends nothing; it only asks whether the
-                // pid is still one of ours (a zombie counts).
-                seen.retain(|known| unsafe { libc::kill(known.pid, 0) } == 0);
+                seen.retain(|known| {
+                    // SAFETY: signal 0 sends nothing; it only asks whether
+                    // the pid exists (a zombie counts). Only `ESRCH` proves
+                    // it gone: `EPERM` keeps it.
+                    let exists = unsafe { libc::kill(known.pid, 0) } == 0;
+                    exists || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+                });
             }
             if seen.len() >= MAX_SEEN_PIDS {
                 return false;
@@ -1789,8 +1795,9 @@ fn sweep_leftovers_with(
         let mut pending = false;
         // Orphan zombies already charged a pass; a dead pid is dropped.
         let mut counted_zombies = HashSet::new();
-        // Set when the set is still full after a prune, or could not take a
-        // candidate: this sweep fails closed.
+        // Set when the set reached its cap at any point (at a pass start, or
+        // full when a candidate came, even if a prune then made room): this
+        // sweep fails closed.
         let mut capped = false;
         // This pass kept a seen process it cannot read. Per pass: every
         // seen pid is re-read by the next pass's `forget_gone`.
@@ -1801,8 +1808,8 @@ fn sweep_leftovers_with(
         // parent dies, so no later pass can prove it gone: never `Clean`.
         let mut lost = false;
         // Seen members whose re-check `Failed`: sticky like `lost` until a
-        // positive answer proves one gone (`forget_gone` or the cap prune
-        // drops it from `seen`).
+        // positive answer proves one gone (`forget_gone`, or the cap prune on
+        // `ESRCH`, drops it from `seen`).
         let mut lost_seen: HashSet<TrackedPid> = HashSet::new();
         for pass in 0..max_passes {
             let pass_visibility = |pid| visibility(pass, pid);
@@ -1851,6 +1858,7 @@ fn sweep_leftovers_with(
                     .filter(|t| seen.contains(t))
                     .copied()
                     .collect();
+                capped |= seen.len() >= MAX_SEEN_PIDS;
                 capped |= !remember(seen, family.iter().copied());
                 for tracked in family {
                     match tracked.recheck(lookup) {
@@ -1884,6 +1892,7 @@ fn sweep_leftovers_with(
                     };
                     // A candidate found by the session/marker scan is part of
                     // the call even if it escapes before the next pass.
+                    capped |= seen.len() >= MAX_SEEN_PIDS;
                     capped |= !remember(seen, [tracked]);
                     if pid <= 1 || !tracked.still_same(&pid_ppid_uid_start) {
                         continue;
@@ -2008,8 +2017,10 @@ struct TreeReaper {
 /// Retries of reapers dropped armed, and whether the one thread that runs
 /// them is alive: the queue runs one retry at a time on its one thread. Cut
 /// overflows past the queue's cap run on at most [`OVERFLOW_THREADS_MAX`]
-/// threads of their own, and beyond that one by one on the blocking pool
-/// ([`OVERFLOW_BACKLOG`]; on the caller with no runtime), so at most
+/// threads of their own, and beyond that one by one by the backlog's one
+/// drainer ([`OVERFLOW_BACKLOG`], a blocking-pool task; the caller drains it
+/// when the pool has no thread or the runtime shuts down), or on the caller
+/// (no runtime, or past [`OVERFLOW_BACKLOG_MAX`]), so at most
 /// `2 + OVERFLOW_THREADS_MAX` late retries run off the callers at once.
 static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
     std::sync::Mutex::new((false, VecDeque::new()));
@@ -2020,8 +2031,8 @@ static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
 /// its fast kill at once, on the caller's thread; if that pass was cut, the
 /// oldest goes back on the queue, or, when the one slot past the cap is taken,
 /// runs its full retry on a thread of its own, or in [`OVERFLOW_BACKLOG`] once
-/// [`OVERFLOW_THREADS_MAX`] such threads are alive (see [`overflow_fast_kill`]):
-/// it is never dropped unkilled.
+/// [`OVERFLOW_THREADS_MAX`] such threads are alive, or on the caller past the
+/// backlog's cap (see [`overflow_retry`]): it is never dropped unkilled.
 const LATE_QUEUE_MAX: usize = 8;
 
 fn late_retries() -> std::sync::MutexGuard<'static, (bool, VecDeque<TreeReaper>)> {
@@ -2218,14 +2229,10 @@ const OVERFLOW_THREADS_MAX: usize = 2;
 /// [`OVERFLOW_BACKLOG_MAX`] wait: each pins a marker descriptor, an unreaped
 /// root and its seen set. Past it the retry runs on the caller
 /// ([`retry_on_caller`]): a reaper is never dropped unkilled.
-/// Each reaper waits with its push number, so a caller can find its own.
-static OVERFLOW_BACKLOG: std::sync::Mutex<(bool, VecDeque<(u64, TreeReaper)>)> =
+static OVERFLOW_BACKLOG: std::sync::Mutex<Backlog> =
     std::sync::Mutex::new((false, VecDeque::new()));
 
-/// The next [`OVERFLOW_BACKLOG`] push number.
-static BACKLOG_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-type Backlog = (bool, VecDeque<(u64, TreeReaper)>);
+type Backlog = (bool, VecDeque<TreeReaper>);
 
 fn overflow_backlog() -> std::sync::MutexGuard<'static, Backlog> {
     OVERFLOW_BACKLOG
@@ -2238,68 +2245,44 @@ fn overflow_backlog() -> std::sync::MutexGuard<'static, Backlog> {
 /// every later shell call fails.
 const OVERFLOW_BACKLOG_MAX: usize = 32;
 
-/// Drains [`OVERFLOW_BACKLOG`] when dropped by the blocking-pool task that
-/// ran it (`ran`). Dropped unrun (a runtime shutting down drops the task on
-/// the caller, maybe a tokio worker) it hands the drain to a plain thread,
-/// never draining the whole backlog there; with no thread either, only the
-/// reaper pushed as `mine` runs there and the flag is cleared, so the next
-/// push starts a drainer. Dropped by an unwind it drains nothing and clears
-/// the flag: the caller runs its own reaper.
-struct DrainBacklog {
-    /// The push number of the reaper the spawning call queued.
-    mine: u64,
-    /// Set by the blocking-pool task when it runs.
-    ran: bool,
-}
-
-/// Marks the backlog's drainer gone when dropped by an unwind, so a later
-/// push starts a new one instead of trusting a dead drainer.
-struct DrainerGone;
-
-impl Drop for DrainerGone {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            overflow_backlog().0 = false;
-        }
-    }
-}
+/// Drains the whole [`OVERFLOW_BACKLOG`] before its drop returns: dropped by
+/// the blocking-pool task that ran it, or unrun on the caller (a runtime
+/// shutting down drops the task there, maybe during an unwind), as before
+/// SHELL-SWEEP-13. Inline, never handed to a thread: a detached thread dies
+/// with the exiting daemon, and a join bounded by [`MAX_SWEEP_TIME`] would
+/// still strand the reapers past the bound. One drainer at a time (the flag).
+struct DrainBacklog;
 
 impl Drop for DrainBacklog {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            overflow_backlog().0 = false;
-            return;
-        }
-        if self.ran {
-            drain_backlog();
-            return;
-        }
-        let handed = std::thread::Builder::new()
-            .name("shell-overflow-backlog".into())
-            .spawn(drain_backlog);
-        if let Err(err) = handed {
-            tracing::error!(%err, "shell: no thread for the overflow backlog; one retry runs here");
-            if let Some(mut mine) = take_own(self.mine) {
-                late_retry_logged(&mut mine);
-            }
-        }
+        drain_backlog();
     }
 }
 
-/// Removes the reaper pushed as `seq` (if still queued) and clears the
-/// drainer flag: the caller runs it, the rest waits for the next push's
-/// drainer.
-fn take_own(seq: u64) -> Option<TreeReaper> {
-    let mut backlog = overflow_backlog();
-    backlog.0 = false;
-    let at = backlog.1.iter().position(|(pushed, _)| *pushed == seq)?;
-    backlog.1.remove(at).map(|(_, reaper)| reaper)
+/// Marks the backlog's drainer gone when dropped by an unwind, so a later
+/// push starts a new one instead of trusting a dead drainer. Made during an
+/// unwind it is inert: a second panic aborts, and dropping it then must not
+/// clear a flag a live drainer holds.
+struct DrainerGone(bool);
+
+impl DrainerGone {
+    fn new() -> Self {
+        Self(!std::thread::panicking())
+    }
+}
+
+impl Drop for DrainerGone {
+    fn drop(&mut self) {
+        if self.0 && std::thread::panicking() {
+            overflow_backlog().0 = false;
+        }
+    }
 }
 
 /// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty; the
 /// empty pop clears the drainer flag under the same lock.
 fn drain_backlog() {
-    let _gone = DrainerGone;
+    let _gone = DrainerGone::new();
     loop {
         let next = {
             let mut backlog = overflow_backlog();
@@ -2307,7 +2290,7 @@ fn drain_backlog() {
             backlog.0 = next.is_some();
             next
         };
-        let Some((_, mut next)) = next else {
+        let Some(mut next) = next else {
             return;
         };
         #[cfg(test)]
@@ -2338,12 +2321,18 @@ static BACKLOG_ITEM_PANICS: std::sync::atomic::AtomicBool =
 /// runtime (the worker hands its other tasks off), else inline. If
 /// `block_in_place` refuses (a `LocalSet`), the retry still runs here.
 fn retry_on_caller(runtime: &tokio::runtime::Handle, mut reaper: TreeReaper) {
+    run_on_caller(runtime, &mut || late_retry_logged(&mut reaper));
+}
+
+/// The one caller path of [`retry_on_caller`]: runs `work` once, in
+/// `block_in_place` on a multi-thread runtime, else (or if refused) inline.
+fn run_on_caller(runtime: &tokio::runtime::Handle, work: &mut dyn FnMut()) {
     let mut ran = false;
     if runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
         let in_place = std::panic::AssertUnwindSafe(|| {
             tokio::task::block_in_place(|| {
                 ran = true;
-                late_retry_logged(&mut reaper);
+                work();
             })
         });
         let _ = std::panic::catch_unwind(in_place);
@@ -2355,7 +2344,7 @@ fn retry_on_caller(runtime: &tokio::runtime::Handle, mut reaper: TreeReaper) {
     if !ran {
         #[cfg(test)]
         OVERFLOW_INLINE.with(|inline| inline.set(inline.get() + 1));
-        late_retry_logged(&mut reaper);
+        work();
     }
 }
 
@@ -2439,12 +2428,11 @@ fn overflow_retry(oldest: TreeReaper) {
             late_retry_logged(&mut reaper);
             return;
         };
-        let seq = BACKLOG_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let queued = {
             let mut backlog = overflow_backlog();
             match backlog.1.len() < OVERFLOW_BACKLOG_MAX {
                 true => {
-                    backlog.1.push_back((seq, oldest));
+                    backlog.1.push_back(oldest);
                     Ok(!std::mem::replace(&mut backlog.0, true))
                 }
                 false => Err(oldest),
@@ -2464,7 +2452,7 @@ fn overflow_retry(oldest: TreeReaper) {
         };
         // The flag is claimed before the drainer exists: an unwind in
         // between clears it, so the next push starts one.
-        let claim = start.then_some(DrainerGone);
+        let claim = start.then(DrainerGone::new);
         #[cfg(test)]
         if let Some(hook) = BEFORE_BACKLOG_SPAWN.with(std::cell::Cell::get) {
             hook();
@@ -2474,38 +2462,33 @@ fn overflow_retry(oldest: TreeReaper) {
              retries are running; the cut reaper waits for the blocking-pool backlog"
         );
         if start {
-            let drain = DrainBacklog {
-                mine: seq,
-                ran: false,
-            };
-            // `spawn_blocking` panics when the OS gives the pool no thread
-            // (tokio keeps the task queued for a later thread); on a runtime
-            // shutting down it drops the task unrun here (see
-            // [`DrainBacklog`]).
+            // `spawn_blocking` panics when the OS gives the pool no thread;
+            // on a runtime shutting down it drops the task unrun here. Either
+            // way `drain` drains the whole backlog where it is dropped (kept
+            // out here until the spawn, so a failed one never drains it
+            // inside the unwind).
+            let mut drain = Some(DrainBacklog);
             let spawn = std::panic::AssertUnwindSafe(|| {
-                let task = move || {
-                    let mut drain = drain;
-                    drain.ran = true;
-                };
                 #[cfg(test)]
                 if FAIL_BACKLOG_SPAWN.with(std::cell::Cell::get) {
                     panic!("test seam: no blocking thread");
                 }
-                runtime.spawn_blocking(task)
+                let task = drain.take();
+                runtime.spawn_blocking(move || drop(task))
             });
             if std::panic::catch_unwind(spawn).is_err() {
-                // Only this call's own retry runs here, never the whole
-                // backlog on a worker: the rest waits for the next push's
-                // drainer (the flag is cleared).
+                // The whole backlog drains on the caller (in `block_in_place`
+                // on a multi-thread runtime), never only this call's reaper.
                 tracing::error!(
-                    "shell: no blocking thread for the overflow backlog; this retry runs here"
+                    "shell: no blocking thread for the overflow backlog; it drains here"
                 );
-                if let Some(mine) = take_own(seq) {
-                    retry_on_caller(&runtime, mine);
-                }
+                run_on_caller(&runtime, &mut drain_backlog);
             }
+            drop(drain);
         }
-        drop(claim);
+        // The drainer exists (or drained here): the claim no longer guards
+        // the window, and an unwind must not clear the flag it now holds.
+        std::mem::forget(claim);
         return;
     };
     tracing::warn!(
@@ -5785,7 +5768,7 @@ await(q(bg.pid));
 
     /// Empties the backlog and marks its drainer gone (test cleanup).
     fn clear_backlog() {
-        let rest: Vec<(u64, TreeReaper)> = {
+        let rest: Vec<TreeReaper> = {
             let mut backlog = overflow_backlog();
             backlog.0 = false;
             backlog.1.drain(..).collect()
@@ -5816,7 +5799,7 @@ await(q(bg.pid));
             let mut backlog = overflow_backlog();
             backlog.0 = true;
             for _ in 0..OVERFLOW_BACKLOG_MAX - 1 {
-                backlog.1.push_back((0, idle_reaper(pinned_marker().0)));
+                backlog.1.push_back(idle_reaper(pinned_marker().0));
             }
         }
         let in_place = OVERFLOW_IN_PLACE.with(std::cell::Cell::get);
@@ -5857,9 +5840,9 @@ await(q(bg.pid));
     }
 
     /// PR #182 fix 4 (P3): when the blocking pool gives the backlog drainer no
-    /// thread, only this call's retry runs on the caller; the reapers already
-    /// waiting stay queued for the next drainer (none ran here) and the
-    /// drainer flag is cleared so the next push starts one.
+    /// thread, the WHOLE backlog drains on the caller (SHELL-SWEEP-13 r2):
+    /// the reapers already waiting and this call's own, each counted here;
+    /// the drain's empty pop clears the flag.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_failed_backlog_spawn_runs_only_this_retry_here() {
@@ -5878,24 +5861,21 @@ await(q(bg.pid));
         {
             let mut backlog = overflow_backlog();
             for _ in 0..3 {
-                backlog.1.push_back((0, idle_reaper(pinned_marker().0)));
+                backlog.1.push_back(idle_reaper(pinned_marker().0));
             }
         }
-        let inline = OVERFLOW_INLINE.with(std::cell::Cell::get);
+        let here = BACKLOG_HERE.with(std::cell::Cell::get);
         let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
         overflow_retry(idle_reaper(pinned_marker().0));
         let (running, waiting) = {
             let backlog = overflow_backlog();
             (backlog.0, backlog.1.len())
         };
-        assert_eq!(
-            OVERFLOW_INLINE.with(std::cell::Cell::get),
-            inline + 1,
-            "this call's retry did not run here"
-        );
-        assert_eq!(waiting, 3, "the whole backlog drained on the worker");
+        // 3 waiting + this call's own, all run here.
+        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get), here + 4);
+        assert_eq!(waiting, 0, "reapers were stranded in the backlog");
         assert!(!running, "the drainer flag stayed set with no drainer");
-        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged);
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 4);
     }
 
     /// PR #182 fix 3 (P3): an item that panics outside the retry's own catch
@@ -5915,7 +5895,7 @@ await(q(bg.pid));
             let mut backlog = overflow_backlog();
             backlog.0 = true;
             for _ in 0..2 {
-                backlog.1.push_back((0, idle_reaper(pinned_marker().0)));
+                backlog.1.push_back(idle_reaper(pinned_marker().0));
             }
         }
         let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
@@ -5931,8 +5911,8 @@ await(q(bg.pid));
     }
 
     /// SHELL-SWEEP-13 (1): when the drainer spawn fails, the caller runs its
-    /// OWN reaper, not the deque's back (another call may have pushed after
-    /// it); the later one waits for the next drainer.
+    /// OWN reaper and also the one another call pushed after it (r2: the
+    /// whole backlog drains), both counted here.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_failed_backlog_spawn_runs_this_calls_own_reaper() {
@@ -5947,7 +5927,7 @@ await(q(bg.pid));
         BEFORE_BACKLOG_SPAWN.with(|seam| {
             seam.set(Some(|| {
                 let late = idle_reaper(pinned_marker().0);
-                overflow_backlog().1.push_back((u64::MAX, late));
+                overflow_backlog().1.push_back(late);
             }))
         });
         let _reset = OnDrop(|| {
@@ -5956,13 +5936,14 @@ await(q(bg.pid));
             BEFORE_BACKLOG_SPAWN.with(|seam| seam.set(None));
             clear_backlog();
         });
+        let here = BACKLOG_HERE.with(std::cell::Cell::get);
         overflow_retry(idle_reaper(pinned_marker().0));
         let (running, left) = {
             let backlog = overflow_backlog();
-            let left: Vec<u64> = backlog.1.iter().map(|(seq, _)| *seq).collect();
-            (backlog.0, left)
+            (backlog.0, backlog.1.len())
         };
-        assert_eq!(left, vec![u64::MAX], "the caller ran another call's reaper");
+        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get), here + 2);
+        assert_eq!(left, 0, "a reaper was stranded");
         assert!(!running, "the drainer flag stayed set with no drainer");
     }
 
@@ -5994,13 +5975,13 @@ await(q(bg.pid));
         assert_eq!(waiting, 1, "the pushed reaper was dropped");
     }
 
-    /// SHELL-SWEEP-13 (3), the real tokio path: on a runtime that has shut
-    /// down, `spawn_blocking` drops the drainer unrun on the caller. The
-    /// backlog is handed to a plain thread, never drained inline there, and
-    /// every reaper still runs.
+    /// SHELL-SWEEP-13 r2 (1), the real tokio path: on a runtime that has shut
+    /// down, `spawn_blocking` drops the drainer unrun on the caller. The whole
+    /// backlog drains there before the call returns (a detached thread could
+    /// die with the exiting daemon): every reaper ran, counted on the caller.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_shut_down_runtime_hands_the_backlog_to_a_thread() {
+    async fn a_shut_down_runtime_drains_the_backlog_before_returning() {
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         let _serial = LATE_QUEUE_TEST.lock().await;
         backlog_idle().await;
@@ -6018,8 +5999,8 @@ await(q(bg.pid));
             OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
             {
                 let mut backlog = overflow_backlog();
-                for seq in 0..3 {
-                    backlog.1.push_back((seq, idle_reaper(pinned_marker().0)));
+                for _ in 0..3 {
+                    backlog.1.push_back(idle_reaper(pinned_marker().0));
                 }
             }
             overflow_retry(idle_reaper(pinned_marker().0));
@@ -6030,14 +6011,32 @@ await(q(bg.pid));
         })
         .join()
         .unwrap();
-        assert_eq!(here, (0, 0), "the caller drained the backlog inline");
-        backlog_idle().await;
+        // 3 waiting + this call's own, all on the caller, none `INLINE`.
+        assert_eq!(here, (4, 0), "the caller did not drain the backlog");
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 4);
         let (running, waiting) = {
             let backlog = overflow_backlog();
             (backlog.0, backlog.1.len())
         };
         assert_eq!((running, waiting), (false, 0), "the backlog was stranded");
-        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 4);
+    }
+
+    /// SHELL-SWEEP-13 r2 (6): the cap prune drops a seen pid only on `ESRCH`.
+    /// `kill(1, 0)` answers `EPERM` to a non-root caller: such entries stay
+    /// (never counted as gone), so `remember` fails closed.
+    #[cfg(unix)]
+    #[test]
+    fn the_cap_prune_keeps_a_pid_it_may_not_signal() {
+        // SAFETY: signal 0 sends nothing.
+        let eperm = unsafe { libc::kill(1, 0) } != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        if !eperm {
+            return;
+        }
+        let at = |pid, start| TrackedPid { pid, start };
+        let mut seen: HashSet<_> = (0..MAX_SEEN_PIDS as u64).map(|s| at(1, s)).collect();
+        assert!(!remember(&mut seen, [at(i32::MAX - 2, 0)]));
+        assert_eq!(seen.len(), MAX_SEEN_PIDS, "EPERM pids counted as gone");
     }
 
     /// SHELL-SWEEP-11 fix 1 (P2): a seen entry whose re-check `Failed` may

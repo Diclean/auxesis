@@ -1430,7 +1430,7 @@ async fn accept_refuses_a_new_tool_until_tools_is_named() {
 // EXT-ANCHOR-11: a refused `--accept` keeps the approved build. v2 adds a host
 // and changes a tool; `--accept-change network` passes the first check, starts
 // v2 and is refused on its tools: the v1 row comes back, v2 is unmounted, and
-// v1 still mounts once v2 is gone.
+// v1 still mounts once v2 no longer runs.
 #[tokio::test]
 async fn a_refused_accept_keeps_the_approved_build() {
     let home = tempfile::tempdir().unwrap();
@@ -1454,6 +1454,7 @@ async fn a_refused_accept_keeps_the_approved_build() {
     let kept = load_state(home.path(), "demo").unwrap();
     assert_eq!(format!("{kept:?}"), format!("{before:?}"));
     assert!(!is_mounted(home.path(), "demo", "alice"), "drift unmounts");
-    std::fs::remove_dir_all(home.path().join("extensions/demo@2.0.0")).unwrap();
+    // A corrupt v2 entry is skipped: v1 is the build that runs again.
+    std::fs::write(home.path().join("extensions/demo@2.0.0/entry.toml"), b"x").unwrap();
     mount(home.path(), "demo", "alice").unwrap();
 }

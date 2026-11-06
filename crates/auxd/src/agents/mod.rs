@@ -449,8 +449,9 @@ fn clamp(grants: &AgentGrants, chief: &AgentGrants) -> AgentGrants {
         }
     }
     for grant in &mut out.can_do {
-        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
-        let max = own.map(|own| own.level).min_by_key(|level| act(*level));
+        // `granted_level`: a chief that reads the calendar also holds its
+        // free times (`calendar.freebusy`).
+        let max = chief.granted_level(&grant.skill);
         let max = max.unwrap_or(ActionLevel::Off);
         if act(grant.level) > act(max) {
             grant.level = max;
@@ -836,7 +837,8 @@ pub(crate) fn grants_lock() -> &'static std::sync::Mutex<()> {
 
 /// Probe tools, one per scope and verb, that compare two grant sets the way
 /// the runtime resolves them (scope fallbacks included).
-const PROBE_TOOLS: &str = "mail_read mail_draft mail_send mail_unknown calendar_list \
+const PROBE_TOOLS: &str =
+    "mail_read mail_draft mail_send mail_unknown calendar_freebusy calendar_list \
     calendar_write calendar_unknown clients_read clients_note clients_unknown documents_read \
     documents_file documents_unknown mcp__server__unknown google_unknown";
 
@@ -863,8 +865,7 @@ fn subset(child: &AgentGrants, chief: &AgentGrants) -> bool {
         let own = chief.see.iter().filter(|own| own.scope == grant.scope);
         see(grant.level) <= own.map(|own| see(own.level)).min().unwrap_or(0)
     }) && child.can_do.iter().all(|grant| {
-        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
-        act(grant.level) <= own.map(|own| act(own.level)).min().unwrap_or(0)
+        act(grant.level) <= chief.granted_level(&grant.skill).map_or(0, act)
     }) && PROBE_TOOLS
         .split_whitespace()
         .all(|name| tool(child, name) <= tool(chief, name))

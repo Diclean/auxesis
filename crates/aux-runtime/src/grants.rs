@@ -23,6 +23,16 @@ use thiserror::Error;
 /// can only get a subset of it.
 pub const CHIEF_AGENT: &str = "main";
 
+/// The derived grant for a skill's own free-times read: the busy spans of
+/// the searched days, never a title or a guest. `calendar.read` implies it;
+/// an explicit level on either one caps it, so turning the read off turns the
+/// free times off too. It never widens the calendar scope (see
+/// [`AgentGrants::granted_level`]).
+pub const FREEBUSY_SKILL: &str = "calendar.freebusy";
+
+/// The name the broker's rules use for that read (no model ever sees it).
+pub const FREEBUSY_TOOL: &str = "calendar_freebusy";
+
 /// The chief of older installs (`default_agent = "aux"`): delegates only.
 pub const LEGACY_CHIEF: &str = "aux";
 
@@ -259,6 +269,9 @@ pub fn tool_skill(tool: &str) -> Option<(&'static str, &'static str)> {
     if lower == "docs_ingest" {
         return Some(("documents", "documents.read"));
     }
+    if lower == FREEBUSY_TOOL {
+        return Some(("calendar", FREEBUSY_SKILL));
+    }
     let base = mcp_remote(&lower).unwrap_or(&lower);
     let tokens: Vec<&str> = base
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -362,8 +375,23 @@ impl AgentGrants {
     /// `Off`).
     pub fn allows_scope(&self, scope: &str) -> bool {
         self.can_do.iter().any(|grant| {
-            grant.level != ActionLevel::Off && skill_scope(&grant.skill) == Some(scope)
+            grant.level != ActionLevel::Off
+                && grant.skill != FREEBUSY_SKILL
+                && skill_scope(&grant.skill) == Some(scope)
         })
+    }
+
+    /// The level granted for `skill`: its exact grants, and for
+    /// [`FREEBUSY_SKILL`] the `calendar.read` grants too, the most restrictive
+    /// winning. `None` when nothing names it.
+    pub fn granted_level(&self, skill: &str) -> Option<ActionLevel> {
+        let own = self.level_for_skill(skill);
+        if skill != FREEBUSY_SKILL {
+            return own;
+        }
+        own.into_iter()
+            .chain(self.level_for_skill("calendar.read"))
+            .max_by_key(|level| level.rank())
     }
 
     /// The most restrictive level granted for one exact skill, if any.
@@ -509,7 +537,7 @@ impl AgentGrants {
         // The precise skill wins when the tool names one (`mail_send` →
         // `mail.send`), so a read grant never widens a send.
         if let Some((_, skill)) = tool_skill(tool) {
-            if let Some(level) = self.level_for_skill(skill) {
+            if let Some(level) = self.granted_level(skill) {
                 return match level {
                     ActionLevel::Off => refused(GrantRefusalKind::NotGranted),
                     ActionLevel::Ask => Ok(GrantLevel::Ask),
@@ -518,9 +546,12 @@ impl AgentGrants {
             }
         }
         // Scope fallback: the most restrictive grant that names this scope.
+        // The free-times grant is narrower than its scope, so it opens nothing
+        // else in it.
         let levels: Vec<ActionLevel> = self
             .can_do
             .iter()
+            .filter(|grant| grant.skill != FREEBUSY_SKILL)
             .filter(|grant| skill_scope(&grant.skill) == Some(scope))
             .map(|grant| grant.level)
             .collect();
@@ -596,6 +627,8 @@ pub fn default_grants(agent: &str) -> Option<AgentGrants> {
                 do_grant("mail.read", ActionLevel::Auto),
                 do_grant("mail.draft", ActionLevel::Auto),
                 do_grant("mail.send", ActionLevel::Ask),
+                // `reply-availability`: the busy spans only, never the events.
+                do_grant(FREEBUSY_SKILL, ActionLevel::Auto),
             ],
             never: vec!["documents".to_string(), "calendar.raw".to_string()],
             egress_note: note(
@@ -669,6 +702,39 @@ mod tests {
         grants.never.clear();
         let refusal = grants.check_tool("mail", "documents.read").unwrap_err();
         assert_eq!(refusal.kind, GrantRefusalKind::NotGranted);
+    }
+
+    /// EXECUTOR-READS: Mail holds the free times, never the calendar read;
+    /// `calendar.read` implies them, and either one off turns them off.
+    #[test]
+    fn free_times_follow_calendar_read_and_open_nothing_else() {
+        let mail = default_grants("mail").unwrap();
+        assert!(mail.check_tool("mail", FREEBUSY_TOOL).is_ok());
+        assert!(mail
+            .check_tool("mail", "apple_calendar_list_events")
+            .is_err());
+        assert!(!mail.allows_scope("calendar"));
+        let chief = default_grants(CHIEF_AGENT).unwrap();
+        assert!(chief.check_tool(CHIEF_AGENT, FREEBUSY_TOOL).is_ok());
+        let level = |grants: &mut AgentGrants, skill: &str, level| {
+            grants.can_do.retain(|grant| grant.skill != skill);
+            grants.can_do.push(DoGrant {
+                skill: skill.to_string(),
+                level,
+            });
+        };
+        let mut off = mail.clone();
+        level(&mut off, "calendar.read", ActionLevel::Off);
+        assert!(off.check_tool("mail", FREEBUSY_TOOL).is_err());
+        let mut lacking = mail.clone();
+        lacking.can_do.retain(|grant| grant.skill != FREEBUSY_SKILL);
+        assert!(lacking.check_tool("mail", FREEBUSY_TOOL).is_err());
+        let mut asks = chief.clone();
+        level(&mut asks, "calendar.read", ActionLevel::Ask);
+        assert_eq!(
+            asks.action_for_tool(CHIEF_AGENT, FREEBUSY_TOOL),
+            Ok(GrantLevel::Ask)
+        );
     }
 
     #[test]

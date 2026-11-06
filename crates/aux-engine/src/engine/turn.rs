@@ -927,7 +927,11 @@ impl<'a> ChatSession<'a> {
                         );
                         return Err(err);
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => {
+                        // Not stored: close the batch from this call on.
+                        self.fail_batch(&calls, index, assistant_row.id, "the turn failed");
+                        return Err(err);
+                    }
                 };
                 self.emit_tool_end(
                     assistant_row.id,
@@ -2334,6 +2338,50 @@ mod tests {
             "{}",
             tool_row.content
         );
+    }
+
+    #[tokio::test]
+    async fn a_tool_row_the_store_refuses_closes_its_batch_instead_of_dangling() {
+        // The store refuses the tool result row (not the engine's closing row).
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("store.db");
+        let store = aux_store::Store::open(&db).unwrap();
+        aux_store::open_keyed(&db)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER refuse_tool BEFORE INSERT ON messages
+                 WHEN NEW.role = 'tool' AND NEW.meta NOT LIKE '%cancelled%'
+                 BEGIN SELECT RAISE(ABORT, 'database is busy'); END;",
+            )
+            .unwrap();
+        let home = dir.path().join("home");
+        let harness = Harness {
+            _dir: dir,
+            home,
+            store: Arc::new(Mutex::new(store)),
+            registry: Arc::new(std::sync::RwLock::new(builtin_registry(
+                ShellSandbox::default(),
+                kernel_core::WebConfig::default(),
+            ))),
+            budgets: Budgets::default(),
+            prices: kernel_core::budget::PriceTable::default(),
+            mode: kernel_core::privacy::PrivacyMode::Open,
+            contacts: aux_runtime::known_names::owner_contacts(),
+        };
+        let provider = scripted_tool_then_text();
+        let mut session = harness.start(&provider, vec![], RecordingApprover::new(true));
+        let session_id = session.session.id;
+
+        assert!(session.send("write a note").await.is_err());
+
+        // The assistant `tool_calls` row does not dangle: the engine closed it.
+        assert_eq!(
+            harness.roles(session_id),
+            vec!["system", "user", "assistant", "tool"]
+        );
+        let stored = harness.store().list_messages(session_id).unwrap();
+        let meta = stored.last().unwrap().meta.clone().unwrap();
+        assert!(meta.contains(r#""status":"cancelled""#), "{meta}");
     }
 
     /// A tool whose call is the owner's switch to private: it runs while the

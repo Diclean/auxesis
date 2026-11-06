@@ -288,7 +288,9 @@ impl AgentBackend for AcpBackend {
                 if let Err(err) = self.host.settle_turn(reservation, &UsageUpdate::default()) {
                     tracing::warn!(error = %err, "acp: settling a timed-out turn failed");
                 }
-                self.host.taint_session("acp (timed out)");
+                if let Err(err) = self.host.taint_session("acp (timed out)") {
+                    tracing::warn!(error = %err, "acp: could not mark a timed-out turn");
+                }
                 Err(AcpError::TurnTimeout {
                     limit_secs: limits.turn_timeout.as_secs(),
                 })
@@ -300,7 +302,9 @@ impl AgentBackend for AcpBackend {
                 {
                     tracing::warn!(error = %settle_err, "acp: settling a failed turn failed");
                 }
-                self.host.taint_session("acp");
+                if let Err(mark_err) = self.host.taint_session("acp") {
+                    tracing::warn!(error = %mark_err, "acp: could not mark a failed turn");
+                }
                 Err(err)
             }
             Ok(Ok(mut outcome)) => {
@@ -328,7 +332,7 @@ impl AgentBackend for AcpBackend {
                 let meta = self.assistant_meta(&outcome);
                 // Write-ahead taint *before* the agent text is persisted: a
                 // crash right after cannot launder the conversation.
-                self.host.taint_session("acp");
+                self.host.taint_session("acp")?;
                 self.host
                     .settle_turn(reservation, &outcome.usage)
                     .map_err(|err| {
@@ -466,8 +470,9 @@ mod tests {
             self.dones.lock().unwrap().push(message_id);
         }
 
-        fn taint_session(&mut self, source: &str) {
+        fn taint_session(&mut self, source: &str) -> Result<(), AcpError> {
             self.taints.lock().unwrap().push(source.to_string());
+            Ok(())
         }
     }
 

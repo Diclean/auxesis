@@ -75,8 +75,9 @@ impl TurnHost for PrintingHost {
 
     fn emit_done(&mut self, _message_id: i64) {}
 
-    fn taint_session(&mut self, source: &str) {
+    fn taint_session(&mut self, source: &str) -> Result<(), AcpError> {
         eprintln!("[smoke] conversation marked tainted ({source})");
+        Ok(())
     }
 }
 

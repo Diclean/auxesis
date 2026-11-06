@@ -1160,15 +1160,25 @@ struct TrackedPid {
 impl TrackedPid {
     /// Identity of `pid` right now, when it is visible and owned by this user.
     fn of(pid: i32) -> Option<Self> {
+        Self::read(pid, &pid_lookup).ok().flatten()
+    }
+
+    /// [`Self::of`] with a failed read kept: `Err(())` when the lookup
+    /// `Failed`, so the pid may still run and the caller's pass is cut.
+    fn read(pid: i32, lookup: OrphanLookup<'_>) -> Result<Option<Self>, ()> {
         // Never this process: a launchd-started auxd has ppid 1 and holds the
         // marker while it waits, so a marker scan would otherwise name it.
         if pid <= 1 || pid == std::process::id() as i32 {
-            return None;
+            return Ok(None);
         }
-        let (_, uid, start) = pid_ppid_uid_start(pid)?;
+        let (_, uid, start) = match lookup(pid) {
+            Lookup::Found(answer) => answer,
+            Lookup::Gone => return Ok(None),
+            Lookup::Failed => return Err(()),
+        };
         // SAFETY: `geteuid` is a side-effect-free read of this process's
         // effective uid; it cannot fail and touches no memory.
-        (uid == unsafe { libc::geteuid() }).then_some(Self { pid, start })
+        Ok((uid == unsafe { libc::geteuid() }).then_some(Self { pid, start }))
     }
 
     /// `pid` is still this exact process: it exists, is ours, and its start
@@ -1236,7 +1246,8 @@ fn remember(seen: &mut HashSet<TrackedPid>, more: impl IntoIterator<Item = Track
 /// Seen processes still the same, and every live descendant of each, read
 /// before any signal: a parent killed first hands its children to launchd,
 /// out of every `ppid` walk. `skip` is the root, handled by the caller. The
-/// flag is false when a seen re-check `Failed`: that process may still run.
+/// flag is false when a seen re-check or a descendant's read `Failed`: that
+/// process may still run.
 fn seen_family(
     seen: &HashSet<TrackedPid>,
     skip: i32,
@@ -1257,8 +1268,12 @@ fn seen_family(
             }
         }
         family.insert(*tracked);
-        let below = descendant_pids(tracked.pid).into_iter();
-        family.extend(below.filter_map(TrackedPid::of));
+        for pid in descendant_pids(tracked.pid) {
+            match TrackedPid::read(pid, lookup) {
+                Ok(found) => family.extend(found),
+                Err(()) => all_read = false,
+            }
+        }
     }
     (family, all_read)
 }
@@ -1269,40 +1284,45 @@ fn seen_family(
 /// epoch; `include_orphans` is false for the cheap per-tick count. Each entry
 /// carries the start time read at scan time so the caller can re-verify it
 /// immediately before a signal. A discovery list for the watchdog and the
-/// kill's early passes: whether every pid could be read is judged by the final
-/// marker pass of [`kill_process_tree`] and by the sweep, never by this list.
+/// kill's early passes. The flag is false when a walk or session candidate's
+/// read `Failed` (it may still run): the kill's pass is cut, never complete.
 fn tracked_pids(
     root: i32,
     marker: &Marker,
     launched_at: u64,
     include_orphans: bool,
-) -> Vec<TrackedPid> {
+) -> (Vec<TrackedPid>, bool) {
     let all = all_pids();
     let orphans = match include_orphans {
         true => orphan_pids_holding_marker_until(marker, launched_at, &all, None).0,
         false => Vec::new(),
     };
-    tracked_pids_from(root, &all, orphans)
+    tracked_pids_from(root, &all, orphans, &pid_lookup)
 }
 
 /// [`tracked_pids`] with the marker scan's finds already in hand. They keep
 /// the start time that scan read: re-reading it here would let a pid recycled
-/// since the scan pass for the process that held the marker.
-fn tracked_pids_from(root: i32, all: &[i32], orphans: Vec<TrackedPid>) -> Vec<TrackedPid> {
+/// since the scan pass for the process that held the marker. `lookup` reads
+/// each walk and session candidate; one that `Failed` clears the flag.
+fn tracked_pids_from(
+    root: i32,
+    all: &[i32],
+    orphans: Vec<TrackedPid>,
+    lookup: OrphanLookup<'_>,
+) -> (Vec<TrackedPid>, bool) {
     let mut seen = std::collections::HashSet::new();
-    seen.insert(root);
     let mut pids = Vec::new();
-    if let Some(identity) = TrackedPid::of(root) {
-        pids.push(identity);
-    }
-    for pid in descendant_pids(root)
+    let mut all_read = true;
+    let candidates = descendant_pids(root)
         .into_iter()
-        .chain(session_pids(root, all))
-    {
-        if seen.insert(pid) {
-            if let Some(identity) = TrackedPid::of(pid) {
-                pids.push(identity);
-            }
+        .chain(session_pids(root, all));
+    for pid in std::iter::once(root).chain(candidates) {
+        if !seen.insert(pid) {
+            continue;
+        }
+        match TrackedPid::read(pid, lookup) {
+            Ok(found) => pids.extend(found),
+            Err(()) => all_read = false,
         }
     }
     pids.extend(
@@ -1310,7 +1330,7 @@ fn tracked_pids_from(root: i32, all: &[i32], orphans: Vec<TrackedPid>) -> Vec<Tr
             .into_iter()
             .filter(|tracked| seen.insert(tracked.pid)),
     );
-    pids
+    (pids, all_read)
 }
 
 /// Resident footprint of one process (macOS `ri_phys_footprint`; elsewhere 0,
@@ -1419,9 +1439,9 @@ fn kill_process_tree_with(
         // recorded identities stay meaningful after the group signal reparents
         // them, and every one is re-checked immediately before its own signal.
         let scan = |seen: &mut HashSet<TrackedPid>, rechecked: &mut bool| {
-            let mut found = tracked_pids(pid, marker, 0, true);
+            let (mut found, listed) = tracked_pids(pid, marker, 0, true);
             let (family, all_read) = seen_family(seen, pid, lookup);
-            *rechecked &= all_read;
+            *rechecked &= listed && all_read;
             found.extend(family);
             let _ = remember(seen, found.iter().copied());
             found
@@ -1714,20 +1734,24 @@ fn sweep_leftovers(root: i32, marker: &Marker, seen: &mut HashSet<TrackedPid>) -
         seen,
         &|_pass| Vec::new(),
         &|_pass, pid| pid_visibility(pid),
+        &pid_lookup,
         MAX_SWEEP_PASSES,
         MAX_SWEEP_TIME,
     )
 }
 
-/// `extra_pids` and `visibility(pass, pid)` are the test seams; `seen` holds
+/// `extra_pids`, `visibility(pass, pid)` and `lookup` (the seen-family
+/// re-check read, as in [`kill_process_tree_with`]) are the test seams; `seen` holds
 /// the call's known processes and records every candidate found. Caps are
 /// lowered only by tests.
+#[allow(clippy::too_many_arguments)] // test seams, documented above.
 fn sweep_leftovers_with(
     root: i32,
     marker: &Marker,
     seen: &mut HashSet<TrackedPid>,
     extra_pids: &dyn Fn(usize) -> Vec<i32>,
     visibility: &dyn Fn(usize, i32) -> Visibility,
+    lookup: OrphanLookup<'_>,
     max_passes: usize,
     max_time: Duration,
 ) -> Sweep {
@@ -1786,11 +1810,11 @@ fn sweep_leftovers_with(
                 // and so do its descendants, read before any signal.
                 // A family member that could not be read may still run: the
                 // pass is never Clean, as in the tree kill and the fast kill.
-                let (family, all_read) = seen_family(seen, root, &pid_lookup);
+                let (family, all_read) = seen_family(seen, root, lookup);
                 unreadable |= !all_read;
                 capped |= !remember(seen, family.iter().copied());
                 for tracked in family {
-                    match tracked.recheck(&pid_lookup) {
+                    match tracked.recheck(lookup) {
                         Some(true) => {}
                         Some(false) => continue,
                         None => {
@@ -1888,7 +1912,7 @@ fn sweep_leftovers_with(
     }
     #[cfg(not(unix))]
     {
-        let _ = (root, marker, seen, extra_pids, visibility);
+        let _ = (root, marker, seen, extra_pids, visibility, lookup);
         let _ = (max_passes, max_time);
         Sweep::Clean
     }
@@ -1936,8 +1960,9 @@ struct TreeReaper {
 /// Retries of reapers dropped armed, and whether the one thread that runs
 /// them is alive: the queue runs one retry at a time on its one thread. Cut
 /// overflows past the queue's cap run on at most [`OVERFLOW_THREADS_MAX`]
-/// threads of their own, and beyond that on their caller, so at most
-/// `1 + OVERFLOW_THREADS_MAX` late retries run off the callers at once.
+/// threads of their own, and beyond that one by one on the blocking pool
+/// ([`OVERFLOW_BACKLOG`]; on the caller with no runtime), so at most
+/// `2 + OVERFLOW_THREADS_MAX` late retries run off the callers at once.
 static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
     std::sync::Mutex::new((false, VecDeque::new()));
 
@@ -1946,7 +1971,7 @@ static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
 /// [`LATE_MARKER_RESERVE`]s. A reaper pushed past it makes the oldest one take
 /// its fast kill at once, on the caller's thread; if that pass was cut, the
 /// oldest goes back on the queue, or, when the one slot past the cap is taken,
-/// runs its full retry on a thread of its own, or on the caller once
+/// runs its full retry on a thread of its own, or in [`OVERFLOW_BACKLOG`] once
 /// [`OVERFLOW_THREADS_MAX`] such threads are alive (see [`overflow_fast_kill`]):
 /// it is never dropped unkilled.
 const LATE_QUEUE_MAX: usize = 8;
@@ -2136,8 +2161,49 @@ fn overflow_fast_kill(mut oldest: TreeReaper) {
 /// At most this many overflow-retry threads are alive at once in this process.
 /// Each runs a full tree kill and marker scans with no deadline, so an
 /// unbounded number of them (one per cut overflow) would exhaust threads and
-/// CPU; past the cap the retry runs on the caller, as before overflow threads.
+/// CPU; past the cap the retry waits in [`OVERFLOW_BACKLOG`].
 const OVERFLOW_THREADS_MAX: usize = 2;
+
+/// Cut overflows that found every overflow thread taken, run one at a time by
+/// a single blocking-pool task (the flag: that task is queued or running), so
+/// no tokio worker runs a full retry and the cap holds. Unbounded: a reaper is
+/// never dropped unkilled.
+static OVERFLOW_BACKLOG: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
+    std::sync::Mutex::new((false, VecDeque::new()));
+
+fn overflow_backlog() -> std::sync::MutexGuard<'static, (bool, VecDeque<TreeReaper>)> {
+    OVERFLOW_BACKLOG
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Drains [`OVERFLOW_BACKLOG`] when dropped: run by the blocking-pool task,
+/// or dropped unrun with it (a runtime shutting down), so the backlog is
+/// drained either way.
+struct DrainBacklog;
+
+impl Drop for DrainBacklog {
+    fn drop(&mut self) {
+        loop {
+            let next = {
+                let mut backlog = overflow_backlog();
+                let next = backlog.1.pop_front();
+                backlog.0 = next.is_some();
+                next
+            };
+            let Some(mut next) = next else {
+                return;
+            };
+            late_retry_logged(&mut next);
+            #[cfg(test)]
+            OVERFLOW_BACKLOGGED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
+/// Test seam: how many overflow retries ran from [`OVERFLOW_BACKLOG`].
+#[cfg(test)]
+static OVERFLOW_BACKLOGGED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Live overflow-retry threads (see [`OVERFLOW_THREADS_MAX`]).
 static OVERFLOW_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -2191,18 +2257,43 @@ fn overflow_live() -> &'static std::sync::atomic::AtomicUsize {
 /// off the caller's thread (a tokio worker, or a `Drop`): its marker scans have
 /// no deadline. It runs on a thread of its own, panic-guarded and its note
 /// logged like a queued retry, while fewer than [`OVERFLOW_THREADS_MAX`] such
-/// threads are alive; at the cap, or with no thread, here, still guarded: it
-/// is never dropped unkilled.
+/// threads are alive; at the cap in [`OVERFLOW_BACKLOG`] on a runtime, else
+/// (or with no thread) here, still guarded: it is never dropped unkilled.
 fn overflow_retry(oldest: TreeReaper) {
     let Some(slot) = reserve_overflow_slot(overflow_live(), OVERFLOW_THREADS_MAX) else {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                "shell: the late-retry queue is past its cap and {OVERFLOW_THREADS_MAX} overflow \
+                 retries are running; the cut reaper runs its full retry here (no runtime)"
+            );
+            #[cfg(test)]
+            OVERFLOW_INLINE.with(|inline| inline.set(inline.get() + 1));
+            let mut reaper = oldest;
+            late_retry_logged(&mut reaper);
+            return;
+        };
         tracing::warn!(
             "shell: the late-retry queue is past its cap and {OVERFLOW_THREADS_MAX} overflow \
-             retries are running; the cut reaper runs its full retry here"
+             retries are running; the cut reaper waits for the blocking-pool backlog"
         );
-        #[cfg(test)]
-        OVERFLOW_INLINE.with(|inline| inline.set(inline.get() + 1));
-        let mut reaper = oldest;
-        late_retry_logged(&mut reaper);
+        let start = {
+            let mut backlog = overflow_backlog();
+            backlog.1.push_back(oldest);
+            !std::mem::replace(&mut backlog.0, true)
+        };
+        if start {
+            let drain = DrainBacklog;
+            // `spawn_blocking` panics when the OS gives the pool no thread:
+            // then the backlog drains here, never dropped.
+            let spawn =
+                std::panic::AssertUnwindSafe(|| runtime.spawn_blocking(move || drop(drain)));
+            if std::panic::catch_unwind(spawn).is_err() {
+                tracing::error!(
+                    "shell: no blocking thread for the overflow backlog; it drains here"
+                );
+                drop(DrainBacklog);
+            }
+        }
         return;
     };
     tracing::warn!(
@@ -2372,6 +2463,7 @@ impl TreeReaper {
                     &mut self.seen,
                     &|_pass| Vec::new(),
                     &visibility,
+                    &pid_lookup,
                     max_passes,
                     max_time,
                 )
@@ -2726,7 +2818,8 @@ impl Tool for ShellTool {
                         ticks = ticks.saturating_add(1);
                         let full = ticks.is_multiple_of(FULL_SCAN_EVERY);
                         if let Some(root) = child_pid {
-                            let tracked = tracked_pids(root as i32, &marker, launched_at, true);
+                            let (tracked, _) =
+                                tracked_pids(root as i32, &marker, launched_at, true);
                             let fits = remember(&mut reaper.seen, tracked.iter().copied());
                             if !fits || tracked.len() > MAX_COMMAND_PROCESSES {
                                 break Stop::ProcessLimit;
@@ -2769,11 +2862,16 @@ impl Tool for ShellTool {
                 // sweep candidate after it leaves every net. The seen family
                 // is read now: a member the group kill takes hands its
                 // children to launchd, out of every `ppid` walk.
+                // A candidate or family member unread here may hand children
+                // to launchd before any later pass sees them: never `Clean`.
+                let mut exit_read = true;
                 if let Some(root) = child_pid {
-                    let tracked = tracked_pids(root as i32, &reaper.marker, launched_at, true);
+                    let (tracked, listed) =
+                        tracked_pids(root as i32, &reaper.marker, launched_at, true);
                     let _ = remember(&mut reaper.seen, tracked);
-                    let (family, _) = seen_family(&reaper.seen, root as i32, &pid_lookup);
+                    let (family, all_read) = seen_family(&reaper.seen, root as i32, &pid_lookup);
                     let _ = remember(&mut reaper.seen, family);
+                    exit_read = listed && all_read;
                 }
                 #[cfg(not(test))]
                 let steps = ExitSteps::BOTH;
@@ -2792,6 +2890,7 @@ impl Tool for ShellTool {
                     )
                     .await?;
                 reaper = back;
+                let sweep = kill_verdict(exit_read, Some(sweep));
                 let (status, group_empty) = reaper.reap_root(self.sweep_time).await?;
                 // The armed reaper's retry is a scan too, so a test that
                 // turned the scan off turns that off as well.
@@ -3646,6 +3745,7 @@ mod tests {
                 }
             },
             &|_pass, _pid| Visibility::Described,
+            &pid_lookup,
             MAX_SWEEP_PASSES,
             MAX_SWEEP_TIME,
         );
@@ -3727,6 +3827,7 @@ mod tests {
                     Visibility::Described
                 }
             },
+            &pid_lookup,
             MAX_SWEEP_PASSES,
             MAX_SWEEP_TIME,
         );
@@ -3756,6 +3857,7 @@ mod tests {
             &mut HashSet::new(),
             &|_pass| Vec::new(),
             &|_pass, _pid| Visibility::Unseen,
+            &pid_lookup,
             3,
             MAX_SWEEP_TIME,
         );
@@ -3768,6 +3870,7 @@ mod tests {
             &mut HashSet::new(),
             &|_pass| Vec::new(),
             &|_pass, _pid| Visibility::Unknown,
+            &pid_lookup,
             3,
             MAX_SWEEP_TIME,
         );
@@ -3907,6 +4010,7 @@ mod tests {
                 true => pid_visibility(pid),
                 false => Visibility::Described,
             },
+            &pid_lookup,
             3,
             MAX_SWEEP_TIME,
         );
@@ -4023,6 +4127,7 @@ mod tests {
                         Visibility::Described
                     }
                 },
+                &pid_lookup,
                 MAX_SWEEP_PASSES,
                 MAX_SWEEP_TIME,
             );
@@ -4494,6 +4599,7 @@ await(q(bg.pid));
                     true => answer,
                     false => Visibility::Described,
                 },
+                &pid_lookup,
                 3,
                 MAX_SWEEP_TIME,
             )
@@ -4625,6 +4731,7 @@ await(q(bg.pid));
                     true => Visibility::Unknown,
                     false => Visibility::Described,
                 },
+                &pid_lookup,
                 3,
                 MAX_SWEEP_TIME,
             );
@@ -5079,6 +5186,7 @@ await(q(bg.pid));
                 &mut HashSet::new(),
                 &|_pass| Vec::new(),
                 &described,
+                &pid_lookup,
                 passes,
                 MAX_SWEEP_TIME,
             )
@@ -5338,12 +5446,14 @@ await(q(bg.pid));
         assert_eq!(live.load(SeqCst), 0);
     }
 
-    /// SHELL-SWEEP-11 fix 1 (P1): at the thread cap a further cut overflow's
-    /// full retry runs on the caller (counted), no thread is started, and the
-    /// live count never goes past the cap.
+    /// SHELL-SWEEP-11 fix 1 (P1), SHELL-SWEEP-12 (4): at the thread cap a
+    /// further cut overflow's full retry never runs on the calling tokio
+    /// worker: it runs from the blocking-pool backlog (counted), no overflow
+    /// thread is started, and the live count never goes past the cap. With no
+    /// runtime it runs on the caller.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_cut_overflow_at_the_thread_cap_runs_inline() {
+    async fn a_cut_overflow_at_the_thread_cap_never_runs_on_the_worker() {
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         let _serial = LATE_QUEUE_TEST.lock().await;
         let live: &'static AtomicUsize =
@@ -5352,11 +5462,33 @@ await(q(bg.pid));
         let _reset = OnDrop(|| OVERFLOW_LIVE.with(|seam| seam.set(None)));
         let threads = OVERFLOW_RETRIES.load(SeqCst);
         let inline = OVERFLOW_INLINE.with(std::cell::Cell::get);
+        let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
         for _ in 0..3 {
             overflow_retry(idle_reaper(pinned_marker().0));
             assert_eq!(live.load(SeqCst), OVERFLOW_THREADS_MAX, "past the cap");
         }
-        assert_eq!(OVERFLOW_INLINE.with(std::cell::Cell::get), inline + 3);
+        for _ in 0..500 {
+            if OVERFLOW_BACKLOGGED.load(SeqCst) >= backlogged + 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 3);
+        assert_eq!(
+            OVERFLOW_INLINE.with(std::cell::Cell::get),
+            inline,
+            "a full retry ran on the tokio worker"
+        );
+        // No runtime: the caller is no tokio worker, the retry runs there.
+        let ran_inline = std::thread::spawn(move || {
+            OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+            overflow_retry(idle_reaper(pinned_marker().0));
+            OVERFLOW_INLINE.with(std::cell::Cell::get)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(ran_inline, 1);
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 3);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             OVERFLOW_RETRIES.load(SeqCst),
@@ -5373,7 +5505,7 @@ await(q(bg.pid));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(OVERFLOW_RETRIES.load(SeqCst), threads + 1);
-        assert_eq!(OVERFLOW_INLINE.with(std::cell::Cell::get), inline + 3);
+        assert_eq!(OVERFLOW_INLINE.with(std::cell::Cell::get), inline);
         for _ in 0..500 {
             if live.load(SeqCst) == OVERFLOW_THREADS_MAX - 1 {
                 break;
@@ -5472,6 +5604,121 @@ await(q(bg.pid));
         let complete = kill_process_tree_with(Some(&mut root), &marker, &pid_lookup, &mut seen);
         assert!(complete, "an answered kill read as incomplete");
         let _ = root.wait().await;
+    }
+
+    /// SHELL-SWEEP-12 (1): a live seen process whose seen-family re-check
+    /// read `Failed` may still run. The sweep never ends `Clean` on it: it
+    /// ends `Unavailable(Unreadable)`, and the process is never signalled on
+    /// a guess. The same sweep with every read answered kills it and is clean.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_seen_family_read_never_sweeps_clean() {
+        let (marker, _pin) = pinned_marker();
+        let _clean = scans_clean(MAX_SWEEP_PASSES * 2);
+        let sleeper = || {
+            std::process::Command::new("sleep")
+                .arg("300")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let tracked_of = |child: &std::process::Child| {
+            let pid = child.id() as i32;
+            let (_, _, start) = pid_ppid_uid_start(pid).expect("the sleeper is readable");
+            TrackedPid { pid, start }
+        };
+
+        let mut child = sleeper();
+        let live = tracked_of(&child);
+        let fails = move |pid: i32| match pid == live.pid {
+            true => Lookup::Failed,
+            false => pid_lookup(pid),
+        };
+        let sweep = sweep_leftovers_with(
+            NO_SESSION,
+            &marker,
+            &mut HashSet::from([live]),
+            &|_pass| Vec::new(),
+            &|_pass, _pid| Visibility::Described,
+            &fails,
+            3,
+            MAX_SWEEP_TIME,
+        );
+        let survived = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(sweep, Sweep::Unavailable(Undescribed::Unreadable));
+        assert!(survived, "a process whose read failed was signalled");
+
+        let mut child = sleeper();
+        let live = tracked_of(&child);
+        let sweep = sweep_leftovers_with(
+            NO_SESSION,
+            &marker,
+            &mut HashSet::from([live]),
+            &|_pass| Vec::new(),
+            &|_pass, _pid| Visibility::Described,
+            &pid_lookup,
+            MAX_SWEEP_PASSES,
+            MAX_SWEEP_TIME,
+        );
+        let killed = (0..500).any(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            child.try_wait().unwrap().is_some()
+        });
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(sweep, Sweep::Clean, "an answered seen family read unclean");
+        assert!(killed, "the seen process was not killed");
+    }
+
+    /// SHELL-SWEEP-12 (3): a `ppid`-walk child whose discovery read `Failed`
+    /// may still run: it is no longer dropped silently, the tree list and the
+    /// seen family both report the pass cut. Answered, both are complete.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_child_read_cuts_the_discovery_pass() {
+        use std::os::unix::process::CommandExt;
+        let mut root = std::process::Command::new("/bin/sh");
+        root.args(["-c", "sleep 300 & wait"])
+            .stdin(std::process::Stdio::null())
+            .process_group(0);
+        let mut root = root.spawn().unwrap();
+        let root_pid = root.id() as i32;
+        let kid = (0..500).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            descendant_pids(root_pid).into_iter().next()
+        });
+        let fails = move |pid: i32| match Some(pid) == kid {
+            true => Lookup::Failed,
+            false => pid_lookup(pid),
+        };
+        let shell = TrackedPid::of(root_pid);
+        let all = all_pids();
+        let cut_list = tracked_pids_from(root_pid, &all, Vec::new(), &fails);
+        let full_list = tracked_pids_from(root_pid, &all, Vec::new(), &pid_lookup);
+        let seen = shell.into_iter().collect::<HashSet<_>>();
+        let cut_family = seen_family(&seen, 0, &fails);
+        let full_family = seen_family(&seen, 0, &pid_lookup);
+        // SAFETY: the group is this test's own shell and its child.
+        unsafe {
+            libc::kill(-root_pid, libc::SIGKILL);
+        }
+        let _ = root.wait();
+        let kid = kid.expect("the root never forked");
+        assert!(
+            !cut_list.1,
+            "a failed walk read left the tree list complete"
+        );
+        assert!(!cut_list.0.iter().any(|t| t.pid == kid));
+        assert!(full_list.1 && full_list.0.iter().any(|t| t.pid == kid));
+        assert!(
+            !cut_family.1,
+            "a failed child read left the family complete"
+        );
+        assert!(full_family.1 && full_family.0.iter().any(|t| t.pid == kid));
     }
 
     /// SHELL-SWEEP-11 fix 1 (DeepSeek P2): an incomplete kill is never cleared
@@ -5658,7 +5905,7 @@ await(q(bg.pid));
         // An unrelated second child is the root: `pid` is in neither its tree
         // nor its session, only in the marker scan's finds.
         let root = guard.0[1].id() as i32;
-        let found = tracked_pids_from(root, &all_pids(), vec![scanned]);
+        let (found, _) = tracked_pids_from(root, &all_pids(), vec![scanned], &pid_lookup);
         assert!(found.contains(&scanned), "the scan-time start was replaced");
         assert!(!found.contains(&live), "the start time was re-read");
         assert!(!scanned.still_same(&pid_ppid_uid_start));

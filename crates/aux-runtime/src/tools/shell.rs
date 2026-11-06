@@ -1784,11 +1784,19 @@ fn sweep_leftovers_with(
                 let mut signalled = 0usize;
                 // A seen process stays a candidate after leaving every net,
                 // and so do its descendants, read before any signal.
-                let (family, _) = seen_family(seen, root, &pid_lookup);
+                // A family member that could not be read may still run: the
+                // pass is never Clean, as in the tree kill and the fast kill.
+                let (family, all_read) = seen_family(seen, root, &pid_lookup);
+                unreadable |= !all_read;
                 capped |= !remember(seen, family.iter().copied());
                 for tracked in family {
-                    if !tracked.still_same(&pid_ppid_uid_start) {
-                        continue;
+                    match tracked.recheck(&pid_lookup) {
+                        Some(true) => {}
+                        Some(false) => continue,
+                        None => {
+                            unreadable = true;
+                            continue;
+                        }
                     }
                     found_any = true;
                     signalled = signalled.saturating_add(1);

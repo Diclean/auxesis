@@ -944,7 +944,11 @@ async fn approval_binds_the_launch_fields_of_entry_toml() {
     let installed = load_installed(home.path(), "demo").unwrap();
     let approved = installed.entry.clone();
     let rewrite = |entry: &Entry| {
-        std::fs::write(installed.dir.join("entry.toml"), toml::to_string(entry).unwrap()).unwrap()
+        std::fs::write(
+            installed.dir.join("entry.toml"),
+            toml::to_string(entry).unwrap(),
+        )
+        .unwrap()
     };
     let marker = home.path().join("ran");
     // (a) Binary -> npm with another command and args, same sha256 and version.

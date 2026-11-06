@@ -2474,9 +2474,9 @@ mod tests {
             secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
             oauth: None,
             artefact: Some(hex(&Sha256::digest(b"x"))),
-            launch: Some(crate::extensions::mount::launch_pin(
-                &binary_entry("demo", b"x", "1.0.0"),
-            )),
+            launch: Some(crate::extensions::mount::launch_pin(&binary_entry(
+                "demo", b"x", "1.0.0",
+            ))),
         };
         state.tools.insert("ping".to_owned(), "00".to_owned());
         crate::extensions::mount::store_state(home.path(), &state).unwrap();

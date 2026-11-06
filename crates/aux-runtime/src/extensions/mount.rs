@@ -356,7 +356,9 @@ pub fn check_approval(
                 return refuse(format!("changed launch fields: {}", changed.join(", ")));
             }
         }
-        None => return refuse("no approved launch (command, type, sensitivity) is pinned".to_owned()),
+        None => {
+            return refuse("no approved launch (command, type, sensitivity) is pinned".to_owned())
+        }
     }
     let wider: Vec<String> = network_pins(&installed.entry)
         .into_iter()

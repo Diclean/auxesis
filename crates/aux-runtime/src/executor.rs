@@ -803,6 +803,17 @@ struct ExecCall {
 
 /// The broker's name for a mail read the run does before its card.
 const MAIL_READ_TOOL: &str = "mail_read";
+
+/// The audit row that authorizes one read before the card.
+const PREPARE_READ_EVENT: &str = "skill.prepare_read_authorized";
+
+/// What a refused free-times read tells the owner to change. Grants name the
+/// skill, owner rules and tools lists the wire tool.
+const FREEBUSY_HINT: &str = "This agent may not read the owner's free times: its grants need \
+     `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off), an \
+     owner rule for this read names the tool `calendar_freebusy`, and every tools list over \
+     the agent needs `calendar_freebusy`: its own, and the chief's when the chief lists tools \
+     (add calendar_freebusy to the chief's tools list)";
 use crate::grants::FREEBUSY_TOOL;
 
 /// The per-run state threaded through approval and execution.
@@ -1588,6 +1599,11 @@ impl Executor<'_> {
     /// rules. A deny refuses with the broker's reason and audit row; an ask
     /// fails closed (nobody could answer it before the card). Taint never
     /// decides: the read is local and the model sees tokens only.
+    ///
+    /// An allow writes one [`PREPARE_READ_EVENT`] row: an authorization,
+    /// written before the read, that the read needs. A row that cannot be
+    /// written refuses, so nothing is read unlogged. A later refusal (no
+    /// zone, no draft) may mean an authorized read never ran.
     async fn authorize_prepare_read(
         &self,
         agent: &str,
@@ -1605,11 +1621,18 @@ impl Executor<'_> {
                 ));
             }
             _ => {
-                // One row per allowed read: the tool and the agent, no content.
-                let row = json!({ "agent": agent, "tool": tool, "skill": context.name });
+                // One row per authorized read, with the taint the way the
+                // broker's `tool.decision` row carries it; no content.
+                let row = json!({
+                    "agent": agent,
+                    "tool": tool,
+                    "skill": context.name,
+                    "tainted": taint.forces_ask(),
+                    "taint_source": taint.summary(),
+                });
                 return self
                     .sink
-                    .log_event("skill.prepare_read", &row)
+                    .log_event(PREPARE_READ_EVENT, &row)
                     .map(|_| ())
                     .map_err(|_| format!("`{tool}` could not be logged; nothing was read"));
             }
@@ -1637,11 +1660,7 @@ impl Executor<'_> {
             Err(err) => err.to_string(),
         };
         if tool == FREEBUSY_TOOL {
-            return Err(format!(
-                "{reason}. This agent may not read the owner's free times: its grants need \
-                 `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read \
-                 not off), and an agent with a tools list needs `calendar_freebusy` in it"
-            ));
+            return Err(format!("{reason}. {FREEBUSY_HINT}"));
         }
         Err(reason)
     }
@@ -2539,7 +2558,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use kernel_broker::{
-        Action, ApprovalRequest, Approver, ApproverError, MemoryAuditSink, Rule, SkillOnlyLookup,
+        Action, ApprovalRequest, Approver, ApproverError, AuditError, MemoryAuditSink, Rule,
+        SkillOnlyLookup,
     };
     use kernel_privacy::{ContactIndex, EntityKind, Span};
 
@@ -4240,6 +4260,8 @@ mod tests {
         )
         .unwrap();
         let tool = crate::grants::FREEBUSY_TOOL;
+        // A fixed zone, so the read is asserted on every host (READS-3).
+        event_time::TEST_ZONE.with(|zone| *zone.borrow_mut() = Some("Europe/Paris".into()));
         // Taint never changes the answer: a tainted run still reads under an
         // auto grant (no rule) and still refuses under an ask (round 2).
         let cases = [Action::Deny, Action::Ask, Action::Allow]
@@ -4271,19 +4293,21 @@ mod tests {
                 .await;
             let read: Vec<_> = connector.calls().into_iter().map(|(l, _)| l).collect();
             if action == Action::Allow {
-                assert_eq!(sink.count("skill.prepare_read"), 1, "{taint:?}");
-                // The read ran (on a host that names its time zone).
-                if event_time::owner_time_zone().is_some() {
-                    assert_eq!(read, vec![free_times::CALENDAR_READ.to_string()]);
-                }
+                // One authorization row, with the run's taint and no content.
+                let rows = sink.payloads(PREPARE_READ_EVENT);
+                let row = json!({ "agent": "assistant", "tool": tool, "skill": skill.name,
+                    "tainted": taint.forces_ask(), "taint_source": taint.summary() });
+                assert_eq!(rows, vec![row], "{taint:?}");
+                assert_eq!(read, vec![free_times::CALENDAR_READ.to_string()]);
                 continue;
             }
             let RunOutcome::Refused { reason, .. } = &outcome else {
                 panic!("{action:?}: {outcome:?}");
             };
+            assert_eq!(sink.count(PREPARE_READ_EVENT), 0);
             if action == Action::Deny {
                 assert!(reason.contains(": deny"), "{reason}");
-                assert!(reason.contains("skill = \"calendar.freebusy\""), "{reason}");
+                assert!(reason.ends_with(&format!(". {FREEBUSY_HINT}")), "{reason}");
             } else {
                 assert!(reason.contains("nothing was read"), "{reason}");
             }
@@ -4320,9 +4344,68 @@ mod tests {
         }
     }
 
-    /// Round 2: a deny on the read's tool refuses before the event lookup
-    /// (calendar read), the INBOX scan and the stored draft (mail reads):
-    /// the broker's reason, nothing read, no card.
+    /// Fails the authorization row only; every other row is kept.
+    struct UnloggableReads(Arc<MemoryAuditSink>);
+
+    impl AuditSink for UnloggableReads {
+        fn log_event(&self, kind: &str, payload: &Value) -> Result<i64, AuditError> {
+            if kind == PREPARE_READ_EVENT {
+                return Err(AuditError::backend("disk full"));
+            }
+            self.0.log_event(kind, payload)
+        }
+    }
+
+    /// The free-times read with no rule but a row that cannot be written:
+    /// refused, no calendar read, no card (READS-3).
+    #[tokio::test]
+    async fn an_unloggable_free_times_read_reads_no_calendar() {
+        event_time::TEST_ZONE.with(|zone| *zone.borrow_mut() = Some("Europe/Paris".into()));
+        let text = b"---\nname: reply-availability\nversion: 1\ntools: [mail.send]\ninputs:\n  email: { type: email }\napproval: each_action\n---\nPropose {free_times}.\n";
+        let skill = parse_skill(text, "s.md", "reply-availability", &mail_agent()).unwrap();
+        let (tokens, _person, email) = session();
+        let value = json!({ "slots": { "email": delimited(&email) },
+            "calls": [{ "tool": "mail_send", "arguments": {
+                "to": [delimited(&email)], "subject": "Q3", "body": "Free:\n{free_times}" } }] });
+        let fill = validate_fill(&skill, &value, &run_context(), None).unwrap();
+        let sink = Arc::new(MemoryAuditSink::new());
+        let broker = broker_with_rules(&sink, Vec::new());
+        let (approver, connector) = (
+            RecordingApprover::approving(),
+            RecordingConnector::default(),
+        );
+        let (directory, clock) = (Known(vec!["camille@exemple.fr"]), PendingClock);
+        let failing = UnloggableReads(sink.clone());
+        let exec = Executor {
+            sink: &failing,
+            ..executor(
+                &broker,
+                &sink,
+                &approver,
+                &connector,
+                &directory,
+                &clock,
+                &[],
+            )
+        };
+        let outcome = exec
+            .execute(&skill, &fill, &run_context(), &tokens, &Taint::Clean)
+            .await;
+        let RunOutcome::Refused { reason, .. } = &outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(
+            reason.contains("could not be logged; nothing was read"),
+            "{reason}"
+        );
+        assert!(connector.calls().is_empty());
+        assert_eq!(approver.card_count(), 0);
+    }
+
+    /// Round 2 and READS-3: a deny or an ask on the read's tool, or an
+    /// authorization row that cannot be written, refuses before the event
+    /// lookup (calendar read), the INBOX scan and the stored draft (mail
+    /// reads): nothing read, no card.
     #[tokio::test]
     async fn a_denied_prepare_read_reads_nothing() {
         let skill = |name: &str, inputs: &str, body: &str| {
@@ -4354,31 +4437,45 @@ mod tests {
             ),
             (MAIL_READ_TOOL, draft, draft_fill, None),
         ];
-        for (tool, skill, fill, owner_input) in cases {
+        let modes = [Some(Action::Deny), Some(Action::Ask), None];
+        let cases = cases.iter().flat_map(|case| modes.map(|mode| (case, mode)));
+        for ((tool, skill, fill, owner_input), mode) in cases {
+            let (tool, owner_input) = (*tool, *owner_input);
             let sink = Arc::new(MemoryAuditSink::new());
-            let broker = broker_with_rules(&sink, vec![Rule::new("assistant", tool, Action::Deny)]);
+            let rules = mode.map(|action| Rule::new("assistant", tool, action));
+            let broker = broker_with_rules(&sink, rules.into_iter().collect());
             let (approver, connector) = (RecordingApprover::approving(), PrepareReads::default());
             let (directory, clock) = (Known(Vec::new()), PendingClock);
-            let exec = executor(
-                &broker,
-                &sink,
-                &approver,
-                &connector,
-                &directory,
-                &clock,
-                &[],
-            );
+            let failing = UnloggableReads(sink.clone());
+            let exec = Executor {
+                sink: &failing,
+                ..executor(
+                    &broker,
+                    &sink,
+                    &approver,
+                    &connector,
+                    &directory,
+                    &clock,
+                    &[],
+                )
+            };
             let run = RunContext {
                 owner_input,
                 ..run_context()
             };
             let outcome = exec
-                .execute(&skill, &fill, &run, &tokens, &Taint::Clean)
+                .execute(skill, fill, &run, &tokens, &Taint::Clean)
                 .await;
             let RunOutcome::Refused { reason, .. } = &outcome else {
                 panic!("{}: {outcome:?}", skill.name);
             };
-            assert!(reason.contains(": deny"), "{}: {reason}", skill.name);
+            let said = match mode {
+                Some(Action::Deny) => ": deny",
+                Some(_) => "asks first for this agent",
+                None => "could not be logged",
+            };
+            assert!(reason.contains(said), "{} {mode:?}: {reason}", skill.name);
+            assert!(reason.ends_with("nothing was read") || mode == Some(Action::Deny));
             assert!(connector.0.lock().unwrap().is_empty(), "{}", skill.name);
             assert_eq!(approver.card_count(), 0);
         }

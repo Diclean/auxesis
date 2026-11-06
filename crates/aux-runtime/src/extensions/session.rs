@@ -721,7 +721,10 @@ pub async fn discover_session(
 ) -> Result<ExtensionSession, SessionError> {
     // Re-hashed before it starts: a binary rewritten in place never runs.
     let installed = super::install::verify_installed(home, name)?;
-    super::mount::require_approval(home, &installed)?;
+    // EXT-ANCHOR-11 r2: a frozen row is no yes, as for a mount.
+    if super::mount::require_approval(home, &installed)?.frozen {
+        return Err(super::mount::MountError::Frozen(name.to_owned()).into());
+    }
     session_for(home, &installed, options).await
 }
 
@@ -869,7 +872,8 @@ pub struct AcceptOptions<'a> {
 /// `legacy`. The new pin is saved
 /// (still frozen) and handed to `on_trusted` **before** the child starts, so
 /// the owner sees what they trust before it runs; the freeze clears once the
-/// live tools are pinned.
+/// live tools are pinned. A failed start or a `tools` refusal puts the
+/// previous row back (EXT-ANCHOR-11), frozen when the tools drifted.
 pub async fn accept_with(
     home: &Path,
     name: &str,
@@ -947,6 +951,10 @@ pub async fn accept_with(
     }
     let previous = state.version.clone();
     let previous_sha256 = state.artefact.clone();
+    // EXT-ANCHOR-11: the row as it was, put back on any refusal or failed
+    // start after the save below: `--accept` is all or nothing, so a refused
+    // build never stays pinned and the approved one keeps its yes.
+    let previous_row = state.clone();
     // The owner's yes covers this build: its version, hosts and secret names
     // are pinned with its tools, so the next start passes the approval check.
     state.version = installed.version.clone();
@@ -988,9 +996,30 @@ pub async fn accept_with(
         }),
     );
     on_trusted(&state);
-    let outcome = |outcome: &str| {
-        let row = serde_json::json!({"name": name, "version": state.version, "outcome": outcome});
+    // Put the previous row back and audit why; a tool drift keeps it frozen
+    // (EXT-ANCHOR-11 r2), as `verify_identity` would. Only the row this call
+    // stored is replaced: another one (a concurrent `freeze`) is kept, and the
+    // skip logged. A failed write keeps the new, frozen row: it fails closed.
+    let restore = |outcome: &str, drift: bool| -> Result<(), SessionError> {
+        let mut back = previous_row.clone();
+        back.frozen |= drift;
+        let ours = match super::mount::read_state(home, name) {
+            Ok(Some(row)) => serde_json::to_value(&row).ok() == serde_json::to_value(&state).ok(),
+            _ => false,
+        };
+        let row = serde_json::json!({
+            "name": name,
+            "outcome": outcome,
+            "refused_version": state.version,
+            "restored_version": ours.then_some(&back.version),
+            "kept_current": !ours,
+            "frozen": back.frozen,
+        });
         super::ledger::log(home, super::ledger::VERIFY, &row);
+        if ours {
+            store_state(home, &back)?;
+        }
+        Ok(())
     };
     let started = session_for(
         home,
@@ -1000,24 +1029,35 @@ pub async fn accept_with(
         },
     )
     .await;
-    let session = started.inspect_err(|_| outcome("start_failed"))?;
+    let session = match started {
+        Ok(session) => session,
+        Err(err) => {
+            restore("start_failed", false)?;
+            return Err(err);
+        }
+    };
     let pins: BTreeMap<String, String> = pinned_tools(&session.tools)
         .into_iter()
         .map(|pin| (pin.name, pin.identity))
         .collect();
     // EXT-ANCHOR-10: `tools` is a trust field too, known once the build lists
     // them: a tool added, removed or with another identity (schema or
-    // description) is named by the owner, never re-pinned silently. The
-    // refusal keeps the row frozen.
-    let tools_changed = tool_changes(&state.tools, &pins);
+    // description) is named by the owner, never re-pinned silently.
+    // EXT-ANCHOR-11: the refusal puts the previous row back; a tool drift also
+    // unmounts it everywhere, as the drift path does.
+    let tools_changed = tool_changes(&previous_row.tools, &pins);
     if named_tools == tools_changed.is_empty() {
         session.stop().await;
-        outcome("tools_refused");
-        let command = super::mount::accept_command(&state, &installed);
+        let drift = !tools_changed.is_empty();
+        if drift {
+            super::mount::remove_from_all_mounts(home, name)?;
+        }
+        restore("tools_refused", drift)?;
+        let command = super::mount::accept_command(&previous_row, &installed);
         let message = match tools_changed.is_empty() {
             true => format!("`{name}` has no changed tool: drop `tools` from `{command}`"),
             false => format!(
-                "`{name}` changed tools since approval ({}); nothing unfrozen: \
+                "`{name}` changed tools since approval ({}); the approved row is kept: \
                  re-trust them only with `{}`",
                 tools_changed.join(", "),
                 with_tools(&command),
@@ -1031,7 +1071,8 @@ pub async fn accept_with(
     session.stop().await;
     stored?;
     // Logged once the unfrozen pin is saved: a failed save never reads as started.
-    outcome("started");
+    let row = serde_json::json!({"name": name, "version": state.version, "outcome": "started"});
+    super::ledger::log(home, super::ledger::VERIFY, &row);
     Ok(Accepted {
         state,
         corrupt_newer: report.corrupt_newer,
@@ -1057,9 +1098,16 @@ fn tool_changes(pinned: &BTreeMap<String, String>, live: &BTreeMap<String, Strin
 
 /// `command` with `tools` added to its `--accept-change` list.
 fn with_tools(command: &str) -> String {
-    match command.contains(" --accept-change ") {
-        true => format!("{command},tools"),
-        false => format!("{command} --accept-change tools"),
+    // The invalid-version fallback (`aux ext remove .. && aux ext install ..`)
+    // takes no flag: it is printed as it is, never as a command clap rejects.
+    if !command.starts_with("aux ext verify ") {
+        return command.to_owned();
+    }
+    // `accept_command` already names `tools` for a frozen row.
+    match command.split_once(" --accept-change ") {
+        Some((_, list)) if list.split(',').any(|field| field == "tools") => command.to_owned(),
+        Some(_) => format!("{command},tools"),
+        None => format!("{command} --accept-change tools"),
     }
 }
 
@@ -1269,5 +1317,28 @@ mod tests {
         let exec = run("/usr/bin/curl --version");
         assert!(!exec.status.success(), "curl must not run");
         assert!(exec.stdout.is_empty(), "curl printed: {:?}", exec.stdout);
+    }
+
+    // EXT-ANCHOR-11: removed and changed tools are named, not only added; the
+    // invalid-version fallback is printed as it is, never with a flag.
+    #[test]
+    fn tool_changes_name_every_kind_and_with_tools_keeps_the_fallback() {
+        let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            (pairs.iter())
+                .map(|(tool, id)| (tool.to_string(), id.to_string()))
+                .collect()
+        };
+        let pinned = map(&[("a", "1"), ("b", "1")]);
+        let changes = tool_changes(&pinned, &map(&[("a", "2"), ("c", "1")]));
+        assert_eq!(
+            changes,
+            [r#"changed "a""#, r#"added "c""#, r#"removed "b""#]
+        );
+        let fallback = "aux ext remove demo && aux ext install demo";
+        assert_eq!(with_tools(fallback), fallback);
+        let command = "aux ext verify demo --accept --accept-change network";
+        assert_eq!(with_tools(command), format!("{command},tools"));
+        let tools = format!("{command},tools");
+        assert_eq!(with_tools(&tools), tools);
     }
 }

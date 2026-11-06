@@ -296,10 +296,10 @@ mod tests {
         );
     }
 
-    // EXT-ANCHOR-10: every Cc, Cf, Zl and Zp character is escaped, tags and
-    // interlinear annotation included; printable text is kept as it is.
+    // EXT-ANCHOR-10: a sample of Cc, Cf, Zl and Zp characters is escaped, tags
+    // and interlinear annotation included; printable text is kept as it is.
     #[test]
-    fn escape_text_escapes_every_control_format_and_separator() {
+    fn escape_text_escapes_sampled_controls_formats_and_separators() {
         let hidden = "\u{1b}\u{85}\u{ad}\u{600}\u{61c}\u{180e}\u{200b}\u{200e}\u{2028}\u{2029}\
                       \u{202e}\u{2066}\u{feff}\u{fff9}\u{fffa}\u{fffb}\u{110bd}\u{1d173}\
                       \u{e0001}\u{e0041}\u{e007f}";

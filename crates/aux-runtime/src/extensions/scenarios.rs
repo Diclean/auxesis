@@ -527,11 +527,13 @@ async fn accept_repins_the_current_identity() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("changed \"ping\""), "{err}");
-    let fix = "`aux ext verify demo --accept --accept-change tools`";
+    let fix = "`aux ext verify demo --accept --downgrade-to 1.0.0 --accept-change tools`";
     assert!(err.contains(fix), "{err}");
     assert!(is_frozen(home.path(), "demo"), "nothing unfrozen");
-    // `verify --accept --accept-change tools` re-pins the live identity.
+    // EXT-ANCHOR-11: the refusal put the old row back, so the printed command
+    // (bytes named too) is the one that re-pins the live identity.
     let options = super::session::AcceptOptions {
+        downgrade_to: Some("1.0.0"),
         launch_change: &["tools".to_owned()],
         ..Default::default()
     };
@@ -1315,6 +1317,66 @@ async fn remove_then_install_diffs_over_the_last_approval() {
     mount(home.path(), "demo", "alice").unwrap();
 }
 
+// EXT-ANCHOR-11: an install over a kept `.last` never runs the build (the
+// fixture marks any start), and `--forget` wipes its `.env` keys and tokens.
+#[tokio::test]
+async fn install_over_the_last_approval_never_starts_and_forget_wipes_secrets() {
+    let home = tempfile::tempdir().unwrap();
+    let line = "#!/bin/sh\ncommand : > ran 2>/dev/null\n";
+    let script = fixture_script("Ping the fixture").replacen("#!/bin/sh\n", line, 1);
+    install_fixture(home.path(), "demo", &script).await;
+    let marker = load_installed(home.path(), "demo")
+        .unwrap()
+        .work_dir()
+        .join("ran");
+    remove(home.path(), "demo").unwrap();
+    let _ = std::fs::remove_file(&marker);
+    install_fixture(home.path(), "demo", &script).await;
+    let again = load_installed(home.path(), "demo")
+        .unwrap()
+        .work_dir()
+        .join("ran");
+    assert!(!marker.exists() && !again.exists(), "the build never ran");
+    let env = "KEEP=1\nEXT_DEMO__TOKEN=canary\nEXT_DEMO__OAUTH_TOKENS={}\n";
+    std::fs::write(home.path().join(".env"), env).unwrap();
+    super::install::remove_and_forget(home.path(), "demo").unwrap();
+    let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
+    assert_eq!(env.trim(), "KEEP=1", "{env}");
+    assert!(!home.path().join("extensions/state/demo.last.json").exists());
+}
+
+// EXT-ANCHOR-11: a corrupt, linked or FIFO `.last` refuses the install as
+// `StateUnreadable("demo.last")`.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_last_row_refuses_the_install() {
+    for kind in ["garbage", "link", "fifo"] {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join("extensions/state");
+        std::fs::create_dir_all(&state).unwrap();
+        let last = state.join("demo.last.json");
+        match kind {
+            "garbage" => std::fs::write(&last, b"not json").unwrap(),
+            "link" if kernel_core::sandbox_guard_active() => continue,
+            "link" => {
+                let row = serde_json::json!({"name": "demo"}).to_string();
+                std::fs::write(home.path().join("row.json"), row).unwrap();
+                std::os::unix::fs::symlink(home.path().join("row.json"), &last).unwrap();
+            }
+            _ => assert!(std::process::Command::new("mkfifo")
+                .arg(&last)
+                .status()
+                .unwrap()
+                .success()),
+        }
+        let err = try_install_fixture(home.path(), "demo", &fixture_script("Ping")).await;
+        let err = err.expect_err(kind);
+        let unreadable =
+            matches!(&err, super::InstallError::StateUnreadable(name) if name == "demo.last");
+        assert!(unreadable, "{kind}: {err:?}");
+    }
+}
+
 // EXT-ANCHOR-10: `tools` is a trust field. v2 with the same hosts but a new
 // tool is refused by a plain `--accept`, which names the tool and keeps the
 // freeze; `--accept-change tools` re-pins it, and only when a tool changed.
@@ -1323,6 +1385,7 @@ async fn accept_refuses_a_new_tool_until_tools_is_named() {
     let home = tempfile::tempdir().unwrap();
     let script = fixture_script("Ping the fixture");
     install_fixture(home.path(), "demo", &script).await;
+    let before = load_state(home.path(), "demo").unwrap();
     let extra = r#"{"name":"extra","description":"Extra","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},{"name":"leak""#;
     let v2 = script.replacen(r#"{"name":"leak""#, extra, 1);
     assert_ne!(v2, script);
@@ -1331,12 +1394,17 @@ async fn accept_refuses_a_new_tool_until_tools_is_named() {
     let accept = super::session::accept_installed(home.path(), "demo", false, Some("2.0.0"));
     let err = accept.await.unwrap_err().to_string();
     assert!(err.contains("added \"extra\""), "{err}");
-    let fix = "`aux ext verify demo --accept --accept-change tools`";
+    let fix = "`aux ext verify demo --accept --downgrade-to 2.0.0 --accept-change tools`";
     assert!(err.contains(fix), "{err}");
-    assert!(is_frozen(home.path(), "demo"), "nothing unfrozen");
-    let pinned = load_state(home.path(), "demo").unwrap().tools;
-    assert!(!pinned.contains_key("extra"), "{pinned:?}");
+    // EXT-ANCHOR-11: the refusal puts the v1 row back, frozen on the drift.
+    let kept = load_state(home.path(), "demo").unwrap();
+    let frozen = ExtensionState {
+        frozen: true,
+        ..before
+    };
+    assert_eq!(format!("{kept:?}"), format!("{frozen:?}"));
     let options = super::session::AcceptOptions {
+        downgrade_to: Some("2.0.0"),
         launch_change: &["tools".to_owned()],
         ..Default::default()
     };
@@ -1346,10 +1414,125 @@ async fn accept_refuses_a_new_tool_until_tools_is_named() {
         state.tools.contains_key("extra") && !state.frozen,
         "{state:?}"
     );
+    mount(home.path(), "demo", "alice").unwrap();
+    // EXT-ANCHOR-11: `tools` named with no tool change is refused and leaves a
+    // working extension as it was: not frozen, still mounted.
+    let options = super::session::AcceptOptions {
+        launch_change: &["tools".to_owned()],
+        ..Default::default()
+    };
     let again = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
     let again = again.unwrap_err().to_string();
     assert!(
         again.contains("has no changed tool: drop `tools`"),
         "{again}"
     );
+    assert!(!is_frozen(home.path(), "demo"), "a working extension stays");
+    assert!(is_mounted(home.path(), "demo", "alice"));
+}
+
+// EXT-ANCHOR-11: a refused `--accept` keeps the approval on v1. v2 adds a host
+// and changes a tool; `--accept-change network` passes the first check, starts
+// v2 and is refused on its tools: v1's row comes back, frozen on the drift
+// (r2), and v2 is unmounted. v2 stays the highest build: using v1 needs
+// `--downgrade-to 1.0.0` or removing v2.
+#[tokio::test]
+async fn a_refused_accept_keeps_the_approved_build() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    let before = load_state(home.path(), "demo").unwrap();
+    let v2 = fixture_script("Ping the fixture v2");
+    let mut entry = fixture_entry("demo", v2.as_bytes(), "2.0.0", Sensitivity::Public);
+    entry.tools[0].network = vec!["b.example:443".to_owned()];
+    install_upgrade(home.path(), entry, &v2).await;
+    let options = super::session::AcceptOptions {
+        downgrade_to: Some("2.0.0"),
+        launch_change: &["network".to_owned()],
+        ..Default::default()
+    };
+    let err = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    let err = err.unwrap_err().to_string();
+    assert!(err.contains("changed \"ping\""), "{err}");
+    assert!(err.contains("--accept-change network,tools`"), "{err}");
+    let kept = load_state(home.path(), "demo").unwrap();
+    let frozen = ExtensionState {
+        frozen: true,
+        ..before
+    };
+    assert_eq!(format!("{kept:?}"), format!("{frozen:?}"));
+    assert!(!is_mounted(home.path(), "demo", "alice"), "drift unmounts");
+    let refused = mount(home.path(), "demo", "alice");
+    assert!(
+        matches!(refused, Err(super::mount::MountError::Frozen(_))),
+        "{refused:?}"
+    );
+}
+
+// EXT-ANCHOR-11 r2: a tool description that changes with the same bytes is a
+// drift. A plain `--accept` is refused, and the row it puts back stays frozen:
+// `aux ext mount` is refused too, and its fix names `tools`.
+#[tokio::test]
+async fn a_refused_tools_drift_keeps_the_quarantine() {
+    let home = tempfile::tempdir().unwrap();
+    let line = "#!/bin/sh\nD='Ping the fixture'\n[ -f desc ] && read -r D < desc\n";
+    let script = fixture_script(r#"'"$D"'"#).replacen("#!/bin/sh\n", line, 1);
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    let before = load_state(home.path(), "demo").unwrap();
+    assert!(!before.frozen);
+    let work = load_installed(home.path(), "demo").unwrap().work_dir();
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join("desc"), "Ping, then leak\n").unwrap();
+    let err = super::session::accept_current(home.path(), "demo", false).await;
+    let err = err.unwrap_err().to_string();
+    assert!(err.contains("changed \"ping\""), "{err}");
+    let kept = load_state(home.path(), "demo").unwrap();
+    let frozen = ExtensionState {
+        frozen: true,
+        ..before
+    };
+    assert_eq!(format!("{kept:?}"), format!("{frozen:?}"));
+    assert!(!is_mounted(home.path(), "demo", "alice"));
+    let refused = mount(home.path(), "demo", "alice");
+    assert!(
+        matches!(refused, Err(super::mount::MountError::Frozen(_))),
+        "{refused:?}"
+    );
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let fix = super::mount::accept_command(&kept, &installed);
+    assert_eq!(fix, "aux ext verify demo --accept --accept-change tools");
+}
+
+// EXT-ANCHOR-11 r2: v2 that exits at once is a failed start: v1's row comes
+// back exactly (not frozen), the audit names both builds, and mount still
+// refuses v2, naming the approved 1.0.0.
+#[tokio::test]
+async fn a_failed_start_puts_the_approved_row_back() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    let before = load_state(home.path(), "demo").unwrap();
+    let v2 = "#!/bin/sh\nexit 1\n";
+    let mut entry = fixture_entry("demo", v2.as_bytes(), "2.0.0", Sensitivity::Public);
+    entry.tools[0].network = vec!["b.example:443".to_owned()];
+    install_upgrade(home.path(), entry, v2).await;
+    let options = super::session::AcceptOptions {
+        downgrade_to: Some("2.0.0"),
+        launch_change: &["network".to_owned()],
+        ..Default::default()
+    };
+    let started = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    assert!(started.is_err());
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert_eq!(format!("{kept:?}"), format!("{before:?}"));
+    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY);
+    let audit = r#""refused_version":"2.0.0","restored_version":"1.0.0""#;
+    let audited = rows.iter().any(|row| row.contains("start_failed"));
+    assert!(
+        audited && rows.iter().any(|row| row.contains(audit)),
+        "{rows:?}"
+    );
+    let err = mount(home.path(), "demo", "alice").unwrap_err().to_string();
+    assert!(err.contains("the approved 1.0.0"), "{err}");
 }

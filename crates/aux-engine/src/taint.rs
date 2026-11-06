@@ -153,10 +153,20 @@ pub(crate) fn url_host(raw: &str) -> &str {
     // body of a URL with no host (`javascript://alert(1)`), not shown.
     // A colon outside `[...]` is a port: 0-5 digits, once (`a.example:8443`,
     // `[::1]:80`); `x:s3cr3t` is an opaque body, never a host (READS-9).
-    let unbracketed = host.rsplit_once(']').map_or(host, |(_, tail)| tail);
-    let port_ok = unbracketed
-        .split_once(':')
-        .is_none_or(|(_, port)| port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit()));
+    // Only a leading `[...]` is a literal, and after it comes nothing or
+    // `:port`; an unclosed `[` is no host.
+    let (literal, after) = match host.strip_prefix('[') {
+        Some(inner) => (true, inner.split_once(']').map_or("[", |(_, tail)| tail)),
+        None => (false, host),
+    };
+    let port_ok = match after.split_once(':') {
+        Some((before, port)) => {
+            (!literal || before.is_empty())
+                && port.len() <= 5
+                && port.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => !literal || after.is_empty(),
+    };
     let host_ok = port_ok
         && host
             .chars()
@@ -358,7 +368,11 @@ mod tests {
             ("\u{0}java%73cript:s3cr3t", ""),
             ("java%73cript:s3cr3t", ""),
             ("\u{0}java%73cript:USER:PASS", ""),
-            ("a:s3cr3t:80", ""),
+            ("a:s3cr3t:80", "a:"),
+            ("\u{0}java%73cript:[USER:PASS]:80", ""),
+            ("https://a.example:[USER:PASS]:80/", ""),
+            ("https://[a]b:80/", ""),
+            ("https://[::1]/x", "[::1]"),
             ("1javascript://s3cr3t-token", ""),
             ("-javascript://s3cr3t-token", ""),
             ("://s3cr3t-token", ""),

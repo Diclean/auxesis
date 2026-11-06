@@ -1269,9 +1269,11 @@ fn remember(
 }
 
 #[cfg(test)]
+type KillProbe = fn(i32) -> i32;
+#[cfg(test)]
 thread_local! {
     /// Test seam: what [`kill_probe`] answers on this thread.
-    static KILL_PROBE: std::cell::Cell<Option<fn(i32) -> i32>> = const { std::cell::Cell::new(None) };
+    static KILL_PROBE: std::cell::Cell<Option<KillProbe>> = const { std::cell::Cell::new(None) };
 }
 
 /// `kill(pid, 0)`: 0 if the pid exists (zombies too), else its errno or -1.
@@ -1841,7 +1843,6 @@ fn sweep_leftovers_with(
         // (a session/extra candidate, a seen-family member or descendant).
         // Such a pid may never enter `seen` and may leave every net once its
         // parent dies, so no later pass can prove it gone: never `Clean`.
-        // Also a seen pid `remember` evicted on `EPERM`.
         let mut lost = false;
         // Seen members whose re-check `Failed`: sticky like `lost` until a
         // positive answer proves one gone (`forget_gone`, or the cap prune on
@@ -6207,7 +6208,6 @@ await(q(bg.pid));
         assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get), here + 1);
         let leftover = LEFTOVER_DRAINER.with(|left| left.borrow_mut().take());
         assert!(leftover.is_some(), "the seam panicked before the take");
-        // Another drainer now owns the backlog.
         {
             let mut backlog = overflow_backlog();
             backlog.0 = true;

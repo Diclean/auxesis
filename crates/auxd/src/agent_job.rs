@@ -487,11 +487,14 @@ impl AgentJobRunner {
         )?;
         // Like a private chat, a private run stores no title.
         let title = (mode != PrivacyMode::Private).then(|| format!("job {}", job.name));
-        let session = kernel_core::sync::lock_recover(store).create_session_of_kind(
-            &job.agent,
-            title.as_deref(),
-            "job",
-        )?;
+        // Past the budget stop no store write runs: the gate refuses it.
+        let session = aux_engine::gated_store_write(|| {
+            kernel_core::sync::lock_recover(store).create_session_of_kind(
+                &job.agent,
+                title.as_deref(),
+                "job",
+            )
+        })?;
         // Load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
         crate::agent_skills::load_agent_skills(&self.home, &job.agent, store);
@@ -527,11 +530,14 @@ impl AgentJobRunner {
             let mut chat = match started {
                 Ok(chat) => chat.with_input_source("schedule"),
                 Err(err) => {
-                    if let Err(remove) =
+                    // Through the stop gate: a start refused because the
+                    // daemon is stopping leaves the row, never a late write.
+                    if let Err(remove) = aux_engine::gated_store_write(|| {
                         kernel_core::sync::lock_recover(store).delete_session(session.id)
-                    {
+                    }) {
                         tracing::warn!(
                             job_id = job.id,
+                            session_id = session.id,
                             error = %remove,
                             "could not remove the empty job session after a failed start"
                         );

@@ -43,8 +43,9 @@ enum ExtAction {
         /// Accept the current tools after a freeze (owner re-approval).
         #[arg(long)]
         accept: bool,
-        /// With `--accept`: re-pin this build even though it is older than the
-        /// approved one (a newer entry is corrupt or gone).
+        /// With `--accept`: re-pin this build although it is not the approved
+        /// one (another version or other bytes, e.g. a newer entry is corrupt
+        /// or gone, or a row from before the artefact pin).
         #[arg(long, value_name = "VERSION", requires = "accept", requires = "name")]
         downgrade_to: Option<String>,
     },
@@ -273,6 +274,15 @@ fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&s
                     continue;
                 }
                 Err(err) => {
+                    // The refusal still names the corrupt newer entries.
+                    if let extensions::session::SessionError::DowngradeRefused {
+                        installed,
+                        corrupt_newer,
+                        ..
+                    } = &err
+                    {
+                        warn_corrupt_newer(&name, installed, corrupt_newer);
+                    }
                     let _ = writeln!(std::io::stderr(), "aux ext verify: {err}");
                     failed = true;
                     continue;

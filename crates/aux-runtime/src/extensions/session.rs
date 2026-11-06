@@ -105,20 +105,19 @@ pub enum SessionError {
     /// The installed artefact failed its re-hash before it could be re-pinned.
     #[error(transparent)]
     Install(#[from] super::install::InstallError),
-    /// `--accept` would re-pin a build older than the approved one (a newer
-    /// entry went corrupt or was deleted), or `--downgrade-to` does not name
-    /// exactly that older build: nothing is re-pinned.
-    #[error(
-        "`{name}` runs {installed}, approved {approved}: an older build is re-pinned \
-         only by `aux ext verify {name} --accept --downgrade-to {installed}`"
-    )]
+    /// `--accept` would re-pin a build other than the approved one (another
+    /// version, other bytes, or a row without an artefact pin), or
+    /// `--downgrade-to` does not name exactly that build, or names the approved
+    /// build itself: nothing is re-pinned.
+    #[error("{message}")]
     DowngradeRefused {
-        /// Extension name.
-        name: String,
-        /// The version the owner approved.
-        approved: String,
+        /// Both versions, why it is not the approved build, and the one
+        /// command that re-pins it.
+        message: String,
         /// The version that would run.
         installed: String,
+        /// Versions newer than the running build whose entry is corrupt.
+        corrupt_newer: Vec<String>,
     },
 }
 
@@ -716,11 +715,8 @@ pub async fn discover_session(
     name: &str,
     options: &SessionOptions,
 ) -> Result<ExtensionSession, SessionError> {
-    let installed =
-        super::install::load_installed(home, name).ok_or_else(|| SessionError::Spawn {
-            name: name.to_owned(),
-            message: "not installed".to_owned(),
-        })?;
+    // Re-hashed before it starts: a binary rewritten in place never runs.
+    let installed = super::install::verify_installed(home, name)?;
     super::mount::require_approval(home, &installed)?;
     session_for(home, &installed, options).await
 }
@@ -768,6 +764,7 @@ pub async fn pin_extension(
         // The `[oauth]` endpoints are pinned with the tools: a same-version
         // reinstall that moves the token URL must not pass the approval check.
         oauth: installed.entry.oauth.clone(),
+        artefact: Some(super::mount::artefact_pin(&installed.entry)),
     };
     store_state(home, &state)?;
     session.stop().await;
@@ -797,10 +794,12 @@ pub struct Accepted {
     pub corrupt_newer: Vec<String>,
 }
 
-/// [`accept_current`]: a build older than the approved one is refused
+/// [`accept_current`]: the approved build is the pinned version string (exact,
+/// never a version order) with the pinned artefact sha256. Any other build
+/// (older, newer, other bytes, or a row without the pin) is refused
 /// ([`SessionError::DowngradeRefused`]) unless `downgrade_to` names exactly
-/// that build, and `downgrade_to` is refused for any other build. The refusal
-/// comes before the build starts and leaves the state as it was.
+/// it; `downgrade_to` on the approved build is refused too. The refusal comes
+/// before the build starts and leaves the state as it was.
 pub async fn accept_installed(
     home: &Path,
     name: &str,
@@ -815,15 +814,31 @@ pub async fn accept_installed(
         super::mount::load_state(home, name).ok_or_else(|| SessionError::MissingState {
             name: name.to_owned(),
         })?;
-    let older = super::catalog::compare_versions(&installed.version, &state.version)
-        == std::cmp::Ordering::Less;
-    if downgrade_to != older.then_some(installed.version.as_str()) {
+    let pin = super::mount::artefact_pin(&installed.entry);
+    let why = match state.artefact.as_deref() {
+        _ if installed.version != state.version => String::new(),
+        Some(approved) if approved == pin => String::new(),
+        Some(approved) => format!(" (artefact sha256 {pin} is not the approved {approved})"),
+        None => " (no approved artefact sha256 is pinned)".to_owned(),
+    };
+    let other = installed.version != state.version || !why.is_empty();
+    if downgrade_to != other.then_some(installed.version.as_str()) {
+        let fix = match other {
+            true => format!(
+                "another build is re-pinned only by \
+                 `aux ext verify {name} --accept --downgrade-to {}`",
+                installed.version
+            ),
+            false => format!("this is the approved build: `aux ext verify {name} --accept`"),
+        };
+        let (installed, approved) = (installed.version, &state.version);
         return Err(SessionError::DowngradeRefused {
-            name: name.to_owned(),
-            approved: state.version.clone(),
-            installed: installed.version.clone(),
+            message: format!("`{name}` runs {installed}, approved {approved}{why}: {fix}"),
+            installed,
+            corrupt_newer: report.corrupt_newer,
         });
     }
+    let previous = state.version.clone();
     let session = session_for(home, &installed, &SessionOptions { allow_loopback }).await?;
     let pins = pinned_tools(&session.tools);
     state.tools = pins
@@ -839,13 +854,22 @@ pub async fn accept_installed(
     // token URLs, client id, client secret name, scopes), including a table
     // that an older pin never recorded.
     state.oauth = installed.entry.oauth.clone();
+    // ... and these bytes: the next start or accept refuses any other.
+    state.artefact = Some(pin);
     state.frozen = false;
     store_state(home, &state)?;
     session.stop().await;
     super::ledger::log(
         home,
         super::ledger::VERIFY,
-        &serde_json::json!({"name": name, "version": state.version, "accepted": true}),
+        &serde_json::json!({
+            "name": name,
+            "version": state.version,
+            "accepted": true,
+            "previous": previous,
+            // The owner named a build other than the approved one.
+            "downgrade": other,
+        }),
     );
     Ok(Accepted {
         state,

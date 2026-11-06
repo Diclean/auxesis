@@ -48,6 +48,20 @@ pub struct ExtensionState {
     /// extension that now carries `[oauth]` fails closed until re-approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<super::catalog::OAuthConfig>,
+    /// The approved artefact's sha256 ([`artefact_pin`]), pinned at approval:
+    /// the approval binds these bytes, not the version name. A row written
+    /// before this pin has none and is never the approved build: it fails
+    /// closed until the owner names the build (`--accept --downgrade-to`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artefact: Option<String>,
+}
+
+/// The artefact sha256 an approval pins: the entry's `source.sha256`,
+/// lowercase. For a binary it is the re-hashed file's (`verify_installed`
+/// refuses any other bytes); for an npm/uv tree it is the tarball's, checked
+/// at install (the unpacked tree is not re-hashed, see `verify_installed`).
+pub fn artefact_pin(entry: &super::catalog::Entry) -> String {
+    entry.source.sha256.to_ascii_lowercase()
 }
 
 /// Everything that can refuse a mount.
@@ -252,7 +266,8 @@ fn unlisted_oauth_change(changed: &mut Vec<&'static str>, equal: bool) {
 /// `[oauth]` table must equal the pinned one: a changed authorize/token URL,
 /// client id, client secret name, scopes or any other table field is refused,
 /// and an extension that gained `[oauth]` after a pin written without one
-/// fails closed.
+/// fails closed. Its artefact sha256 must be the pinned one (a row without
+/// the pin fails closed too).
 pub fn check_approval(
     state: &ExtensionState,
     installed: &InstalledExtension,
@@ -268,6 +283,16 @@ pub fn check_approval(
             "version {} is not the approved {}",
             installed.version, state.version
         ));
+    }
+    let pin = artefact_pin(&installed.entry);
+    match state.artefact.as_deref() {
+        Some(approved) if approved == pin => {}
+        Some(approved) => {
+            return refuse(format!(
+                "artefact sha256 {pin} is not the approved {approved}"
+            ))
+        }
+        None => return refuse("no approved artefact sha256 is pinned".to_owned()),
     }
     let wider: Vec<String> = network_pins(&installed.entry)
         .into_iter()
@@ -495,8 +520,13 @@ impl ExtensionHost {
             if is_frozen(home, &name) {
                 continue;
             }
-            let Some(installed) = load_installed(home, &name) else {
-                continue;
+            // Re-hashed before it starts: a binary rewritten in place never runs.
+            let installed = match super::install::verify_installed(home, &name) {
+                Ok(installed) => installed,
+                Err(err) => {
+                    tracing::warn!(extension = %name, reason = %err, "extension did not start");
+                    continue;
+                }
             };
             // A sensitive extension is never started in Private mode.
             if !may_mount_in_mode(&installed.entry, current_mode(home)) {
@@ -614,6 +644,7 @@ mod tests {
             network: Vec::new(),
             secrets: Vec::new(),
             oauth: None,
+            artefact: Some("a".repeat(64)),
         }
     }
 
@@ -907,6 +938,23 @@ mod tests {
         changed.push("token_url");
         unlisted_oauth_change(&mut changed, false);
         assert_eq!(changed, vec!["token_url"]);
+    }
+
+    // EXT-ANCHOR-7: approval binds the artefact sha256: other bytes at the
+    // approved version, or a row written before the pin, fail closed.
+    #[test]
+    fn approval_refuses_other_bytes_and_a_row_without_an_artefact_pin() {
+        let mut pinned = state("demo");
+        let mut build = installed("1.0.0", &[], &[]);
+        build.entry.source.sha256 = "A".repeat(64);
+        check_approval(&pinned, &build).unwrap();
+        build.entry.source.sha256 = "b".repeat(64);
+        let err = check_approval(&pinned, &build).expect_err("other bytes");
+        assert!(err.to_string().contains("sha256"), "{err}");
+        pinned.artefact = None;
+        let err = check_approval(&pinned, &installed("1.0.0", &[], &[])).expect_err("no pin");
+        let err = err.to_string();
+        assert!(err.contains("no approved artefact sha256"), "{err}");
     }
 
     #[test]

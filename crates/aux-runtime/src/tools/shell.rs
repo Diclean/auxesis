@@ -749,6 +749,12 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
     // 8 bytes per fd; the command's own RLIMIT_NOFILE caps it at
     // MAX_OPEN_FILES, so this buffer always covers a tracked process.
     let mut buf = vec![0u8; 8 * kernel_broker::sandbox::MAX_OPEN_FILES as usize];
+    // A live process with no descriptor answers 0 and leaves errno alone:
+    // clear it first, so a stale errno never turns an empty list into `Cut`.
+    // SAFETY: `__error` returns this thread's errno slot, always valid.
+    unsafe {
+        *libc::__error() = 0;
+    }
     // SAFETY: `buf` is a live allocation and `proc_pidinfo` writes at most
     // `buf.len()` bytes into it, returning the count written.
     let n = unsafe {
@@ -807,14 +813,16 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
     }
 }
 
-/// Sorts a failed `PROC_PIDLISTFDS` answer: `ESRCH` is a process that is gone
-/// (`No`); any other failure (`ENOMEM`, `EPERM`, ...) means the descriptors
-/// could not be read at all, which is `Cut`. `None` for a usable list. Pure,
-/// so tested on every OS.
+/// Sorts a `PROC_PIDLISTFDS` answer: `0` with errno cleared to `0` is a live
+/// process with no descriptor (`No`); `ESRCH` is a process that is gone
+/// (`No`); any other failure (`ENOMEM`, `EPERM`, unknown errno, ...) means the
+/// descriptors could not be read at all, which is `Cut`. `None` for a usable
+/// list. Pure, so tested on every OS.
 #[cfg(any(target_os = "macos", test))]
 fn fd_list_unknown(n: i32, errno: Option<i32>) -> Option<Holds> {
     match n > 0 {
         true => None,
+        false if n == 0 && errno == Some(0) => Some(Holds::No),
         false if errno == Some(libc::ESRCH) => Some(Holds::No),
         false => Some(Holds::Cut),
     }
@@ -1216,7 +1224,9 @@ fn kill_process_tree_with(
         // recorded and re-checked right before its signal.
         let all = all_pids();
         let (orphans, scanned) = orphan_pids_holding_marker_until(marker, 0, &all, None);
-        complete = scanned;
+        // An empty listing means the syscall failed (this process is always
+        // in it): nothing was scanned, so the pass is not complete.
+        complete = scanned && !all.is_empty();
         for tracked in orphans {
             if !tracked.still_same(lookup) {
                 continue;
@@ -4650,6 +4660,10 @@ await(q(bg.pid));
             assert_eq!(fd_list_unknown(0, Some(errno)), Some(Holds::Cut));
         }
         assert_eq!(fd_list_unknown(0, None), Some(Holds::Cut));
+        // A live process with no descriptor holds nothing: its empty list is
+        // read, so it never keeps a sweep from Clean.
+        assert_eq!(fd_list_unknown(0, Some(0)), Some(Holds::No));
+        assert_eq!(fd_list_unknown(-1, Some(0)), Some(Holds::Cut));
     }
 
     /// SHELL-SWEEP-8 (4): the watchdog's tree list keeps the start time the

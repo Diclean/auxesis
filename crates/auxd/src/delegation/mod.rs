@@ -95,6 +95,31 @@ impl DelegationCancels {
         }
     }
 
+    /// Register `token` under `id` only when no run of `id` is still live (a
+    /// stopped run cancelling or writing its last state): `None` then, so a
+    /// resume never runs beside it and its late writes never reach the new
+    /// run's row.
+    pub fn claim(
+        self: &Arc<Self>,
+        id: &str,
+        token: Arc<TurnCancel>,
+    ) -> Option<DelegationRegistration> {
+        let mut inner = kernel_core::lock_recover(&self.inner);
+        if inner.get(id).is_some_and(|tokens| !tokens.is_empty()) {
+            return None;
+        }
+        inner
+            .entry(id.to_string())
+            .or_default()
+            .push(Arc::clone(&token));
+        drop(inner);
+        Some(DelegationRegistration {
+            registry: Arc::clone(self),
+            id: id.to_string(),
+            token,
+        })
+    }
+
     /// Fire one task's token.
     pub fn cancel(&self, id: &str) {
         let tokens: Vec<Arc<TurnCancel>> = kernel_core::lock_recover(&self.inner)
@@ -374,6 +399,10 @@ fn unfinished_state(delegation: Option<&Delegation>) -> DelegationState {
 /// their last persisted step keeps showing as live forever.
 pub(crate) fn recover_interrupted(home: &std::path::Path) -> anyhow::Result<usize> {
     let store = Store::open(&kernel_core::store_path(home))?;
+    // A Stop all whose row writes the stop gate refused left its rows open;
+    // the switch it engaged (a file, not a store write) is still on, so
+    // those rows are stopped (resumable), as the Stop all meant.
+    let stop_all = killswitch::is_stopped(home);
     let open: Vec<_> = store
         .list_delegations(None)?
         .into_iter()
@@ -383,7 +412,7 @@ pub(crate) fn recover_interrupted(home: &std::path::Path) -> anyhow::Result<usiz
     for delegation in open {
         // A queued row never started since it was queued (a resume refused
         // by the stop, or a start that failed): stopped, so it stays resumable.
-        let state = if delegation.state == DelegationState::Queued {
+        let state = if stop_all || delegation.state == DelegationState::Queued {
             DelegationState::Stopped
         } else {
             unfinished_state(Some(&delegation))
@@ -779,30 +808,35 @@ impl Tool for DelegateTool {
         // hand-off runs without a card, so the agent inherits the taint before
         // its turn starts: its workspace is marked, and its own effectful
         // calls still ask. A clean agent can never launder the caller's taint.
-        // The mark comes first and fails closed: a crash before the row
-        // leaves only an over-taint, never a row without its mark.
+        // The workspace mark comes first and fails closed. The row and its
+        // `delegation:<id>` marker land in one transaction: a failed insert
+        // leaves no marker (and never rewrites another row's), and no row
+        // exists without its marker.
         let created = aux_engine::gated_store_write(|| {
             let store = Store::open(&db_path)?;
-            if ctx.tainted {
-                if let Err(err) = inherit_taint(&self.home, &store, &ctx.agent, &args.agent, &id) {
+            let marker = if ctx.tainted {
+                if let Err(err) = mark_agent_workspace(&self.home, &store, &args.agent, &ctx.agent)
+                {
                     return Ok(Err(err));
                 }
+                handoff_reason(&ctx.agent)
             } else {
                 // A clean hand-off records its marker too: a resume reads a
                 // missing marker as unknown and re-taints.
-                store.mark_workspace_tainted(
-                    &handoff_taint_key(&id),
-                    &format!("{CLEAN_HANDOFF}{}", ctx.agent),
+                format!("{CLEAN_HANDOFF}{}", ctx.agent)
+            };
+            let delegation = store.atomically(|store| {
+                let row = store.create_delegation(
+                    &id,
+                    &ctx.agent,
+                    &args.agent,
+                    &task,
+                    brain.as_deref(),
+                    at_handoff,
                 )?;
-            }
-            let delegation = store.create_delegation(
-                &id,
-                &ctx.agent,
-                &args.agent,
-                &task,
-                brain.as_deref(),
-                at_handoff,
-            )?;
+                store.mark_workspace_tainted(&handoff_taint_key(&id), &marker)?;
+                Ok(row)
+            })?;
             Ok(Ok((store, delegation)))
         });
         let (store, delegation) = match created {
@@ -1091,16 +1125,33 @@ fn inherit_taint(
     agent: &str,
     delegation_id: &str,
 ) -> Result<(), String> {
+    mark_agent_workspace(home, store, agent, caller)?;
+    store
+        .mark_workspace_tainted(&handoff_taint_key(delegation_id), &handoff_reason(caller))
+        .map_err(|err| err.to_string())
+}
+
+/// A tainted caller's hand-off marker reason (never [`CLEAN_HANDOFF`]).
+fn handoff_reason(caller: &str) -> String {
+    format!("delegate: from {caller}")
+}
+
+/// Mark `agent`'s workspace tainted by `caller`, creating it first so the key
+/// is the canonical path the engine computes.
+fn mark_agent_workspace(
+    home: &std::path::Path,
+    store: &Store,
+    agent: &str,
+    caller: &str,
+) -> Result<(), String> {
     let workspace = aux_engine::workspace_dir(home, agent);
     let rel = std::path::Path::new("agents").join(agent).join("workspace");
     kernel_core::SandboxHome::open_existing(home)
         .and_then(|sandbox| sandbox.create_dir_all(&rel))
         .map_err(|err| err.to_string())?;
     let key = aux_engine::workspace::workspace_key(&workspace);
-    let reason = format!("delegate: from {caller}");
     store
-        .mark_workspace_tainted(&key, &reason)
-        .and_then(|()| store.mark_workspace_tainted(&handoff_taint_key(delegation_id), &reason))
+        .mark_workspace_tainted(&key, &handoff_reason(caller))
         .map_err(|err| err.to_string())
 }
 
@@ -1340,6 +1391,21 @@ pub async fn resume(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
             None,
         );
     }
+    // A stopped run still finishing holds its registration until its last
+    // write: no second run beside it (its late writes would land on this
+    // run's row). Claimed before the move, so a Stop and a resume in the
+    // window before the new run starts cannot start a third.
+    let Some(registration) = state
+        .delegation_cancels
+        .claim(&delegation.id, TurnCancel::new())
+    else {
+        return error::error_response(
+            axum::http::StatusCode::CONFLICT,
+            "delegation_still_stopping",
+            "the stopped run is still finishing; resume it in a moment",
+            None,
+        );
+    };
     let db_path = state.db_path.clone();
     let delegation_id = delegation.id.clone();
     // Only from stopped: of two concurrent resumes one wins, the other is a
@@ -1378,7 +1444,7 @@ pub async fn resume(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
             }),
         );
     }
-    spawn_run(Arc::clone(&state), delegation);
+    spawn_run(Arc::clone(&state), delegation, registration);
     Json(serde_json::json!({ "state": "queued" })).into_response()
 }
 
@@ -1417,16 +1483,21 @@ async fn set_state(state: Arc<ApiState>, id: String, target: DelegationState) ->
 }
 
 /// Run one delegation in the background through the configured executor.
-pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
+/// `registration` is the run's claim on the id, held until its last write.
+pub fn spawn_run(
+    state: Arc<ApiState>,
+    delegation: Delegation,
+    registration: DelegationRegistration,
+) {
     tokio::spawn(async move {
+        let _registration = registration;
         let home = state.home.clone();
         let db_path = state.db_path.clone();
         let open_path = db_path.clone();
         let events = Some(state.events.clone());
         let id = delegation.id.clone();
         let agent = delegation.agent.clone();
-        let cancel = TurnCancel::new();
-        let _registration = state.delegation_cancels.register(&id, Arc::clone(&cancel));
+        let cancel = _registration.token();
         let run = match tokio::task::spawn_blocking(move || {
             gated(|| {
                 rearm_handoff_taint(&home, &open_path, &delegation)?;
@@ -1442,17 +1513,12 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
                 // (resumable). After the stop this write is refused too: the
                 // row stays queued and the next start retires it to stopped.
                 tracing::warn!(error = %detail, "could not resume a delegation");
-                let _ = gated_open(&db_path, |store| {
-                    store.move_delegation_state(
-                        &id,
-                        DelegationState::Queued,
-                        DelegationState::Stopped,
-                    )
-                });
+                retire_queued(&state, &id, &agent, "could not resume");
                 return;
             }
             Err(err) => {
                 tracing::warn!(error = %err, "joining the delegation opener");
+                retire_queued(&state, &id, &agent, "could not resume");
                 return;
             }
         };
@@ -1462,9 +1528,10 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
             Ok(true) => {}
             Ok(false) => return,
             Err(detail) => {
-                // Not a Stop: logged; the queued row is retired to stopped at
-                // the next start.
+                // Not a Stop: the row, which attempted nothing, goes back to
+                // stopped (resumable) instead of staying queued.
                 tracing::warn!(error = %detail, "could not start a resumed delegation");
+                retire_queued(&state, &id, &agent, "could not start");
                 return;
             }
         }
@@ -1510,6 +1577,17 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
             }
         }
     });
+}
+
+/// A resumed row that attempted nothing goes back from queued to stopped
+/// (resumable) and the UI hears it. Past the stop gate the write is refused:
+/// the row stays queued and the next start retires it to stopped.
+fn retire_queued(state: &ApiState, id: &str, agent: &str, reason: &str) {
+    let _ = gated_open(&state.db_path, |store| {
+        store.move_delegation_state(id, DelegationState::Queued, DelegationState::Stopped)
+    });
+    let _ =
+        crate::api::wire::send_bounded(&state.events, &delegation_stopped_frame(id, agent, reason));
 }
 
 /// Open the store and run `access` on it, the opening included, past the
@@ -1915,6 +1993,53 @@ mod tests {
             .unwrap();
         assert_eq!(rows[0].state, DelegationState::Failed);
         assert_eq!(rows[0].steps[0].text, "running apple_calendar_list_events");
+    }
+
+    /// One open row in `state` with one step, as a crash leaves it.
+    fn open_row_with_a_step(home: &std::path::Path, state: DelegationState) -> String {
+        let store = Store::open(&kernel_core::store_path(home)).unwrap();
+        let row = store
+            .create_delegation("dl-open", "aux", "mail", "sort", None, PrivacyMode::Open)
+            .unwrap();
+        store.set_delegation_state(&row.id, state).unwrap();
+        let step = aux_store::DelegationStep {
+            text: "listing the inbox".into(),
+            at: "2026-11-06 09:00:00".into(),
+            state: "working".into(),
+            where_ran: None,
+        };
+        store.append_delegation_step(&row.id, &step).unwrap();
+        row.id
+    }
+
+    fn state_after_recovery(home: &std::path::Path, id: &str) -> DelegationState {
+        assert_eq!(recover_interrupted(home).unwrap(), 1);
+        let store = Store::open(&kernel_core::store_path(home)).unwrap();
+        store.delegation(id).unwrap().unwrap().state
+    }
+
+    /// A queued row never started since its resume, steps or not.
+    #[test]
+    fn a_queued_row_with_steps_recovers_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = open_row_with_a_step(dir.path(), DelegationState::Queued);
+        assert_eq!(
+            state_after_recovery(dir.path(), &id),
+            DelegationState::Stopped
+        );
+    }
+
+    /// A Stop all whose row writes the stop gate refused: the engaged switch
+    /// carries the intent across the restart, so the row is stopped.
+    #[test]
+    fn a_working_row_under_an_engaged_stop_recovers_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = open_row_with_a_step(dir.path(), DelegationState::Working);
+        killswitch::engage(dir.path()).unwrap();
+        assert_eq!(
+            state_after_recovery(dir.path(), &id),
+            DelegationState::Stopped
+        );
     }
 
     /// Keeps the floor the child turn would run under, and answers at once.

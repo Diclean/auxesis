@@ -351,6 +351,7 @@ async fn sensitive_extension_is_mountable_in_private_because_b14_is_covered() {
         secrets: Vec::new(),
         oauth: None,
         artefact: None,
+        launch: None,
     };
     state.tools.insert("ping".to_owned(), "00".to_owned());
     store_state(home.path(), &state).unwrap();
@@ -553,6 +554,7 @@ async fn accept_refuses_a_tampered_binary_and_stays_frozen() {
         secrets: Vec::new(),
         oauth: None,
         artefact: None,
+        launch: None,
     };
     store_state(home.path(), &state).unwrap();
     // Tamper with the installed bytes: `accept` must re-hash before re-pinning.
@@ -662,6 +664,7 @@ fn remove_never_touches_another_extensions_secret_keys() {
         secrets: vec!["EXT_FOO__TOKEN".to_owned(), "EXT_FOO_BAR__TOKEN".to_owned()],
         oauth: None,
         artefact: None,
+        launch: None,
     };
     foo.tools.insert("ping".to_owned(), "00".to_owned());
     store_state(home.path(), &foo).unwrap();
@@ -675,6 +678,7 @@ fn remove_never_touches_another_extensions_secret_keys() {
         secrets: vec!["EXT_FOO_BAR__TOKEN".to_owned()],
         oauth: None,
         artefact: None,
+        launch: None,
     };
     store_state(home.path(), &bar).unwrap();
     std::fs::write(
@@ -916,4 +920,65 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
         "a new secret name must not start"
     );
     host.stop().await;
+}
+
+async fn assert_starts(home: &Path, want: bool) {
+    let host = ExtensionHost::start(home).await;
+    let names: Vec<String> = host.running().iter().map(|n| n.to_string()).collect();
+    host.stop().await;
+    assert_eq!(names.is_empty(), !want, "{names:?}");
+}
+
+// EXT-ANCHOR-7 r2: entry.toml sits in the install tree, so the approval binds
+// what runs and where, not only the sha256. A kind flip (which skips the
+// binary re-hash), a new command or args, or a lowered sensitivity is refused
+// at mount and at start; a row without the launch pin waits for `--accept`.
+#[tokio::test]
+async fn approval_binds_the_launch_fields_of_entry_toml() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    // (c) the unchanged entry starts.
+    assert_starts(home.path(), true).await;
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let approved = installed.entry.clone();
+    let rewrite = |entry: &Entry| {
+        std::fs::write(installed.dir.join("entry.toml"), toml::to_string(entry).unwrap()).unwrap()
+    };
+    let marker = home.path().join("ran");
+    // (a) Binary -> npm with another command and args, same sha256 and version.
+    let mut flipped = approved.clone();
+    flipped.source.kind = SourceType::Npm;
+    flipped.run.command = "sh".to_owned();
+    flipped.run.args = vec!["-c".to_owned(), format!("touch '{}'", marker.display())];
+    rewrite(&flipped);
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    for field in ["source.type", "run.command", "run.args"] {
+        assert!(err.contains(field), "{err}");
+    }
+    assert_starts(home.path(), false).await;
+    assert!(!marker.exists(), "the swapped command must never run");
+    // (b) sensitive -> public.
+    let mut sensitive = approved.clone();
+    sensitive.sensitivity = Sensitivity::Sensitive;
+    rewrite(&sensitive);
+    let pinned = super::session::accept_current(home.path(), "demo", false).await;
+    assert!(pinned.unwrap().launch.is_some());
+    rewrite(&approved);
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    assert!(err.contains("changed launch fields: sensitivity"), "{err}");
+    assert_starts(home.path(), false).await;
+    // (d) a row without the launch pin is refused until `--accept`.
+    let mut state = load_state(home.path(), "demo").unwrap();
+    state.launch = None;
+    store_state(home.path(), &state).unwrap();
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    assert!(err.contains("no approved launch"), "{err}");
+    assert_starts(home.path(), false).await;
+    super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap();
+    mount(home.path(), "demo", "bob").unwrap();
+    assert_starts(home.path(), true).await;
 }

@@ -2313,6 +2313,7 @@ mod tests {
             secrets: Vec::new(),
             oauth: None,
             artefact: None,
+            launch: None,
         }
     }
 
@@ -2461,6 +2462,8 @@ mod tests {
             toml::to_string(&binary_entry("demo", b"x", "1.0.0")).unwrap(),
         )
         .unwrap();
+        // A mount re-hashes the binary, so the tree carries it.
+        std::fs::write(dir.join("server"), b"x").unwrap();
         let mut state = crate::extensions::mount::ExtensionState {
             name: "demo".to_owned(),
             version: "1.0.0".to_owned(),
@@ -2471,6 +2474,9 @@ mod tests {
             secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
             oauth: None,
             artefact: Some(hex(&Sha256::digest(b"x"))),
+            launch: Some(crate::extensions::mount::launch_pin(
+                &binary_entry("demo", b"x", "1.0.0"),
+            )),
         };
         state.tools.insert("ping".to_owned(), "00".to_owned());
         crate::extensions::mount::store_state(home.path(), &state).unwrap();
@@ -2541,6 +2547,7 @@ mod tests {
                 secrets: vec!["EXT_FOO__TOKEN".to_owned()],
                 oauth: None,
                 artefact: None,
+                launch: None,
             };
             state.tools.insert("ping".to_owned(), "00".to_owned());
             crate::extensions::mount::store_state(home.path(), &state).unwrap();

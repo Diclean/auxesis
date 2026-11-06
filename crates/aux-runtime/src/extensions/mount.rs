@@ -54,6 +54,60 @@ pub struct ExtensionState {
     /// closed until the owner names the build (`--accept --downgrade-to`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artefact: Option<String>,
+    /// What runs and where ([`launch_pin`]), pinned at approval: source type,
+    /// entry kind, sensitivity and the whole `[run]` table. entry.toml sits in
+    /// the install tree, so a row without this pin fails closed until
+    /// `aux ext verify --accept` re-pins it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<LaunchPin>,
+}
+
+/// The launch-deciding fields of an approved entry (EXT-ANCHOR-7 r2): a flip
+/// of the source type skips the binary re-hash, a new command or args run
+/// other code with the extension's secrets, and a lowered sensitivity mounts
+/// in Private mode, so each must match the owner's yes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchPin {
+    /// `[source].type`.
+    pub source: super::catalog::SourceType,
+    /// Entry `kind`.
+    pub kind: super::catalog::EntryKind,
+    /// Entry `sensitivity`.
+    pub sensitivity: super::catalog::Sensitivity,
+    /// The whole `[run]` table (transport, command, args, and any field added
+    /// to it later).
+    pub run: super::catalog::Run,
+}
+
+/// The [`LaunchPin`] an approval of `entry` records.
+pub fn launch_pin(entry: &super::catalog::Entry) -> LaunchPin {
+    LaunchPin {
+        source: entry.source.kind,
+        kind: entry.kind,
+        sensitivity: entry.sensitivity,
+        run: entry.run.clone(),
+    }
+}
+
+/// The names of the fields that differ between two launch pins.
+fn changed_launch_fields(pinned: &LaunchPin, now: &LaunchPin) -> Vec<&'static str> {
+    let mut changed = Vec::new();
+    let mut check = |differs: bool, field| {
+        if differs {
+            changed.push(field);
+        }
+    };
+    check(pinned.source != now.source, "source.type");
+    check(pinned.kind != now.kind, "kind");
+    check(pinned.sensitivity != now.sensitivity, "sensitivity");
+    check(pinned.run.transport != now.run.transport, "run.transport");
+    check(pinned.run.command != now.run.command, "run.command");
+    check(pinned.run.args != now.run.args, "run.args");
+    // A `[run]` field added later is still covered, by name of its table.
+    if changed.is_empty() && pinned != now {
+        changed.push("run");
+    }
+    changed
 }
 
 /// The artefact sha256 an approval pins: the entry's `source.sha256`,
@@ -266,8 +320,9 @@ fn unlisted_oauth_change(changed: &mut Vec<&'static str>, equal: bool) {
 /// `[oauth]` table must equal the pinned one: a changed authorize/token URL,
 /// client id, client secret name, scopes or any other table field is refused,
 /// and an extension that gained `[oauth]` after a pin written without one
-/// fails closed. Its artefact sha256 must be the pinned one (a row without
-/// the pin fails closed too).
+/// fails closed. Its artefact sha256 must be the pinned one, and so must its
+/// source type, kind, sensitivity and `[run]` table ([`launch_pin`]); a row
+/// without either pin fails closed too.
 pub fn check_approval(
     state: &ExtensionState,
     installed: &InstalledExtension,
@@ -293,6 +348,15 @@ pub fn check_approval(
             ))
         }
         None => return refuse("no approved artefact sha256 is pinned".to_owned()),
+    }
+    match &state.launch {
+        Some(pinned) => {
+            let changed = changed_launch_fields(pinned, &launch_pin(&installed.entry));
+            if !changed.is_empty() {
+                return refuse(format!("changed launch fields: {}", changed.join(", ")));
+            }
+        }
+        None => return refuse("no approved launch (command, type, sensitivity) is pinned".to_owned()),
     }
     let wider: Vec<String> = network_pins(&installed.entry)
         .into_iter()
@@ -348,8 +412,14 @@ pub fn mount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
     if agent.trim().is_empty() {
         return Err(MountError::InvalidAgent);
     }
-    let installed =
-        load_installed(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
+    // Re-hashed like a start: a binary rewritten in place is never mounted.
+    let installed = super::install::verify_installed(home, name).map_err(|err| match err {
+        super::install::InstallError::NotInstalled(_) => MountError::NotInstalled(name.to_owned()),
+        other => MountError::ApprovalRequired {
+            name: name.to_owned(),
+            reason: other.to_string(),
+        },
+    })?;
     let state = load_state(home, name).ok_or_else(|| MountError::MissingState(name.to_owned()))?;
     if state.frozen {
         return Err(MountError::Frozen(name.to_owned()));
@@ -644,8 +714,20 @@ mod tests {
             network: Vec::new(),
             secrets: Vec::new(),
             oauth: None,
-            artefact: Some("a".repeat(64)),
+            artefact: Some(server_sha()),
+            launch: Some(launch_pin(&test_entry(
+                name,
+                super::super::catalog::Sensitivity::Public,
+            ))),
         }
+    }
+
+    /// The test binary's bytes; a mount re-hashes them like a start.
+    const SERVER: &[u8] = b"#!test-server";
+
+    fn server_sha() -> String {
+        use sha2::Digest;
+        super::super::hex(&sha2::Sha256::digest(SERVER))
     }
 
     #[test]
@@ -792,6 +874,7 @@ mod tests {
         let dir = super::super::install_dir(home, name, "1.0.0");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("entry.toml"), toml::to_string(&entry).unwrap()).unwrap();
+        std::fs::write(dir.join("server"), SERVER).unwrap();
     }
 
     fn test_entry(
@@ -810,7 +893,7 @@ mod tests {
             source: super::super::catalog::Source {
                 kind: super::super::catalog::SourceType::Binary,
                 package: "server".to_owned(),
-                sha256: "a".repeat(64),
+                sha256: server_sha(),
             },
             run: super::super::catalog::Run {
                 transport: super::super::catalog::Transport::Stdio,
@@ -946,7 +1029,7 @@ mod tests {
     fn approval_refuses_other_bytes_and_a_row_without_an_artefact_pin() {
         let mut pinned = state("demo");
         let mut build = installed("1.0.0", &[], &[]);
-        build.entry.source.sha256 = "A".repeat(64);
+        build.entry.source.sha256 = server_sha().to_ascii_uppercase();
         check_approval(&pinned, &build).unwrap();
         build.entry.source.sha256 = "b".repeat(64);
         let err = check_approval(&pinned, &build).expect_err("other bytes");
@@ -955,6 +1038,24 @@ mod tests {
         let err = check_approval(&pinned, &installed("1.0.0", &[], &[])).expect_err("no pin");
         let err = err.to_string();
         assert!(err.contains("no approved artefact sha256"), "{err}");
+    }
+
+    // EXT-ANCHOR-7 r2: each launch field is named when it changes.
+    #[test]
+    fn approval_names_each_changed_launch_field() {
+        use super::super::catalog::{Sensitivity, SourceType};
+        let pinned = state("demo");
+        let mut build = installed("1.0.0", &[], &[]);
+        check_approval(&pinned, &build).unwrap();
+        build.entry.source.kind = SourceType::Uv;
+        build.entry.sensitivity = Sensitivity::Sensitive;
+        build.entry.run.args = vec!["-c".to_owned()];
+        let err = check_approval(&pinned, &build).expect_err("launch changed");
+        let err = err.to_string();
+        assert!(
+            err.contains("changed launch fields: source.type, sensitivity, run.args"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -1019,7 +1120,12 @@ mod tests {
             "demo",
             super::super::catalog::Sensitivity::Sensitive,
         );
-        store_state(home.path(), &state("demo")).unwrap();
+        let mut pinned = state("demo");
+        pinned.launch = Some(launch_pin(&test_entry(
+            "demo",
+            super::super::catalog::Sensitivity::Sensitive,
+        )));
+        store_state(home.path(), &pinned).unwrap();
         set_mode(home.path(), "private");
         assert!(mount(home.path(), "demo", "alice").is_ok());
         assert!(is_mounted(home.path(), "demo", "alice"));

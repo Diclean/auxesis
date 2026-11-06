@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use aux_runtime::extensions::install::{install, load_installed, InstallOptions};
-use aux_runtime::extensions::mount::{artefact_pin, network_pins, store_state, ExtensionState};
+use aux_runtime::extensions::mount::{artefact_pin, launch_pin, network_pins, store_state, ExtensionState};
 use aux_runtime::extensions::session::{accept_current, accept_installed};
 use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions};
@@ -68,6 +68,7 @@ impl TestApi {
                 secrets: installed.entry.secret_names(),
                 oauth: installed.entry.oauth.clone(),
                 artefact: Some(artefact_pin(&installed.entry)),
+                launch: Some(launch_pin(&installed.entry)),
             },
         )
         .unwrap();

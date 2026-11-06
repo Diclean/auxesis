@@ -765,6 +765,7 @@ pub async fn pin_extension(
         // reinstall that moves the token URL must not pass the approval check.
         oauth: installed.entry.oauth.clone(),
         artefact: Some(super::mount::artefact_pin(&installed.entry)),
+        launch: Some(super::mount::launch_pin(&installed.entry)),
     };
     store_state(home, &state)?;
     session.stop().await;
@@ -856,6 +857,8 @@ pub async fn accept_installed(
     state.oauth = installed.entry.oauth.clone();
     // ... and these bytes: the next start or accept refuses any other.
     state.artefact = Some(pin);
+    // ... run this way, from this source type, at this sensitivity.
+    state.launch = Some(super::mount::launch_pin(&installed.entry));
     state.frozen = false;
     store_state(home, &state)?;
     session.stop().await;

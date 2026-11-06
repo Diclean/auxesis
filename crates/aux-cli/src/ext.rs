@@ -234,6 +234,31 @@ fn warn_corrupt_newer(name: &str, running: &str, corrupt_newer: &[String]) {
     }
 }
 
+/// What an `--accept` now trusts: the artefact sha256, the hosts granted, and
+/// how it runs, so the owner sees the pin they just approved.
+fn trusted_summary(state: &extensions::ExtensionState) -> String {
+    let none = || "none".to_owned();
+    let hosts = match state.network.is_empty() {
+        true => none(),
+        false => state.network.join(", "),
+    };
+    let mut out = format!(
+        "  sha256: {}\n  hosts: {hosts}\n",
+        state.artefact.clone().unwrap_or_else(none)
+    );
+    if let Some(launch) = &state.launch {
+        let run = std::iter::once(launch.run.command.as_str())
+            .chain(launch.run.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push_str(&format!(
+            "  runs: {run} ({:?} source, {:?})\n",
+            launch.source, launch.sensitivity
+        ));
+    }
+    out
+}
+
 fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&str>) -> ExitCode {
     let names: Vec<String> = match name {
         Some(name) => vec![name.to_owned()],
@@ -271,6 +296,7 @@ fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&s
                     let version = &accepted.state.version;
                     warn_corrupt_newer(&name, version, &accepted.corrupt_newer);
                     let _ = writeln!(std::io::stdout(), "accepted {name}@{version}");
+                    let _ = write!(std::io::stdout(), "{}", trusted_summary(&accepted.state));
                     continue;
                 }
                 Err(err) => {

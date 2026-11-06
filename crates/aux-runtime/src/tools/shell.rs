@@ -1228,22 +1228,41 @@ fn parent_in_call(parent: i32, seen: &HashSet<TrackedPid>) -> bool {
 const MAX_SEEN_PIDS: usize = 4 * MAX_COMMAND_PROCESSES;
 
 /// Adds `more` to `seen`. A full set first forgets the pids proven gone
-/// (`ESRCH`); a pid `kill(pid, 0)` cannot answer for (`EPERM`) stays, never
-/// counted as gone. `false` means it is still full: the caller kills what it
-/// knows and reports the cap.
-fn remember(seen: &mut HashSet<TrackedPid>, more: impl IntoIterator<Item = TrackedPid>) -> bool {
+/// (`ESRCH`). Still full, it evicts the pids `kill(pid, 0)` answers `EPERM`
+/// for (this user may not signal them, so no sweep could) and sets
+/// `unprovable` (and [`EVICTED`] for the reaper): never counted as gone, the
+/// sweep stays sticky non-`Clean`. Any other answer keeps the pid. `false`
+/// means it was full: the caller kills what it knows and reports the cap. An
+/// `EPERM` eviction still answers `false` (fail closed, as before it existed:
+/// the command stops at the cap), but the new pids are tracked too.
+fn remember(
+    seen: &mut HashSet<TrackedPid>,
+    more: impl IntoIterator<Item = TrackedPid>,
+    unprovable: &mut bool,
+) -> bool {
     let mut pruned = false;
+    let mut evicted = false;
     for tracked in more {
         if seen.len() >= MAX_SEEN_PIDS && !seen.contains(&tracked) {
             if !pruned {
                 pruned = true;
-                seen.retain(|known| {
-                    // SAFETY: signal 0 sends nothing; it only asks whether
-                    // the pid exists (a zombie counts). Only `ESRCH` proves
-                    // it gone: `EPERM` keeps it.
-                    let exists = unsafe { libc::kill(known.pid, 0) } == 0;
-                    exists || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+                let mut eperm = Vec::new();
+                seen.retain(|known| match kill_probe(known.pid) {
+                    libc::ESRCH => false,
+                    libc::EPERM => {
+                        eperm.push(*known);
+                        true
+                    }
+                    _ => true,
                 });
+                if seen.len() >= MAX_SEEN_PIDS && !eperm.is_empty() {
+                    *unprovable = true;
+                    evicted = true;
+                    EVICTED.with(|flag| flag.set(true));
+                    for known in &eperm {
+                        seen.remove(known);
+                    }
+                }
             }
             if seen.len() >= MAX_SEEN_PIDS {
                 return false;
@@ -1251,7 +1270,34 @@ fn remember(seen: &mut HashSet<TrackedPid>, more: impl IntoIterator<Item = Track
         }
         seen.insert(tracked);
     }
-    true
+    !evicted
+}
+
+thread_local! {
+    /// Set by any [`remember`] eviction on this thread: the reaper whose pass
+    /// ran here takes it into its sticky `unprovable` ([`TreeReaper::evictions`]).
+    static EVICTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+type KillProbe = fn(i32) -> i32;
+#[cfg(test)]
+thread_local! {
+    /// Test seam: what [`kill_probe`] answers on this thread.
+    static KILL_PROBE: std::cell::Cell<Option<KillProbe>> = const { std::cell::Cell::new(None) };
+}
+
+/// `kill(pid, 0)`: 0 if the pid exists (zombies too), else its errno or -1.
+fn kill_probe(pid: i32) -> i32 {
+    #[cfg(test)]
+    if let Some(probe) = KILL_PROBE.with(std::cell::Cell::get) {
+        return probe(pid);
+    }
+    // SAFETY: signal 0 sends nothing; it only asks whether the pid exists.
+    match unsafe { libc::kill(pid, 0) } {
+        0 => 0,
+        _ => std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
+    }
 }
 
 /// Seen processes still the same, and every live descendant of each, read
@@ -1467,7 +1513,9 @@ fn kill_process_tree_with(
             let (family, all_read) = seen_family(seen, pid, lookup);
             *rechecked &= listed && all_read;
             found.extend(family);
-            let _ = remember(seen, found.iter().copied());
+            let mut evicted = false;
+            let _ = remember(seen, found.iter().copied(), &mut evicted);
+            *rechecked &= !evicted;
             found
         };
         let first = scan(seen, &mut rechecked);
@@ -1859,7 +1907,7 @@ fn sweep_leftovers_with(
                     .copied()
                     .collect();
                 capped |= seen.len() >= MAX_SEEN_PIDS;
-                capped |= !remember(seen, family.iter().copied());
+                capped |= !remember(seen, family.iter().copied(), &mut lost);
                 for tracked in family {
                     match tracked.recheck(lookup) {
                         Some(true) => {}
@@ -1893,7 +1941,7 @@ fn sweep_leftovers_with(
                     // A candidate found by the session/marker scan is part of
                     // the call even if it escapes before the next pass.
                     capped |= seen.len() >= MAX_SEEN_PIDS;
-                    capped |= !remember(seen, [tracked]);
+                    capped |= !remember(seen, [tracked], &mut lost);
                     if pid <= 1 || !tracked.still_same(&pid_ppid_uid_start) {
                         continue;
                     }
@@ -2009,6 +2057,8 @@ struct TreeReaper {
     armed: bool,
     /// Processes the call saw: every sweep, `Drop` included, signals them.
     seen: HashSet<TrackedPid>,
+    /// [`remember`] evicted `EPERM` pids from `seen`: never `Clean` again.
+    unprovable: bool,
     /// The marker file, open until the last retry ends: while it is open its
     /// inode cannot be reused, so `marker` names no other call's file.
     marker_file: Option<std::fs::File>,
@@ -2250,13 +2300,55 @@ const OVERFLOW_BACKLOG_MAX: usize = 32;
 /// shutting down drops the task there, maybe during an unwind), as before
 /// SHELL-SWEEP-13. Inline, never handed to a thread: a detached thread dies
 /// with the exiting daemon, and a join bounded by [`MAX_SWEEP_TIME`] would
-/// still strand the reapers past the bound. One drainer at a time (the flag).
-struct DrainBacklog;
+/// still strand the reapers past the bound. One drainer at a time (the flag),
+/// and the token ([`TOKEN_TASK`]) says who holds it: a task a failed spawn
+/// left in the pool (`NoThreads`) skips while the caller holds it
+/// ([`TOKEN_CALLER`]), and drains the whole backlog when the caller hands it
+/// back ([`TOKEN_TASK`] again) with reapers left.
+struct DrainBacklog(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+/// The [`DrainBacklog`] token: the task owns the drain.
+const TOKEN_TASK: u8 = 1;
+/// The caller took the drain after a failed spawn.
+const TOKEN_CALLER: u8 = 0;
+/// The task is gone without draining (it found the caller holding it).
+const TOKEN_GONE: u8 = 2;
 
 impl Drop for DrainBacklog {
     fn drop(&mut self) {
-        drain_backlog();
+        use std::sync::atomic::Ordering::SeqCst;
+        let gone = |from| {
+            self.0
+                .compare_exchange(from, TOKEN_GONE, SeqCst, SeqCst)
+                .is_ok()
+        };
+        // A loop: the caller may hand the token back between the two tries.
+        loop {
+            if gone(TOKEN_TASK) {
+                drain_backlog();
+                return;
+            }
+            if gone(TOKEN_CALLER) {
+                return;
+            }
+        }
     }
+}
+
+/// How long a failed drainer spawn drains on the caller: the daemon's turn
+/// runtime is current-thread, so the drain blocks a turn with no cancel. A
+/// soft budget, checked between items: one item in progress always finishes.
+/// The rest goes back, flag still set, to the drainer task left queued in the
+/// pool (it drains everything when a pool thread runs it, or when shutdown
+/// drops it); with that task gone, it drains here to the end.
+const INLINE_DRAIN_BUDGET: Duration = Duration::from_secs(10);
+
+fn inline_drain_budget() -> Duration {
+    #[cfg(test)]
+    if let Some(budget) = INLINE_DRAIN_TEST_BUDGET.with(std::cell::Cell::get) {
+        return budget;
+    }
+    INLINE_DRAIN_BUDGET
 }
 
 /// Marks the backlog's drainer gone when dropped by an unwind, so a later
@@ -2282,19 +2374,35 @@ impl Drop for DrainerGone {
 /// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty; the
 /// empty pop clears the drainer flag under the same lock.
 fn drain_backlog() {
+    drain_backlog_until(None);
+}
+
+/// [`drain_backlog`], stopping at `deadline` (checked between items): the
+/// flag stays set with reapers left, for the caller to hand on, and their
+/// count is returned.
+fn drain_backlog_until(deadline: Option<Instant>) -> usize {
     let _gone = DrainerGone::new();
     loop {
         let next = {
             let mut backlog = overflow_backlog();
+            if deadline.is_some_and(|end| Instant::now() >= end) && !backlog.1.is_empty() {
+                return backlog.1.len();
+            }
             let next = backlog.1.pop_front();
             backlog.0 = next.is_some();
             next
         };
         let Some(mut next) = next else {
-            return;
+            return 0;
         };
         #[cfg(test)]
         BACKLOG_HERE.with(|here| here.set(here.get() + 1));
+        #[cfg(test)]
+        std::thread::sleep(BACKLOG_ITEM_DELAY.with(std::cell::Cell::get));
+        #[cfg(test)]
+        if let Some(hook) = BACKLOG_ITEM_HOOK.with(std::cell::Cell::get) {
+            hook();
+        }
         // `late_retry_logged` catches the retry; this also catches its
         // logging, so one item never ends the drain.
         let item = std::panic::AssertUnwindSafe(|| {
@@ -2319,7 +2427,9 @@ static BACKLOG_ITEM_PANICS: std::sync::atomic::AtomicBool =
 
 /// Runs a full retry on the caller: in `block_in_place` on a multi-thread
 /// runtime (the worker hands its other tasks off), else inline. If
-/// `block_in_place` refuses (a `LocalSet`), the retry still runs here.
+/// `block_in_place` refuses (a multi-thread handle under a current-thread
+/// executor or a `LocalSet`), the accepted fallback runs it inline anyway: it
+/// blocks that executor, but a reaper is never dropped unkilled.
 fn retry_on_caller(runtime: &tokio::runtime::Handle, mut reaper: TreeReaper) {
     run_on_caller(runtime, &mut || late_retry_logged(&mut reaper));
 }
@@ -2337,8 +2447,9 @@ fn run_on_caller(runtime: &tokio::runtime::Handle, work: &mut dyn FnMut()) {
         });
         let _ = std::panic::catch_unwind(in_place);
         #[cfg(test)]
-        if ran {
-            OVERFLOW_IN_PLACE.with(|count| count.set(count.get() + 1));
+        match ran {
+            true => OVERFLOW_IN_PLACE.with(|count| count.set(count.get() + 1)),
+            false => OVERFLOW_REFUSED.with(|count| count.set(count.get() + 1)),
         }
     }
     if !ran {
@@ -2397,6 +2508,19 @@ thread_local! {
     static BEFORE_BACKLOG_SPAWN: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
     /// Test seam: how many backlog reapers ran on this thread.
     static BACKLOG_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test seam: how often `block_in_place` refused on a multi-thread handle.
+    static OVERFLOW_REFUSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test seam: each backlog item on this thread sleeps this long first.
+    static BACKLOG_ITEM_DELAY: std::cell::Cell<Duration> =
+        const { std::cell::Cell::new(Duration::ZERO) };
+    /// Test seam: runs before each backlog item on this thread.
+    static BACKLOG_ITEM_HOOK: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
+    /// Test seam: the failed-spawn inline drain's budget on this thread.
+    static INLINE_DRAIN_TEST_BUDGET: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+    /// Test seam: the drainer task a failed spawn left queued in the pool.
+    static LEFTOVER_DRAINER: std::cell::RefCell<Option<DrainBacklog>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The live overflow-thread counter: [`OVERFLOW_THREADS`], or a test's.
@@ -2462,27 +2586,45 @@ fn overflow_retry(oldest: TreeReaper) {
              retries are running; the cut reaper waits for the blocking-pool backlog"
         );
         if start {
-            // `spawn_blocking` panics when the OS gives the pool no thread;
-            // on a runtime shutting down it drops the task unrun here. Either
-            // way `drain` drains the whole backlog where it is dropped (kept
-            // out here until the spawn, so a failed one never drains it
-            // inside the unwind).
-            let mut drain = Some(DrainBacklog);
+            // `spawn_blocking` panics when the OS gives the pool no thread,
+            // after queuing the task (a later pool thread may run it); on a
+            // runtime shutting down it drops the task unrun here, which
+            // drains the whole backlog. Kept out here until the spawn, so a
+            // failed one never drains inside the unwind.
+            use std::sync::atomic::Ordering::SeqCst;
+            let owner = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(TOKEN_TASK));
+            let mut drain = Some(DrainBacklog(owner.clone()));
             let spawn = std::panic::AssertUnwindSafe(|| {
+                let task = drain.take();
                 #[cfg(test)]
                 if FAIL_BACKLOG_SPAWN.with(std::cell::Cell::get) {
+                    LEFTOVER_DRAINER.with(|left| *left.borrow_mut() = task);
                     panic!("test seam: no blocking thread");
                 }
-                let task = drain.take();
                 runtime.spawn_blocking(move || drop(task))
             });
-            if std::panic::catch_unwind(spawn).is_err() {
-                // The whole backlog drains on the caller (in `block_in_place`
-                // on a multi-thread runtime), never only this call's reaper.
-                tracing::error!(
-                    "shell: no blocking thread for the overflow backlog; it drains here"
-                );
-                run_on_caller(&runtime, &mut drain_backlog);
+            // The token taken, a leftover drainer skips. The backlog, not
+            // only this call's reaper, drains here within the budget; the
+            // rest goes back to the leftover, or drains here with it gone.
+            let failed = std::panic::catch_unwind(spawn).is_err();
+            if failed {
+                tracing::error!("shell: no blocking thread for the overflow backlog");
+            }
+            let took = || owner.compare_exchange(TOKEN_TASK, TOKEN_CALLER, SeqCst, SeqCst);
+            if failed && took().is_ok() {
+                let deadline = Instant::now() + inline_drain_budget();
+                let mut left = 0;
+                run_on_caller(&runtime, &mut || left = drain_backlog_until(Some(deadline)));
+                let back = || owner.compare_exchange(TOKEN_CALLER, TOKEN_TASK, SeqCst, SeqCst);
+                if left > 0 && back().is_ok() {
+                    tracing::warn!(
+                        left,
+                        "shell: the overflow backlog drain ran out of time here; the rest \
+                         waits for the queued drainer (a pool thread, or shutdown)"
+                    );
+                } else if left > 0 {
+                    run_on_caller(&runtime, &mut || drain_backlog());
+                }
             }
             drop(drain);
         }
@@ -2557,6 +2699,7 @@ impl TreeReaper {
             marker,
             armed: true,
             seen: root.and_then(TrackedPid::of).into_iter().collect(),
+            unprovable: false,
             marker_file: None,
         }
     }
@@ -2635,7 +2778,16 @@ impl TreeReaper {
     /// held (not reaped) across the sweep.
     /// False when the final marker pass was incomplete (see [`kill_process_tree`]).
     fn sweep_now(&mut self) -> bool {
-        kill_process_tree(self.child.as_mut(), &self.marker, &mut self.seen)
+        self.evictions(|this| kill_process_tree(this.child.as_mut(), &this.marker, &mut this.seen))
+    }
+
+    /// Runs one pass over `seen`; any [`remember`] eviction in it makes
+    /// `unprovable` sticky: this reaper never retires as clean again.
+    fn evictions<R>(&mut self, pass: impl FnOnce(&mut Self) -> R) -> R {
+        EVICTED.with(|flag| flag.set(false));
+        let out = pass(self);
+        self.unprovable |= EVICTED.with(|flag| flag.replace(false));
+        out
     }
 
     /// The whole-tree kill (`kill_tree`: stop path) and leftover sweep
@@ -2652,18 +2804,21 @@ impl TreeReaper {
         tokio::task::spawn_blocking(move || {
             let killed = !kill_tree || self.sweep_now();
             let sweep = self.root.filter(|_| scan).map(|root| {
-                sweep_leftovers_with(
-                    root,
-                    &self.marker,
-                    &mut self.seen,
-                    &|_pass| Vec::new(),
-                    &visibility,
-                    &pid_lookup,
-                    max_passes,
-                    max_time,
-                )
+                self.evictions(|this| {
+                    sweep_leftovers_with(
+                        root,
+                        &this.marker,
+                        &mut this.seen,
+                        &|_pass| Vec::new(),
+                        &visibility,
+                        &pid_lookup,
+                        max_passes,
+                        max_time,
+                    )
+                })
             });
-            (self, kill_verdict(killed, sweep))
+            let verdict = kill_verdict(killed && !self.unprovable, sweep);
+            (self, verdict)
         })
         .await
         .map_err(std::io::Error::other)
@@ -2682,18 +2837,20 @@ impl TreeReaper {
     fn retry(&mut self) -> Option<Sweep> {
         self.armed = false;
         if self.child.as_ref().is_some_and(|c| c.id().is_some()) {
-            return match self.sweep_now() {
+            return match self.sweep_now() && !self.unprovable {
                 true => None,
                 false => Some(Sweep::Unchecked),
             };
         }
-        self.root?;
-        Some(
-            match sweep_leftovers(NO_SESSION, &self.marker, &mut self.seen) {
-                Sweep::Clean => Sweep::Unavailable(Undescribed::NoSession),
-                sweep => sweep,
-            },
-        )
+        if self.root.is_none() {
+            return self.unprovable.then_some(Sweep::Unchecked);
+        }
+        let sweep =
+            self.evictions(|this| sweep_leftovers(NO_SESSION, &this.marker, &mut this.seen));
+        Some(match sweep {
+            Sweep::Clean => Sweep::Unavailable(Undescribed::NoSession),
+            sweep => sweep,
+        })
     }
 
     /// The no-thread fallback, with no ppid walk or session scan: SIGKILL the
@@ -2764,6 +2921,8 @@ impl TreeReaper {
             // re-check failed may still run: the pass counts as cut.
             let signalled = signal_holders(&orphans, &pid_lookup);
             skipped += usize::from(!complete || !signalled);
+            // Evicted pids no pass can prove gone: the full retry, never done.
+            skipped += usize::from(self.unprovable);
         }
         #[cfg(not(unix))]
         let _ = (deadline, marker_deadline, lookup);
@@ -2794,6 +2953,7 @@ impl Drop for TreeReaper {
             marker: self.marker,
             armed: false,
             seen: std::mem::take(&mut self.seen),
+            unprovable: self.unprovable,
             marker_file: self.marker_file.take(),
         };
         if tokio::runtime::Handle::try_current().is_err() {
@@ -3015,7 +3175,11 @@ impl Tool for ShellTool {
                         if let Some(root) = child_pid {
                             let (tracked, _) =
                                 tracked_pids(root as i32, &marker, launched_at, true);
-                            let fits = remember(&mut reaper.seen, tracked.iter().copied());
+                            let fits = remember(
+                                &mut reaper.seen,
+                                tracked.iter().copied(),
+                                &mut reaper.unprovable,
+                            );
                             if !fits || tracked.len() > MAX_COMMAND_PROCESSES {
                                 break Stop::ProcessLimit;
                             }
@@ -3063,7 +3227,7 @@ impl Tool for ShellTool {
                 if let Some(root) = child_pid {
                     let (tracked, listed) =
                         tracked_pids(root as i32, &reaper.marker, launched_at, true);
-                    let _ = remember(&mut reaper.seen, tracked);
+                    let _ = remember(&mut reaper.seen, tracked, &mut reaper.unprovable);
                     #[cfg(test)]
                     let family_read: OrphanLookup<'_> = match &self.exit_family_lookup {
                         Some(lookup) => lookup,
@@ -3072,7 +3236,7 @@ impl Tool for ShellTool {
                     #[cfg(not(test))]
                     let family_read: OrphanLookup<'_> = &pid_lookup;
                     let (family, all_read) = seen_family(&reaper.seen, root as i32, family_read);
-                    let _ = remember(&mut reaper.seen, family);
+                    let _ = remember(&mut reaper.seen, family, &mut reaper.unprovable);
                     exit_read = listed && all_read;
                 }
                 #[cfg(not(test))]
@@ -4855,11 +5019,11 @@ await(q(bg.pid));
         // the start time does not, so the sweep forgets them.
         let guard = Spawned(vec![spawn_sh("sleep 30")], Vec::new());
         let mut seen = fill(guard.0[0].id() as i32);
-        assert!(!remember(&mut seen, [at(i32::MAX - 2, 0)]));
+        assert!(!remember(&mut seen, [at(i32::MAX - 2, 0)], &mut false));
         assert_eq!(seen.len(), MAX_SEEN_PIDS);
         assert_eq!(sweep(&mut seen, Visibility::Described), Sweep::Clean);
         assert!(seen.is_empty(), "{} stale entries kept", seen.len());
-        assert!(remember(&mut seen, [at(i32::MAX - 2, 0)]));
+        assert!(remember(&mut seen, [at(i32::MAX - 2, 0)], &mut false));
         // Live-looking pids (the lookup seam) stay; with no start time, a
         // zombie or `ESRCH` goes, so the sweep reports the cap only if full.
         // SAFETY: `geteuid` only reads this process's effective uid.
@@ -5002,6 +5166,7 @@ await(q(bg.pid));
             marker: Marker::from_file(&marker_file).unwrap(),
             armed: true,
             seen: HashSet::new(),
+            unprovable: false,
             marker_file: Some(marker_file),
         };
         drop(reaper);
@@ -5269,6 +5434,7 @@ await(q(bg.pid));
             marker,
             armed: false,
             seen: HashSet::new(),
+            unprovable: false,
             marker_file: None,
         }
     }
@@ -6021,22 +6187,270 @@ await(q(bg.pid));
         assert_eq!((running, waiting), (false, 0), "the backlog was stranded");
     }
 
-    /// SHELL-SWEEP-13 r2 (6): the cap prune drops a seen pid only on `ESRCH`.
-    /// `kill(1, 0)` answers `EPERM` to a non-root caller: such entries stay
-    /// (never counted as gone), so `remember` fails closed.
+    /// SHELL-SWEEP-14 (1): a failed drainer spawn drains on the caller only
+    /// within its budget (here 200 ms; 10 s in production): 32 slow reapers
+    /// leave the rest queued, flag still set, handed back to the drainer task
+    /// the spawn left queued. With no new push, a runtime shutdown dropping
+    /// that task unrun runs every one of them.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_spawn_drains_within_its_budget_and_shutdown_drains_the_rest() {
+        use std::sync::atomic::AtomicUsize;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        let live: &'static AtomicUsize =
+            Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
+        OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+        FAIL_BACKLOG_SPAWN.with(|seam| seam.set(true));
+        BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(25)));
+        INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(200))));
+        let _reset = OnDrop(|| {
+            OVERFLOW_LIVE.with(|seam| seam.set(None));
+            FAIL_BACKLOG_SPAWN.with(|seam| seam.set(false));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+            clear_backlog();
+        });
+        {
+            let mut backlog = overflow_backlog();
+            for _ in 0..OVERFLOW_BACKLOG_MAX - 1 {
+                backlog.1.push_back(idle_reaper(pinned_marker().0));
+            }
+        }
+        let here = BACKLOG_HERE.with(std::cell::Cell::get);
+        let started = Instant::now();
+        overflow_retry(idle_reaper(pinned_marker().0));
+        let took = started.elapsed();
+        let ran = BACKLOG_HERE.with(std::cell::Cell::get) - here;
+        let (running, left) = {
+            let backlog = overflow_backlog();
+            (backlog.0, backlog.1.len())
+        };
+        assert!(took < Duration::from_secs(2), "held {took:?}");
+        assert!(ran >= 1 && left > 0, "ran {ran}, left {left}");
+        assert_eq!(ran + left, OVERFLOW_BACKLOG_MAX, "a reaper was dropped");
+        assert!(running, "the flag was cleared with reapers left");
+        let leftover = LEFTOVER_DRAINER.with(|left| left.borrow_mut().take());
+        assert!(leftover.is_some(), "no drainer task was left queued");
+        let backlogged = OVERFLOW_BACKLOGGED.load(std::sync::atomic::Ordering::SeqCst);
+        // The pool's queued task, dropped unrun by the runtime's shutdown.
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let _handle = runtime.spawn(async move {
+                let _task = leftover;
+                std::future::pending::<()>().await;
+            });
+            drop(runtime);
+        })
+        .join()
+        .unwrap();
+        let drained = OVERFLOW_BACKLOGGED.load(std::sync::atomic::Ordering::SeqCst) - backlogged;
+        assert_eq!(drained, left, "the shutdown drop left reapers");
+        let backlog = overflow_backlog();
+        assert!(
+            backlog.1.is_empty() && !backlog.0,
+            "stranded after shutdown"
+        );
+    }
+
+    /// SHELL-SWEEP-14 (1): the drainer task gone before the hand-back (it
+    /// skipped while the caller held the token): the caller drains the rest
+    /// to the end, flag cleared.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_spawn_with_its_task_gone_drains_everything_here() {
+        use std::sync::atomic::AtomicUsize;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        let live: &'static AtomicUsize =
+            Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
+        OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+        FAIL_BACKLOG_SPAWN.with(|seam| seam.set(true));
+        BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(100)));
+        INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(50))));
+        let _reset = OnDrop(|| {
+            OVERFLOW_LIVE.with(|seam| seam.set(None));
+            FAIL_BACKLOG_SPAWN.with(|seam| seam.set(false));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+            clear_backlog();
+        });
+        // The task drops (and skips) while the caller drains its first item.
+        BACKLOG_ITEM_HOOK.with(|seam| {
+            seam.set(Some(|| {
+                drop(LEFTOVER_DRAINER.with(|left| left.borrow_mut().take()))
+            }))
+        });
+        let _unhook = OnDrop(|| BACKLOG_ITEM_HOOK.with(|seam| seam.set(None)));
+        overflow_backlog()
+            .1
+            .push_back(idle_reaper(pinned_marker().0));
+        let here = BACKLOG_HERE.with(std::cell::Cell::get);
+        overflow_retry(idle_reaper(pinned_marker().0));
+        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get) - here, 2);
+        let backlog = overflow_backlog();
+        assert!(
+            backlog.1.is_empty() && !backlog.0,
+            "stranded with the task gone"
+        );
+    }
+
+    /// SHELL-SWEEP-14 (2), the production shape: `spawn_blocking` panics
+    /// AFTER the drainer task was moved into the pool. The caller drains; the
+    /// leftover task, run later by a pool thread, finds the token taken: it
+    /// neither drains beside the owner nor clears the owner's flag.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_leftover_drainer_after_a_failed_spawn_does_nothing() {
+        use std::sync::atomic::AtomicUsize;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        let live: &'static AtomicUsize =
+            Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
+        OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+        FAIL_BACKLOG_SPAWN.with(|seam| seam.set(true));
+        let _reset = OnDrop(|| {
+            OVERFLOW_LIVE.with(|seam| seam.set(None));
+            FAIL_BACKLOG_SPAWN.with(|seam| seam.set(false));
+            clear_backlog();
+        });
+        let here = BACKLOG_HERE.with(std::cell::Cell::get);
+        overflow_retry(idle_reaper(pinned_marker().0));
+        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get), here + 1);
+        let leftover = LEFTOVER_DRAINER.with(|left| left.borrow_mut().take());
+        assert!(leftover.is_some(), "the seam panicked before the take");
+        {
+            let mut backlog = overflow_backlog();
+            backlog.0 = true;
+            backlog.1.push_back(idle_reaper(pinned_marker().0));
+        }
+        drop(leftover);
+        let (running, waiting) = {
+            let backlog = overflow_backlog();
+            (backlog.0, backlog.1.len())
+        };
+        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get), here + 1);
+        assert_eq!((running, waiting), (true, 1), "the leftover drained");
+    }
+
+    /// SHELL-SWEEP-14 (5): a refused `block_in_place` (a multi-thread handle
+    /// under a current-thread executor) runs inline as the accepted fallback,
+    /// counted apart from the flavor check (a current-thread handle, never
+    /// tried) and from a real `block_in_place`.
+    #[test]
+    fn a_refused_block_in_place_is_told_apart_from_the_flavor_check() {
+        use tokio::runtime::Handle;
+        let counts = || {
+            (
+                OVERFLOW_REFUSED.with(std::cell::Cell::get),
+                OVERFLOW_INLINE.with(std::cell::Cell::get),
+                OVERFLOW_IN_PLACE.with(std::cell::Cell::get),
+            )
+        };
+        std::thread::spawn(move || {
+            let multi = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .build()
+                .unwrap();
+            let current = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let mut ran = 0;
+            let mut work = || ran += 1;
+            current.block_on(async { run_on_caller(multi.handle(), &mut work) });
+            assert_eq!(counts(), (1, 1, 0), "the refusal was not the fallback");
+            current.block_on(async { run_on_caller(&Handle::current(), &mut work) });
+            assert_eq!(counts(), (1, 2, 0), "the flavor check tried in place");
+            multi.block_on(async { run_on_caller(&Handle::current(), &mut work) });
+            assert_eq!(counts(), (1, 2, 1));
+            assert_eq!(ran, 3);
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// SHELL-SWEEP-14 (3, 4): the cap prune drops a seen pid on `ESRCH`; if
+    /// the set is still full, it evicts the `EPERM` pids and flags them
+    /// unprovable, never gone, and still reports the cap. Any other answer
+    /// keeps the pid. The kill result is a seam, so this asserts as root too.
     #[cfg(unix)]
     #[test]
-    fn the_cap_prune_keeps_a_pid_it_may_not_signal() {
-        // SAFETY: signal 0 sends nothing.
-        let eperm = unsafe { libc::kill(1, 0) } != 0
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-        if !eperm {
-            return;
-        }
+    fn the_cap_prune_evicts_eperm_pids_as_unprovable_never_gone() {
         let at = |pid, start| TrackedPid { pid, start };
-        let mut seen: HashSet<_> = (0..MAX_SEEN_PIDS as u64).map(|s| at(1, s)).collect();
-        assert!(!remember(&mut seen, [at(i32::MAX - 2, 0)]));
-        assert_eq!(seen.len(), MAX_SEEN_PIDS, "EPERM pids counted as gone");
+        let _reset = OnDrop(|| KILL_PROBE.with(|seam| seam.set(None)));
+        let full = |pid: fn(u64) -> i32| -> HashSet<_> {
+            (0..MAX_SEEN_PIDS as u64).map(|s| at(pid(s), s)).collect()
+        };
+        let new = at(i32::MAX - 2, 0);
+        // Every pid `EPERM`: evicted, flagged, the new pid tracked, and the
+        // cap still reported (the command stops, as before the eviction).
+        KILL_PROBE.with(|seam| seam.set(Some(|_| libc::EPERM)));
+        let mut seen = full(|_| 1);
+        let mut unprovable = false;
+        assert!(
+            !remember(&mut seen, [new], &mut unprovable),
+            "EPERM eviction kept it running"
+        );
+        assert!(unprovable, "evicted EPERM pids read as gone");
+        assert_eq!(seen, HashSet::from([new]));
+        // Another answer (EIO): kept, still full, not flagged.
+        KILL_PROBE.with(|seam| seam.set(Some(|_| libc::EIO)));
+        let mut seen = full(|_| 1);
+        let mut unprovable = false;
+        assert!(!remember(&mut seen, [new], &mut unprovable));
+        assert!(!unprovable);
+        assert_eq!(seen.len(), MAX_SEEN_PIDS);
+    }
+
+    /// SHELL-SWEEP-14 (3, 4): a candidate that finds the set full mid-pass
+    /// (filled by the candidate before it) marks the sweep capped even when
+    /// the prune makes room: `SeenCap`, never `Clean`. When the prune evicts
+    /// `EPERM` pids instead, the sweep stays non-`Clean` (unreadable).
+    #[cfg(unix)]
+    #[test]
+    fn a_set_filled_mid_pass_is_capped_and_evicted_eperm_stays_unclean() {
+        let me = unsafe { libc::geteuid() };
+        let root = i32::MAX;
+        let (a, b) = (i32::MAX - 1, i32::MAX - 2);
+        let (marker, _pin) = pinned_marker();
+        let _reset = OnDrop(|| KILL_PROBE.with(|seam| seam.set(None)));
+        let lookup = move |pid: i32| match pid == a || pid == b {
+            true => Lookup::Found((1, me, 7)),
+            false => pid_lookup(pid),
+        };
+        let sweep = || {
+            // The root's own entries: `forget_gone` skips them, so the set
+            // starts each pass one short of its cap.
+            let mut seen: HashSet<_> = (0..MAX_SEEN_PIDS as u64 - 1)
+                .map(|start| TrackedPid { pid: root, start })
+                .collect();
+            sweep_leftovers_with(
+                root,
+                &marker,
+                &mut seen,
+                &|pass| match pass {
+                    0 => vec![a, b],
+                    _ => Vec::new(),
+                },
+                &|_pass, pid| match pid == a || pid == b {
+                    true => Visibility::Unseen,
+                    false => Visibility::Described,
+                },
+                &lookup,
+                3,
+                MAX_SWEEP_TIME,
+            )
+        };
+        KILL_PROBE.with(|seam| seam.set(Some(|_| libc::ESRCH)));
+        assert_eq!(sweep(), Sweep::SeenCap, "a mid-pass cap read as clean");
+        KILL_PROBE.with(|seam| seam.set(Some(|_| libc::EPERM)));
+        assert_eq!(
+            sweep(),
+            Sweep::Unavailable(Undescribed::Unreadable),
+            "evicted EPERM pids counted as gone"
+        );
     }
 
     /// SHELL-SWEEP-11 fix 1 (P2): a seen entry whose re-check `Failed` may
@@ -6062,6 +6476,33 @@ await(q(bg.pid));
         assert!(child.try_wait().unwrap().is_none());
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    /// SHELL-SWEEP-14 (P2): an eviction in any reaper pass is sticky: the
+    /// fast kill counts it as skipped (full retry) and `retry` never answers
+    /// clean, though the later passes evict nothing.
+    #[cfg(unix)]
+    #[test]
+    fn an_eviction_keeps_the_reaper_unprovable_for_every_later_pass() {
+        let _reset = OnDrop(|| KILL_PROBE.with(|seam| seam.set(None)));
+        KILL_PROBE.with(|seam| seam.set(Some(|_| libc::EPERM)));
+        let mut reaper = idle_reaper(pinned_marker().0);
+        reaper.seen = (0..MAX_SEEN_PIDS as u64)
+            .map(|start| TrackedPid { pid: 1, start })
+            .collect();
+        let new = TrackedPid {
+            pid: i32::MAX - 2,
+            start: 0,
+        };
+        let mut local = false;
+        reaper.evictions(|this| remember(&mut this.seen, [new], &mut local));
+        assert!(reaper.unprovable, "the eviction was not kept on the reaper");
+        KILL_PROBE.with(|seam| seam.set(None));
+        reaper.seen.clear();
+        let ample = std::time::Instant::now() + Duration::from_secs(5);
+        let _clean = scans_clean(1);
+        assert_eq!(reaper.fast_kill_with(ample, ample, &|_| Lookup::Gone), 1);
+        assert_eq!(reaper.retry(), Some(Sweep::Unchecked), "retired as clean");
     }
 
     /// SHELL-SWEEP-11 fix 1 (P2): in the tree kill, a seen process or a

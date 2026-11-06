@@ -635,8 +635,8 @@ dependencies = [
 
 [[package]]
 name = "auxesis-gliner2"
-version = "0.1.8"
-source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.8#2add881808d51bfd5b1fa9b2879f9bd6e09fb6c4"
+version = "0.1.9"
+source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.9#d9a3f2e1fecac19dee0605e4a56f70cbb33a8995"
 dependencies = [
  "ort",
  "regex",
@@ -645,8 +645,8 @@ dependencies = [
 
 [[package]]
 name = "auxesis-kernel-broker"
-version = "0.1.8"
-source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.8#2add881808d51bfd5b1fa9b2879f9bd6e09fb6c4"
+version = "0.1.9"
+source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.9#d9a3f2e1fecac19dee0605e4a56f70cbb33a8995"
 dependencies = [
  "aho-corasick",
  "async-trait",
@@ -668,8 +668,8 @@ dependencies = [
 
 [[package]]
 name = "auxesis-kernel-core"
-version = "0.1.8"
-source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.8#2add881808d51bfd5b1fa9b2879f9bd6e09fb6c4"
+version = "0.1.9"
+source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.9#d9a3f2e1fecac19dee0605e4a56f70cbb33a8995"
 dependencies = [
  "chrono",
  "core-foundation",
@@ -686,8 +686,8 @@ dependencies = [
 
 [[package]]
 name = "auxesis-kernel-mcp"
-version = "0.1.8"
-source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.8#2add881808d51bfd5b1fa9b2879f9bd6e09fb6c4"
+version = "0.1.9"
+source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.9#d9a3f2e1fecac19dee0605e4a56f70cbb33a8995"
 dependencies = [
  "async-trait",
  "auxesis-kernel-broker",
@@ -709,8 +709,8 @@ dependencies = [
 
 [[package]]
 name = "auxesis-kernel-net"
-version = "0.1.8"
-source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.8#2add881808d51bfd5b1fa9b2879f9bd6e09fb6c4"
+version = "0.1.9"
+source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.9#d9a3f2e1fecac19dee0605e4a56f70cbb33a8995"
 dependencies = [
  "async-trait",
  "auxesis-kernel-core",
@@ -724,8 +724,8 @@ dependencies = [
 
 [[package]]
 name = "auxesis-kernel-privacy"
-version = "0.1.8"
-source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.8#2add881808d51bfd5b1fa9b2879f9bd6e09fb6c4"
+version = "0.1.9"
+source = "git+https://github.com/Diclean/auxesis-privacy-kernel?tag=v0.1.9#d9a3f2e1fecac19dee0605e4a56f70cbb33a8995"
 dependencies = [
  "aes-gcm",
  "aho-corasick",

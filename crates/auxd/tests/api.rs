@@ -2810,7 +2810,7 @@ async fn a_tainted_conversation_refuses_allow_always() {
     assert_eq!(write.scope_tool, "write_file");
     assert_eq!(
         write.taint.as_deref(),
-        Some("workspace: http_fetch: https://example.invalid/"),
+        Some("workspace: http_fetch: example.invalid"),
         "the approval card shows the persisted taint source"
     );
 
@@ -3109,7 +3109,7 @@ async fn a_tainted_turn_raises_effectful_and_read_only_calls() {
     assert_eq!(pending[0].scope_tool, "read_file");
     assert_eq!(
         pending[0].taint.as_deref(),
-        Some("workspace: http_fetch: https://example.invalid/"),
+        Some("workspace: http_fetch: example.invalid"),
         "the read card must name the taint source"
     );
     let read = post_auth(
@@ -3125,7 +3125,7 @@ async fn a_tainted_turn_raises_effectful_and_read_only_calls() {
     assert_eq!(pending[0].scope_tool, "write_file");
     assert_eq!(
         pending[0].taint.as_deref(),
-        Some("workspace: http_fetch: https://example.invalid/"),
+        Some("workspace: http_fetch: example.invalid"),
         "the write card must name the taint source"
     );
 

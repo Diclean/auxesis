@@ -176,13 +176,19 @@ impl<'a> ChatSession<'a> {
             None => crate::taint::from_history(&tool_rows, &registry),
         };
         if let Some(mark) = setup.store.with(|store| store.session_taint(session.id))? {
-            taint.record(TaintSource::new(mark.tool, mark.detail));
+            taint.record(TaintSource::new(
+                mark.tool,
+                crate::taint::host_only(mark.detail),
+            ));
         }
         if let Some(source) = setup
             .store
             .with(|store| store.workspace_taint(&workspace_key))?
         {
-            taint.record(TaintSource::new("workspace", Some(source)));
+            taint.record(TaintSource::new(
+                "workspace",
+                crate::taint::host_only_reason(source),
+            ));
         }
 
         // The private-data egress rule is sticky like taint: once a turn of

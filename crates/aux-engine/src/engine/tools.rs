@@ -561,9 +561,10 @@ impl<'a> ChatSession<'a> {
                 .store
                 .with(|store| store.workspace_taint(&self.workspace_key))
             {
-                Ok(Some(source)) => self
-                    .taint
-                    .record(TaintSource::new("workspace", Some(source))),
+                Ok(Some(source)) => self.taint.record(TaintSource::new(
+                    "workspace",
+                    crate::taint::host_only_reason(source),
+                )),
                 Ok(None) => {}
                 Err(_) => self.taint.mark_unknown(),
             }

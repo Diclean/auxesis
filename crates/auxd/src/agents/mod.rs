@@ -812,10 +812,20 @@ pub(crate) fn uncapped_grants(home: &Path, id: &str) -> Option<AgentGrants> {
     }
 }
 
-/// True when `agents/<id>/grants.toml` exists and cannot be read or parsed
-/// (READS-6: named as such, never as missing grants).
-pub(crate) fn grants_unreadable(home: &Path, id: &str) -> bool {
-    read_agent_grants(home, id).is_err()
+/// Why `agents/<id>/grants.toml` cannot be used, `Some` exactly when
+/// [`read_agent_grants`] fails (READS-6, words per READS-7).
+pub(crate) fn grants_fault(home: &Path, id: &str) -> Option<aux_runtime::executor::FileFault> {
+    use aux_runtime::executor::FileFault;
+    match read_private(home, &grants_rel(id)) {
+        Ok(None) => None,
+        Ok(Some(text)) => toml::from_str::<GrantsFile>(&text)
+            .err()
+            .map(|_| FileFault::Parse),
+        Err(_) => Some(match std::fs::symlink_metadata(home.join(grants_rel(id))) {
+            Ok(meta) if meta.len() > MAX_REGISTRY_FILE_BYTES => FileFault::TooLarge,
+            _ => FileFault::Read,
+        }),
+    }
 }
 
 /// A parse error of a home file: file, line and column, never the text.

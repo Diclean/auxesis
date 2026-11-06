@@ -11,21 +11,9 @@ pub(super) fn taint_source(tool: &str, arguments: &serde_json::Value) -> TaintSo
     let detail = arguments
         .get("url")
         .and_then(|value| value.as_str())
-        .map(|url| sanitize_detail(url_host(url)));
+        .map(|url| sanitize_detail(crate::taint::url_host(url)))
+        .filter(|detail| !detail.is_empty());
     TaintSource::new(tool, detail)
-}
-
-/// The host (and port) of a model-chosen URL: never its user info, path,
-/// query or fragment, which can carry what the page was asked (READS-6).
-/// Every taint row, Activity entry and card shows this detail.
-fn url_host(raw: &str) -> &str {
-    let rest = raw.trim_start();
-    let rest = rest.split_once("://").map_or(rest, |(_, rest)| rest);
-    let authority = rest
-        .split(|c: char| matches!(c, '/' | '?' | '#' | '\\') || c.is_whitespace())
-        .next()
-        .unwrap_or_default();
-    authority.rsplit('@').next().unwrap_or_default()
 }
 
 pub(super) fn private_history_tool(row: &Message, registry: &ToolRegistry) -> Option<String> {
@@ -1919,6 +1907,16 @@ mod tests {
         let source = taint_source("http_fetch", &arguments);
         let summary = source.summary();
         assert_eq!(summary, "http_fetch: 127.0.0.1:1");
+        // READS-7: no host gives the scheme, never the path.
+        for (url, shown) in [
+            ("file:///etc/passwd", "http_fetch: file"),
+            ("/a/b", "http_fetch"),
+        ] {
+            assert_eq!(
+                taint_source("http_fetch", &json!({ "url": url })).summary(),
+                shown
+            );
+        }
         // READS-6: the host only, never the path, query or user info.
         let full = json!({"url": "https://user:pw@a.example:8443/inbox/42?token=x#frag"});
         assert_eq!(
@@ -1976,7 +1974,7 @@ mod tests {
         );
         assert_eq!(
             resumed.taint().summary().as_deref(),
-            Some("http_fetch: https://evil.example")
+            Some("http_fetch: evil.example")
         );
     }
 

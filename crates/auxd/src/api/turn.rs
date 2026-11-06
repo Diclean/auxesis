@@ -2903,8 +2903,8 @@ fn freebusy_denials(
     // covers it (READS-6). `Err(gap)`: the rows, or a file that won't parse.
     let refuses =
         |grants: Option<&AgentGrants>, id: &str| -> Option<Result<Vec<String>, GrantsGap>> {
-            if crate::agents::grants_unreadable(home, id) {
-                return Some(Err(GrantsGap::Unreadable));
+            if let Some(fault) = crate::agents::grants_fault(home, id) {
+                return Some(Err(GrantsGap::Unreadable(fault)));
             }
             let Some(grants) = grants else {
                 return Some(Err(GrantsGap::Rows {
@@ -2938,11 +2938,15 @@ fn freebusy_denials(
                 ask: rule.action == Action::Ask,
             })
     };
-    let unlisted = |id: &str| -> Vec<&'static str> {
+    // `Ok(file)`: a list without the tool. `Err(file)`: a file that cannot
+    // be read, named as such, never as a list to extend (READS-7).
+    let unlisted = |id: &str| -> Vec<Result<&'static str, &'static str>> {
         labelled_tool_lists(home, id)
             .into_iter()
-            .filter(|(_, tools)| !listed(tools, TOOL))
-            .map(|(file, _)| file)
+            .filter_map(|(file, tools)| match tools {
+                None => Some(Err(file)),
+                Some(tools) => (!listed(&tools, TOOL)).then_some(Ok(file)),
+            })
             .collect()
     };
     let ids = crate::agents::ceilings(home, agent);
@@ -2955,7 +2959,10 @@ fn freebusy_denials(
         Some(Err(gap)) => out.push(ReadDenial::OwnGrants(gap)),
         None => {}
     }
-    out.extend(unlisted(agent).into_iter().map(ReadDenial::OwnTools));
+    out.extend(unlisted(agent).into_iter().map(|file| match file {
+        Ok(file) => ReadDenial::OwnTools(file),
+        Err(file) => ReadDenial::OwnFile(file),
+    }));
     let agents = crate::agents::registry(home).ok();
     for id in ids {
         let grants = agents
@@ -2967,11 +2974,10 @@ fn freebusy_denials(
             Some(Err(gap)) => out.push(ReadDenial::ChiefGrants(id, gap)),
             None => {}
         }
-        out.extend(
-            unlisted(id)
-                .into_iter()
-                .map(|file| ReadDenial::ChiefTools(id, file)),
-        );
+        out.extend(unlisted(id).into_iter().map(|file| match file {
+            Ok(file) => ReadDenial::ChiefTools(id, file),
+            Err(file) => ReadDenial::ChiefFile(id, file),
+        }));
     }
     out
 }
@@ -2996,15 +3002,15 @@ pub(crate) fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
 fn checked_tool_lists(home: &Path, id: &str) -> Result<Vec<Vec<String>>, agent::AgentError> {
     Ok(checked_labelled_tool_lists(home, id)?
         .into_iter()
-        .map(|(_, tools)| tools)
+        .map(|(_, tools)| tools.unwrap_or_default())
         .collect())
 }
 
 /// [`tool_lists`], each with the file it comes from (`agent.toml`, a
 /// legacy `dot.toml`, `agent.md`), so a refusal names the file to edit.
-fn labelled_tool_lists(home: &Path, id: &str) -> Vec<(&'static str, Vec<String>)> {
-    checked_labelled_tool_lists(home, id)
-        .unwrap_or_else(|_| vec![(sidecar_name(home, id), Vec::new())])
+/// `None`: that file cannot be read, so it allows nothing.
+fn labelled_tool_lists(home: &Path, id: &str) -> Vec<LabelledList> {
+    checked_labelled_tool_lists(home, id).unwrap_or_else(|_| vec![(sidecar_name(home, id), None)])
 }
 
 /// The sidecar `agent::config` reads: `dot.toml` only while `agent.toml`
@@ -3020,22 +3026,25 @@ fn sidecar_name(home: &Path, id: &str) -> &'static str {
     }
 }
 
+/// A tools list and its file; `None` when that file cannot be read.
+type LabelledList = (&'static str, Option<Vec<String>>);
+
 fn checked_labelled_tool_lists(
     home: &Path,
     id: &str,
-) -> Result<Vec<(&'static str, Vec<String>)>, agent::AgentError> {
+) -> Result<Vec<LabelledList>, agent::AgentError> {
     let mut lists = Vec::new();
     lists.extend(
         agent::config(home, id)?
             .tools
-            .map(|tools| (sidecar_name(home, id), tools)),
+            .map(|tools| (sidecar_name(home, id), Some(tools))),
     );
     match aux_runtime::skills::load_agent(&aux_engine::agent_dir(home, id)) {
         Ok(md)
             if md.source == aux_runtime::skills::agent::AgentSource::AgentMd
                 && !md.tools.is_empty() =>
         {
-            lists.push(("agent.md", md.tools))
+            lists.push(("agent.md", Some(md.tools)))
         }
         Ok(_) => {}
         Err(err) => lists.push((
@@ -3045,7 +3054,7 @@ fn checked_labelled_tool_lists(
                 "agent.toml" => agent::AGENT_CONFIG_FILE,
                 _ => "agent.md",
             },
-            Vec::new(),
+            None,
         )),
     }
     Ok(lists)
@@ -5858,7 +5867,7 @@ mod m4_invite_tests {
     /// never as grants that leave the free times out.
     #[test]
     fn free_times_denials_name_an_unreadable_grants_file() {
-        use aux_runtime::executor::{GrantsGap, ReadDenial};
+        use aux_runtime::executor::{FileFault, GrantsGap, ReadDenial};
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
         let mail = aux_engine::agent_dir(&home, "mail");
@@ -5869,8 +5878,42 @@ mod m4_invite_tests {
             .iter()
             .filter(|d| matches!(d, ReadDenial::OwnGrants(_)))
             .collect();
-        let unreadable = ReadDenial::OwnGrants(GrantsGap::Unreadable);
+        let unreadable = ReadDenial::OwnGrants(GrantsGap::Unreadable(FileFault::Parse));
         assert_eq!(own, [&unreadable], "{denials:?}");
+        // READS-7: an oversize or non-UTF-8 file is not called unparsable.
+        let big = format!("# {}\n", "x".repeat(300 * 1024));
+        for (bytes, fault) in [
+            (big.into_bytes(), FileFault::TooLarge),
+            (vec![0xff, 0xfe, b'\n'], FileFault::Read),
+        ] {
+            std::fs::write(mail.join("grants.toml"), bytes).unwrap();
+            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+            let gap = ReadDenial::OwnGrants(GrantsGap::Unreadable(fault));
+            assert!(denials.contains(&gap), "{denials:?}");
+        }
+    }
+
+    /// READS-7: a chief sidecar (agent.toml, or a legacy dot.toml alone)
+    /// that will not parse is named as unreadable, never as a tools list
+    /// to add `calendar_freebusy` to.
+    #[test]
+    fn free_times_denials_name_an_unreadable_chief_sidecar() {
+        use aux_runtime::executor::{freebusy_hint, ReadDenial};
+        use aux_runtime::grants::CHIEF_AGENT as CHIEF;
+        for file in ["agent.toml", "dot.toml"] {
+            let dir = tempdir().unwrap();
+            let home = dir.path().join("home");
+            let chief = aux_engine::agent_dir(&home, CHIEF);
+            std::fs::create_dir_all(&chief).unwrap();
+            std::fs::write(chief.join(file), "tools = [\n").unwrap();
+            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+            let hint = freebusy_hint("mail", &denials);
+            assert!(
+                denials.contains(&ReadDenial::ChiefFile(CHIEF, file)),
+                "{hint}"
+            );
+            assert!(!hint.contains("the chief's tools list"), "{hint}");
+        }
     }
 
     /// A fully busy week says so and proposes no time; a no sends nothing; a

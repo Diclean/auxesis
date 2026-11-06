@@ -813,8 +813,10 @@ const PREPARE_READ_EVENT: &str = "skill.prepare_read_authorized";
 /// daemon did not say which rule refused it. Grants name the skill, owner
 /// rules and tools lists the wire tool.
 const FREEBUSY_HINT: &str = "This agent may not read the owner's free times: its grants need \
-     `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off, and \
-     no `never` entry for calendar), an owner rule for this read names the tool \
+     `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off; a \
+     `never` entry wider than calendar_freebusy, in its grants or a chief's, is a hard block \
+     that stays, and only the agent's own exact `calendar_freebusy` entry may be removed), an \
+     owner rule for this read names the tool \
      `calendar_freebusy`, and every tools list over the agent (agent.md, agent.toml) needs \
      `calendar_freebusy`: its own, and the chief's when the chief lists tools (add \
      calendar_freebusy to the chief's tools list)";
@@ -844,19 +846,45 @@ pub enum ReadDenial {
     OwnNever(Vec<String>),
     /// The agent's own tools list in this file (`agent.md`, `agent.toml`).
     OwnTools(&'static str),
+    /// This agent file (`agent.toml`, `dot.toml`, `agent.md`, `soul.md`)
+    /// cannot be read, so it refuses every tool (READS-7).
+    OwnFile(&'static str),
     /// A chief's grants (`agents/<chief>/grants.toml`) leave it out or ask.
     ChiefGrants(&'static str, GrantsGap),
     /// These `never` entries in a chief's grants cover it.
     ChiefNever(&'static str, Vec<String>),
     /// A chief's tools list in this file (`agent.md`, `agent.toml`).
     ChiefTools(&'static str, &'static str),
+    /// A chief's agent file that cannot be read (see [`ReadDenial::OwnFile`]).
+    ChiefFile(&'static str, &'static str),
+}
+
+/// Why a `grants.toml` cannot be used, in the words the hint shows (READS-7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileFault {
+    /// It was read but is not valid TOML grants.
+    Parse,
+    /// It cannot be opened or read, or is not UTF-8.
+    Read,
+    /// It is over the size limit.
+    TooLarge,
+}
+
+impl FileFault {
+    fn words(self) -> &'static str {
+        match self {
+            FileFault::Parse => "does not parse",
+            FileFault::Read => "cannot be read",
+            FileFault::TooLarge => "is too large",
+        }
+    }
 }
 
 /// Why one `grants.toml` refuses the free times, as written (READS-6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantsGap {
-    /// The file does not parse: every scoped tool is refused.
-    Unreadable,
+    /// The file cannot be used: every scoped tool is refused.
+    Unreadable(FileFault),
     /// The strictest `calendar.freebusy` row (`None`: none), and
     /// `calendar.read` when below `auto` (it caps the free times).
     Rows {
@@ -868,14 +896,19 @@ pub enum GrantsGap {
 /// The `[[do]]` row that grants the free times (with calendar.read not off).
 const FREEBUSY_DO: &str = "`[[do]] skill = \"calendar.freebusy\" level = \"auto\"`";
 
-/// What one `grants.toml` must change; never more than the free times.
-fn grants_step(id: &str, gap: GrantsGap) -> String {
+/// What one `grants.toml` must change; never more than the free times. A
+/// chief's row reaches every agent under it, and the hint says so (READS-7).
+fn grants_step(id: &str, gap: GrantsGap, chief: bool) -> String {
     let file = format!("agents/{id}/grants.toml");
-    let GrantsGap::Rows { row, read_cap } = gap else {
-        return format!(
-            "grants.toml unreadable: {file} does not parse, so it refuses every scoped \
-             tool; fix that file"
-        );
+    let (row, read_cap) = match gap {
+        GrantsGap::Unreadable(fault) => {
+            return format!(
+                "grants.toml unreadable: {file} {}, so it refuses every scoped tool; fix \
+                 that file",
+                fault.words()
+            )
+        }
+        GrantsGap::Rows { row, read_cap } => (row, read_cap),
     };
     let mut parts = Vec::new();
     if let Some(cap) = read_cap {
@@ -894,20 +927,34 @@ fn grants_step(id: &str, gap: GrantsGap) -> String {
             level.as_str()
         ));
     }
+    // Only a step that adds or changes the row is about the row.
+    let suggests_row = parts.len() > usize::from(read_cap.is_some()) || parts.is_empty();
     if parts.is_empty() {
         parts.push(format!("add {FREEBUSY_DO} to {file}"));
+    }
+    if chief && suggests_row {
+        parts.push(format!(
+            "a calendar.freebusy row at level = \"auto\" in {file} grants the free times \
+             to every agent under the chief `{id}`, not only this one"
+        ));
     }
     parts.join("; ")
 }
 
 /// A `never` hint: an entry wider than the free times is a hard block,
 /// never offered for removal; only the agent's own exact
-/// `calendar_freebusy` entry may go.
-fn never_step(who: &str, id: &str, entries: &[String], own: bool) -> String {
+/// `calendar_freebusy` entry may go, and while a chief's `never` blocks the
+/// read the hint says that removal alone will not help (READS-7).
+fn never_step(who: &str, id: &str, entries: &[String], own: bool, chief_blocks: bool) -> String {
     let file = format!("agents/{id}/grants.toml");
     let named: Vec<String> = entries.iter().map(|e| format!("\"{e}\"")).collect();
-    if own && entries.iter().all(|e| e == FREEBUSY_TOOL) {
-        return format!("remove {} from `never` in {file}", named.join(", "));
+    if own && !entries.is_empty() && entries.iter().all(|e| e == FREEBUSY_TOOL) {
+        let alone = if chief_blocks {
+            " (this alone will not help while the chief's hard block applies)"
+        } else {
+            ""
+        };
+        return format!("remove {} from `never` in {file}{alone}", named.join(", "));
     }
     format!(
         "the `never` entries {} in {file} are a hard block: they keep {who} out of the \
@@ -919,11 +966,6 @@ fn never_step(who: &str, id: &str, entries: &[String], own: bool) -> String {
 /// A tools-list hint. A legacy `dot.toml` is edited in place: an
 /// `agent.toml` beside it would replace it and drop its provider and model.
 fn tools_step(list: &str, id: &str, file: &str) -> String {
-    if file == "soul.md" {
-        return format!(
-            "agents/{id}/soul.md cannot be read, which refuses every tool; fix that file"
-        );
-    }
     let legacy = if file == "dot.toml" {
         " (edit dot.toml itself; never create an agent.toml there, it would replace \
          dot.toml and drop its provider and model)"
@@ -939,6 +981,12 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
     if denials.is_empty() {
         return FREEBUSY_HINT.to_string();
     }
+    let chief_blocks = denials
+        .iter()
+        .any(|denial| matches!(denial, ReadDenial::ChiefNever(..)));
+    let broken = |id: &str, file: &str, whom: &str| {
+        format!("agents/{id}/{file} cannot be read, which refuses every tool{whom}; fix that file")
+    };
     let steps: Vec<String> = denials
         .iter()
         .map(|denial| match denial {
@@ -968,19 +1016,24 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
                     )
                 }
             }
-            ReadDenial::OwnGrants(gap) => grants_step(agent, *gap),
-            ReadDenial::OwnNever(entries) => never_step("this agent", agent, entries, true),
+            ReadDenial::OwnGrants(gap) => grants_step(agent, *gap, false),
+            ReadDenial::OwnNever(entries) => {
+                never_step("this agent", agent, entries, true, chief_blocks)
+            }
             ReadDenial::OwnTools(file) => tools_step("the tools list", agent, file),
-            ReadDenial::ChiefGrants(chief, gap) => grants_step(chief, *gap),
+            ReadDenial::OwnFile(file) => broken(agent, file, ""),
+            ReadDenial::ChiefGrants(chief, gap) => grants_step(chief, *gap, true),
             ReadDenial::ChiefNever(chief, entries) => never_step(
                 &format!("the chief `{chief}` and every agent under it"),
                 chief,
                 entries,
                 false,
+                false,
             ),
             ReadDenial::ChiefTools(chief, file) => {
                 tools_step("the chief's tools list", chief, file)
             }
+            ReadDenial::ChiefFile(chief, file) => broken(chief, file, " for every agent under it"),
         })
         .collect();
     format!(
@@ -4669,8 +4722,8 @@ mod tests {
         )]);
         assert!(many.contains("\"calendar\", \"calendar_free\""), "{many}");
         for denial in [
-            ReadDenial::OwnGrants(GrantsGap::Unreadable),
-            ReadDenial::ChiefGrants("mail", GrantsGap::Unreadable),
+            ReadDenial::OwnGrants(GrantsGap::Unreadable(FileFault::Parse)),
+            ReadDenial::ChiefGrants("mail", GrantsGap::Unreadable(FileFault::Parse)),
         ] {
             let broken = hint(&[denial]);
             assert!(
@@ -4684,6 +4737,62 @@ mod tests {
         assert!(legacy.contains("never create an agent.toml"), "{legacy}");
         let current = hint(&[ReadDenial::OwnTools("agent.toml")]);
         assert!(!current.contains("dot.toml"), "{current}");
+    }
+
+    /// READS-7: unreadable files are named in accurate words, never as a
+    /// list to extend; an own exact `never` removal says it is not enough
+    /// while a chief's blocks; a chief free-times row reaches every agent
+    /// under it; the fallback keeps wider `never`s.
+    #[test]
+    fn the_free_times_hint_names_broken_files_and_chief_reach() {
+        let hint = |denials: &[ReadDenial]| freebusy_hint("mail", denials);
+        let has = |denials: &[ReadDenial], text: &str| hint(denials).contains(text);
+        for file in ["agent.toml", "dot.toml", "agent.md", "soul.md"] {
+            let chief = [ReadDenial::ChiefFile("main", file)];
+            let whom = "every tool for every agent under it; fix";
+            assert!(has(
+                &chief,
+                &format!("agents/main/{file} cannot be read, which refuses {whom}")
+            ));
+            let own = [ReadDenial::OwnFile(file)];
+            assert!(has(&own, &format!("agents/mail/{file} cannot be read")));
+            assert!(!has(&chief, "add `calendar_freebusy`") && !has(&own, "add `calendar_"));
+        }
+        let entry = || vec![FREEBUSY_TOOL.to_string()];
+        let own = ReadDenial::OwnNever(entry());
+        let both = hint(&[own.clone(), ReadDenial::ChiefNever("main", entry())]);
+        let alone = "from `never` in agents/mail/grants.toml (this alone will not help while \
+            the chief's hard block applies)";
+        assert!(
+            both.contains(alone) && both.matches("remove").count() == 1,
+            "{both}"
+        );
+        assert!(!has(&[own], "will not help"));
+        assert!(!has(&[ReadDenial::OwnNever(Vec::new())], "remove"));
+        for fault in [FileFault::Parse, FileFault::Read, FileFault::TooLarge] {
+            let text = format!("agents/mail/grants.toml {}, so", fault.words());
+            assert!(has(
+                &[ReadDenial::OwnGrants(GrantsGap::Unreadable(fault))],
+                &text
+            ));
+        }
+        assert_eq!(FileFault::TooLarge.words(), "is too large");
+        let rows = |row, read_cap| GrantsGap::Rows { row, read_cap };
+        let reach = "grants the free times to every agent under the chief `main`";
+        for gap in [rows(None, None), rows(Some(ActionLevel::Ask), None)] {
+            assert!(has(&[ReadDenial::ChiefGrants("main", gap)], reach));
+            assert!(!has(&[ReadDenial::OwnGrants(gap)], "every agent under"));
+        }
+        let cap = rows(Some(ActionLevel::Auto), Some(ActionLevel::Off));
+        assert!(!has(&[ReadDenial::ChiefGrants("main", cap)], reach));
+        // The fallback (no rule known, the CLI path) keeps wider `never`s.
+        assert!(
+            FREEBUSY_HINT.contains(
+                "a `never` entry wider than calendar_freebusy, in its grants or a chief's, is a \
+             hard block that stays, and only the agent's own exact `calendar_freebusy` entry \
+             may be removed"
+            ) && !FREEBUSY_HINT.contains("no `never` entry")
+        );
     }
 
     /// Every prepare read the connector can be asked for, recorded by name.

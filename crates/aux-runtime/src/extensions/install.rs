@@ -2365,7 +2365,10 @@ mod tests {
         assert_eq!(remove(home.path(), "demo").unwrap(), 1);
         let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
         assert!(!env.contains("EXT_DEMO__OAUTH_TOKENS"), "{env}");
-        assert!(env.contains("EXT_DEMO_X__K=1") && env.contains("KEEP=1"), "{env}");
+        assert!(
+            env.contains("EXT_DEMO_X__K=1") && env.contains("KEEP=1"),
+            "{env}"
+        );
     }
 
     #[tokio::test]

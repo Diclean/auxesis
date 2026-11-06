@@ -3660,9 +3660,10 @@ mod tests {
     fn other_users_processes_are_described_not_unknown() {
         // pid 1 is launchd, owned by root.
         if unsafe { libc::geteuid() } != 0 {
+            // The owner-checked query refuses it (`EPERM`); the owner-free
+            // follow-up, with errno cleared, describes it as another user's.
+            assert_eq!(pid_lookup(1), Lookup::Gone);
             assert_eq!(pid_ppid_uid_start(1), None);
-            let errno = std::io::Error::last_os_error().raw_os_error();
-            assert_eq!(errno, Some(libc::EPERM));
         }
         assert_eq!(pid_visibility(1), Visibility::Described);
         // The raw kernel answer for launchd and this test process: a short

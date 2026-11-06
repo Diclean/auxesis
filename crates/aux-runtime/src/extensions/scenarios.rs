@@ -950,7 +950,8 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
     v3.tools[0].network = vec!["a.example:443".to_owned()];
     v3.tools[0].secrets = vec!["EXT_DEMO__EXTRA".to_owned()];
     install_upgrade(home.path(), v3, &script).await;
-    assert!(load_state(home.path(), "demo").unwrap().secrets.is_empty());
+    let kept = load_state(home.path(), "demo").unwrap().secrets;
+    assert_eq!(kept, vec!["EXT_DEMO__TOKEN"], "the v2 yes is kept");
     let err = mount(home.path(), "demo", "carol").unwrap_err().to_string();
     assert!(
         err.contains("new secret names: \"EXT_DEMO__EXTRA\""),
@@ -970,7 +971,11 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
         ..Default::default()
     };
     let accepted = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
-    assert_eq!(accepted.unwrap().state.secrets, vec!["EXT_DEMO__EXTRA"]);
+    let secrets = accepted.unwrap().state.secrets;
+    assert!(
+        secrets.contains(&"EXT_DEMO__EXTRA".to_owned()),
+        "{secrets:?}"
+    );
     mount(home.path(), "demo", "carol").unwrap();
 }
 

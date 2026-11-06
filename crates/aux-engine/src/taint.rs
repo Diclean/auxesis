@@ -134,9 +134,10 @@ fn opaque_scheme(url: &str) -> Option<&str> {
         return None;
     }
     let authority = after
-        .split(|c: char| matches!(c, '/' | '?' | '#' | '\\'))
-        .next();
-    if authority.is_some_and(|authority| authority.contains('@')) {
+        .split(['/', '?', '#', '\\'])
+        .next()
+        .unwrap_or_default();
+    if authority.contains('@') {
         return None;
     }
     let digits = after.bytes().take_while(u8::is_ascii_digit).count();

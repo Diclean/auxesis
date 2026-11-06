@@ -367,11 +367,13 @@ pub async fn stop_all(State(state): State<Arc<ApiState>>) -> Response {
         // D33: Stop all also aborts every running child turn, keeping each
         // task's partial steps so its row can offer Resume.
         delegation_cancels.cancel_all();
-        // partial steps so its row can offer Resume.
-        let stopped_delegations = match aux_store::Store::open(&db_path) {
-            Ok(store) => store.stop_open_delegations().unwrap_or(0),
-            Err(_) => 0,
-        };
+        // partial steps so its row can offer Resume. Past the budget stop
+        // no SQL runs: the rows stay as they are (the next start retires
+        // them) and the switch alone stops their runs.
+        let stopped_delegations = aux_engine::gated_store_write(|| {
+            aux_store::Store::open(&db_path)?.stop_open_delegations()
+        })
+        .unwrap_or(0);
         let changed = !was_stopped;
         if changed {
             audit(
@@ -1118,14 +1120,17 @@ async fn control(state: &Arc<ApiState>, id: &str, action: ControlAction) -> Resp
 
 /// Append one audit/journal row. The row is also what the WebSocket poller
 /// publishes as `agent.created`/`agent.updated`/… — never instructions or keys.
+/// Past the budget stop gate: after the stop no store opens and no row lands.
 pub(crate) fn audit(_db_path: &Path, kind: &str, payload: serde_json::Value) {
     let text = payload.to_string();
     // J-02 round 4: re-open through the verified home, never the raw path.
     let home_path = _db_path.parent().unwrap_or(_db_path);
-    let result = kernel_core::verified_home_or_verify(home_path)
-        .map_err(aux_store::StoreError::from)
-        .and_then(|home| aux_store::Store::open_verified(&home))
-        .and_then(|store| store.log_event(kind, &text));
+    let result = aux_engine::gated_store_write(|| {
+        kernel_core::verified_home_or_verify(home_path)
+            .map_err(aux_store::StoreError::from)
+            .and_then(|home| aux_store::Store::open_verified(&home))
+            .and_then(|store| store.log_event(kind, &text))
+    });
     if let Err(err) = result {
         tracing::warn!(kind, error = %err, "agent write audit failed");
     }

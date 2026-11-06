@@ -5916,7 +5916,7 @@ mod m4_invite_tests {
         assert!(denials.contains(&gap(FileFault::Symlink)), "{denials:?}");
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, "").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::File::open(&path).is_err() {
             let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
             assert!(denials.contains(&gap(FileFault::Denied)), "{denials:?}");

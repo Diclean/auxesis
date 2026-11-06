@@ -392,8 +392,9 @@ struct AcpAdmission {
 }
 
 /// `mail_draft`'s local store: one encrypted journal row; no transport opens.
-struct StoreDraftSink {
-    store: Arc<Mutex<Store>>,
+pub struct StoreDraftSink {
+    /// The daemon's shared store.
+    pub store: Arc<Mutex<Store>>,
 }
 
 impl aux_mail::DraftSink for StoreDraftSink {
@@ -405,10 +406,19 @@ impl aux_mail::DraftSink for StoreDraftSink {
             "body": draft.body,
         })
         .to_string();
-        let store = kernel_core::lock_recover(&self.store);
-        store
-            .log_event_id("mail.draft", &payload)
-            .map_err(|error| error.to_string())
+        // Past the stop gate: after the stop the draft is refused, never
+        // written (the refusal names no text).
+        aux_engine::gated_store_write(|| {
+            kernel_core::lock_recover(&self.store).log_event_id("mail.draft", &payload)
+        })
+        .map_err(|error| {
+            if aux_engine::is_stop_refusal(&error) {
+                tracing::warn!("mail draft skipped: the daemon is stopping");
+                "the daemon is stopping: the draft was not saved".to_string()
+            } else {
+                error.to_string()
+            }
+        })
     }
 }
 
@@ -1266,6 +1276,11 @@ fn map_acp_error(err: aux_acp::AcpError) -> TurnError {
         aux_acp::AcpError::Cancelled => TurnError::Cancelled,
         aux_acp::AcpError::BudgetDenied { reason } => TurnError::BudgetDenied { detail: reason },
         aux_acp::AcpError::Config(message) => TurnError::ProviderConfig { detail: message },
+        // A refused write after the stop is `BudgetDenied` (the ledger maps the
+        // gate's refusal there); a database error is a store error.
+        aux_acp::AcpError::Store(err) => TurnError::Store {
+            detail: err.to_string(),
+        },
         other => TurnError::Provider {
             detail: other.to_string(),
         },
@@ -1889,12 +1904,13 @@ impl EngineTurnRunner {
                     // A private conversation's title is not the message: no
                     // title is written from it in private mode.
                     let title = (!private).then(|| session_title(content));
-                    kernel_core::lock_recover(&store)
-                        .create_session(agent, title.as_deref())
-                        .map_err(|err| TurnError::Store {
-                            detail: err.to_string(),
-                        })?
-                        .id
+                    // Past the stop gate: a turn abandoned at the shutdown
+                    // cutoff must not write its session row (the title is the
+                    // owner's words) after the stop. It gets the budget refusal.
+                    gated_turn_write(|| {
+                        kernel_core::lock_recover(&store).create_session(agent, title.as_deref())
+                    })?
+                    .id
                 }
             },
         };
@@ -2138,7 +2154,7 @@ impl EngineTurnRunner {
             approver,
             &owner_rules,
             &registry,
-            StoreHandle::Shared(Arc::clone(&store)).audit_sink(),
+            aux_engine::gated_audit_sink(&StoreHandle::Shared(Arc::clone(&store))),
             Some(run_id.clone()),
             // WO-BUD-1: the judge's call is `agent`'s spend, on this run.
             self.shell_judge(
@@ -2634,7 +2650,13 @@ fn refuse_reserved(store: &Arc<Mutex<Store>>, agent: &str, stage: &str, tool: &s
         "refused a tool that would shadow a builtin"
     );
     let payload = serde_json::json!({ "agent": agent, "stage": stage, "tool": tool }).to_string();
-    let _ = kernel_core::lock_recover(store).log_event("agent.tool_reserved", &payload);
+    // Past the stop gate: after the stop the row is skipped (no text in the warning).
+    let logged = aux_engine::gated_store_write(|| {
+        kernel_core::lock_recover(store).log_event("agent.tool_reserved", &payload)
+    });
+    if logged.is_err_and(|err| aux_engine::is_stop_refusal(&err)) {
+        tracing::warn!("reserved-tool row skipped: the daemon is stopping");
+    }
 }
 
 /// Apply one agent's grants as broker rules: deny what it does not cover
@@ -3150,6 +3172,23 @@ mod tests {
     use super::*;
     use aux_providers::FakeProvider;
     use tempfile::tempdir;
+
+    #[cfg(feature = "acp")]
+    #[test]
+    fn an_acp_stop_refusal_is_the_budget_status_and_a_database_error_a_store_error() {
+        use aux_acp::AcpError;
+        // The ledger maps the gate's refusal to `BudgetDenied` (stop path).
+        let stopped = AcpError::BudgetDenied {
+            reason: "the daemon is stopping: the answer was not saved".to_string(),
+        };
+        assert!(matches!(
+            map_acp_error(stopped),
+            TurnError::BudgetDenied { .. }
+        ));
+        // A real database error stays a store error, not a provider failure.
+        let busy = AcpError::Store(aux_store::StoreError::Io(std::io::Error::other("busy")));
+        assert!(matches!(map_acp_error(busy), TurnError::Store { .. }));
+    }
 
     #[test]
     fn failed_receipt_persists_captured_host_skill_and_replacement_counts() {

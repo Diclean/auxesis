@@ -1114,14 +1114,14 @@ async fn accept_refuses_a_tampered_run_args_and_starts_nothing() {
     );
 }
 
-/// Install `demo` with a fixture that creates `home/ran` when it starts; the
-/// install's own start is cleared.
+/// Install `demo` with a fixture that creates `ran` in its work dir (the one
+/// place a child writes) when it starts; the install's own start is cleared.
 async fn install_marked(home: &Path) -> PathBuf {
-    let marker = home.join("ran");
-    let line = format!("#!/bin/sh\n: > '{}'\n", marker.display());
-    let script = fixture_script("Ping the fixture").replacen("#!/bin/sh\n", &line, 1);
+    let line = "#!/bin/sh\ncommand : > ran 2>/dev/null\n";
+    let script = fixture_script("Ping the fixture").replacen("#!/bin/sh\n", line, 1);
     install_fixture(home, "demo", &script).await;
-    std::fs::remove_file(&marker).unwrap();
+    let marker = load_installed(home, "demo").unwrap().work_dir().join("ran");
+    std::fs::remove_file(&marker).expect("the fixture marks its start");
     marker
 }
 
@@ -1174,14 +1174,16 @@ async fn accept_refuses_a_subset_of_the_changed_launch_fields() {
     let home = tempfile::tempdir().unwrap();
     install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
     let before = load_state(home.path(), "demo").unwrap();
+    // npm: the binary re-hash, which would refuse first, is skipped.
     rewrite_entry(home.path(), |entry| {
+        entry.source.kind = SourceType::Npm;
         entry.run.command = "other".to_owned();
         entry.run.args = vec!["--evil".to_owned()];
     });
     let err = accept_launch(home.path(), &["run.args".to_owned()]).await;
     let err = err.unwrap_err().to_string();
     assert!(
-        err.contains("--accept-change run.command,run.args`"),
+        err.contains("--accept-change source.type,run.command,run.args`"),
         "{err}"
     );
     let kept = load_state(home.path(), "demo").unwrap();

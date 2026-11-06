@@ -2758,7 +2758,8 @@ impl TreeReaper {
                     max_time,
                 )
             });
-            (self, kill_verdict(killed && !self.unprovable, sweep))
+            let verdict = kill_verdict(killed && !self.unprovable, sweep);
+            (self, verdict)
         })
         .await
         .map_err(std::io::Error::other)

@@ -813,26 +813,43 @@ const PREPARE_READ_EVENT: &str = "skill.prepare_read_authorized";
 /// daemon did not say which rule refused it. Grants name the skill, owner
 /// rules and tools lists the wire tool.
 const FREEBUSY_HINT: &str = "This agent may not read the owner's free times: its grants need \
-     `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off), an \
-     owner rule for this read names the tool `calendar_freebusy`, and every tools list over \
-     the agent needs `calendar_freebusy`: its own, and the chief's when the chief lists tools \
-     (add calendar_freebusy to the chief's tools list)";
+     `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off, and \
+     no `never` entry for calendar), an owner rule for this read names the tool \
+     `calendar_freebusy`, and every tools list over the agent (agent.md, agent.toml) needs \
+     `calendar_freebusy`: its own, and the chief's when the chief lists tools (add \
+     calendar_freebusy to the chief's tools list)";
 
 /// One rule that refuses an agent's free-times read, as the daemon built it:
-/// the refusal names the file the owner edits for that rule only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the refusal names the file the owner edits for that rule only. A rule
+/// that asks refuses too: nobody could answer it before the card.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadDenial {
-    /// An owner rule in `config.toml` denies `calendar_freebusy`.
-    OwnerRule,
-    /// The agent's own grants (`agents/<agent>/grants.toml`).
+    /// A `config.toml` rule refuses `calendar_freebusy` for `agent` (this
+    /// agent or a chief over it). `rule_agent` and `tool` are the rule's own
+    /// (`*` is every agent); `ask` when it asks rather than denies.
+    OwnerRule {
+        agent: String,
+        rule_agent: String,
+        tool: String,
+        ask: bool,
+    },
+    /// The agent's own grants (`agents/<agent>/grants.toml`) leave it out
+    /// or ask.
     OwnGrants,
-    /// The agent's own tools list (`agents/<agent>/agent.md`).
-    OwnTools,
-    /// A chief's grants (`agents/<chief>/grants.toml`).
+    /// This `never` entry in the agent's own grants covers it.
+    OwnNever(String),
+    /// The agent's own tools list in this file (`agent.md`, `agent.toml`).
+    OwnTools(&'static str),
+    /// A chief's grants (`agents/<chief>/grants.toml`) leave it out or ask.
     ChiefGrants(&'static str),
-    /// A chief's tools list (`agents/<chief>/agent.md`).
-    ChiefTools(&'static str),
+    /// This `never` entry in a chief's grants covers it.
+    ChiefNever(&'static str, String),
+    /// A chief's tools list in this file (`agent.md`, `agent.toml`).
+    ChiefTools(&'static str, &'static str),
 }
+
+/// The `[[do]]` row that grants the free times (with calendar.read not off).
+const FREEBUSY_DO: &str = "`[[do]] skill = \"calendar.freebusy\" level = \"auto\"`";
 
 /// The free-times refusal hint for `denials`; [`FREEBUSY_HINT`] when the
 /// caller did not say which rule refused.
@@ -843,19 +860,46 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
     let steps: Vec<String> = denials
         .iter()
         .map(|denial| match denial {
-            ReadDenial::OwnerRule => "remove the config.toml rule that denies it".to_string(),
+            ReadDenial::OwnerRule {
+                agent: who,
+                rule_agent,
+                tool,
+                ask,
+            } => {
+                let does = if *ask { "asks first" } else { "denies it" };
+                if rule_agent == "*" {
+                    // A rule for every agent stays: only this agent is let in.
+                    format!(
+                        "the config.toml rule for every agent on `{tool}` {does}: keep it and \
+                         add after it a rule with agent = \"{who}\", tool = \
+                         \"calendar_freebusy\", action = \"allow\""
+                    )
+                } else {
+                    format!(
+                        "the config.toml rule for agent `{rule_agent}` on `{tool}` {does}: \
+                         remove it or set its action to \"allow\""
+                    )
+                }
+            }
             ReadDenial::OwnGrants => format!(
-                "add `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` to \
-                 agents/{agent}/grants.toml (and leave calendar.read not off)"
+                "add {FREEBUSY_DO} to agents/{agent}/grants.toml (and leave calendar.read \
+                 not off)"
             ),
-            ReadDenial::OwnTools => {
-                format!("add `calendar_freebusy` to the tools list in agents/{agent}/agent.md")
+            ReadDenial::OwnNever(entry) => {
+                format!("remove \"{entry}\" from `never` in agents/{agent}/grants.toml")
             }
-            ReadDenial::ChiefGrants(c) => {
-                format!("turn calendar.read on in agents/{c}/grants.toml")
+            ReadDenial::OwnTools(file) => {
+                format!("add `calendar_freebusy` to the tools list in agents/{agent}/{file}")
             }
-            ReadDenial::ChiefTools(chief) => format!(
-                "add `calendar_freebusy` to the chief's tools list in agents/{chief}/agent.md"
+            ReadDenial::ChiefGrants(chief) => format!(
+                "add {FREEBUSY_DO} to agents/{chief}/grants.toml (and leave calendar.read \
+                 not off)"
+            ),
+            ReadDenial::ChiefNever(chief, entry) => {
+                format!("remove \"{entry}\" from `never` in agents/{chief}/grants.toml")
+            }
+            ReadDenial::ChiefTools(chief, file) => format!(
+                "add `calendar_freebusy` to the chief's tools list in agents/{chief}/{file}"
             ),
         })
         .collect();
@@ -1667,10 +1711,16 @@ impl Executor<'_> {
         match kernel_broker::matching_rule(rules, agent, tool, false).map(|(_, rule)| rule.action) {
             Some(kernel_broker::Action::Deny) => {}
             Some(kernel_broker::Action::Ask) => {
-                return Err(format!(
+                let reason = format!(
                     "`{tool}` asks first for this agent, and this skill reads it before its \
                      card; nothing was read"
-                ));
+                );
+                // The ask names its file too (READS-5).
+                if tool == FREEBUSY_TOOL {
+                    let hint = freebusy_hint(agent, self.freebusy_denials);
+                    return Err(format!("{reason}. {hint}"));
+                }
+                return Err(reason);
             }
             _ => {
                 // One row per authorized read, with the taint the way the
@@ -4377,7 +4427,9 @@ mod tests {
                 assert!(reason.contains(": deny"), "{reason}");
                 assert!(reason.ends_with(&format!(". {FREEBUSY_HINT}")), "{reason}");
             } else {
+                // READS-5: the ask names what to change too.
                 assert!(reason.contains("nothing was read"), "{reason}");
+                assert!(reason.ends_with(&format!(". {FREEBUSY_HINT}")), "{reason}");
             }
             assert!(read.is_empty(), "{action:?}: {read:?}");
             assert_eq!(approver.card_count(), 0);
@@ -4386,30 +4438,77 @@ mod tests {
 
     /// READS-4: the free-times refusal names the file for each rule that
     /// refused it, and only those; no rule named keeps the full hint.
+    /// READS-5: a chief's grants get the narrow free-times row, a `never`
+    /// entry and an owner rule are named as written, and a rule for every
+    /// agent is never to be removed.
     #[test]
     fn the_free_times_hint_names_the_file_of_the_rule_that_refused() {
         let hint = |denials: &[ReadDenial]| freebusy_hint("mail", denials);
         assert_eq!(hint(&[]), FREEBUSY_HINT);
+        let rule = |rule_agent: &str, tool: &str, ask| ReadDenial::OwnerRule {
+            agent: "mail".to_string(),
+            rule_agent: rule_agent.to_string(),
+            tool: tool.to_string(),
+            ask,
+        };
         let cases = [
             (ReadDenial::ChiefGrants("main"), "main/grants.toml"),
             (
-                ReadDenial::ChiefTools("main"),
+                ReadDenial::ChiefTools("main", "agent.md"),
                 "chief's tools list in agents/main/agent.md",
             ),
+            (
+                ReadDenial::ChiefTools("main", "agent.toml"),
+                "chief's tools list in agents/main/agent.toml",
+            ),
             (ReadDenial::OwnGrants, "mail/grants.toml"),
-            (ReadDenial::OwnTools, "mail/agent.md"),
-            (ReadDenial::OwnerRule, "config.toml"),
+            (ReadDenial::OwnTools("agent.md"), "mail/agent.md"),
+            (ReadDenial::OwnTools("agent.toml"), "mail/agent.toml"),
+            (rule("mail", "calendar_*", false), "config.toml"),
         ];
-        for case in cases {
-            let text = hint(&[case.0]);
+        for case in &cases {
+            let text = hint(std::slice::from_ref(&case.0));
             let named: Vec<_> = cases.iter().filter(|(_, f)| text.contains(f)).collect();
-            assert_eq!(named, [&case], "{text}");
+            assert_eq!(named, [case], "{text}");
         }
-        let both = hint(&[ReadDenial::OwnGrants, ReadDenial::ChiefTools("main")]);
+        let both = hint(&[
+            ReadDenial::OwnGrants,
+            ReadDenial::ChiefTools("main", "agent.md"),
+        ]);
         assert!(
             both.contains("not off); add `calendar_freebusy` to the chief's"),
             "{both}"
         );
+        // The chief is offered the free times only, never its calendar read.
+        let chief = hint(&[ReadDenial::ChiefGrants("main")]);
+        assert!(
+            chief.contains("skill = \"calendar.freebusy\" level = \"auto\""),
+            "{chief}"
+        );
+        assert!(!chief.contains("turn calendar.read on"), "{chief}");
+        let never = hint(&[ReadDenial::ChiefNever("main", "calendar".into())]);
+        assert!(
+            never.contains("remove \"calendar\" from `never` in agents/main/grants.toml"),
+            "{never}"
+        );
+        let own = hint(&[ReadDenial::OwnNever("calendar_".into())]);
+        assert!(
+            own.contains("\"calendar_\" from `never` in agents/mail/"),
+            "{own}"
+        );
+        // An owner rule names its tool; one for every agent is kept.
+        let mine = hint(&[rule("mail", "calendar_*", true)]);
+        assert!(
+            mine.contains("rule for agent `mail` on `calendar_*` asks first: remove it"),
+            "{mine}"
+        );
+        let global = hint(&[rule("*", "*", false)]);
+        assert!(
+            global.contains("every agent on `*` denies it: keep it"),
+            "{global}"
+        );
+        assert!(global.contains("agent = \"mail\""), "{global}");
+        assert!(!global.contains("remove"), "{global}");
     }
 
     /// Every prepare read the connector can be asked for, recorded by name.

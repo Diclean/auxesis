@@ -381,8 +381,16 @@ fn skill_scope(skill: &str) -> Option<&str> {
 }
 
 impl AgentGrants {
-    /// True when both decide every call alike: equal but for display-only rows.
-    pub fn decides_like(&self, other: &AgentGrants) -> bool {
+    /// True when these grants decide every call as `shipped` does: equal but
+    /// for display-only rows, where each such row here is one `shipped`
+    /// holds exactly (READS-5: only Mail's shipped free-times row, never one
+    /// another agent gained or one at another level).
+    pub fn decides_like(&self, shipped: &AgentGrants) -> bool {
+        let shipped_rows = self
+            .see
+            .iter()
+            .filter(|see| see.is_display_only())
+            .all(|see| shipped.see.contains(see));
         let deciding = |grants: &AgentGrants| AgentGrants {
             see: grants
                 .see
@@ -392,7 +400,7 @@ impl AgentGrants {
                 .collect(),
             ..grants.clone()
         };
-        deciding(self) == deciding(other)
+        shipped_rows && deciding(self) == deciding(shipped)
     }
 
     /// True when the agent's `do` list covers `scope` at all (any level but
@@ -777,6 +785,37 @@ mod tests {
         );
         assert!(!ok(&calendar, "apple_calendar_list_events"));
         assert!(ok(&calendar, "apple_calendar_update_event"));
+    }
+
+    /// READS-5: only Mail's shipped free-times row, exactly, is ignored when
+    /// grants are compared with the shipped ones.
+    #[test]
+    fn only_the_exact_shipped_free_times_row_decides_nothing() {
+        let mail = default_grants("mail").unwrap();
+        let row = mail
+            .see
+            .iter()
+            .find(|see| see.is_display_only())
+            .unwrap()
+            .clone();
+        let mut without = mail.clone();
+        without.see.retain(|see| !see.is_display_only());
+        assert!(mail.decides_like(&mail) && without.decides_like(&mail));
+        for level in [AccessLevel::Ask, AccessLevel::Off] {
+            let mut other = without.clone();
+            other.see.push(SeeGrant {
+                level,
+                ..row.clone()
+            });
+            assert!(!other.decides_like(&mail), "{level:?}");
+        }
+        for agent in ["calendar", "documents", CHIEF_AGENT] {
+            let shipped = default_grants(agent).unwrap();
+            let mut gained = shipped.clone();
+            gained.see.push(row.clone());
+            assert!(shipped.decides_like(&shipped), "{agent}");
+            assert!(!gained.decides_like(&shipped), "{agent}");
+        }
     }
 
     #[test]

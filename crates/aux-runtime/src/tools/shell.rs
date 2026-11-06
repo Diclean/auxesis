@@ -1600,8 +1600,8 @@ thread_local! {
 /// Total time the no-thread fallback spends on seen-set kills and marker passes.
 const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
 
-/// The last part of [`LATE_INLINE_BUDGET`] the seen-set kills leave to the
-/// marker pass, so a long seen set cannot starve it.
+/// The time the marker pass always gets after the seen-set kills, even when
+/// they used the whole of [`LATE_INLINE_BUDGET`], so neither starves the other.
 const LATE_MARKER_RESERVE: Duration = Duration::from_millis(100);
 
 fn spawn_late_thread() -> std::io::Result<()> {
@@ -1808,8 +1808,9 @@ impl TreeReaper {
     /// The no-thread fallback, with no ppid walk or session scan: SIGKILL the
     /// still-unreaped root's group (pinned by the root, never signalled once
     /// the root is reaped), then, until `deadline`, every seen process
-    /// re-checked as the same process, then ONE marker pass for a double-fork
-    /// and `setsid()` escapee that is not in `seen`. Then disarm. Returns the
+    /// re-checked as the same process, then ONE marker pass (at least
+    /// [`LATE_MARKER_RESERVE`] long) for a double-fork and `setsid()` escapee
+    /// that is not in `seen`, each holder found signalled. Then disarm. Returns the
     /// seen entries the deadline left untried, plus one when the marker pass
     /// was cut short or never started.
     fn fast_kill(&mut self, deadline: Instant) -> usize {
@@ -1823,14 +1824,11 @@ impl TreeReaper {
                 unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
             }
             let lookup = &pid_ppid_uid_start;
-            // The seen loop stops early enough to leave the marker pass its
-            // reserve.
-            let seen_until = deadline
-                .checked_sub(LATE_MARKER_RESERVE)
-                .unwrap_or(deadline);
+            // The seen loop has the whole budget; the marker pass then gets
+            // at least its own reserve past it, so neither starves the other.
             let seen: Vec<TrackedPid> = self.seen.iter().copied().collect();
             for (done, tracked) in seen.iter().enumerate() {
-                if Instant::now() >= seen_until {
+                if Instant::now() >= deadline {
                     skipped += seen.len() - done;
                     break;
                 }
@@ -1843,6 +1841,7 @@ impl TreeReaper {
             // failed (this process is always in it), as in the sweep: the pass
             // did not run. Newest pid first: the escapee is a recent process,
             // and a cut-off budget should lose the old ones.
+            let deadline = deadline.max(Instant::now() + LATE_MARKER_RESERVE);
             let mut all = match Instant::now() < deadline {
                 true => all_pids(),
                 false => Vec::new(),
@@ -1853,11 +1852,9 @@ impl TreeReaper {
                 false => orphan_pids_holding_marker_until(&self.marker, 0, &all, Some(deadline)),
             };
             skipped += usize::from(!complete);
-            for (done, orphan) in orphans.iter().enumerate() {
-                if Instant::now() >= deadline {
-                    skipped += orphans.len() - done;
-                    break;
-                }
+            // Every holder the scan found is signalled, past the deadline too:
+            // one check and one syscall each, and it is the escapee.
+            for orphan in &orphans {
                 // Re-checked against its scan-time start right before its signal.
                 if orphan.still_same(lookup) {
                     // SAFETY: SIGKILL of a marker holder, re-checked above.
@@ -4193,19 +4190,10 @@ await(q(bg.pid));
         reaper.seen.extend(fakes);
         let all = reaper.seen.len();
         let past = std::time::Instant::now();
+        // Past the deadline the seen loop tries nothing; the marker pass still
+        // has its own reserve, and kills every holder it finds.
         let skipped = reaper.fast_kill(past);
-        assert_eq!(skipped, all + 1, "every seen entry and the marker pass");
-        assert!(
-            guard.0[0].try_wait().unwrap().is_none(),
-            "killed over budget"
-        );
-        // Inside the marker reserve the seen loop is already out of budget.
-        let skipped = reaper.fast_kill(Instant::now() + LATE_MARKER_RESERVE / 2);
-        assert!(skipped >= all, "the seen loop ignored the marker reserve");
-        assert!(
-            guard.0[0].try_wait().unwrap().is_none(),
-            "killed in reserve"
-        );
+        assert!(skipped >= all, "a seen entry was tried past the deadline");
         let skipped = reaper.fast_kill(std::time::Instant::now() + Duration::from_secs(5));
         assert_eq!(skipped, 0, "an ample budget skips nothing");
         // The helper is this test's child: the kernel keeps it a zombie

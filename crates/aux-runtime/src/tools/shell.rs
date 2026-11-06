@@ -76,8 +76,7 @@ const KILL_GRACE: Duration = Duration::from_secs(5);
 
 /// What a private-mode call answers when the sandbox that would keep the
 /// network off is not in force.
-const PRIVATE_UNSANDBOXED_MESSAGE: &str =
-    "shell refused in private mode: it needs the sandbox (network off) to run with protected values";
+const PRIVATE_UNSANDBOXED_MESSAGE: &str = "shell refused in private mode: it needs the sandbox (network off) to run with protected values";
 
 /// Runs `sh -c <command>` in the context workspace, under the sandbox unless
 /// configured otherwise.
@@ -715,9 +714,18 @@ fn pidfdinfo_filled_buffer(rc: libc::c_int, expected: usize) -> bool {
     expected > 0 && rc == expected as libc::c_int
 }
 
-/// True when `pid` holds the marker file as an open descriptor.
+/// What a descriptor walk found. `Cut` is not `No`: the deadline stopped the
+/// walk before every descriptor was read, so the answer is unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Holds {
+    Yes,
+    No,
+    Cut,
+}
+
+/// Whether `pid` holds the marker file as an open descriptor.
 #[cfg(target_os = "macos")]
-fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) -> bool {
+fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) -> Holds {
     const PROC_PIDLISTFDS: libc::c_int = 1;
     const PROC_PIDFDVNODEINFO: libc::c_int = 1;
 
@@ -752,12 +760,15 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
             buf.len() as libc::c_int,
         )
     };
-    if n <= 0 {
-        return false;
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    if let Some(unknown) = fd_list_unknown(n, errno) {
+        return unknown;
     }
+    // A full buffer may have cut the list: no hit then is unknown, not "No".
+    let truncated = n as usize == buf.len();
     for entry in buf[..n as usize].as_chunks::<8>().0 {
         if deadline.is_some_and(|d| Instant::now() >= d) {
-            return false;
+            return Holds::Cut;
         }
         let fd = i32::from_ne_bytes([entry[0], entry[1], entry[2], entry[3]]);
         if fd < 0 {
@@ -787,36 +798,52 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
         if u64::from(info.pvi.vi_stat.vst_dev) == marker.dev
             && info.pvi.vi_stat.vst_ino == marker.ino
         {
-            return true;
+            return Holds::Yes;
         }
     }
-    false
+    match truncated {
+        true => Holds::Cut,
+        false => Holds::No,
+    }
+}
+
+/// Sorts a failed `PROC_PIDLISTFDS` answer: `ESRCH` is a process that is gone
+/// (`No`); any other failure (`ENOMEM`, `EPERM`, ...) means the descriptors
+/// could not be read at all, which is `Cut`. `None` for a usable list. Pure,
+/// so tested on every OS.
+#[cfg(any(target_os = "macos", test))]
+fn fd_list_unknown(n: i32, errno: Option<i32>) -> Option<Holds> {
+    match n > 0 {
+        true => None,
+        false if errno == Some(libc::ESRCH) => Some(Holds::No),
+        false => Some(Holds::Cut),
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) -> bool {
+fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) -> Holds {
     use std::os::unix::fs::MetadataExt;
 
     let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
-        return false;
+        return Holds::No;
     };
     for entry in entries.flatten() {
         if deadline.is_some_and(|d| Instant::now() >= d) {
-            return false;
+            return Holds::Cut;
         }
         let Ok(metadata) = std::fs::metadata(entry.path()) else {
             continue;
         };
         if metadata.dev() == marker.dev && metadata.ino() == marker.ino {
-            return true;
+            return Holds::Yes;
         }
     }
-    false
+    Holds::No
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn process_holds_marker(_pid: i32, _marker: &Marker, _deadline: Option<Instant>) -> bool {
-    false
+fn process_holds_marker(_pid: i32, _marker: &Marker, _deadline: Option<Instant>) -> Holds {
+    Holds::No
 }
 
 /// Live processes that reparented to launchd (`ppid == 1`), belong to this
@@ -826,15 +853,11 @@ fn process_holds_marker(_pid: i32, _marker: &Marker, _deadline: Option<Instant>)
 /// filters to processes started around this call, so the scan does not probe
 /// every user agent on the machine; pass `0` on the final kill sweep. `pids`
 /// is the process listing to filter (one `all_pids()` per scan).
-fn orphan_pids_holding_marker(marker: &Marker, min_start: u64, pids: &[i32]) -> Vec<i32> {
-    let (found, _) = orphan_pids_holding_marker_until(marker, min_start, pids, None);
-    found.into_iter().map(|tracked| tracked.pid).collect()
-}
-
-/// [`orphan_pids_holding_marker`] that stops at `deadline`, even inside one
-/// process's descriptor walk: the second value is false when it did, so the
-/// scan did not cover every listed pid. Each find carries the start time read
-/// by this scan, which is what a later [`TrackedPid::still_same`] compares.
+///
+/// The scan stops at `deadline`, even inside one process's descriptor walk:
+/// the second value is false when it did (or when a walk was cut), so the scan
+/// did not cover every listed pid. Each find carries the start time read by
+/// this scan, which is what a later [`TrackedPid::still_same`] compares.
 fn orphan_pids_holding_marker_until(
     marker: &Marker,
     min_start: u64,
@@ -844,6 +867,7 @@ fn orphan_pids_holding_marker_until(
     let me = unsafe { libc::geteuid() };
     let own = std::process::id() as i32;
     let mut out = Vec::new();
+    let mut complete = true;
     let expired = || deadline.is_some_and(|d| Instant::now() >= d);
     for &pid in pids {
         if expired() {
@@ -866,16 +890,19 @@ fn orphan_pids_holding_marker_until(
         if min_start != 0 && seconds.saturating_add(1) < min_start {
             continue;
         }
-        if process_holds_marker(pid, marker, deadline) {
-            out.push(TrackedPid {
+        match process_holds_marker(pid, marker, deadline) {
+            Holds::Yes => out.push(TrackedPid {
                 pid,
                 start: started,
-            });
-        } else if expired() {
-            return (out, false);
+            }),
+            // Unknown, not "not holding": the pass is incomplete. Past the
+            // deadline it stops; an unreadable list only skips this pid.
+            Holds::Cut if expired() => return (out, false),
+            Holds::Cut => complete = false,
+            Holds::No => {}
         }
     }
-    (out, true)
+    (out, complete)
 }
 
 /// Reads `(ppid, uid, start)` for a pid. Production code uses
@@ -988,21 +1015,27 @@ fn tracked_pids(
     launched_at: u64,
     include_orphans: bool,
 ) -> Vec<TrackedPid> {
+    let all = all_pids();
+    let orphans = match include_orphans {
+        true => orphan_pids_holding_marker_until(marker, launched_at, &all, None).0,
+        false => Vec::new(),
+    };
+    tracked_pids_from(root, &all, orphans)
+}
+
+/// [`tracked_pids`] with the marker scan's finds already in hand. They keep
+/// the start time that scan read: re-reading it here would let a pid recycled
+/// since the scan pass for the process that held the marker.
+fn tracked_pids_from(root: i32, all: &[i32], orphans: Vec<TrackedPid>) -> Vec<TrackedPid> {
     let mut seen = std::collections::HashSet::new();
     seen.insert(root);
     let mut pids = Vec::new();
     if let Some(identity) = TrackedPid::of(root) {
         pids.push(identity);
     }
-    let all = all_pids();
     for pid in descendant_pids(root)
         .into_iter()
-        .chain(session_pids(root, &all))
-        .chain(if include_orphans {
-            orphan_pids_holding_marker(marker, launched_at, &all)
-        } else {
-            Vec::new()
-        })
+        .chain(session_pids(root, all))
     {
         if seen.insert(pid) {
             if let Some(identity) = TrackedPid::of(pid) {
@@ -1010,6 +1043,11 @@ fn tracked_pids(
             }
         }
     }
+    pids.extend(
+        orphans
+            .into_iter()
+            .filter(|tracked| seen.insert(tracked.pid)),
+    );
     pids
 }
 
@@ -1181,11 +1219,21 @@ enum Undescribed {
 impl Undescribed {
     fn note(self) -> &'static str {
         match self {
-            Self::NoListing => "[cleanup unverified: this OS cannot list processes; only the command's process group was killed]",
-            Self::SelfCheck => "[cleanup incomplete: this process could not describe itself, so no leftover could be checked]",
-            Self::OutOfMemory => "[cleanup incomplete: a process could not be described (ENOMEM: out of kernel memory)]",
-            Self::Unreadable => "[cleanup incomplete: a process the command started could not be read, so it may still run]",
-            Self::NoSession => "[cleanup unverified: after the reap the command's session can no longer be checked]",
+            Self::NoListing => {
+                "[cleanup unverified: this OS cannot list processes; only the command's process group was killed]"
+            }
+            Self::SelfCheck => {
+                "[cleanup incomplete: this process could not describe itself, so no leftover could be checked]"
+            }
+            Self::OutOfMemory => {
+                "[cleanup incomplete: a process could not be described (ENOMEM: out of kernel memory)]"
+            }
+            Self::Unreadable => {
+                "[cleanup incomplete: a process the command started could not be read, so it may still run]"
+            }
+            Self::NoSession => {
+                "[cleanup unverified: after the reap the command's session can no longer be checked]"
+            }
         }
     }
 }
@@ -1454,7 +1502,7 @@ fn sweep_leftovers_with(
                         match visibility(pass, pid) {
                             Visibility::Unseen | Visibility::Unknown => unsettled = true,
                             Visibility::OutOfMemory => {
-                                return Sweep::Unavailable(Undescribed::OutOfMemory)
+                                return Sweep::Unavailable(Undescribed::OutOfMemory);
                             }
                             Visibility::Zombie { orphan: true, .. } => {
                                 orphan_zombies.insert(pid);
@@ -1597,11 +1645,20 @@ thread_local! {
         const { std::cell::Cell::new((false, 0)) };
 }
 
-/// Total time the no-thread fallback spends on seen-set kills and marker passes.
+#[cfg(test)]
+thread_local! {
+    /// Test seam: how many marker passes `fast_kill` started on this thread.
+    static MARKER_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The no-thread fallback's seen-set budget: every queued reaper's seen loop
+/// shares these 250 ms. The marker pass then gets at least
+/// [`LATE_MARKER_RESERVE`] more, once for the whole batch.
 const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
 
-/// The time the marker pass always gets after the seen-set kills, even when
-/// they used the whole of [`LATE_INLINE_BUDGET`], so neither starves the other.
+/// The time the batch's marker passes get after the shared seen deadline, even
+/// when the seen loops used the whole of [`LATE_INLINE_BUDGET`], so neither
+/// starves the other. One deadline for the batch, not one per reaper.
 const LATE_MARKER_RESERVE: Duration = Duration::from_millis(100);
 
 fn spawn_late_thread() -> std::io::Result<()> {
@@ -1623,8 +1680,9 @@ fn spawn_late_thread() -> std::io::Result<()> {
 /// starting it if needed. No thread: the caller (a turn thread or a tokio
 /// worker) takes the whole queue and marks it idle, then gives every reaper
 /// only a fast kill, never the up-to-2 s sweep: each unreaped root's group,
-/// then its seen processes and one marker pass while [`LATE_INLINE_BUDGET`]
-/// lasts.
+/// then its seen processes while [`LATE_INLINE_BUDGET`] lasts, then one marker
+/// pass until the batch's marker deadline: [`LATE_MARKER_RESERVE`] after the
+/// budget's end.
 fn late_retry(reaper: TreeReaper) {
     let mut queue = late_retries();
     queue.1.push_back(reaper);
@@ -1650,11 +1708,16 @@ fn late_retry(reaper: TreeReaper) {
     }
 }
 
-/// A fast kill of every reaper until `deadline`; the sum of what each skipped.
+/// A fast kill of every reaper: seen loops until `deadline`, then each
+/// reaper's marker pass until [`LATE_MARKER_RESERVE`] after `deadline`, or a
+/// reserve of its own when that has passed: each escapee holds its own marker,
+/// so each pass must run. N queued reapers cost at most the budget plus N
+/// reserves, on the rare no-thread path. The sum of what each skipped.
 fn fast_kill_all(queued: Vec<TreeReaper>, deadline: Instant) -> usize {
+    let marker_deadline = deadline + LATE_MARKER_RESERVE;
     let mut skipped = 0;
     for mut reaper in queued {
-        skipped += reaper.fast_kill(deadline);
+        skipped += reaper.fast_kill(deadline, marker_deadline);
     }
     skipped
 }
@@ -1808,12 +1871,12 @@ impl TreeReaper {
     /// The no-thread fallback, with no ppid walk or session scan: SIGKILL the
     /// still-unreaped root's group (pinned by the root, never signalled once
     /// the root is reaped), then, until `deadline`, every seen process
-    /// re-checked as the same process, then ONE marker pass (at least
-    /// [`LATE_MARKER_RESERVE`] long) for a double-fork and `setsid()` escapee
-    /// that is not in `seen`, each holder found signalled. Then disarm. Returns the
-    /// seen entries the deadline left untried, plus one when the marker pass
-    /// was cut short or never started.
-    fn fast_kill(&mut self, deadline: Instant) -> usize {
+    /// re-checked as the same process, then ONE marker pass, until
+    /// `marker_deadline` (the batch's, see [`fast_kill_all`]), for a
+    /// double-fork and `setsid()` escapee that is not in `seen`, each holder
+    /// found signalled. Then disarm. Returns the seen entries the deadline left
+    /// untried, plus one when the marker pass was cut short or never started.
+    fn fast_kill(&mut self, deadline: Instant, marker_deadline: Instant) -> usize {
         self.armed = false;
         #[allow(unused_mut)]
         let mut skipped = 0;
@@ -1824,8 +1887,8 @@ impl TreeReaper {
                 unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
             }
             let lookup = &pid_ppid_uid_start;
-            // The seen loop has the whole budget; the marker pass then gets
-            // at least its own reserve past it, so neither starves the other.
+            // The seen loop has the whole budget; the marker pass has the
+            // batch's own, later deadline, so neither starves the other.
             let seen: Vec<TrackedPid> = self.seen.iter().copied().collect();
             for (done, tracked) in seen.iter().enumerate() {
                 if Instant::now() >= deadline {
@@ -1841,9 +1904,15 @@ impl TreeReaper {
             // failed (this process is always in it), as in the sweep: the pass
             // did not run. Newest pid first: the escapee is a recent process,
             // and a cut-off budget should lose the old ones.
-            let deadline = deadline.max(Instant::now() + LATE_MARKER_RESERVE);
+            // Each reaper's own pass gets the reserve: its escapee holds its own
+            // marker, and no other reaper's pass would find it.
+            let deadline = marker_deadline.max(Instant::now() + LATE_MARKER_RESERVE);
             let mut all = match Instant::now() < deadline {
-                true => all_pids(),
+                true => {
+                    #[cfg(test)]
+                    MARKER_PASSES.with(|passes| passes.set(passes.get() + 1));
+                    all_pids()
+                }
                 false => Vec::new(),
             };
             all.sort_unstable_by(|a, b| b.cmp(a));
@@ -1863,7 +1932,7 @@ impl TreeReaper {
             }
         }
         #[cfg(not(unix))]
-        let _ = deadline;
+        let _ = (deadline, marker_deadline);
         skipped
     }
 
@@ -2308,7 +2377,8 @@ mod tests {
         assert!(TrackedPid::of(0).is_none());
         let file = tempfile::tempfile().expect("marker file");
         let marker = Marker::from_file(&file).expect("marker identity");
-        assert!(!orphan_pids_holding_marker(&marker, 0, &all_pids()).contains(&own));
+        let found = orphan_pids_holding_marker_until(&marker, 0, &all_pids(), None).0;
+        assert!(!found.iter().any(|tracked| tracked.pid == own));
     }
 
     fn ctx(dir: &std::path::Path) -> ToolCtx {
@@ -2880,7 +2950,10 @@ mod tests {
                     continue;
                 }
                 if let Some((ppid, uid, _)) = pid_ppid_uid_start(pid) {
-                    if ppid == 1 && uid == me && process_holds_marker(pid, marker, None) {
+                    if ppid == 1
+                        && uid == me
+                        && process_holds_marker(pid, marker, None) == Holds::Yes
+                    {
                         out.push(pid);
                     }
                 }
@@ -3584,12 +3657,24 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
     /// still there at the limit is SIGKILLed, so a failing test cannot leak it.
     #[cfg(unix)]
     async fn gone_within(pid: i32, limit: Duration) -> bool {
+        // The identity is read now; a pid with none is already gone.
+        match TrackedPid::of(pid) {
+            Some(tracked) => gone_tracked(tracked, limit).await,
+            None => true,
+        }
+    }
+
+    /// Waits until `tracked` (pid and start time) is gone. A recycled pid has
+    /// another start time, so it counts as gone and is never signalled; on
+    /// timeout the process is killed only while `still_same` holds.
+    async fn gone_tracked(tracked: TrackedPid, limit: Duration) -> bool {
         let deadline = std::time::Instant::now() + limit;
-        // SAFETY: signal 0 only probes a pid this test's command reported.
-        while unsafe { libc::kill(pid, 0) } == 0 {
+        while tracked.still_same(&pid_ppid_uid_start) {
             if std::time::Instant::now() >= deadline {
-                // SAFETY: best-effort SIGKILL of a process this test spawned.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
+                if tracked.still_same(&pid_ppid_uid_start) {
+                    // SAFETY: best-effort SIGKILL of a test process, re-checked.
+                    unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
+                }
                 return false;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -4078,7 +4163,7 @@ await(q(bg.pid));
             .count();
         assert_eq!(left, 0, "queued reapers were left in the queue");
         for sleeper in &sleepers.1 {
-            let gone = gone_within(sleeper.pid, Duration::from_secs(2)).await;
+            let gone = gone_tracked(*sleeper, Duration::from_secs(2)).await;
             assert!(
                 gone,
                 "queued reaper's process {} was never killed",
@@ -4154,7 +4239,7 @@ await(q(bg.pid));
         late_retry(reaper);
         let (_, refused) = FAIL_LATE_SPAWN.with(|seam| seam.replace((false, 0)));
         assert_eq!(refused, 1, "the spawn-failure path never ran");
-        let gone = gone_within(escapee.pid, Duration::from_secs(2)).await;
+        let gone = gone_tracked(escapee, Duration::from_secs(2)).await;
         assert!(gone, "the unseen setsid escapee {} survived", escapee.pid);
     }
 
@@ -4190,11 +4275,15 @@ await(q(bg.pid));
         reaper.seen.extend(fakes);
         let all = reaper.seen.len();
         let past = std::time::Instant::now();
-        // Past the deadline the seen loop tries nothing; the marker pass still
-        // has its own reserve, and kills every holder it finds.
-        let skipped = reaper.fast_kill(past);
-        assert!(skipped >= all, "a seen entry was tried past the deadline");
-        let skipped = reaper.fast_kill(std::time::Instant::now() + Duration::from_secs(5));
+        // Past both deadlines no seen entry is tried; the marker pass still
+        // gets its own reserve (plus one only if that pass was cut).
+        let skipped = reaper.fast_kill(past, past);
+        assert!(
+            skipped == all || skipped == all + 1,
+            "the budget miscounted what it skipped: {skipped} of {all}"
+        );
+        let ample = std::time::Instant::now() + Duration::from_secs(5);
+        let skipped = reaper.fast_kill(ample, ample);
         assert_eq!(skipped, 0, "an ample budget skips nothing");
         // The helper is this test's child: the kernel keeps it a zombie
         // until it is waited for, so the exit status is the proof.
@@ -4208,6 +4297,155 @@ await(q(bg.pid));
             Some(libc::SIGKILL)
         );
         assert_eq!(fast_kill_all(Vec::new(), past), 0);
+    }
+
+    /// A reaper with no child and no seen entry: it signals nothing, so a
+    /// batch of them times the marker passes alone.
+    #[cfg(unix)]
+    fn idle_reaper(marker: Marker) -> TreeReaper {
+        TreeReaper {
+            child: None,
+            root: None,
+            marker,
+            armed: false,
+            seen: HashSet::new(),
+            marker_file: None,
+        }
+    }
+
+    /// SHELL-SWEEP-8 (1): the production shape. The seen loops get a budget
+    /// that is already spent (the worst case: they used all of it), and the
+    /// marker pass must still run, in the reserve after the shared deadline.
+    /// With the reserve deleted (`marker_deadline = deadline`) no pass starts.
+    #[cfg(unix)]
+    #[test]
+    fn the_marker_pass_runs_even_when_the_seen_budget_is_spent() {
+        let (marker, _pin) = pinned_marker();
+        MARKER_PASSES.with(|passes| passes.set(0));
+        // The deadline is the real one's shape: `now`, with the seen loops
+        // finished right at it.
+        fast_kill_all(vec![idle_reaper(marker)], std::time::Instant::now());
+        let passes = MARKER_PASSES.with(|passes| passes.replace(0));
+        assert_eq!(passes, 1, "no marker pass ran after the seen budget");
+    }
+
+    /// Every reaper of a batch gets its own marker pass, the last one too,
+    /// even when the shared deadline and the first reserve are spent: its
+    /// escapee holds only its own marker.
+    #[cfg(unix)]
+    #[test]
+    fn every_reaper_of_a_batch_gets_its_marker_pass() {
+        let (marker, _pin) = pinned_marker();
+        let queued: Vec<TreeReaper> = (0..3).map(|_| idle_reaper(marker)).collect();
+        MARKER_PASSES.with(|passes| passes.set(0));
+        let now = std::time::Instant::now();
+        let past = now.checked_sub(LATE_MARKER_RESERVE * 2).unwrap_or(now);
+        fast_kill_all(queued, past);
+        let passes = MARKER_PASSES.with(|passes| passes.replace(0));
+        assert_eq!(passes, 3, "a queued reaper's escapee went unhunted");
+    }
+
+    /// SHELL-SWEEP-8 (2, 3): through `fast_kill_all`, with a spent seen budget,
+    /// the marker pass still SIGKILLs a real double-forked `setsid()` escapee
+    /// that is not in `seen`; and a descriptor walk cut by the deadline is
+    /// `Cut`, not `No`.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn past_the_seen_budget_the_marker_pass_still_kills_an_unseen_holder() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        let dir = tempdir().unwrap();
+        let pid_file = dir.path().join("escapee.pid");
+        let (marker, marker_file) = pinned_marker();
+        let script = format!(
+            "exec /usr/bin/perl -MPOSIX -e 'exit 0 if fork; exit 0 if fork; POSIX::setsid; \
+             open F, q(>{}); print F $$; close F; exec q(sleep), q(60)'",
+            pid_file.display()
+        );
+        let mut starter = std::process::Command::new("/bin/sh");
+        starter
+            .args(["-c", &script])
+            .stdin(std::process::Stdio::null());
+        starter.stdout(marker_file.try_clone().unwrap());
+        let mut guard = Spawned(vec![starter.spawn().unwrap()], Vec::new());
+        let escapee = (0..500).find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            let raw = std::fs::read_to_string(&pid_file).ok()?;
+            let pid = raw.trim().parse::<i32>().ok()?;
+            let (ppid, _, _) = pid_ppid_uid_start(pid)?;
+            (ppid == 1).then(|| TrackedPid::of(pid)).flatten()
+        });
+        let escapee = escapee.expect("the escapee never reparented");
+        guard.1.push(escapee);
+        // A cut walk is unknown, not "not holding"; an uncut one finds it.
+        let past = std::time::Instant::now();
+        assert_eq!(
+            process_holds_marker(escapee.pid, &marker, Some(past)),
+            Holds::Cut
+        );
+        assert_eq!(process_holds_marker(escapee.pid, &marker, None), Holds::Yes);
+        let (found, complete) =
+            orphan_pids_holding_marker_until(&marker, 0, &[escapee.pid], Some(past));
+        assert!(
+            found.is_empty() && !complete,
+            "a cut pass reads as complete"
+        );
+        let mut reaper = idle_reaper(marker);
+        reaper.marker_file = Some(marker_file);
+        reaper.seen.extend((1..=3).map(|n| TrackedPid {
+            pid: i32::MAX - n,
+            start: 1,
+        }));
+        // The production shape: the seen budget is spent (all 3 skipped), the
+        // marker pass runs in the reserve after it and is the only thing that
+        // can kill the escapee.
+        let skipped = fast_kill_all(vec![reaper], std::time::Instant::now());
+        // 3 seen entries; plus one when a loaded host's walk ran out of
+        // reserve. The kill itself is asserted below, not the host's speed.
+        assert!(
+            (3..=4).contains(&skipped),
+            "unexpected skip count {skipped}"
+        );
+        // Not our child (it reparented to launchd): gone is the proof.
+        assert!(
+            gone_tracked(escapee, Duration::from_secs(2)).await,
+            "the unseen marker holder {} survived",
+            escapee.pid
+        );
+    }
+
+    /// SHELL-SWEEP-8 (5): a descriptor list that could not be read is unknown;
+    /// only a process that is gone holds nothing.
+    #[test]
+    fn an_unreadable_fd_list_is_unknown_not_empty() {
+        assert_eq!(fd_list_unknown(16, Some(0)), None);
+        assert_eq!(fd_list_unknown(0, Some(libc::ESRCH)), Some(Holds::No));
+        for errno in [libc::ENOMEM, libc::EPERM] {
+            assert_eq!(fd_list_unknown(-1, Some(errno)), Some(Holds::Cut));
+            assert_eq!(fd_list_unknown(0, Some(errno)), Some(Holds::Cut));
+        }
+        assert_eq!(fd_list_unknown(0, None), Some(Holds::Cut));
+    }
+
+    /// SHELL-SWEEP-8 (4): the watchdog's tree list keeps the start time the
+    /// marker scan read, not a fresh read: a pid recycled since the scan then
+    /// fails its `still_same` instead of being killed.
+    #[cfg(unix)]
+    #[test]
+    fn the_tracked_list_keeps_the_marker_scans_start_time() {
+        let guard = Spawned(vec![spawn_sh("sleep 60"), spawn_sh("sleep 60")], Vec::new());
+        let pid = guard.0[0].id() as i32;
+        let live = TrackedPid::of(pid).unwrap();
+        let scanned = TrackedPid {
+            pid,
+            start: live.start + 1,
+        };
+        // An unrelated second child is the root: `pid` is in neither its tree
+        // nor its session, only in the marker scan's finds.
+        let root = guard.0[1].id() as i32;
+        let found = tracked_pids_from(root, &all_pids(), vec![scanned]);
+        assert!(found.contains(&scanned), "the scan-time start was replaced");
+        assert!(!found.contains(&live), "the start time was re-read");
+        assert!(!scanned.still_same(&pid_ppid_uid_start));
     }
 
     /// SHELL-SWEEP-6 (3): a sweep left not clean keeps the reaper armed; its

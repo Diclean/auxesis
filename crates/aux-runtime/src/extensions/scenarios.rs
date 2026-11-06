@@ -453,7 +453,7 @@ async fn reinstall_keeps_a_freeze_until_accept() {
             // EXT-ANCHOR-9 r2: an unreadable row is refused by name, never
             // overwritten by an install.
             let err = try_install_fixture(home.path(), "demo", &script).await;
-            let err = err.err().expect("refused").to_string();
+            let err = err.expect_err("refused").to_string();
             assert!(err.contains("extensions/state/demo.json"), "{kind}: {err}");
             assert!(is_frozen(home.path(), "demo"), "reinstall over {kind}");
             if kind == "garbage" {

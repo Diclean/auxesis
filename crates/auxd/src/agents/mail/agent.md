@@ -9,6 +9,7 @@ tools:
   - mail.read
   - mail.draft
   - mail.send
+  - calendar_freebusy
   - recall
   - remember
   - suggest_memory

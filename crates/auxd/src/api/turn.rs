@@ -2892,10 +2892,12 @@ fn apply_tools_ceiling(
 }
 
 /// The scoped tools a skill run can call through its connector that this
-/// registry does not hold (the EventKit update): the rules cover them as
-/// the daemon's own connector tools.
+/// registry does not hold (the EventKit update), and the free-times read a
+/// skill does before its card: the rules cover them as the daemon's own
+/// connector tools.
 fn skill_tools_outside(registry: &kernel_broker::ToolRegistry) -> Vec<String> {
     aux_runtime::skills::tool_map::wire_names()
+        .chain([aux_runtime::grants::FREEBUSY_TOOL])
         .filter(|name| registry.get(name).is_none())
         .filter(|name| aux_runtime::grants::tool_scope(name).is_some())
         .map(str::to_string)
@@ -4990,6 +4992,9 @@ mod m4_invite_tests {
         let agent_dir = aux_engine::agent_dir(&home, "mail");
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(agent_dir.join("soul.md"), "Mail soul.\n").unwrap();
+        if let Some(grants) = MAIL_GRANTS.with(std::cell::Cell::get) {
+            std::fs::write(agent_dir.join("grants.toml"), grants).unwrap();
+        }
         crate::agents::install_shipped_files(&home).unwrap();
         let mut contacts = kernel_privacy::ContactIndex::new();
         contacts
@@ -5449,6 +5454,45 @@ mod m4_invite_tests {
         );
         assert_eq!(sent[0].body, card_body(&cards[0]));
         assert_eq!(sent[0].to, vec!["camille@exemple.fr".to_string()]);
+    }
+
+    thread_local! {
+        /// The Mail agent's own `grants.toml` for the next `mail_skill_run`.
+        static MAIL_GRANTS: std::cell::Cell<Option<&'static str>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// EXECUTOR-READS: with `calendar.read` off (or the free times not
+    /// granted), Mail's `reply-availability` refuses before any card: no
+    /// time is read, shown or sent. The shipped grants still send them.
+    #[test]
+    fn availability_refuses_when_mail_may_not_read_the_calendar() {
+        const BASE: &str = "[[do]]\nskill = \"mail.read\"\nlevel = \"auto\"\n\n\
+            [[do]]\nskill = \"mail.send\"\nlevel = \"ask\"\n";
+        let off = format!("{BASE}\n[[do]]\nskill = \"calendar.read\"\nlevel = \"off\"\n");
+        let both = format!("{off}\n[[do]]\nskill = \"calendar.freebusy\"\nlevel = \"auto\"\n");
+        // Each refuses with the broker's deny and names the line to add.
+        for grants in [BASE.to_string(), off, both] {
+            MAIL_GRANTS.with(|cell| cell.set(Some(Box::leak(grants.clone().into_boxed_str()))));
+            let fill = serde_json::json!({
+                "slots": { "person": "Camille Exemple", "topic": "the Q3 review" },
+                "calls": [{ "tool": "mail_send", "arguments": {
+                    "to": ["camille@exemple.fr"], "subject": AVAILABILITY.0, "body": AVAILABILITY.1 } }]
+            });
+            let content = "/availability Camille Exemple";
+            let (cards, sent, _, _, stored) = mail_skill_run(
+                content,
+                "reply-availability",
+                fill,
+                (Vec::new(), false),
+                None,
+                Answer::Yes,
+            );
+            MAIL_GRANTS.with(|cell| cell.set(None));
+            assert_eq!((cards.len(), sent.len()), (0, 0), "{grants}\n{cards:?}");
+            let hint = r#"matched: deny. This agent may not read the owner's free times: its grants need `[[do]] skill = \"calendar.freebusy\" level = \"auto\""#;
+            assert!(stored.contains(hint), "{grants}\n{stored}");
+        }
     }
 
     /// A fully busy week says so and proposes no time; a no sends nothing; a

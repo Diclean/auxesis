@@ -801,6 +801,10 @@ struct ExecCall {
     real_arguments: Value,
 }
 
+/// The broker's name for a mail read the run does before its card.
+const MAIL_READ_TOOL: &str = "mail_read";
+use crate::grants::FREEBUSY_TOOL;
+
 /// The per-run state threaded through approval and execution.
 struct RunState<'a, 'r> {
     skill: &'a LoadedSkill,
@@ -854,7 +858,10 @@ impl Executor<'_> {
         tokens: &dyn TokenResolver,
         taint: &Taint,
     ) -> RunOutcome {
-        match self.mailbox_recipient(skill, fill, run, tokens).await {
+        match self
+            .mailbox_recipient(skill, fill, run, tokens, taint)
+            .await
+        {
             Ok(None) => self.execute_resolved(skill, fill, run, tokens, taint).await,
             Ok(Some((said, sender))) => {
                 let directory = mailbox::WithMailboxSender {
@@ -950,6 +957,7 @@ impl Executor<'_> {
         fill: &ValidatedFill,
         run: &RunContext<'_>,
         tokens: &dyn TokenResolver,
+        taint: &Taint,
     ) -> Result<Option<(String, MailboxSender)>, RunOutcome> {
         let mut sources = skill.inputs.iter().filter_map(|input| input.from.as_ref());
         let (Some(source), None) = (sources.next(), sources.next()) else {
@@ -971,6 +979,16 @@ impl Executor<'_> {
             || !maximal_contact_name_matches(owner_input, &directory.name_groups()).is_empty()
         {
             return Ok(None);
+        }
+        // The INBOX scan is a mail read: the agent's grants and rules decide
+        // it before the mailbox is opened.
+        let context = SkillContext::from_loaded(skill);
+        if let Err(reason) = self
+            .authorize_prepare_read(run.agent, MAIL_READ_TOOL, &context, taint)
+            .await
+        {
+            log_rejected_fill(Some(self.sink), skill, run, None, &reason);
+            return Err(self.finish_refused(skill, run, &reason));
         }
         // No mailbox keeps the contacts-only path. An empty or partial scan
         // still asks: the owner may name the address, or a lone match may not
@@ -1065,6 +1083,20 @@ impl Executor<'_> {
                 Ok(real) => real,
                 Err(reason) => return self.finish_refused(skill, run, &reason),
             };
+            // The reads below meet the agent's rules first: the event lookup
+            // (a calendar read), the free times, the stored draft (a mail read).
+            let mail = call.logical == "mail.send";
+            let reads = [
+                (call.logical == event_time::EVENT_UPDATE).then_some("apple_calendar_list_events"),
+                (mail && skill.body.contains(free_times::MARKER)).then_some(FREEBUSY_TOOL),
+                (mail && skill.body.contains(DRAFT_MARKER)).then_some(MAIL_READ_TOOL),
+            ];
+            for tool in reads.into_iter().flatten() {
+                let read = self.authorize_prepare_read(run.agent, tool, &context, taint);
+                if let Err(reason) = read.await {
+                    return self.finish_refused(skill, run, &reason);
+                }
+            }
             let real = match with_found_event(self.connector, &call.logical, real) {
                 Ok(real) => real,
                 Err(reason) => return self.finish_refused(skill, run, &reason),
@@ -1549,6 +1581,69 @@ impl Executor<'_> {
             }
         }
         self.finish_done(skill, run, actions)
+    }
+
+    /// A read before the card, held to the rules for `tool`, which carry the
+    /// agent's grants (off → deny, ask → ask, auto → none) and the owner's
+    /// rules. A deny refuses with the broker's reason and audit row; an ask
+    /// fails closed (nobody could answer it before the card). Taint never
+    /// decides: the read is local and the model sees tokens only.
+    async fn authorize_prepare_read(
+        &self,
+        agent: &str,
+        tool: &str,
+        context: &SkillContext,
+        taint: &Taint,
+    ) -> Result<(), String> {
+        let rules = self.broker.rules();
+        match kernel_broker::matching_rule(rules, agent, tool, false).map(|(_, rule)| rule.action) {
+            Some(kernel_broker::Action::Deny) => {}
+            Some(kernel_broker::Action::Ask) => {
+                return Err(format!(
+                    "`{tool}` asks first for this agent, and this skill reads it before its \
+                     card; nothing was read"
+                ));
+            }
+            _ => {
+                // One row per allowed read: the tool and the agent, no content.
+                let row = json!({ "agent": agent, "tool": tool, "skill": context.name });
+                return self
+                    .sink
+                    .log_event("skill.prepare_read", &row)
+                    .map(|_| ())
+                    .map_err(|_| format!("`{tool}` could not be logged; nothing was read"));
+            }
+        }
+        // A deny goes through the broker for its own reason and audit row.
+        let skill_ref = context.skill_ref();
+        let authorization = self
+            .broker
+            .authorize(AuthorizeRequest {
+                agent,
+                tool,
+                risk: Risk::Low,
+                arguments: json!({}),
+                taint,
+                read_only: true,
+                mode: ExecutionMode::Sandboxed,
+                requires_explicit_rule: false,
+                skill: Some(&skill_ref),
+                skill_only: false,
+            })
+            .await;
+        let reason = match authorization {
+            Ok(auth) if !auth.is_allowed() => auth.reason().to_string(),
+            Ok(_) => format!("`{tool}` is denied for this agent"),
+            Err(err) => err.to_string(),
+        };
+        if tool == FREEBUSY_TOOL {
+            return Err(format!(
+                "{reason}. This agent may not read the owner's free times: its grants need \
+                 `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read \
+                 not off), and an agent with a tools list needs `calendar_freebusy` in it"
+            ));
+        }
+        Err(reason)
     }
 
     /// Everything that must pass before a call may be sent: the argument checks,
@@ -4124,5 +4219,168 @@ mod tests {
         assert!(matches!(outcome, RunOutcome::Refused { .. }), "{outcome:?}");
         assert_eq!(connector.1.calls().len(), 1, "call 2 is not sent");
         assert_eq!(sink.payloads("skill.run")[0]["outcome"], "refused");
+    }
+
+    /// EXECUTOR-READS: a deny or an ask on the free-times read refuses with
+    /// no calendar read and no card; no rule (an auto grant) reads.
+    #[tokio::test]
+    async fn a_refused_free_times_read_reads_no_calendar() {
+        let text = b"---\nname: reply-availability\nversion: 1\ntools: [mail.send]\ninputs:\n  email: { type: email }\napproval: each_action\n---\nPropose {free_times}.\n";
+        let skill = parse_skill(text, "s.md", "reply-availability", &mail_agent()).unwrap();
+        let (tokens, _person, email) = session();
+        let fill = validate_fill(
+            &skill,
+            &json!({
+                "slots": { "email": delimited(&email) },
+                "calls": [{ "tool": "mail_send", "arguments": {
+                    "to": [delimited(&email)], "subject": "Q3", "body": "Free:\n{free_times}" } }]
+            }),
+            &run_context(),
+            None,
+        )
+        .unwrap();
+        let tool = crate::grants::FREEBUSY_TOOL;
+        // Taint never changes the answer: a tainted run still reads under an
+        // auto grant (no rule) and still refuses under an ask (round 2).
+        let cases = [Action::Deny, Action::Ask, Action::Allow]
+            .into_iter()
+            .flat_map(|action| [(action, Taint::Clean), (action, Taint::Unknown)]);
+        for (action, taint) in cases {
+            let rules = match action {
+                Action::Allow => Vec::new(),
+                action => vec![Rule::new("assistant", tool, action)],
+            };
+            let sink = Arc::new(MemoryAuditSink::new());
+            let broker = broker_with_rules(&sink, rules);
+            let (approver, connector) = (
+                RecordingApprover::approving(),
+                RecordingConnector::default(),
+            );
+            let (directory, clock) = (Known(vec!["camille@exemple.fr"]), PendingClock);
+            let exec = executor(
+                &broker,
+                &sink,
+                &approver,
+                &connector,
+                &directory,
+                &clock,
+                &[],
+            );
+            let outcome = exec
+                .execute(&skill, &fill, &run_context(), &tokens, &taint)
+                .await;
+            let read: Vec<_> = connector.calls().into_iter().map(|(l, _)| l).collect();
+            if action == Action::Allow {
+                assert_eq!(sink.count("skill.prepare_read"), 1, "{taint:?}");
+                // The read ran (on a host that names its time zone).
+                if event_time::owner_time_zone().is_some() {
+                    assert_eq!(read, vec![free_times::CALENDAR_READ.to_string()]);
+                }
+                continue;
+            }
+            let RunOutcome::Refused { reason, .. } = &outcome else {
+                panic!("{action:?}: {outcome:?}");
+            };
+            if action == Action::Deny {
+                assert!(reason.contains(": deny"), "{reason}");
+                assert!(reason.contains("skill = \"calendar.freebusy\""), "{reason}");
+            } else {
+                assert!(reason.contains("nothing was read"), "{reason}");
+            }
+            assert!(read.is_empty(), "{action:?}: {read:?}");
+            assert_eq!(approver.card_count(), 0);
+        }
+    }
+
+    /// Every prepare read the connector can be asked for, recorded by name.
+    #[derive(Default)]
+    struct PrepareReads(Mutex<Vec<&'static str>>);
+
+    #[async_trait]
+    impl SkillConnector for PrepareReads {
+        async fn call(
+            &self,
+            _: &SkillContext,
+            _: &str,
+            _: &Value,
+        ) -> Result<Value, ConnectorError> {
+            Err(ConnectorError::new("no call expected"))
+        }
+        fn find_event(&self, _arguments: &Value) -> FoundEvent {
+            self.0.lock().unwrap().push("find_event");
+            Ok(None)
+        }
+        async fn received_senders(&self) -> Option<MailboxScan> {
+            self.0.lock().unwrap().push("received_senders");
+            None
+        }
+        fn mail_draft(&self, _id: i64) -> Result<Option<StoredDraft>, String> {
+            self.0.lock().unwrap().push("mail_draft");
+            Ok(None)
+        }
+    }
+
+    /// Round 2: a deny on the read's tool refuses before the event lookup
+    /// (calendar read), the INBOX scan and the stored draft (mail reads):
+    /// the broker's reason, nothing read, no card.
+    #[tokio::test]
+    async fn a_denied_prepare_read_reads_nothing() {
+        let skill = |name: &str, inputs: &str, body: &str| {
+            let text = format!("---\nname: {name}\nversion: 1\ntools: [mail.send]\ninputs:\n{inputs}approval: each_run\n---\n{body}\n");
+            parse_skill(text.as_bytes(), "s.md", name, &mail_agent()).unwrap()
+        };
+        let contact = "  person: { tier: H }\n  email: { type: email, from: contact(person) }\n";
+        let inbox = skill("follow-up", contact, "Body.");
+        let draft = skill("send-draft", "  draft_id: { tier: N }\n", "Send {draft}.");
+        let (tokens, person, _) = session();
+        let fill = |skill: &LoadedSkill, slots: Value| {
+            let value = json!({ "slots": slots, "calls": [{ "tool": "mail_send", "arguments": { "subject": "Hi", "body": "Hi." } }] });
+            validate_fill(skill, &value, &run_context(), None).unwrap()
+        };
+        let inbox_fill = fill(&inbox, json!({ "person": delimited(&person) }));
+        let draft_fill = fill(&draft, json!({ "draft_id": "7" }));
+        let cases = [
+            (
+                "apple_calendar_list_events",
+                update_skill(),
+                update_fill(),
+                None,
+            ),
+            (
+                MAIL_READ_TOOL,
+                inbox,
+                inbox_fill,
+                Some("mail Camille Exemple"),
+            ),
+            (MAIL_READ_TOOL, draft, draft_fill, None),
+        ];
+        for (tool, skill, fill, owner_input) in cases {
+            let sink = Arc::new(MemoryAuditSink::new());
+            let broker = broker_with_rules(&sink, vec![Rule::new("assistant", tool, Action::Deny)]);
+            let (approver, connector) = (RecordingApprover::approving(), PrepareReads::default());
+            let (directory, clock) = (Known(Vec::new()), PendingClock);
+            let exec = executor(
+                &broker,
+                &sink,
+                &approver,
+                &connector,
+                &directory,
+                &clock,
+                &[],
+            );
+            let run = RunContext {
+                owner_input,
+                ..run_context()
+            };
+            let outcome = exec
+                .execute(&skill, &fill, &run, &tokens, &Taint::Clean)
+                .await;
+            let RunOutcome::Refused { reason, .. } = &outcome else {
+                panic!("{}: {outcome:?}", skill.name);
+            };
+            assert!(reason.contains(": deny"), "{}: {reason}", skill.name);
+            assert!(connector.0.lock().unwrap().is_empty(), "{}", skill.name);
+            assert_eq!(approver.card_count(), 0);
+        }
     }
 }

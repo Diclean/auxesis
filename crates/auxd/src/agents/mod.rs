@@ -449,8 +449,9 @@ fn clamp(grants: &AgentGrants, chief: &AgentGrants) -> AgentGrants {
         }
     }
     for grant in &mut out.can_do {
-        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
-        let max = own.map(|own| own.level).min_by_key(|level| act(*level));
+        // `granted_level`: a chief that reads the calendar also holds its
+        // free times (`calendar.freebusy`).
+        let max = chief.granted_level(&grant.skill);
         let max = max.unwrap_or(ActionLevel::Off);
         if act(grant.level) > act(max) {
             grant.level = max;
@@ -633,11 +634,12 @@ pub(crate) fn is_shipped_skill(agent: &str, name: &str) -> bool {
 /// The hash is the first 16 hex characters of the BLAKE3 of the shipped bytes.
 /// Every shipped file that changes adds its old hash here, in the same commit
 /// that changes it.
-const PAST_SHIPPED_HASHES: [(&str, &str, &str); 10] = [
+const PAST_SHIPPED_HASHES: [(&str, &str, &str); 11] = [
     ("calendar", "agent.md", "eae3a046eee2a171"),
     ("calendar", "agent.md", "2a4d1d80176dc3b7"),
     ("mail", "agent.md", "2546a133a8b8cdec"),
     ("mail", "agent.md", "b255a6a7a44afd92"),
+    ("mail", "agent.md", "53b8436b4290542c"),
     ("documents", "agent.md", "adf17956714da82c"),
     ("calendar", "skills/send-invite.md", "7dbc5035db053257"),
     ("mail", "skills/follow-up.md", "f48e1767c6ec0e33"),
@@ -836,7 +838,8 @@ pub(crate) fn grants_lock() -> &'static std::sync::Mutex<()> {
 
 /// Probe tools, one per scope and verb, that compare two grant sets the way
 /// the runtime resolves them (scope fallbacks included).
-const PROBE_TOOLS: &str = "mail_read mail_draft mail_send mail_unknown calendar_list \
+const PROBE_TOOLS: &str =
+    "mail_read mail_draft mail_send mail_unknown calendar_freebusy calendar_list \
     calendar_write calendar_unknown clients_read clients_note clients_unknown documents_read \
     documents_file documents_unknown mcp__server__unknown google_unknown";
 
@@ -863,8 +866,7 @@ fn subset(child: &AgentGrants, chief: &AgentGrants) -> bool {
         let own = chief.see.iter().filter(|own| own.scope == grant.scope);
         see(grant.level) <= own.map(|own| see(own.level)).min().unwrap_or(0)
     }) && child.can_do.iter().all(|grant| {
-        let own = chief.can_do.iter().filter(|own| own.skill == grant.skill);
-        act(grant.level) <= own.map(|own| act(own.level)).min().unwrap_or(0)
+        act(grant.level) <= chief.granted_level(&grant.skill).map_or(0, act)
     }) && PROBE_TOOLS
         .split_whitespace()
         .all(|name| tool(child, name) <= tool(chief, name))
@@ -2050,6 +2052,7 @@ level = "auto"
                 "mail.read",
                 "mail.draft",
                 "mail.send",
+                "calendar_freebusy",
                 "recall",
                 "remember",
                 "suggest_memory"
@@ -2161,6 +2164,22 @@ level = "auto"
             std::fs::read_to_string(&file).unwrap(),
             "the owner's own words"
         );
+    }
+
+    /// EXECUTOR-READS: the Mail agent.md shipped before `calendar_freebusy`
+    /// joined its tools list is updated on an existing home, so free times keep
+    /// working after an upgrade.
+    #[test]
+    fn the_mail_agent_shipped_before_freebusy_is_updated() {
+        const OLD: &str = include_str!("../../tests/data/mail-agent-pre-160.md");
+        const CURRENT: &str = include_str!("mail/agent.md");
+        assert!(CURRENT.contains("calendar_freebusy"));
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("agents/mail/agent.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, OLD).unwrap();
+        install_shipped_files(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), CURRENT);
     }
 
     #[test]

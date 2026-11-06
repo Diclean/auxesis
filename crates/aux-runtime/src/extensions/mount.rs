@@ -144,7 +144,8 @@ pub fn changed_trust_fields(
 
 /// The exact `aux ext verify` command that re-trusts `installed` over `state`:
 /// `--downgrade-to` for another build, `--accept-legacy` for a row without a
-/// launch pin, `--accept-change` with every changed trust field.
+/// launch pin, `--accept-change` with every changed trust field (`tools`
+/// for a frozen row).
 pub fn accept_command(state: &ExtensionState, installed: &InstalledExtension) -> String {
     let name = &installed.name;
     // A directory name is not a catalog version: it never enters a command.
@@ -159,7 +160,12 @@ pub fn accept_command(state: &ExtensionState, installed: &InstalledExtension) ->
     if state.launch.is_none() {
         command.push_str(" --accept-legacy");
     }
-    let changed = changed_trust_fields(state, &installed.entry);
+    let mut changed = changed_trust_fields(state, &installed.entry);
+    // EXT-ANCHOR-11 r2: a frozen row is a tool drift (`verify_identity`, a
+    // refused `tools`): a plain `--accept` would be refused on it.
+    if state.frozen {
+        changed.push("tools");
+    }
     if !changed.is_empty() {
         command.push_str(&format!(" --accept-change {}", changed.join(",")));
     }

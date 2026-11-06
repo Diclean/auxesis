@@ -721,7 +721,10 @@ pub async fn discover_session(
 ) -> Result<ExtensionSession, SessionError> {
     // Re-hashed before it starts: a binary rewritten in place never runs.
     let installed = super::install::verify_installed(home, name)?;
-    super::mount::require_approval(home, &installed)?;
+    // EXT-ANCHOR-11 r2: a frozen row is no yes, as for a mount.
+    if super::mount::require_approval(home, &installed)?.frozen {
+        return Err(super::mount::MountError::Frozen(name.to_owned()).into());
+    }
     session_for(home, &installed, options).await
 }
 
@@ -870,7 +873,7 @@ pub struct AcceptOptions<'a> {
 /// (still frozen) and handed to `on_trusted` **before** the child starts, so
 /// the owner sees what they trust before it runs; the freeze clears once the
 /// live tools are pinned. A failed start or a `tools` refusal puts the
-/// previous row back as it was (EXT-ANCHOR-11).
+/// previous row back (EXT-ANCHOR-11), frozen when the tools drifted.
 pub async fn accept_with(
     home: &Path,
     name: &str,
@@ -993,12 +996,30 @@ pub async fn accept_with(
         }),
     );
     on_trusted(&state);
-    // Put the previous row back (frozen if it was) and audit why. A failed
-    // write keeps the new row, which is still frozen: it fails closed.
-    let restore = |outcome: &str| -> Result<(), SessionError> {
-        let row = serde_json::json!({"name": name, "version": state.version, "outcome": outcome});
+    // Put the previous row back and audit why; a tool drift keeps it frozen
+    // (EXT-ANCHOR-11 r2), as `verify_identity` would. Only the row this call
+    // stored is replaced: another one (a concurrent `freeze`) is kept, and the
+    // skip logged. A failed write keeps the new, frozen row: it fails closed.
+    let restore = |outcome: &str, drift: bool| -> Result<(), SessionError> {
+        let mut back = previous_row.clone();
+        back.frozen |= drift;
+        let ours = match super::mount::read_state(home, name) {
+            Ok(Some(row)) => serde_json::to_value(&row).ok() == serde_json::to_value(&state).ok(),
+            _ => false,
+        };
+        let row = serde_json::json!({
+            "name": name,
+            "outcome": outcome,
+            "refused_version": state.version,
+            "restored_version": ours.then_some(&back.version),
+            "kept_current": !ours,
+            "frozen": back.frozen,
+        });
         super::ledger::log(home, super::ledger::VERIFY, &row);
-        Ok(store_state(home, &previous_row)?)
+        if ours {
+            store_state(home, &back)?;
+        }
+        Ok(())
     };
     let started = session_for(
         home,
@@ -1011,7 +1032,7 @@ pub async fn accept_with(
     let session = match started {
         Ok(session) => session,
         Err(err) => {
-            restore("start_failed")?;
+            restore("start_failed", false)?;
             return Err(err);
         }
     };
@@ -1027,10 +1048,11 @@ pub async fn accept_with(
     let tools_changed = tool_changes(&previous_row.tools, &pins);
     if named_tools == tools_changed.is_empty() {
         session.stop().await;
-        if !tools_changed.is_empty() {
+        let drift = !tools_changed.is_empty();
+        if drift {
             super::mount::remove_from_all_mounts(home, name)?;
         }
-        restore("tools_refused")?;
+        restore("tools_refused", drift)?;
         let command = super::mount::accept_command(&previous_row, &installed);
         let message = match tools_changed.is_empty() {
             true => format!("`{name}` has no changed tool: drop `tools` from `{command}`"),
@@ -1081,9 +1103,11 @@ fn with_tools(command: &str) -> String {
     if !command.starts_with("aux ext verify ") {
         return command.to_owned();
     }
-    match command.contains(" --accept-change ") {
-        true => format!("{command},tools"),
-        false => format!("{command} --accept-change tools"),
+    // `accept_command` already names `tools` for a frozen row.
+    match command.split_once(" --accept-change ") {
+        Some((_, list)) if list.split(',').any(|field| field == "tools") => command.to_owned(),
+        Some(_) => format!("{command},tools"),
+        None => format!("{command} --accept-change tools"),
     }
 }
 
@@ -1314,5 +1338,7 @@ mod tests {
         assert_eq!(with_tools(fallback), fallback);
         let command = "aux ext verify demo --accept --accept-change network";
         assert_eq!(with_tools(command), format!("{command},tools"));
+        let tools = format!("{command},tools");
+        assert_eq!(with_tools(&tools), tools);
     }
 }

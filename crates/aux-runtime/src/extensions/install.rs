@@ -1496,10 +1496,11 @@ pub fn kept_approval(home: &Path, name: &str) -> KeptApproval {
     }
 }
 
-/// Whether the approval row of `name` holds text that is not a valid row:
-/// `remove` cannot keep it as the last approval.
+/// Whether the approval row of `name` exists but cannot be read back (text
+/// that is not a valid row, a link, a FIFO): `remove` cannot keep it as the
+/// last approval, and the owner is warned (EXT-ANCHOR-11 r2).
 pub fn approval_row_is_corrupt(home: &Path, name: &str) -> bool {
-    super::mount::state_row_is_corrupt(home, name)
+    super::mount::read_state(home, name).is_err()
 }
 
 /// Delete every `extensions/<name>@*` tree through the verified home, after it

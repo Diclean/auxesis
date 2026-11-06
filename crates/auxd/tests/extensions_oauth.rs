@@ -336,6 +336,8 @@ async fn oauth_start_refuses_a_frozen_extension() {
     assert_eq!(response.json()["error"]["code"], "approval_required");
     let message = response.json()["error"]["message"].to_string();
     assert!(message.contains("frozen"), "{message}");
+    // EXT-ANCHOR-11 r2: a frozen row is a tool drift: the fix names `tools`.
+    assert!(message.contains("--accept-change tools"), "{message}");
     assert!(server.received_requests().await.unwrap().is_empty());
     api.stop();
 }

@@ -321,6 +321,13 @@ fn signal(pid: u32, sig: libc::c_int) {
     }
 }
 
+/// True once the budget stop was asked ([`aux_engine::stop_settle_worker`]):
+/// an empty write through the stop gate is refused. Runs no SQL. A failure
+/// that comes with it is the stop's, not a budget denial or a run failure.
+pub fn daemon_stopping() -> bool {
+    aux_engine::gated_store_write(|| Ok(())).is_err_and(|err| aux_engine::is_stop_refusal(&err))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

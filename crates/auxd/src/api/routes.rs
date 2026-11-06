@@ -1076,6 +1076,16 @@ fn turn_error_response(state: &ApiState, err: TurnError) -> Response {
             "disabled in private mode",
             detail(&text),
         ),
+        // The stop gate refuses a turn as a budget denial; once the stop is
+        // asked the turn met the stop, not the agent's budget.
+        TurnError::BudgetDenied { .. } if crate::shutdown::daemon_stopping() => {
+            error::error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "daemon_stopping",
+                "the daemon is stopping; send again once it is back",
+                None,
+            )
+        }
         TurnError::BudgetDenied { detail: text } => error::error_response_with_detail(
             StatusCode::TOO_MANY_REQUESTS,
             "budget_denied",

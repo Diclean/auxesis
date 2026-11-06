@@ -762,18 +762,29 @@ impl Tool for DelegateTool {
             ctx.turn_mode(),
             crate::privacy_wiring::agent_mode_fn(&self.home, &ctx.agent),
         );
-        let delegation = {
-            let guard = kernel_core::lock_recover(&store);
-            guard
-                .create_delegation(
-                    &id,
-                    &ctx.agent,
-                    &args.agent,
-                    &task,
-                    brain.as_deref(),
-                    at_handoff,
-                )
-                .map_err(|err| ToolError::Io(std::io::Error::other(err.to_string())))?
+        // Past the budget stop no delegation row is written and the agent
+        // does not run: the call fails with the stop, ids only in the log.
+        let delegation = match aux_engine::gated_store_write(|| {
+            kernel_core::lock_recover(&store).create_delegation(
+                &id,
+                &ctx.agent,
+                &args.agent,
+                &task,
+                brain.as_deref(),
+                at_handoff,
+            )
+        }) {
+            Ok(delegation) => delegation,
+            Err(err) if aux_engine::is_stop_refusal(&err) => {
+                tracing::warn!(
+                    delegation_id = %id,
+                    "delegation skipped: the daemon is stopping"
+                );
+                return Ok(ToolOutput::error(
+                    "the daemon is stopping: the task was not handed over",
+                ));
+            }
+            Err(err) => return Err(ToolError::Io(std::io::Error::other(err.to_string()))),
         };
         if let Some(events) = &self.events {
             let _ = crate::api::wire::send_bounded(
@@ -792,8 +803,10 @@ impl Tool for DelegateTool {
             .as_ref()
             .map(|cancels| cancels.register(&id, Arc::clone(&cancel)));
         let run = {
-            let guard = kernel_core::lock_recover(&store);
-            let _ = guard.set_delegation_state(&id, DelegationState::Working);
+            let _ = gated_delegation_write(&id, || {
+                kernel_core::lock_recover(&store)
+                    .set_delegation_state(&id, DelegationState::Working)
+            });
             DelegationRun {
                 id: delegation.id.clone(),
                 parent_thread: delegation.parent_thread.clone(),
@@ -860,12 +873,10 @@ impl Tool for DelegateTool {
                 let took_ms = started.elapsed().as_millis() as i64;
                 // Conditional completion: a Stop that landed while the
                 // executor ran must never be overwritten with `done`.
-                let applied = {
-                    let guard = kernel_core::lock_recover(&store);
-                    guard
-                        .set_delegation_result(&id, &result, took_ms)
-                        .unwrap_or(false)
-                };
+                let applied = gated_delegation_write(&id, || {
+                    kernel_core::lock_recover(&store).set_delegation_result(&id, &result, took_ms)
+                })
+                .unwrap_or(false);
                 if !applied {
                     if let Some(events) = &self.events {
                         let _ = crate::api::wire::send_bounded(
@@ -891,12 +902,12 @@ impl Tool for DelegateTool {
                 let stopped = row
                     .as_ref()
                     .is_some_and(|delegation| delegation.state == DelegationState::Stopped);
-                {
-                    let guard = kernel_core::lock_recover(&store);
-                    if !stopped {
-                        // A run that attempted nothing never ran.
-                        let _ = guard.set_delegation_state(&id, unfinished_state(row.as_ref()));
-                    }
+                if !stopped {
+                    // A run that attempted nothing never ran.
+                    let _ = gated_delegation_write(&id, || {
+                        kernel_core::lock_recover(&store)
+                            .set_delegation_state(&id, unfinished_state(row.as_ref()))
+                    });
                 }
                 if let Some(events) = &self.events {
                     let _ = crate::api::wire::send_bounded(
@@ -935,6 +946,27 @@ impl Tool for DelegateTool {
     }
 }
 
+/// A delegation row write past the budget stop gate: after the stop it is
+/// refused (a warning, the id only) and `None`; a store error is `None` too,
+/// as the callers already treated it.
+fn gated_delegation_write<T>(
+    id: &str,
+    write: impl FnOnce() -> Result<T, aux_store::StoreError>,
+) -> Option<T> {
+    match aux_engine::gated_store_write(write) {
+        Ok(written) => Some(written),
+        Err(err) => {
+            if aux_engine::is_stop_refusal(&err) {
+                tracing::warn!(
+                    delegation_id = %id,
+                    "delegation row skipped: the daemon is stopping"
+                );
+            }
+            None
+        }
+    }
+}
+
 /// Closes a delegation whose `delegate` call was dropped before the agent
 /// answered: the agent's turn is cancelled and a record still open is marked
 /// failed, so neither runs nor shows "working" past the chief's turn.
@@ -964,9 +996,10 @@ impl Drop for OrphanGuard {
             });
             // A row the cancelled turn never touched attempted
             // nothing: it is stopped, so the owner reads no "couldn't finish".
-            open && guard
-                .set_delegation_state(&self.id, unfinished_state(row.as_ref()))
-                .unwrap_or(false)
+            open && gated_delegation_write(&self.id, || {
+                guard.set_delegation_state(&self.id, unfinished_state(row.as_ref()))
+            })
+            .unwrap_or(false)
         };
         if let (true, Some(events)) = (closed, &self.events) {
             let _ = crate::api::wire::send_bounded(

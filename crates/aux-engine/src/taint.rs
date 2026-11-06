@@ -93,8 +93,18 @@ fn classify(message: &Message, registry: &ToolRegistry) -> Row {
 /// path (READS-7), and an opaque one (`javascript:alert(1)`, `data:,x`)
 /// gives `javascript:` / `data:`, never its body (READS-8). Every taint row,
 /// Activity entry and card shows this.
+/// Schemes whose body is never a host (READS-8 rev 2).
+const BODY_ONLY: [&str; 5] = ["javascript", "data", "vbscript", "about", "blob"];
+
 pub(crate) fn url_host(raw: &str) -> &str {
     let rest = raw.trim_start();
+    // Schemes that never name a host: their scheme only, whatever follows
+    // (`javascript://token`, `data:x@token` would otherwise parse a host).
+    if let Some((scheme, _)) = rest.split_once(':') {
+        if BODY_ONLY.iter().any(|s| scheme.eq_ignore_ascii_case(s)) {
+            return &rest[..=scheme.len()];
+        }
+    }
     if let Some(scheme) = opaque_scheme(rest) {
         return scheme;
     }
@@ -166,16 +176,15 @@ pub(crate) fn host_only(detail: Option<String>) -> Option<String> {
 /// A stored workspace mark (`tool: detail`, see [`TaintSource::summary`])
 /// with its detail cut to the host, as [`host_only`]. A mark with no prefix
 /// is a bare tool name: shown as is, escaped (READS-8), unless it looks like
-/// a URL (it has a `:`, `@`, `?`, `#` or `\\` in it, or starts with `/`), which is cut as above.
+/// a URL or path (it has a `/`, `:`, `@`, `?`, `#` or `\\` in it), which is cut
+/// as above, as main did: `http_fetch/S3CRET/tok` shows `http_fetch`.
 pub(crate) fn host_only_reason(reason: String) -> Option<String> {
     match reason.split_once(": ") {
         Some((tool, detail)) => Some(match host_only(Some(detail.to_string())) {
             Some(host) => format!("{tool}: {host}"),
             None => tool.to_string(),
         }),
-        None if reason.starts_with('/') || reason.contains([':', '@', '?', '#', '\\']) => {
-            host_only(Some(reason))
-        }
+        None if reason.contains(['/', ':', '@', '?', '#', '\\']) => host_only(Some(reason)),
         None => Some(kernel_broker::sanitize_text(&reason))
             .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|name| !name.is_empty()),
@@ -278,8 +287,14 @@ mod tests {
             ("data:text/html;base64,AAAA", "data:"),
             ("javascript:alert(1)", "javascript:"),
             (" JavaScript:alert(1)", "JavaScript:"),
-            ("javascript:alert('a@b')", ""),
-            ("javascript://alert(1)", "javascript"),
+            ("javascript:alert('a@b')", "javascript:"),
+            ("javascript://alert(1)", "javascript:"),
+            ("javascript://s3cr3t-token", "javascript:"),
+            ("javascript:letmein@s3cr3t-token", "javascript:"),
+            ("JAVASCRIPT://s3cr3t-token", "JAVASCRIPT:"),
+            ("data://s3cr3t-token", "data:"),
+            ("vbscript:x@s3cr3t-token", "vbscript:"),
+            ("blob:https://evil.example/x", "blob:"),
             ("mailto:a@b.example", "b.example"),
             ("user:pw@a.example/x", "a.example"),
             ("a.example:8443/x", "a.example:8443"),
@@ -302,7 +317,11 @@ mod tests {
         assert_eq!(host_only(Some(String::new())), None);
         assert_eq!(host_only(None), None);
         let name = host_only_reason("mcp/files\u{7}  tool".into());
-        assert_eq!(name.as_deref(), Some("mcp/files tool"));
+        assert_eq!(name.as_deref(), Some("mcp"));
+        let path = host_only_reason("http_fetch/S3CRET/tok".into());
+        assert_eq!(path.as_deref(), Some("http_fetch"));
+        let name = host_only_reason("search\u{7}  web".into());
+        assert_eq!(name.as_deref(), Some("search web"));
         assert_eq!(host_only_reason(String::new()), None);
     }
 

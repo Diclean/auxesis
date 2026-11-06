@@ -799,32 +799,38 @@ fn read_agent_grants(home: &Path, id: &str) -> Result<Option<AgentGrants>, Regis
 }
 
 /// One agent's grants as its own `grants.toml` (or the seed) says, before
-/// any chief cap. `None` when unreadable or the agent is not seeded.
-pub(crate) fn uncapped_grants(home: &Path, id: &str) -> Option<AgentGrants> {
-    match read_agent_grants(home, id) {
-        Ok(Some(grants)) => Some(grants),
-        Ok(None) => seed_for(home, chief_id(home))
-            .ok()?
-            .into_iter()
-            .find(|agent| agent.id == id)
-            .map(|agent| agent.grants),
-        Err(_) => None,
+/// any chief cap, or why that file cannot be used (READS-6, words per
+/// READS-7/8). The file is read once; `Err` exactly when [`read_agent_grants`]
+/// fails. `Ok(None)`: no file and not seeded.
+pub(crate) fn uncapped_grants(
+    home: &Path,
+    id: &str,
+) -> Result<Option<AgentGrants>, aux_runtime::executor::FileFault> {
+    use aux_runtime::executor::FileFault;
+    match read_private(home, &grants_rel(id)) {
+        Ok(Some(text)) => toml::from_str::<GrantsFile>(&text)
+            .map(|file| Some(AgentGrants::from(file)))
+            .map_err(|_| FileFault::Parse),
+        Ok(None) => Ok(seed_for(home, chief_id(home)).ok().and_then(|seed| {
+            seed.into_iter()
+                .find(|agent| agent.id == id)
+                .map(|agent| agent.grants)
+        })),
+        Err(_) => Err(unreadable_fault(&home.join(grants_rel(id)))),
     }
 }
 
-/// Why `agents/<id>/grants.toml` cannot be used, `Some` exactly when
-/// [`read_agent_grants`] fails (READS-6, words per READS-7).
-pub(crate) fn grants_fault(home: &Path, id: &str) -> Option<aux_runtime::executor::FileFault> {
+/// Why a grants file that failed to open or read cannot be used: a symlink
+/// (never followed), over the size limit, a mode that refuses reading, or
+/// something else (not UTF-8, I/O error).
+fn unreadable_fault(path: &Path) -> aux_runtime::executor::FileFault {
     use aux_runtime::executor::FileFault;
-    match read_private(home, &grants_rel(id)) {
-        Ok(None) => None,
-        Ok(Some(text)) => toml::from_str::<GrantsFile>(&text)
-            .err()
-            .map(|_| FileFault::Parse),
-        Err(_) => Some(match std::fs::symlink_metadata(home.join(grants_rel(id))) {
-            Ok(meta) if meta.len() > MAX_REGISTRY_FILE_BYTES => FileFault::TooLarge,
-            _ => FileFault::Read,
-        }),
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => FileFault::Symlink,
+        Ok(meta) if meta.len() > MAX_REGISTRY_FILE_BYTES => FileFault::TooLarge,
+        Ok(meta) if meta.permissions().mode() & 0o444 == 0 => FileFault::Denied,
+        _ => FileFault::Read,
     }
 }
 

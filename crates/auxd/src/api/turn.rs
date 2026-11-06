@@ -3013,7 +3013,7 @@ fn checked_tool_lists(home: &Path, id: &str) -> Result<Vec<Vec<String>>, agent::
 /// [`tool_lists`], each with the file it comes from (`agent.toml`, a
 /// legacy `dot.toml`, `agent.md`), so a refusal names the file to edit.
 /// `None`: that file cannot be read, so it allows nothing.
-fn labelled_tool_lists(home: &Path, id: &str) -> Vec<(&'static str, Option<Vec<String>>)> {
+fn labelled_tool_lists(home: &Path, id: &str) -> Vec<LabelledList> {
     checked_labelled_tool_lists(home, id).unwrap_or_else(|_| vec![(sidecar_name(home, id), None)])
 }
 
@@ -3030,10 +3030,13 @@ fn sidecar_name(home: &Path, id: &str) -> &'static str {
     }
 }
 
+/// A tools list and its file; `None` when that file cannot be read.
+type LabelledList = (&'static str, Option<Vec<String>>);
+
 fn checked_labelled_tool_lists(
     home: &Path,
     id: &str,
-) -> Result<Vec<(&'static str, Option<Vec<String>>)>, agent::AgentError> {
+) -> Result<Vec<LabelledList>, agent::AgentError> {
     let mut lists = Vec::new();
     lists.extend(
         agent::config(home, id)?

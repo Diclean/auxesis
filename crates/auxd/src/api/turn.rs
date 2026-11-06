@@ -1779,6 +1779,9 @@ impl EngineTurnRunner {
         );
         // A generated grant `ask` never softens the owner's own deny.
         deny_again(agent, &registry, &owner_rules, &mut rules);
+        // The tools ceiling last too, as outside the API: a grant `ask`
+        // pushed above must never soften a tool the agent's lists deny.
+        apply_tools_ceiling(agent, &registry, &ceilings, &mut rules);
         if customised_grants {
             let added = rules[owner_rules.len()..].iter();
             let asks: Vec<Rule> = added
@@ -2803,11 +2806,15 @@ struct Ceiling {
 /// An agent's tools lists: `agent.toml`'s, and `agent.md`'s when it names
 /// tools. An unreadable one allows nothing.
 pub(crate) fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
+    checked_tool_lists(home, id).unwrap_or_else(|_| vec![Vec::new()])
+}
+
+/// [`tool_lists`] for a turn that runs the agent: an unreadable `agent.toml`
+/// is an error, as it fails the daemon's own turn, not a list that denies
+/// every tool. An unreadable `agent.md` still allows nothing.
+fn checked_tool_lists(home: &Path, id: &str) -> Result<Vec<Vec<String>>, agent::AgentError> {
     let mut lists: Vec<Vec<String>> = Vec::new();
-    match agent::config(home, id) {
-        Ok(config) => lists.extend(config.tools),
-        Err(_) => lists.push(Vec::new()),
-    }
+    lists.extend(agent::config(home, id)?.tools);
     match aux_runtime::skills::load_agent(&aux_engine::agent_dir(home, id)) {
         Ok(md)
             if md.source == aux_runtime::skills::agent::AgentSource::AgentMd
@@ -2818,7 +2825,7 @@ pub(crate) fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
         Ok(_) => {}
         Err(_) => lists.push(Vec::new()),
     }
-    lists
+    Ok(lists)
 }
 
 /// What a turn outside the API may do (`aux skill run`, `aux chat`, scheduled
@@ -2827,13 +2834,14 @@ pub(crate) fn tool_lists(home: &Path, id: &str) -> Vec<Vec<String>> {
 /// already hold (the owner's config, a tools list, MAIL-NO-SHELL) again, last,
 /// so a generated ask never softens one. The registries are the built-ins
 /// plus mounted MCP tools; the scoped tools a skill reaches outside them are
-/// covered too ([`constrained_names`]).
+/// covered too ([`constrained_names`]). An unreadable `agent.toml` is an
+/// error, as it fails the daemon's own turn.
 pub fn constrain_non_api_turn(
     home: &Path,
     agent: &str,
     registry: &kernel_broker::ToolRegistry,
     rules: &mut Vec<Rule>,
-) {
+) -> Result<(), agent::AgentError> {
     use aux_runtime::grants::ToolOrigin;
     // These registries do not record their stages, so a name is never taken
     // as built-in when it could be a connector or MCP tool: any name with a
@@ -2856,12 +2864,13 @@ pub fn constrain_non_api_turn(
         })
         .collect();
     // The tools ceiling first, so the owner denies replayed last hold it too.
-    let lists = tool_lists(home, agent);
+    let lists = checked_tool_lists(home, agent)?;
     apply_tools_ceiling(agent, registry, &lists, rules);
     let owner_rules = rules.clone();
     apply_own_grants(home, agent, registry, &origins, &lists, rules);
     apply_chief_ceiling(home, agent, registry, &origins, &owner_rules, rules);
     deny_again(agent, registry, &owner_rules, rules);
+    Ok(())
 }
 
 /// The tools ceiling (B-API v3, F7): each list in `lists` caps `agent`, and a
@@ -4131,7 +4140,7 @@ mod tests {
         registry.register_native(Box::new(NamedTestTool("google_mail_send_x")));
         registry.register_native(Box::new(NamedTestTool("mail_read")));
         let mut rules = Vec::new();
-        constrain_non_api_turn(home, "scout", &registry, &mut rules);
+        constrain_non_api_turn(home, "scout", &registry, &mut rules).unwrap();
         let denied = |tool: &str| {
             rules
                 .iter()
@@ -4158,7 +4167,7 @@ mod tests {
         registry.register_native(Box::new(NamedTestTool("read_file")));
         let denied = |agent: &str| {
             let mut rules = Vec::new();
-            constrain_non_api_turn(home, agent, &registry, &mut rules);
+            constrain_non_api_turn(home, agent, &registry, &mut rules).unwrap();
             let deny = |tool: &str| {
                 rules
                     .iter()
@@ -4234,7 +4243,7 @@ mod tests {
         std::fs::create_dir_all(aux_engine::agent_dir(home, "calendar")).unwrap();
         let ceiling = |agent: &str| {
             let mut rules = Vec::new();
-            constrain_non_api_turn(home, agent, &registry, &mut rules);
+            constrain_non_api_turn(home, agent, &registry, &mut rules).unwrap();
             last(&rules, agent)
         };
         assert_eq!(ceiling("calendar"), Some(Action::Ask));
@@ -4299,7 +4308,7 @@ mod tests {
             apply_chief_ceiling(home, "mail", &registry, &origins, &owner, &mut api);
             assert_eq!(denied(&api), capped, "daemon turn: {rules}");
             let mut cli = owner.clone();
-            constrain_non_api_turn(home, "mail", &registry, &mut cli);
+            constrain_non_api_turn(home, "mail", &registry, &mut cli).unwrap();
             assert_eq!(denied(&cli), capped, "outside the API: {rules}");
         }
     }
@@ -4316,7 +4325,7 @@ mod tests {
         std::fs::create_dir_all(aux_engine::agent_dir(home, "calendar")).unwrap();
         let registry = kernel_broker::ToolRegistry::new();
         let send = |mut rules: Vec<Rule>, agent: &str| {
-            constrain_non_api_turn(home, agent, &registry, &mut rules);
+            constrain_non_api_turn(home, agent, &registry, &mut rules).unwrap();
             kernel_broker::matching_rule(&rules, agent, "mail_send", false)
                 .map(|(_, rule)| rule.action)
         };
@@ -5613,27 +5622,80 @@ mod listed_tool_floor_tests {
         }
     }
 
+    /// An MCP tool of the `fake` server.
+    struct FakeMcp;
+
+    #[async_trait::async_trait]
+    impl kernel_broker::Tool for FakeMcp {
+        fn name(&self) -> &str {
+            "mcp__fake__ping"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object" })
+        }
+        async fn run(&self, _: &serde_json::Value, _: &ToolCtx) -> Result<ToolOutput, ToolError> {
+            Ok(ToolOutput::ok("ran"))
+        }
+        fn risk(&self) -> Risk {
+            Risk::Low
+        }
+        fn path_id(&self) -> PathId {
+            PathId::B1
+        }
+        fn class(&self) -> ToolClass {
+            ToolClass::default()
+        }
+    }
+
     type Seen = Arc<Mutex<Vec<(String, ToolClass)>>>;
 
     /// One plain call to `tool` by `agent`, whose agent.toml lists only
     /// `tool` by its logical name, under the default `approvals = "auto"`.
     /// Returns `card`, `ran` or `deny`, and records the turn's tools in `seen`.
     fn probe(agent: &str, tool: &str, seen: &Seen) -> &'static str {
+        let logical = aux_runtime::skills::tool_map::from_wire(tool)
+            .map_or_else(|| tool.to_string(), |info| info.logical);
+        probe_listing(agent, tool, &logical, seen)
+    }
+
+    /// [`probe`] with `agent.toml` listing `listed` instead of `tool`.
+    fn probe_listing(agent: &str, tool: &str, listed: &str, seen: &Seen) -> &'static str {
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(aux_engine::agent_dir(&home, agent)).unwrap();
+        let chief = if tool.starts_with("mcp__") {
+            "main"
+        } else {
+            "aux"
+        };
         std::fs::write(
             config_path(&home),
-            "version = 1\nprivacy.mode = \"open\"\ndefault_agent = \"aux\"\n\n\
+            format!(
+                "version = 1\nprivacy.mode = \"open\"\ndefault_agent = \"{chief}\"\n\n\
              [[providers]]\nid = \"alpha\"\nbase_url = \"http://127.0.0.1:9/v1\"\n\
              model = \"m\"\nkind = \"fake\"\n\n[connectors.mail]\n\n\
              [[connectors.mail.accounts]]\nid = \"personal\"\nemail = \"owner@example.org\"\n\n\
-             [connectors.mail.accounts.imap]\nhost = \"127.0.0.1\"\nport = 9\nsecurity = \"tls\"\n",
+             [connectors.mail.accounts.imap]\nhost = \"127.0.0.1\"\nport = 9\nsecurity = \"tls\"\n"
+            ),
         )
         .unwrap();
-        let logical = aux_runtime::skills::tool_map::from_wire(tool)
-            .map_or_else(|| tool.to_string(), |info| info.logical);
-        let toml = format!("tools = [{logical:?}]\n");
+        // The chief and then the agent may use the `fake` MCP server at `ask`.
+        for id in ["main", agent]
+            .into_iter()
+            .filter(|_| tool.starts_with("mcp__"))
+        {
+            let Some(mut grants) = aux_runtime::grants::default_grants(id) else {
+                continue;
+            };
+            grants.can_do.push(aux_runtime::grants::DoGrant {
+                skill: "mcp.fake".to_string(),
+                level: aux_runtime::grants::ActionLevel::Ask,
+            });
+            std::fs::create_dir_all(aux_engine::agent_dir(&home, id)).unwrap();
+            // An id outside the registry (the table's `aux`) keeps no grants file.
+            let _ = crate::agents::write_grants(&home, id, &grants);
+        }
+        let toml = format!("tools = [{listed:?}]\n");
         let agent_toml = aux_engine::agent_dir(&home, agent).join("agent.toml");
         std::fs::write(agent_toml, toml).unwrap();
         let provider = Arc::new(aux_providers::FakeProvider::scripted(
@@ -5652,6 +5714,7 @@ mod listed_tool_floor_tests {
             let seen = Arc::clone(seen);
             Arc::new(move |registry: &mut ToolRegistry| {
                 registry.register(Box::new(Unknown));
+                registry.register(Box::new(FakeMcp));
                 let mut seen = seen.lock().unwrap();
                 for tool in registry.iter() {
                     seen.push((tool.name().to_string(), tool.class()));
@@ -5669,10 +5732,16 @@ mod listed_tool_floor_tests {
             .with_approvals(ApprovalRegistry::new(Duration::from_millis(20)))
             .with_bridge(bridge)
             .with_tools(hook)
-            .with_tool_origins(vec![(
-                "frobnicate_widget".to_string(),
-                aux_runtime::grants::ToolOrigin::Builtin,
-            )]);
+            .with_tool_origins(vec![
+                (
+                    "frobnicate_widget".to_string(),
+                    aux_runtime::grants::ToolOrigin::Builtin,
+                ),
+                (
+                    "mcp__fake__ping".to_string(),
+                    aux_runtime::grants::ToolOrigin::Mcp,
+                ),
+            ]);
         let _ = runner.run_turn(agent, None, "go", None);
         let conn = aux_store::open_keyed_readonly(&kernel_core::store_path(&home)).unwrap();
         let rows = |kind: &str| -> Vec<serde_json::Value> {
@@ -5696,6 +5765,18 @@ mod listed_tool_floor_tests {
         } else {
             "deny"
         }
+    }
+
+    /// A tool outside the agent's list is denied, not carded, though its own
+    /// grants say `ask`: Calendar may use the `fake` MCP server at `ask`, but
+    /// its list names only `read_file`, so the grant `ask` must not soften the
+    /// ceiling's deny. Listed, the same call cards.
+    #[test]
+    fn a_grant_ask_never_softens_the_tools_ceiling_in_a_daemon_turn() {
+        let seen: Seen = Arc::default();
+        let tool = "mcp__fake__ping";
+        assert_eq!(probe_listing("calendar", tool, tool, &seen), "card");
+        assert_eq!(probe_listing("calendar", tool, "read_file", &seen), "deny");
     }
 
     #[test]

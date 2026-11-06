@@ -235,8 +235,9 @@ impl ChatParts<'_> {
     fn session_rules(
         &self,
         registry: &mut kernel_broker::ToolRegistry,
-    ) -> Vec<kernel_broker::Rule> {
+    ) -> Result<Vec<kernel_broker::Rule>, ChatError> {
         // A config that cannot be read opts into nothing: no shell.
+        // The ceiling below then fails the session, as it fails a daemon turn.
         let toml_tools = auxd::agent::config(&self.home, &self.agent)
             .ok()
             .and_then(|config| config.tools);
@@ -248,8 +249,9 @@ impl ChatParts<'_> {
             registry,
             &mut rules,
         );
-        auxd::api::constrain_non_api_turn(&self.home, &self.agent, registry, &mut rules);
-        rules
+        auxd::api::constrain_non_api_turn(&self.home, &self.agent, registry, &mut rules)
+            .map_err(std::io::Error::other)?;
+        Ok(rules)
     }
 
     /// A session under `mode`, resuming `resume` when given. Its gate and its
@@ -272,7 +274,7 @@ impl ChatParts<'_> {
             ));
         }
         kernel_broker::gate_dispatch(&mut registry, Arc::clone(&self.live));
-        let rules = self.session_rules(&mut registry);
+        let rules = self.session_rules(&mut registry)?;
         ChatSession::start(ChatSetup {
             mode: Arc::new(move || mode),
             contacts: Arc::clone(&self.contacts),
@@ -676,7 +678,7 @@ mod tests {
         let mut parts = test_parts(&home, &config, &provider, live_from(&config_file));
         let send = |parts: &ChatParts<'_>| {
             let mut registry = aux_engine::registry_from_config(parts.config);
-            let rules = parts.session_rules(&mut registry);
+            let rules = parts.session_rules(&mut registry).unwrap();
             kernel_broker::matching_rule(&rules, &parts.agent, "mail_send", false)
                 .map(|(_, rule)| rule.action)
         };
@@ -781,6 +783,47 @@ mod tests {
         }
     }
 
+    /// An unreadable `agent.toml` fails the session, as it fails the daemon's
+    /// turn, instead of denying every constrained tool.
+    #[test]
+    fn a_session_fails_on_an_unreadable_agent_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let agent_dir = aux_engine::agent_dir(&home, "main");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let config_file = kernel_core::config_path(&home);
+        std::fs::write(&config_file, "version = 1\nprivacy.mode = \"open\"\n").unwrap();
+        std::fs::write(agent_dir.join("agent.toml"), "not = [toml").unwrap();
+        let config = Config::default();
+        let provider = aux_providers::FakeProvider::echo("main");
+        let parts = test_parts(&home, &config, &provider, live_from(&config_file));
+        let mut registry = aux_engine::registry_from_config(parts.config);
+        let err = parts.session_rules(&mut registry).unwrap_err();
+        assert!(err.to_string().contains("unreadable"), "{err}");
+        runtime().block_on(async {
+            assert!(Conversation::start(&parts).is_err());
+        });
+    }
+
+    /// `text` without the digits of each "rule <n>", and nothing else.
+    fn without_rule_number(text: &str) -> String {
+        let (mut out, mut rest) = (String::new(), text);
+        while let Some(at) = rest.find("rule ") {
+            let (head, tail) = rest.split_at(at + "rule ".len());
+            out.push_str(head);
+            rest = tail.trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        out + rest
+    }
+
+    #[test]
+    fn only_the_rule_number_is_normalised() {
+        assert_eq!(
+            without_rule_number("denied by rule 12 for 3 files, rule 4."),
+            "denied by rule  for 3 files, rule ."
+        );
+    }
+
     /// The daemon's turn and `aux chat` give the same verdict, and the same
     /// refusal text, for each (tools list, tool) pair.
     #[test]
@@ -791,6 +834,8 @@ mod tests {
             ("read_file", "read_file", false),
             ("read_file, write_file", "write_file", false),
             ("read_file", "write_file", true),
+            ("crm.search, write_file", "write_file", false),
+            ("crm.search", "write_file", true),
         ];
         let args = serde_json::json!({"path": "x.txt", "content": "x"});
         let owner = "[[rules]]\nagent = \"*\"\ntool = \"read_file\"\naction = \"allow\"\n\
@@ -842,11 +887,8 @@ mod tests {
                 "{case}: {api_verdict:?}"
             );
             if denied {
-                // The rule's index differs (the daemon holds more rules).
-                let text = |provider| {
-                    let result: String = first_result(provider);
-                    result.replace(|c: char| c.is_ascii_digit(), "")
-                };
+                // The rule's number differs (the daemon holds more rules).
+                let text = |provider| without_rule_number(&first_result(provider));
                 assert_eq!(text(&api), text(&cli), "{case}");
             }
         }

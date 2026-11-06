@@ -1179,6 +1179,17 @@ impl TrackedPid {
         lookup(self.pid).is_some_and(|answer| self.is(answer))
     }
 
+    /// The pre-signal re-check with the failure kept: `Some(true)` the same
+    /// process, `Some(false)` gone or recycled, `None` when the read `Failed`
+    /// (the process may still run, so the caller's pass is not complete).
+    fn recheck(&self, lookup: OrphanLookup<'_>) -> Option<bool> {
+        match lookup(self.pid) {
+            Lookup::Found(answer) => Some(self.is(answer)),
+            Lookup::Gone => Some(false),
+            Lookup::Failed => None,
+        }
+    }
+
     /// One `(ppid, uid, start)` answer names this process: ours, same start.
     fn is(&self, (_, uid, start): (i32, u32, u64)) -> bool {
         // SAFETY: `geteuid` is a side-effect-free read of this process's
@@ -1224,22 +1235,32 @@ fn remember(seen: &mut HashSet<TrackedPid>, more: impl IntoIterator<Item = Track
 
 /// Seen processes still the same, and every live descendant of each, read
 /// before any signal: a parent killed first hands its children to launchd,
-/// out of every `ppid` walk. `skip` is the root, handled by the caller.
+/// out of every `ppid` walk. `skip` is the root, handled by the caller. The
+/// flag is false when a seen re-check `Failed`: that process may still run.
 fn seen_family(
     seen: &HashSet<TrackedPid>,
     skip: i32,
-    lookup: StartLookup<'_>,
-) -> HashSet<TrackedPid> {
+    lookup: OrphanLookup<'_>,
+) -> (HashSet<TrackedPid>, bool) {
     let mut family = HashSet::new();
+    let mut all_read = true;
     for tracked in seen {
-        if tracked.pid == skip || !tracked.still_same(lookup) {
+        if tracked.pid == skip {
             continue;
+        }
+        match tracked.recheck(lookup) {
+            Some(true) => {}
+            Some(false) => continue,
+            None => {
+                all_read = false;
+                continue;
+            }
         }
         family.insert(*tracked);
         let below = descendant_pids(tracked.pid).into_iter();
         family.extend(below.filter_map(TrackedPid::of));
     }
-    family
+    (family, all_read)
 }
 
 /// Every process that belongs to one command: descendants by `ppid` walk,
@@ -1324,14 +1345,15 @@ fn process_footprint(_pid: i32) -> u64 {
 ///
 /// Returns false when the final marker pass could not read every candidate (a
 /// pid before the end whose descriptors were unreadable), or could not re-check
-/// a holder it found: a holder may still run, so the caller must not report
-/// the tree empty.
+/// a holder it found, or when a seen process or a `ppid`-walk candidate could
+/// not be re-checked (its read `Failed`) before its signal: any of them may
+/// still run, so the caller must not report the tree empty.
 fn kill_process_tree(
     root: Option<&mut tokio::process::Child>,
     marker: &Marker,
     seen: &mut HashSet<TrackedPid>,
 ) -> bool {
-    kill_process_tree_with(root, marker, &pid_ppid_uid_start, seen)
+    kill_process_tree_with(root, marker, &pid_lookup, seen)
 }
 
 #[cfg(test)]
@@ -1375,11 +1397,14 @@ fn signal_holders(holders: &[TrackedPid], lookup: OrphanLookup<'_>) -> bool {
 fn kill_process_tree_with(
     root: Option<&mut tokio::process::Child>,
     marker: &Marker,
-    lookup: StartLookup<'_>,
+    lookup: OrphanLookup<'_>,
     seen: &mut HashSet<TrackedPid>,
 ) -> bool {
     #[allow(unused_mut)]
     let mut complete = true;
+    // False once any pre-signal re-check `Failed`: that process may still run.
+    #[allow(unused_mut)]
+    let mut rechecked = true;
     #[cfg(unix)]
     if let Some(root) = root {
         // `id` is `None` only once the child has been polled to completion,
@@ -1393,13 +1418,15 @@ fn kill_process_tree_with(
         // Scan while the root is still alive so the ppid tree is intact. The
         // recorded identities stay meaningful after the group signal reparents
         // them, and every one is re-checked immediately before its own signal.
-        let scan = |seen: &mut HashSet<TrackedPid>| {
+        let scan = |seen: &mut HashSet<TrackedPid>, rechecked: &mut bool| {
             let mut found = tracked_pids(pid, marker, 0, true);
-            found.extend(seen_family(seen, pid, lookup));
+            let (family, all_read) = seen_family(seen, pid, lookup);
+            *rechecked &= all_read;
+            found.extend(family);
             let _ = remember(seen, found.iter().copied());
             found
         };
-        let first = scan(seen);
+        let first = scan(seen, &mut rechecked);
 
         // The dedicated group first, as a whole: one signal reaches the root
         // and every member still in its group, so the root cannot run another
@@ -1421,13 +1448,23 @@ fn kill_process_tree_with(
         // during the first kill; each candidate was recorded at scan time and
         // is re-checked right before its signal.
         for pass in 0..2 {
-            let tracked = if pass == 0 { first.clone() } else { scan(seen) };
+            let tracked = match pass {
+                0 => first.clone(),
+                _ => scan(seen, &mut rechecked),
+            };
             for tracked in tracked {
                 if tracked.pid == pid || tracked.pid <= 1 {
                     continue;
                 }
-                if !tracked.still_same(lookup) {
-                    continue;
+                match tracked.recheck(lookup) {
+                    Some(true) => {}
+                    Some(false) => continue,
+                    // Unknown is not gone: never signalled on a guess, and
+                    // the kill is not complete.
+                    None => {
+                        rechecked = false;
+                        continue;
+                    }
                 }
                 // SAFETY: `kill` is the documented libc signal call. The pid
                 // was re-checked one statement above; the remaining window is
@@ -1452,12 +1489,12 @@ fn kill_process_tree_with(
         // in it): nothing was scanned, so the pass is not complete.
         // Every holder found is signalled, also from a cut scan; one whose
         // re-check failed may still run: the pass is cut.
-        let signalled = signal_holders(&orphans, &pid_lookup);
+        let signalled = signal_holders(&orphans, lookup);
         complete = scanned && !all.is_empty() && signalled;
     }
     #[cfg(not(unix))]
     let _ = (root, marker, lookup, seen);
-    complete
+    complete && rechecked
 }
 
 /// At most this many passes in [`sweep_leftovers`], and at most this long,
@@ -1747,7 +1784,7 @@ fn sweep_leftovers_with(
                 let mut signalled = 0usize;
                 // A seen process stays a candidate after leaving every net,
                 // and so do its descendants, read before any signal.
-                let family = seen_family(seen, root, &pid_ppid_uid_start);
+                let (family, _) = seen_family(seen, root, &pid_lookup);
                 capped |= !remember(seen, family.iter().copied());
                 for tracked in family {
                     if !tracked.still_same(&pid_ppid_uid_start) {
@@ -1889,7 +1926,10 @@ struct TreeReaper {
 }
 
 /// Retries of reapers dropped armed, and whether the one thread that runs
-/// them is alive: at most one late retry runs at a time in this process.
+/// them is alive: the queue runs one retry at a time on its one thread. Cut
+/// overflows past the queue's cap run on at most [`OVERFLOW_THREADS_MAX`]
+/// threads of their own, and beyond that on their caller, so at most
+/// `1 + OVERFLOW_THREADS_MAX` late retries run off the callers at once.
 static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
     std::sync::Mutex::new((false, VecDeque::new()));
 
@@ -1898,8 +1938,9 @@ static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
 /// [`LATE_MARKER_RESERVE`]s. A reaper pushed past it makes the oldest one take
 /// its fast kill at once, on the caller's thread; if that pass was cut, the
 /// oldest goes back on the queue, or, when the one slot past the cap is taken,
-/// runs its full retry on a thread of its own (see [`overflow_fast_kill`]): it
-/// is never dropped unkilled.
+/// runs its full retry on a thread of its own, or on the caller once
+/// [`OVERFLOW_THREADS_MAX`] such threads are alive (see [`overflow_fast_kill`]):
+/// it is never dropped unkilled.
 const LATE_QUEUE_MAX: usize = 8;
 
 fn late_retries() -> std::sync::MutexGuard<'static, (bool, VecDeque<TreeReaper>)> {
@@ -2006,7 +2047,8 @@ fn spawn_late_thread() -> std::io::Result<()> {
 /// pass of its own, with a [`LATE_MARKER_RESERVE`] after the budget's end (or
 /// after its own start, once that has passed). The queue holds at most
 /// [`LATE_QUEUE_MAX`] reapers (plus one requeued overflow; a further cut
-/// overflow retries on its own thread, see [`overflow_fast_kill`]), so that
+/// overflow retries on a capped thread of its own or here, see
+/// [`overflow_fast_kill`]), so that
 /// batch costs at most the budget plus that many reserves.
 fn late_retry(reaper: TreeReaper) {
     let overflow = {
@@ -2051,8 +2093,8 @@ fn late_retry(reaper: TreeReaper) {
 /// retry, and its cleanup note is logged. A complete pass is the end of it.
 /// The queue never holds more than one reaper past the cap: when that slot is
 /// taken, a cut reaper runs its full retry on a thread of its own instead
-/// ([`overflow_retry`]), so it is never dropped unkilled and the queue stays
-/// bounded.
+/// ([`overflow_retry`], at most [`OVERFLOW_THREADS_MAX`] alive, else on the
+/// caller), so it is never dropped unkilled and the queue stays bounded.
 fn overflow_fast_kill(mut oldest: TreeReaper) {
     let deadline = Instant::now() + LATE_INLINE_BUDGET;
     let skipped = oldest.fast_kill(deadline, deadline + LATE_MARKER_RESERVE);
@@ -2083,12 +2125,78 @@ fn overflow_fast_kill(mut oldest: TreeReaper) {
     }
 }
 
+/// At most this many overflow-retry threads are alive at once in this process.
+/// Each runs a full tree kill and marker scans with no deadline, so an
+/// unbounded number of them (one per cut overflow) would exhaust threads and
+/// CPU; past the cap the retry runs on the caller, as before overflow threads.
+const OVERFLOW_THREADS_MAX: usize = 2;
+
+/// Live overflow-retry threads (see [`OVERFLOW_THREADS_MAX`]).
+static OVERFLOW_THREADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// One reserved overflow-thread slot, freed when dropped: when its thread
+/// ends, also by a panic, or with the closure if the spawn failed.
+struct OverflowSlot(&'static std::sync::atomic::AtomicUsize);
+
+impl Drop for OverflowSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Reserves a slot in `live` when fewer than `max` are taken; `None` at the cap.
+fn reserve_overflow_slot(
+    live: &'static std::sync::atomic::AtomicUsize,
+    max: usize,
+) -> Option<OverflowSlot> {
+    use std::sync::atomic::Ordering::SeqCst;
+    let mut now = live.load(SeqCst);
+    while now < max {
+        match live.compare_exchange_weak(now, now + 1, SeqCst, SeqCst) {
+            Ok(_) => return Some(OverflowSlot(live)),
+            Err(actual) => now = actual,
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the live-thread counter `overflow_retry` reserves from on
+    /// this thread, instead of [`OVERFLOW_THREADS`].
+    static OVERFLOW_LIVE: std::cell::Cell<Option<&'static std::sync::atomic::AtomicUsize>> =
+        const { std::cell::Cell::new(None) };
+    /// Test seam: how many overflow retries ran inline on this thread.
+    static OVERFLOW_INLINE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The live overflow-thread counter: [`OVERFLOW_THREADS`], or a test's.
+fn overflow_live() -> &'static std::sync::atomic::AtomicUsize {
+    #[cfg(test)]
+    if let Some(live) = OVERFLOW_LIVE.with(std::cell::Cell::get) {
+        return live;
+    }
+    &OVERFLOW_THREADS
+}
+
 /// The full retry of a cut overflow that found the slot past the cap taken,
 /// off the caller's thread (a tokio worker, or a `Drop`): its marker scans have
 /// no deadline. It runs on a thread of its own, panic-guarded and its note
-/// logged like a queued retry; with no thread, here, still guarded: it is
-/// never dropped unkilled.
+/// logged like a queued retry, while fewer than [`OVERFLOW_THREADS_MAX`] such
+/// threads are alive; at the cap, or with no thread, here, still guarded: it
+/// is never dropped unkilled.
 fn overflow_retry(oldest: TreeReaper) {
+    let Some(slot) = reserve_overflow_slot(overflow_live(), OVERFLOW_THREADS_MAX) else {
+        tracing::warn!(
+            "shell: the late-retry queue is past its cap and {OVERFLOW_THREADS_MAX} overflow \
+             retries are running; the cut reaper runs its full retry here"
+        );
+        #[cfg(test)]
+        OVERFLOW_INLINE.with(|inline| inline.set(inline.get() + 1));
+        let mut reaper = oldest;
+        late_retry_logged(&mut reaper);
+        return;
+    };
     tracing::warn!(
         "shell: the late-retry queue is past its cap; the cut reaper runs its full retry \
          on a thread of its own"
@@ -2097,6 +2205,8 @@ fn overflow_retry(oldest: TreeReaper) {
     let spawned = std::thread::Builder::new()
         .name("shell-overflow-retry".into())
         .spawn(move || {
+            // Freed when this thread ends, by a panic too.
+            let _slot = slot;
             if let Ok(mut reaper) = recv.recv() {
                 late_retry_logged(&mut reaper);
                 #[cfg(test)]
@@ -2128,6 +2238,20 @@ fn fast_kill_all(queued: Vec<TreeReaper>, deadline: Instant) -> usize {
         skipped += reaper.fast_kill(deadline, marker_deadline);
     }
     skipped
+}
+
+/// The verdict of a kill and its optional sweep. An incomplete kill (a
+/// re-check or marker pass that could not read a process) is never cleared
+/// by a later sweep that reads clean: that process may have closed its
+/// marker in between and still run, so the verdict stays `Unchecked` (the
+/// reaper stays armed and the call shows the note). No sweep: the kill's own
+/// passes decide.
+fn kill_verdict(killed: bool, sweep: Option<Sweep>) -> Sweep {
+    match sweep {
+        Some(Sweep::Clean) | None if !killed => Sweep::Unchecked,
+        Some(sweep) => sweep,
+        None => Sweep::Clean,
+    }
 }
 
 impl TreeReaper {
@@ -2233,8 +2357,8 @@ impl TreeReaper {
     ) -> std::io::Result<(Self, Sweep)> {
         tokio::task::spawn_blocking(move || {
             let killed = !kill_tree || self.sweep_now();
-            let sweep = match self.root.filter(|_| scan) {
-                Some(root) => sweep_leftovers_with(
+            let sweep = self.root.filter(|_| scan).map(|root| {
+                sweep_leftovers_with(
                     root,
                     &self.marker,
                     &mut self.seen,
@@ -2242,12 +2366,9 @@ impl TreeReaper {
                     &visibility,
                     max_passes,
                     max_time,
-                ),
-                // No scan to judge by: the kill's own final pass decides.
-                None if killed => Sweep::Clean,
-                None => Sweep::Unchecked,
-            };
-            (self, sweep)
+                )
+            });
+            (self, kill_verdict(killed, sweep))
         })
         .await
         .map_err(std::io::Error::other)
@@ -2287,8 +2408,19 @@ impl TreeReaper {
     /// `marker_deadline` or its own reserve if that has passed (see
     /// [`fast_kill_all`]), for a double-fork and `setsid()` escapee that is not in `seen`, each holder
     /// found signalled. Then disarm. Returns the seen entries the deadline left
-    /// untried, plus one when the marker pass was cut short or never started.
+    /// untried or whose re-check `Failed` (they may still run), plus one when
+    /// the marker pass was cut short or never started.
     fn fast_kill(&mut self, deadline: Instant, marker_deadline: Instant) -> usize {
+        self.fast_kill_with(deadline, marker_deadline, &pid_lookup)
+    }
+
+    /// [`Self::fast_kill`] with the seen re-check injected (`lookup`).
+    fn fast_kill_with(
+        &mut self,
+        deadline: Instant,
+        marker_deadline: Instant,
+        lookup: OrphanLookup<'_>,
+    ) -> usize {
         self.armed = false;
         #[allow(unused_mut)]
         let mut skipped = 0;
@@ -2298,7 +2430,6 @@ impl TreeReaper {
                 // SAFETY: the root is held unreaped, so `-pid` names its group.
                 unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
             }
-            let lookup = &pid_ppid_uid_start;
             // The seen loop has the whole budget; the marker pass has the
             // batch's own, later deadline, so neither starves the other.
             let seen: Vec<TrackedPid> = self.seen.iter().copied().collect();
@@ -2307,9 +2438,15 @@ impl TreeReaper {
                     skipped += seen.len() - done;
                     break;
                 }
-                if tracked.still_same(lookup) {
+                match tracked.recheck(lookup) {
                     // SAFETY: SIGKILL of a seen process, re-checked just before.
-                    unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
+                    Some(true) => unsafe {
+                        libc::kill(tracked.pid, libc::SIGKILL);
+                    },
+                    Some(false) => {}
+                    // Unknown is not gone: it may still run, so the pass is
+                    // cut and the reaper gets the full retry.
+                    None => skipped += 1,
                 }
             }
             // Each reaper's own pass gets the reserve: its escapee holds its own
@@ -2334,7 +2471,7 @@ impl TreeReaper {
             skipped += usize::from(!complete || !signalled);
         }
         #[cfg(not(unix))]
-        let _ = (deadline, marker_deadline);
+        let _ = (deadline, marker_deadline, lookup);
         skipped
     }
 
@@ -2627,7 +2764,7 @@ impl Tool for ShellTool {
                 if let Some(root) = child_pid {
                     let tracked = tracked_pids(root as i32, &reaper.marker, launched_at, true);
                     let _ = remember(&mut reaper.seen, tracked);
-                    let family = seen_family(&reaper.seen, root as i32, &pid_ppid_uid_start);
+                    let (family, _) = seen_family(&reaper.seen, root as i32, &pid_lookup);
                     let _ = remember(&mut reaper.seen, family);
                 }
                 #[cfg(not(test))]
@@ -3664,6 +3801,18 @@ mod tests {
             // follow-up, with errno cleared, describes it as another user's.
             assert_eq!(pid_lookup(1), Lookup::Gone);
             assert_eq!(pid_ppid_uid_start(1), None);
+            // Gone because of `EPERM` (the owner check), not `ESRCH`: the
+            // raw full query is refused, and the owner-free one says why.
+            let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+            let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+            unsafe { *libc::__error() = 0 };
+            let n = unsafe {
+                libc::proc_pidinfo(1, libc::PROC_PIDTBSDINFO, 0, info.as_mut_ptr().cast(), size)
+            };
+            let errno = std::io::Error::last_os_error().raw_os_error();
+            assert!(n <= 0, "the owner-checked query described launchd");
+            assert_eq!(errno, Some(libc::EPERM), "launchd read as not EPERM");
+            assert_eq!(owner_free_lookup(1), Lookup::Gone);
         }
         assert_eq!(pid_visibility(1), Visibility::Described);
         // The raw kernel answer for launchd and this test process: a short
@@ -5097,7 +5246,8 @@ await(q(bg.pid));
     /// SHELL-SWEEP-11 (1): with the one slot past the cap taken, a cut
     /// overflow's full retry runs on a thread of its own, panic-guarded, never
     /// on the caller's (a tokio worker, or a `Drop`), and the queue stays
-    /// bounded.
+    /// bounded. On macOS that thread's retry is the one that kills the marker
+    /// holder both cut fast kills missed.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_cut_overflow_past_the_cap_retries_on_its_own_thread() {
@@ -5105,7 +5255,19 @@ await(q(bg.pid));
         late_queue_idle().await;
         let _busy = queue_busy();
         let before = OVERFLOW_RETRIES.load(std::sync::atomic::Ordering::SeqCst);
-        for _ in 0..LATE_QUEUE_MAX {
+        let inline_before = OVERFLOW_INLINE.with(std::cell::Cell::get);
+        // The first reaper in is the one both overflows pop: it names the
+        // holder only through its marker (`root` is a tag no process has).
+        let (marker, marker_file) = pinned_marker();
+        #[cfg(target_os = "macos")]
+        let dir = tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        let (_holder, escapee) = spawn_marker_holder(dir.path(), &marker_file);
+        let mut first = idle_reaper(marker);
+        first.root = Some(i32::MAX - 9);
+        first.marker_file = Some(marker_file);
+        late_retry(first);
+        for _ in 1..LATE_QUEUE_MAX {
             late_retry(idle_reaper(pinned_marker().0));
         }
         // The first cut overflow takes the slot past the cap; the second one
@@ -5124,6 +5286,201 @@ await(q(bg.pid));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(done(), 1, "the overflow retry never ran on its own thread");
+        assert_eq!(
+            OVERFLOW_INLINE.with(std::cell::Cell::get),
+            inline_before,
+            "under the thread cap the retry ran on the caller"
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            gone_tracked(escapee, Duration::from_secs(2)).await,
+            "the overflow thread's retry never killed the holder {}",
+            escapee.pid
+        );
+    }
+
+    /// SHELL-SWEEP-11 fix 1 (P1): overflow-retry threads are capped. Slots are
+    /// handed out up to the cap and no further; a slot is freed when its
+    /// holder drops it, also by a panic.
+    #[test]
+    fn overflow_thread_slots_are_capped_and_freed_even_on_a_panic() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let live: &'static AtomicUsize = Box::leak(Box::new(AtomicUsize::new(0)));
+        let slots: Vec<OverflowSlot> = (0..OVERFLOW_THREADS_MAX)
+            .map(|_| reserve_overflow_slot(live, OVERFLOW_THREADS_MAX).unwrap())
+            .collect();
+        assert!(reserve_overflow_slot(live, OVERFLOW_THREADS_MAX).is_none());
+        assert_eq!(live.load(SeqCst), OVERFLOW_THREADS_MAX, "past the cap");
+        let mut slots = slots.into_iter();
+        let one = slots.next().unwrap();
+        let panicked = std::thread::spawn(move || {
+            let _slot = one;
+            panic!("an overflow retry panicked");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert_eq!(
+            live.load(SeqCst),
+            OVERFLOW_THREADS_MAX - 1,
+            "a panic kept its slot"
+        );
+        let again = reserve_overflow_slot(live, OVERFLOW_THREADS_MAX);
+        assert!(again.is_some(), "a freed slot was not reusable");
+        drop((again, slots));
+        assert_eq!(live.load(SeqCst), 0);
+    }
+
+    /// SHELL-SWEEP-11 fix 1 (P1): at the thread cap a further cut overflow's
+    /// full retry runs on the caller (counted), no thread is started, and the
+    /// live count never goes past the cap.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cut_overflow_at_the_thread_cap_runs_inline() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        let live: &'static AtomicUsize =
+            Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
+        OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+        let _reset = OnDrop(|| OVERFLOW_LIVE.with(|seam| seam.set(None)));
+        let threads = OVERFLOW_RETRIES.load(SeqCst);
+        let inline = OVERFLOW_INLINE.with(std::cell::Cell::get);
+        for _ in 0..3 {
+            overflow_retry(idle_reaper(pinned_marker().0));
+            assert_eq!(live.load(SeqCst), OVERFLOW_THREADS_MAX, "past the cap");
+        }
+        assert_eq!(OVERFLOW_INLINE.with(std::cell::Cell::get), inline + 3);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            OVERFLOW_RETRIES.load(SeqCst),
+            threads,
+            "a thread was started"
+        );
+        // Under the cap a slot is taken for the thread, and freed after it.
+        live.store(OVERFLOW_THREADS_MAX - 1, SeqCst);
+        overflow_retry(idle_reaper(pinned_marker().0));
+        for _ in 0..500 {
+            if OVERFLOW_RETRIES.load(SeqCst) > threads {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(OVERFLOW_RETRIES.load(SeqCst), threads + 1);
+        assert_eq!(OVERFLOW_INLINE.with(std::cell::Cell::get), inline + 3);
+        for _ in 0..500 {
+            if live.load(SeqCst) == OVERFLOW_THREADS_MAX - 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            live.load(SeqCst),
+            OVERFLOW_THREADS_MAX - 1,
+            "the slot leaked"
+        );
+    }
+
+    /// SHELL-SWEEP-11 fix 1 (P2): a seen entry whose re-check `Failed` may
+    /// still run: the fast kill counts it as skipped (so the reaper gets the
+    /// full retry) and never signals it on a guess. Gone costs nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_fast_kill_counts_a_failed_seen_recheck_as_skipped() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("300")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let tracked = TrackedPid::of(child.id() as i32).unwrap();
+        let ample = std::time::Instant::now() + Duration::from_secs(5);
+        let mut reaper = idle_reaper(pinned_marker().0);
+        reaper.seen.insert(tracked);
+        let _clean = scans_clean(1);
+        assert_eq!(reaper.fast_kill_with(ample, ample, &|_| Lookup::Failed), 1);
+        assert!(child.try_wait().unwrap().is_none(), "signalled on a guess");
+        let _clean = scans_clean(1);
+        assert_eq!(reaper.fast_kill_with(ample, ample, &|_| Lookup::Gone), 0);
+        assert!(child.try_wait().unwrap().is_none());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// SHELL-SWEEP-11 fix 1 (P2): in the tree kill, a seen process or a
+    /// `ppid`-walk candidate whose pre-signal re-check `Failed` makes the kill
+    /// incomplete (so `retry` reports it and the call notes it); with every
+    /// re-check answered, the same kill is complete.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_recheck_in_the_tree_kill_makes_it_incomplete() {
+        use std::os::unix::process::CommandExt;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        let spawn_root = || {
+            let mut root = std::process::Command::new("/bin/sh");
+            root.args(["-c", "sleep 300 & wait"])
+                .stdin(std::process::Stdio::null())
+                .process_group(0);
+            tokio::process::Command::from(root).spawn().unwrap()
+        };
+        let kid_of = |root: i32| {
+            (0..500).find_map(|_| {
+                std::thread::sleep(Duration::from_millis(10));
+                descendant_pids(root).into_iter().next()
+            })
+        };
+        let (marker, _pin) = pinned_marker();
+
+        // A ppid-walk candidate (the root's child) whose re-check fails.
+        let mut root = spawn_root();
+        let kid = kid_of(root.id().unwrap() as i32).expect("the root never forked");
+        let fails = move |pid: i32| match pid == kid {
+            true => Lookup::Failed,
+            false => pid_lookup(pid),
+        };
+        let _clean = scans_clean(64);
+        let mut seen = HashSet::new();
+        let complete = kill_process_tree_with(Some(&mut root), &marker, &fails, &mut seen);
+        assert!(!complete, "a failed walk re-check read as a complete kill");
+        let _ = root.wait().await;
+
+        // A seen process (not in the tree) whose re-check fails.
+        let mut root = spawn_root();
+        let _ = kid_of(root.id().unwrap() as i32).expect("the root never forked");
+        let ghost = TrackedPid {
+            pid: i32::MAX - 11,
+            start: 1,
+        };
+        let mut seen = HashSet::from([ghost]);
+        let fails = move |pid: i32| match pid == ghost.pid {
+            true => Lookup::Failed,
+            false => pid_lookup(pid),
+        };
+        let complete = kill_process_tree_with(Some(&mut root), &marker, &fails, &mut seen);
+        assert!(!complete, "a failed seen re-check read as a complete kill");
+        let _ = root.wait().await;
+
+        // Every re-check answered: complete.
+        let mut root = spawn_root();
+        let _ = kid_of(root.id().unwrap() as i32).expect("the root never forked");
+        let mut seen = HashSet::new();
+        let complete = kill_process_tree_with(Some(&mut root), &marker, &pid_lookup, &mut seen);
+        assert!(complete, "an answered kill read as incomplete");
+        let _ = root.wait().await;
+    }
+
+    /// SHELL-SWEEP-11 fix 1 (DeepSeek P2): an incomplete kill is never cleared
+    /// by a later sweep that reads clean (the holder may have closed its
+    /// marker in between): the verdict stays `Unchecked`, so the reaper stays
+    /// armed and the call shows the note. A complete kill keeps the sweep's.
+    #[test]
+    fn an_incomplete_kill_is_not_cleared_by_a_clean_sweep() {
+        assert_eq!(kill_verdict(false, Some(Sweep::Clean)), Sweep::Unchecked);
+        assert_eq!(kill_verdict(false, None), Sweep::Unchecked);
+        assert_eq!(kill_verdict(false, Some(Sweep::SeenCap)), Sweep::SeenCap);
+        assert_eq!(kill_verdict(true, Some(Sweep::Clean)), Sweep::Clean);
+        assert_eq!(kill_verdict(true, None), Sweep::Clean);
+        assert_eq!(
+            kill_verdict(true, Some(Sweep::Incomplete(2))),
+            Sweep::Incomplete(2)
+        );
     }
 
     /// SHELL-SWEEP-11 (2): a holder whose pre-signal re-check `Failed` may

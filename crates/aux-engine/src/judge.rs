@@ -112,6 +112,8 @@ impl JudgeBudget {
         provider: &dyn ChatProvider,
         request: &mut ChatRequest,
     ) -> Result<Held, crate::ChatError> {
+        // From the first store access: after a stop, the judge touches no store.
+        let _in_flight = crate::engine::admitted()?;
         let store = StoreHandle::Shared(Arc::clone(&self.store));
         let caps = self.budgets.caps_for(&self.agent);
         let day = store
@@ -166,7 +168,8 @@ impl JudgeBudget {
             cached_tokens: usage.and_then(|usage| usage.cached_prompt_tokens),
             completion_tokens: usage.map(|usage| usage.completion_tokens),
         };
-        if let Err(err) = store.with(|store| store.record_usage_call(&call)) {
+        if let Err(err) = crate::engine::usage_write(&store, |store| store.record_usage_call(&call))
+        {
             tracing::warn!(error = %err, "could not record the judge call's token counts");
         }
         Ok(())

@@ -89,9 +89,9 @@ fn main() -> ExitCode {
         // grace, then abandon it and let the process exit.
         runtime.shutdown_timeout(SHUTDOWN_GRACE);
         // After the runtime's grace, so a call it abandoned has handed over
-        // its reservation. This covers the settle worker, and no settle
-        // starts on any thread once it is asked to stop; a settle already
-        // running, inline or the worker's, is waited for again: it ends
+        // its reservation. This covers the settle worker, and no settle or
+        // usage write starts on any thread once it is asked to stop; one
+        // already running, inline or the worker's, is waited for again: it ends
         // at its next check, within the busy timeout. Exiting normally with
         // it running is the use-after-free, so past the tries the process
         // aborts instead (no exit hooks run; its rows stay held, and the next

@@ -73,7 +73,8 @@ pub enum InstallError {
     /// The extension is not installed.
     #[error("extension `{0}` is not installed")]
     NotInstalled(String),
-    /// The approval row cannot be read back: an install never overwrites it.
+    /// The approval row (or, as `<name>.last`, the last approval a remove
+    /// kept) cannot be read back: an install never overwrites it.
     #[error(
         "the approval row extensions/state/{0}.json is unreadable or corrupt; \
          nothing installed, the row is kept"
@@ -421,6 +422,13 @@ pub async fn install(
     // anything is fetched or written; `pin_extension` never overwrites a row.
     if options.pin && super::mount::read_state(home, &entry.name).is_err() {
         return Err(InstallError::StateUnreadable(entry.name.clone()));
+    }
+    // EXT-ANCHOR-10: so is a kept last approval (named `<name>.last`).
+    if options.pin && super::mount::read_last(home, &entry.name).is_err() {
+        return Err(InstallError::StateUnreadable(format!(
+            "{}.last",
+            entry.name
+        )));
     }
 
     let bytes = fetch_artifact(entry, options.allow_loopback).await?;
@@ -1404,8 +1412,16 @@ pub fn verify_installed_report(home: &Path, name: &str) -> Result<VerifiedInstal
 /// Remove every `<name>@*` tree, its state, its mounts and its secrets.
 ///
 /// Returns the number of install trees deleted. The Ledger keeps its history.
+/// The approval row is kept as `state/<name>.last.json` (EXT-ANCHOR-10): a
+/// later install diffs over it like an upgrade, never a fresh yes.
 pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
-    remove_after_open(home, name, || {})
+    remove_after_open(home, name, false, || {})
+}
+
+/// [`remove`] that also drops the last approval (`aux ext remove --forget`):
+/// the next install is a true first install.
+pub fn remove_and_forget(home: &Path, name: &str) -> Result<usize, InstallError> {
+    remove_after_open(home, name, true, || {})
 }
 
 /// `remove`, running `after_open` once the home handle is open: the seam the
@@ -1413,6 +1429,7 @@ pub fn remove(home: &Path, name: &str) -> Result<usize, InstallError> {
 fn remove_after_open(
     home: &Path,
     name: &str,
+    forget: bool,
     after_open: impl FnOnce(),
 ) -> Result<usize, InstallError> {
     if !valid_name(name) {
@@ -1451,6 +1468,7 @@ fn remove_after_open(
     // half-done removal all leave nothing in `.env`. The row goes last.
     remove_secret_namespace(home, &super::catalog::secret_prefix(name))?;
     if let Some(handle) = home_handle.as_ref() {
+        keep_last_row(handle, name, forget)?;
         remove_state_row(handle, name)?;
     }
     Ok(removed)
@@ -1578,6 +1596,32 @@ fn refusal(rel: &Path, fr: &str, en: &str) -> std::io::Error {
     let at = rel.display();
     let msg = format!("refus de sandbox : {at} {fr}. / sandbox refused: {at} {en}.");
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg)
+}
+
+/// Copy a valid `state/<name>.json` to `state/<name>.last.json` (0600, through
+/// the verified home), or drop the last row with `forget`. A missing or
+/// corrupt row leaves any older last row as it is.
+fn keep_last_row(
+    handle: &kernel_core::SandboxHome,
+    name: &str,
+    forget: bool,
+) -> std::io::Result<()> {
+    let state_dir = Path::new("extensions").join("state");
+    if !anchored_dir_exists(handle, &state_dir)? {
+        return Ok(());
+    }
+    let last = super::mount::last_rel(name);
+    if forget {
+        return handle.remove_file(&last).map(|_| ());
+    }
+    let row = state_dir.join(format!("{name}.json"));
+    if let super::ReadAt::Text(text) = super::read_text_at_checked(handle, &row, MAX_ENTRY_BYTES) {
+        let parsed = serde_json::from_str::<super::mount::ExtensionState>(&text);
+        if parsed.is_ok_and(|state| state.name == name) {
+            handle.write_atomic(&last, text.as_bytes(), 0o600)?;
+        }
+    }
+    Ok(())
 }
 
 /// Unlink `extensions/state/<name>.json` through the verified home. The row is
@@ -2337,7 +2381,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join("extensions")).unwrap();
         let planted = home.path().join(link);
-        let err = remove_after_open(home.path(), "demo", || {
+        let err = remove_after_open(home.path(), "demo", false, || {
             std::os::unix::fs::symlink(outside, &planted).unwrap();
         })
         .unwrap_err();

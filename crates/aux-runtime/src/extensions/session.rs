@@ -763,6 +763,19 @@ pub async fn pin_extension(
             return Err(super::install::InstallError::StateUnreadable(name).into());
         }
     }
+    // EXT-ANCHOR-10: after a remove, the owner's last yes is the row again:
+    // this build is not started and diffs over it like an upgrade.
+    match super::mount::read_last(home, &installed.name) {
+        Ok(None) => {}
+        Ok(Some(last)) => {
+            store_state(home, &last)?;
+            return Ok(last);
+        }
+        Err(_) => {
+            let name = format!("{}.last", installed.name);
+            return Err(super::install::InstallError::StateUnreadable(name).into());
+        }
+    }
     let session = session_for(home, installed, &SessionOptions { allow_loopback }).await?;
     let pins = pinned_tools(&session.tools);
     // Never clears a freeze: only the owner's `aux ext verify --accept` does
@@ -911,7 +924,9 @@ pub async fn accept_with(
         return Err(SessionError::LaunchChangeRefused(message));
     }
     let changed = super::mount::changed_trust_fields(&state, &installed.entry);
-    let named: BTreeSet<&str> = options.launch_change.iter().map(String::as_str).collect();
+    let mut named: BTreeSet<&str> = options.launch_change.iter().map(String::as_str).collect();
+    // `tools` is checked once the build lists them, below.
+    let named_tools = named.remove("tools");
     if named != changed.iter().copied().collect() {
         let message = match (changed.is_empty(), named.is_empty()) {
             (true, _) => format!("`{name}` has no changed trust field: drop `--accept-change`"),
@@ -986,11 +1001,31 @@ pub async fn accept_with(
     )
     .await;
     let session = started.inspect_err(|_| outcome("start_failed"))?;
-    let pins = pinned_tools(&session.tools);
-    state.tools = pins
+    let pins: BTreeMap<String, String> = pinned_tools(&session.tools)
         .into_iter()
         .map(|pin| (pin.name, pin.identity))
         .collect();
+    // EXT-ANCHOR-10: `tools` is a trust field too, known once the build lists
+    // them: a tool added, removed or with another identity (schema or
+    // description) is named by the owner, never re-pinned silently. The
+    // refusal keeps the row frozen.
+    let tools_changed = tool_changes(&state.tools, &pins);
+    if named_tools == tools_changed.is_empty() {
+        session.stop().await;
+        outcome("tools_refused");
+        let command = super::mount::accept_command(&state, &installed);
+        let message = match tools_changed.is_empty() {
+            true => format!("`{name}` has no changed tool: drop `tools` from `{command}`"),
+            false => format!(
+                "`{name}` changed tools since approval ({}); nothing unfrozen: \
+                 re-trust them only with `{}`",
+                tools_changed.join(", "),
+                with_tools(&command),
+            ),
+        };
+        return Err(SessionError::LaunchChangeRefused(message));
+    }
+    state.tools = pins;
     state.frozen = false;
     let stored = store_state(home, &state);
     session.stop().await;
@@ -1001,6 +1036,31 @@ pub async fn accept_with(
         state,
         corrupt_newer: report.corrupt_newer,
     })
+}
+
+/// `added "x", removed "y", changed "z"`: every tool whose pin differs.
+fn tool_changes(pinned: &BTreeMap<String, String>, live: &BTreeMap<String, String>) -> Vec<String> {
+    let mut changes = Vec::new();
+    for (tool, identity) in live {
+        match pinned.get(tool) {
+            None => changes.push(format!("added {}", super::quoted(tool))),
+            Some(old) if old != identity => {
+                changes.push(format!("changed {}", super::quoted(tool)))
+            }
+            Some(_) => {}
+        }
+    }
+    let removed = pinned.keys().filter(|tool| !live.contains_key(*tool));
+    changes.extend(removed.map(|tool| format!("removed {}", super::quoted(tool))));
+    changes
+}
+
+/// `command` with `tools` added to its `--accept-change` list.
+fn with_tools(command: &str) -> String {
+    match command.contains(" --accept-change ") {
+        true => format!("{command},tools"),
+        false => format!("{command} --accept-change tools"),
+    }
 }
 
 /// `: new network "h:443", secrets "EXT_X__K"` for the refusal, or nothing.

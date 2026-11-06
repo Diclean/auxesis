@@ -83,10 +83,14 @@ enum ExtAction {
         #[arg(long)]
         agent: String,
     },
-    /// Remove an install, its mounts and its secrets.
+    /// Remove an install, its mounts and its secrets. The last approval is
+    /// kept: a later install diffs over it like an upgrade.
     Remove {
         /// Entry name.
         name: String,
+        /// Also drop the last approval: the next install is a fresh one.
+        #[arg(long)]
+        forget: bool,
     },
 }
 
@@ -114,7 +118,7 @@ pub fn run(args: ExtArgs, _lang: Lang) -> ExitCode {
         }
         ExtAction::Mount { name, agent } => mount(&home, &name, &agent),
         ExtAction::Unmount { name, agent } => unmount(&home, &name, &agent),
-        ExtAction::Remove { name } => remove(&home, &name),
+        ExtAction::Remove { name, forget } => remove(&home, &name, forget),
     }
 }
 
@@ -230,20 +234,15 @@ fn install(home: &Path, name: &str) -> ExitCode {
                     "sha256": installed.entry.source.sha256,
                 }),
             );
-            let _ = writeln!(
-                std::io::stdout(),
-                "installed {}@{}",
-                installed.name,
-                installed.version
+            let approval = extensions::mount::require_approval(home, &installed);
+            let report = install_report(
+                &installed.name,
+                &installed.version,
+                &extensions::mount::network_pins(&installed.entry),
+                &installed.entry.secret_names(),
+                approval.err().map(|err| err.to_string()),
             );
-            // EXT-ANCHOR-9 r2: an upgrade over an approval keeps the old yes and
-            // was not started; the owner re-trusts it by name.
-            if let Err(err) = extensions::mount::require_approval(home, &installed) {
-                let _ = writeln!(
-                    std::io::stdout(),
-                    "not started: it needs verify --accept before it runs ({err})"
-                );
-            }
+            let _ = write!(std::io::stdout(), "{report}");
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -256,6 +255,36 @@ fn install(home: &Path, name: &str) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// What `aux ext install` prints: the build, every host and secret name it
+/// declares (EXT-ANCHOR-10), and, for an upgrade or a reinstall over a kept
+/// approval (EXT-ANCHOR-9 r2), that it was not started and why.
+fn install_report(
+    name: &str,
+    version: &str,
+    hosts: &[String],
+    secrets: &[String],
+    refused: Option<String>,
+) -> String {
+    let list = |values: &[String]| match values.is_empty() {
+        true => "none".to_owned(),
+        false => json(values),
+    };
+    let mut out = format!(
+        "installed {}@{}\n  hosts: {}\n  secrets: {}\n",
+        extensions::escape_text(name),
+        extensions::escape_text(version),
+        list(hosts),
+        list(secrets)
+    );
+    if let Some(err) = refused {
+        out.push_str(&format!(
+            "not started: it needs verify --accept before it runs ({})\n",
+            extensions::escape_text(&err)
+        ));
+    }
+    out
 }
 
 /// Tell the owner about corrupt entries above the build that runs: they never
@@ -294,11 +323,15 @@ fn trusted_summary(state: &extensions::ExtensionState) -> String {
         true => none(),
         false => json(&state.network),
     };
+    // EXT-ANCHOR-10: the approved tool names, before the build starts; a
+    // tool change is refused once it lists them unless `tools` is named.
+    let tools: Vec<&String> = state.tools.keys().collect();
     let mut out = format!(
-        "  sha256: {}\n  hosts: {hosts}\n  secrets: {}\n  oauth: {}\n",
+        "  sha256: {}\n  hosts: {hosts}\n  secrets: {}\n  oauth: {}\n  tools: {}\n",
         state.artefact.clone().unwrap_or_else(none),
         json(&state.secrets),
         state.oauth.as_ref().map_or_else(none, json),
+        json(&tools),
     );
     if let Some(launch) = &state.launch {
         // Args as a JSON list: a space inside one arg stays visible.
@@ -470,16 +503,20 @@ fn unmount(home: &Path, name: &str, agent: &str) -> ExitCode {
     }
 }
 
-fn remove(home: &Path, name: &str) -> ExitCode {
+fn remove(home: &Path, name: &str, forget: bool) -> ExitCode {
     if let Some(code) = reject_invalid_name(name) {
         return code;
     }
-    match extensions::remove(home, name) {
+    let removed = match forget {
+        true => extensions::install::remove_and_forget(home, name),
+        false => extensions::remove(home, name),
+    };
+    match removed {
         Ok(removed) => {
             extensions::ledger::log(
                 home,
                 extensions::ledger::REMOVE,
-                &serde_json::json!({"name": name, "removed": removed}),
+                &serde_json::json!({"name": name, "removed": removed, "forget": forget}),
             );
             let _ = writeln!(std::io::stdout(), "removed {name} ({removed} install(s))");
             ExitCode::SUCCESS
@@ -611,7 +648,66 @@ mod tests {
         state.secrets.clear();
         assert_eq!(
             trusted_summary(&state),
-            "  sha256: none\n  hosts: none\n  secrets: []\n  oauth: none\n"
+            "  sha256: none\n  hosts: none\n  secrets: []\n  oauth: none\n  tools: []\n"
+        );
+        state.tools.insert("ping".to_owned(), "ab".to_owned());
+        state
+            .tools
+            .insert("new\u{2028}".to_owned(), "cd".to_owned());
+        let text = trusted_summary(&state);
+        assert!(
+            text.contains("  tools: [\"new\\u{2028}\",\"ping\"]\n"),
+            "{text}"
+        );
+    }
+
+    // EXT-ANCHOR-10: every install names its hosts and secret names; one that
+    // waits for the owner says it was not started and names the command.
+    #[test]
+    fn install_report_names_hosts_secrets_and_the_verify_command() {
+        let hosts = ["a.example:443".to_owned()];
+        let secrets = ["EXT_DEMO__TOKEN".to_owned()];
+        let fresh = install_report("demo", "1.0.0", &hosts, &secrets, None);
+        assert_eq!(
+            fresh,
+            "installed demo@1.0.0\n  hosts: [\"a.example:443\"]\n  \
+             secrets: [\"EXT_DEMO__TOKEN\"]\n"
+        );
+        let refused = "approval_required: extension `demo` changed since approval \
+                       (new network hosts: \"b.example:443\"); run \
+                       `aux ext verify demo --accept --accept-change network`";
+        let text = install_report("demo", "2.0.0", &[], &[], Some(refused.to_owned()));
+        assert!(text.contains("  hosts: none\n  secrets: none\n"), "{text}");
+        assert!(
+            text.contains("not started: it needs verify --accept"),
+            "{text}"
+        );
+        assert!(
+            text.contains("`aux ext verify demo --accept --accept-change network`)\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn remove_takes_forget() {
+        #[derive(Debug, clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            ext: ExtArgs,
+        }
+        let parse = |args: &[&str]| {
+            let argv = ["aux"].iter().chain(args).copied();
+            <Cli as clap::Parser>::try_parse_from(argv).map(|cli| cli.ext.action)
+        };
+        let ok = parse(&["remove", "demo", "--forget"]);
+        assert!(
+            matches!(ok, Ok(ExtAction::Remove { forget: true, .. })),
+            "{ok:?}"
+        );
+        let ok = parse(&["remove", "demo"]);
+        assert!(
+            matches!(ok, Ok(ExtAction::Remove { forget: false, .. })),
+            "{ok:?}"
         );
     }
 }

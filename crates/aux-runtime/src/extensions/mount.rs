@@ -113,7 +113,9 @@ pub(crate) fn changed_launch_fields(pinned: &LaunchPin, now: &LaunchPin) -> Vec<
 /// Every field an owner must name to re-trust `entry` over `state`
 /// (`--accept-change`): the changed launch fields, plus `network` for a new
 /// host, `secrets` for a new secret name and `oauth` for any `[oauth]` change.
-/// A narrower host or secret set is not a change.
+/// A narrower host or secret set is not a change. `tools` (a tool added,
+/// removed, or with another identity or description) is known only once the
+/// build lists its tools: `accept_with` checks it then, before it unfreezes.
 pub fn changed_trust_fields(
     state: &ExtensionState,
     entry: &super::catalog::Entry,
@@ -283,16 +285,34 @@ pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
     handle.write_atomic(&state_rel(&state.name), text.as_bytes(), 0o600)
 }
 
+/// `extensions/state/<name>.last.json`: the approval a `remove` keeps
+/// (EXT-ANCHOR-10), so a reinstall diffs over the owner's last yes instead of
+/// trusting the new build on first use. `aux ext remove --forget` drops it.
+pub(crate) fn last_rel(name: &str) -> PathBuf {
+    Path::new("extensions")
+        .join("state")
+        .join(format!("{name}.last.json"))
+}
+
 pub(crate) fn read_state(
     home: &Path,
     name: &str,
 ) -> Result<Option<ExtensionState>, std::io::Error> {
+    read_row(home, &state_rel(name), name)
+}
+
+/// The last approval of a removed `name`; unreadable or corrupt is an error.
+pub(crate) fn read_last(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io::Error> {
+    read_row(home, &last_rel(name), name)
+}
+
+fn read_row(home: &Path, rel: &Path, name: &str) -> Result<Option<ExtensionState>, std::io::Error> {
     let handle = match kernel_core::SandboxHome::open_existing(home) {
         Ok(handle) => handle,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(std::io::ErrorKind::InvalidData.into()),
     };
-    match super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES) {
+    match super::read_text_at_checked(&handle, rel, MAX_STATE_BYTES) {
         super::ReadAt::Absent => Ok(None),
         super::ReadAt::Unreadable => Err(std::io::ErrorKind::InvalidData.into()),
         // A row naming another extension is never this one's approval.

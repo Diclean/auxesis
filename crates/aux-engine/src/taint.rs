@@ -57,6 +57,10 @@ fn classify(message: &Message, registry: &ToolRegistry) -> Row {
             let source = meta
                 .get("taint_source")
                 .and_then(|value| serde_json::from_value::<TaintSource>(value.clone()).ok())
+                .map(|mut source| {
+                    source.detail = host_only(source.detail.take());
+                    source
+                })
                 .or_else(|| tool.map(|name| TaintSource::new(name, None)));
             source.map(Row::Tainted).unwrap_or(Row::Unknown)
         }
@@ -80,6 +84,52 @@ fn classify(message: &Message, registry: &ToolRegistry) -> Row {
             Some(name) if registry.get(name).is_some() => Row::Clean,
             _ => Row::Unknown,
         },
+    }
+}
+
+/// The host (and port) of a model-chosen URL: never its user info, path,
+/// query or fragment, which can carry what the page was asked (READS-6).
+/// A URL with no host (`file:///etc/passwd`) gives its scheme, never the
+/// path (READS-7). Every taint row, Activity entry and card shows this.
+pub(crate) fn url_host(raw: &str) -> &str {
+    let rest = raw.trim_start();
+    let (scheme, rest) = rest.split_once("://").unwrap_or(("", rest));
+    let authority = rest
+        .split(|c: char| matches!(c, '/' | '?' | '#' | '\\') || c.is_whitespace())
+        .next()
+        .unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let scheme_ok = scheme
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    if host.is_empty() && scheme_ok {
+        scheme
+    } else {
+        host
+    }
+}
+
+/// A stored taint detail as the host only: rows written before READS-6 kept
+/// the whole URL, and resume shows them again (READS-7). A detail with
+/// nothing a URL could cut away (a host, `acp (timed out)`) is kept as
+/// written; one that leaves nothing is dropped.
+pub(crate) fn host_only(detail: Option<String>) -> Option<String> {
+    let detail = detail?;
+    if !detail.contains(['/', '?', '#', '@', '\\']) {
+        return Some(detail);
+    }
+    Some(url_host(&detail).to_string()).filter(|host| !host.is_empty())
+}
+
+/// A stored workspace mark (`tool: detail`, see [`TaintSource::summary`])
+/// with its detail cut to the host, as [`host_only`].
+pub(crate) fn host_only_reason(reason: String) -> Option<String> {
+    match reason.split_once(": ") {
+        Some((tool, detail)) => Some(match host_only(Some(detail.to_string())) {
+            Some(host) => format!("{tool}: {host}"),
+            None => tool.to_string(),
+        }),
+        None => host_only(Some(reason)),
     }
 }
 
@@ -128,12 +178,46 @@ mod tests {
         ];
         assert_eq!(
             from_history(&history, &registry).summary().as_deref(),
-            Some("http_fetch: https://example.com")
+            Some("http_fetch: example.com")
         );
         assert!(!from_history(&history[..1], &registry).forces_ask());
         // Text-only history stays clean no matter what it says.
         let text = vec![message("assistant", None), message("user", None)];
         assert!(!from_history(&text, &registry).forces_ask());
+    }
+
+    /// READS-7: a row stored before READS-6 with the whole URL comes back
+    /// as its host only; a URL with no host gives its scheme, never a path.
+    #[test]
+    fn stored_taint_details_come_back_as_the_host_only() {
+        let registry = builtin_registry();
+        let source = |detail: &str| serde_json::json!({"tool": "http_fetch", "detail": detail});
+        let row = |detail: &str| {
+            tool_row(serde_json::json!({"tainted": true, "taint_source": source(detail)}))
+        };
+        for (detail, shown) in [
+            (
+                "https://u:p@a.example:8443/i?t=x",
+                "http_fetch: a.example:8443",
+            ),
+            ("a.example/inbox?q=secret", "http_fetch: a.example"),
+            ("file:///etc/passwd", "http_fetch: file"),
+            ("/etc/passwd", "http_fetch"),
+            ("a.example:8443", "http_fetch: a.example:8443"),
+        ] {
+            let taint = from_history(&[row(detail)], &registry);
+            assert!(taint.forces_ask(), "{detail}");
+            assert_eq!(taint.summary().as_deref(), Some(shown), "{detail}");
+        }
+        assert_eq!(
+            url_host("a/b:///etc"),
+            "",
+            "a scheme with a path is no scheme"
+        );
+        let acp = Some("acp (timed out)".to_string());
+        assert_eq!(host_only(acp.clone()), acp);
+        assert_eq!(host_only_reason("shell".into()).as_deref(), Some("shell"));
+        assert_eq!(host_only_reason("/etc/passwd".into()), None);
     }
 
     #[test]

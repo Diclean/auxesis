@@ -286,6 +286,18 @@ impl Store {
             .ok_or_else(|| StoreError::DelegationNotFound { id: id.to_string() })
     }
 
+    /// Run `writes` in one transaction: all of them land or none does. The
+    /// closure must not open a transaction of its own.
+    pub fn atomically<T>(
+        &self,
+        writes: impl FnOnce(&Store) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let value = writes(self)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
     /// One delegation by id.
     pub fn delegation(&self, id: &str) -> Result<Option<Delegation>, StoreError> {
         let sql = format!("SELECT {SELECT_COLUMNS} FROM delegations WHERE id = ?1");

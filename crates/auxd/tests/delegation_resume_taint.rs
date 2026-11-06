@@ -75,6 +75,12 @@ async fn a_tainted_handoff_resumed_after_a_restart_runs_tainted() {
     // trusted the workspace, or the old order never wrote it).
     let store = Store::open(&path).unwrap();
     let id = store.list_delegations(None).unwrap()[0].id.clone();
+    let marker = store.workspace_taint(&format!("delegation:{id}")).unwrap();
+    assert_eq!(
+        marker.as_deref(),
+        Some("delegate: from main"),
+        "the tainted row carries a tainted marker"
+    );
     store
         .set_delegation_state(&id, aux_store::DelegationState::Queued)
         .unwrap();

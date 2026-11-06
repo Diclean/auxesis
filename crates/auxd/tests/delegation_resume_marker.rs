@@ -249,4 +249,30 @@ async fn a_start_that_fails_in_sql_is_an_error_not_a_stop() {
         Ok(out) => panic!("a failed start is an error: {}", out.content),
     }
     assert!(w.agent.tainted_at_start.lock().unwrap().is_empty());
+    let store = Store::open(&kernel_core::store_path(&w.home)).unwrap();
+    let id = store.list_delegations(None).unwrap()[0].id.clone();
+    assert_eq!(state(&w.home, &id), DelegationState::Stopped, "resumable");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resume_whose_start_fails_in_sql_goes_back_to_stopped() {
+    let w = world(0);
+    let id = old_row(&w.home);
+    let handle = serve(&w);
+    let raw = aux_store::open_keyed(&kernel_core::store_path(&w.home)).unwrap();
+    raw.execute_batch(
+        "CREATE TRIGGER no_start BEFORE UPDATE OF state ON delegations
+         WHEN NEW.state = 'working' BEGIN SELECT RAISE(ABORT, 'no start'); END;",
+    )
+    .unwrap();
+    let resumed = resume(&handle, &id);
+    assert_eq!(resumed.status, 200, "body: {}", resumed.body);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state(&w.home, &id) == DelegationState::Queued {
+        assert!(Instant::now() < deadline, "the row stayed queued");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(state(&w.home, &id), DelegationState::Stopped);
+    assert!(w.agent.tainted_at_start.lock().unwrap().is_empty());
+    handle.shutdown();
 }

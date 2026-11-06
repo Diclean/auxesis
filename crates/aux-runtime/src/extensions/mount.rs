@@ -149,6 +149,18 @@ fn read_state(home: &Path, name: &str) -> Result<Option<ExtensionState>, std::io
     }
 }
 
+/// Whether the state row holds text that is not a valid state: a record that
+/// exists but cannot be read back (absent or a non-regular file is not one).
+pub(crate) fn state_row_is_corrupt(home: &Path, name: &str) -> bool {
+    let Ok(handle) = kernel_core::SandboxHome::open_existing(home) else {
+        return false;
+    };
+    matches!(
+        super::read_text_at_checked(&handle, &state_rel(name), MAX_STATE_BYTES),
+        super::ReadAt::Text(text) if serde_json::from_str::<ExtensionState>(&text).is_err()
+    )
+}
+
 pub fn load_state(home: &Path, name: &str) -> Option<ExtensionState> {
     read_state(home, name).ok().flatten()
 }

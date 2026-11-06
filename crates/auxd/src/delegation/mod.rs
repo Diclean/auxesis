@@ -195,6 +195,10 @@ pub struct DelegationRun {
     events: Option<broadcast::Sender<String>>,
     /// The task-scoped cancel token a Stop fires.
     cancel: Arc<TurnCancel>,
+    /// A share of the run's claim on its id: every task that can still write
+    /// for this run (the step drain, the blocking turn) keeps the run alive,
+    /// so a resume stays `delegation_still_stopping` until the last one ends.
+    _claim: Option<Arc<DelegationRegistration>>,
     /// The agent's own session, once its turn ran: its references resolve there.
     child_thread: Arc<std::sync::OnceLock<i64>>,
     /// The caller's mode at handoff, only ever tightened: the agent's turn runs
@@ -233,6 +237,7 @@ impl DelegationRun {
             store: Arc::new(Mutex::new(store)),
             events,
             cancel,
+            _claim: None,
             child_thread: Arc::default(),
             // A resumed run: the mode stored at handoff is the floor (a row
             // with none reads Private); only the chief delegates, so its live
@@ -245,6 +250,12 @@ impl DelegationRun {
             parent_session: None,
             owner_words: None,
         })
+    }
+
+    /// Hold `claim` for as long as anything of this run can still write.
+    pub fn holding(mut self, claim: Arc<DelegationRegistration>) -> Self {
+        self._claim = Some(claim);
+        self
     }
 
     /// The task-scoped cancel token the child turn runs under.
@@ -345,7 +356,7 @@ impl DelegationRun {
 
     /// True when Stop all is engaged or this delegation is `stopped`.
     pub fn stopped(&self) -> bool {
-        if self.cancel.is_cancelled() || killswitch::is_stopped(&self.home) {
+        if self.cancel.is_cancelled() || aux_engine::marker_engaged(&self.home) {
             return true;
         }
         self.with_store(|store| {
@@ -402,7 +413,7 @@ pub(crate) fn recover_interrupted(home: &std::path::Path) -> anyhow::Result<usiz
     // A Stop all whose row writes the stop gate refused left its rows open;
     // the switch it engaged (a file, not a store write) is still on, so
     // those rows are stopped (resumable), as the Stop all meant.
-    let stop_all = killswitch::is_stopped(home);
+    let stop_all = aux_engine::marker_engaged(home);
     let open: Vec<_> = store
         .list_delegations(None)?
         .into_iter()
@@ -582,7 +593,11 @@ impl DelegationExecutor for EngineDelegationExecutor {
                 .delegate_session(parent_session, &agent)
                 .map_err(|err| err.to_string())
         })?;
+        // Aborting a blocking task is a no-op: the turn keeps running after a
+        // deadline, so it holds the run (and its claim) until it returns.
+        let hold = Arc::clone(&run);
         let mut record = tokio::task::spawn_blocking(move || {
+            let _hold = hold;
             let mut runner = EngineTurnRunner::new(&home)
                 .with_events(child_tx)
                 .with_inherited_tokens(inherited)
@@ -688,7 +703,9 @@ pub struct DelegateTool {
     home: PathBuf,
     events: Option<broadcast::Sender<String>>,
     executor: Arc<dyn DelegationExecutor>,
-    cancels: Option<Arc<DelegationCancels>>,
+    /// Mandatory: every tool-started run is registered, so a resume's
+    /// `delegation_still_stopping` gate always sees it.
+    cancels: Arc<DelegationCancels>,
 }
 
 impl DelegateTool {
@@ -697,7 +714,7 @@ impl DelegateTool {
         home: PathBuf,
         events: Option<broadcast::Sender<String>>,
         executor: Arc<dyn DelegationExecutor>,
-        cancels: Option<Arc<DelegationCancels>>,
+        cancels: Arc<DelegationCancels>,
     ) -> Self {
         Self {
             home,
@@ -798,10 +815,9 @@ impl Tool for DelegateTool {
         );
         // Registered before the row exists: a Stop of the row cancels it.
         let cancel = TurnCancel::new();
-        let _registration = self
-            .cancels
-            .as_ref()
-            .map(|cancels| cancels.register(&id, Arc::clone(&cancel)));
+        // The run holds a share too: the claim lasts until its drain and its
+        // blocking turn have really ended, not only until `execute` returns.
+        let registration = Arc::new(self.cancels.register(&id, Arc::clone(&cancel)));
         // One gated write opens the store, marks a tainted caller's hand-off
         // and creates the row: past the budget stop none of it runs (no file,
         // no row, no mark) and the agent does not run. A tainted caller's
@@ -915,6 +931,7 @@ impl Tool for DelegateTool {
             store: Arc::clone(&store),
             events: self.events.clone(),
             cancel: Arc::clone(&cancel),
+            _claim: Some(Arc::clone(&registration)),
             child_thread: Arc::default(),
             caller_mode,
             inherited: handoff.clone(),
@@ -1490,7 +1507,8 @@ pub fn spawn_run(
     registration: DelegationRegistration,
 ) {
     tokio::spawn(async move {
-        let _registration = registration;
+        let _registration = Arc::new(registration);
+        let claim = Arc::clone(&_registration);
         let home = state.home.clone();
         let db_path = state.db_path.clone();
         let open_path = db_path.clone();
@@ -1502,6 +1520,7 @@ pub fn spawn_run(
             gated(|| {
                 rearm_handoff_taint(&home, &open_path, &delegation)?;
                 DelegationRun::open(&delegation, &home, &open_path, events, Arc::clone(&cancel))
+                    .map(|run| run.holding(claim))
             })
         })
         .await
@@ -1583,11 +1602,16 @@ pub fn spawn_run(
 /// (resumable) and the UI hears it. Past the stop gate the write is refused:
 /// the row stays queued and the next start retires it to stopped.
 fn retire_queued(state: &ApiState, id: &str, agent: &str, reason: &str) {
-    let _ = gated_open(&state.db_path, |store| {
+    let moved = gated_open(&state.db_path, |store| {
         store.move_delegation_state(id, DelegationState::Queued, DelegationState::Stopped)
     });
-    let _ =
-        crate::api::wire::send_bounded(&state.events, &delegation_stopped_frame(id, agent, reason));
+    // Only a row that really moved is announced stopped.
+    if matches!(moved, Ok(true)) {
+        let _ = crate::api::wire::send_bounded(
+            &state.events,
+            &delegation_stopped_frame(id, agent, reason),
+        );
+    }
 }
 
 /// Open the store and run `access` on it, the opening included, past the
@@ -1757,7 +1781,7 @@ mod tests {
                 "Jonas Sample".to_string(),
             )],
         );
-        let tool = DelegateTool::new(home.clone(), None, Arc::new(TokenisedMail), None);
+        let tool = DelegateTool::new(home.clone(), None, Arc::new(TokenisedMail), Arc::default());
         let ctx = ToolCtx::new("aux", home.clone());
         let args = serde_json::json!({ "agent": "mail", "task": "newest mail" });
         let output = tool.run(&args, &ctx).await.unwrap();
@@ -1782,7 +1806,7 @@ mod tests {
             home.to_path_buf(),
             None,
             Arc::new(FixedOutcome(Err("provider failed".into()))),
-            None,
+            Arc::default(),
         );
         let _ = tool
             .run(
@@ -1822,7 +1846,7 @@ mod tests {
             home.clone(),
             None,
             Arc::new(FixedOutcome(Err("the turn was cancelled".into()))),
-            None,
+            Arc::default(),
         );
         let _ = tool
             .run(
@@ -1858,7 +1882,7 @@ mod tests {
             Some(brain),
             None,
         ));
-        let tool = DelegateTool::new(home.clone(), None, executor, None);
+        let tool = DelegateTool::new(home.clone(), None, executor, Arc::default());
         let _ = tool
             .run(
                 &serde_json::json!({ "agent": "mail", "task": "newest mail" }),
@@ -1916,7 +1940,7 @@ mod tests {
             Arc::new(Stalled {
                 started: Arc::clone(&started),
             }),
-            None,
+            Arc::default(),
         );
         let task = tokio::spawn(async move {
             let _ = tool
@@ -2064,7 +2088,7 @@ mod tests {
     async fn delegate(home: &std::path::Path, config: &str, turn: ModeFn) -> (ModeFn, Delegation) {
         set_mode(home, config);
         let floor = Arc::new(Floor::default());
-        let tool = DelegateTool::new(home.to_path_buf(), None, floor.clone(), None);
+        let tool = DelegateTool::new(home.to_path_buf(), None, floor.clone(), Arc::default());
         let ctx = ToolCtx::new("aux", home.to_path_buf()).with_turn_mode(turn);
         let args = serde_json::json!({ "agent": "mail", "task": "newest mail" });
         tool.run(&args, &ctx).await.unwrap();

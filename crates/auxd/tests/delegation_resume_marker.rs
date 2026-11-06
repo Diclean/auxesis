@@ -117,7 +117,7 @@ fn resume(handle: &api::ApiHandle, id: &str) -> common::HttpResponse {
 }
 
 async fn wait_runs(agent: &Recording, n: usize) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::LOADED_RUNNER_WAIT;
     while agent.tainted_at_start.lock().unwrap().len() < n {
         assert!(Instant::now() < deadline, "the resumed run never started");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -158,7 +158,7 @@ async fn an_old_row_with_no_marker_resumes_tainted_in_a_trusted_workspace() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_clean_handoff_records_its_marker_and_resumes_clean() {
     let w = world(1);
-    let tool = DelegateTool::new(w.home.clone(), None, w.agent.clone(), None);
+    let tool = DelegateTool::new(w.home.clone(), None, w.agent.clone(), Arc::default());
     let clean = ToolCtx::new("main", w.home.clone());
     let args = serde_json::json!({ "agent": "mail", "task": "sort the inbox" });
     let _ = tool.run(&args, &clean).await.unwrap();
@@ -196,7 +196,7 @@ async fn a_failed_rearm_leaves_the_row_stopped_and_the_agent_idle() {
     .unwrap();
     let resumed = resume(&handle, &id);
     assert_eq!(resumed.status, 200, "body: {}", resumed.body);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::LOADED_RUNNER_WAIT;
     while state(&w.home, &id) == DelegationState::Queued {
         assert!(Instant::now() < deadline, "the row stayed queued");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -241,7 +241,7 @@ async fn a_start_that_fails_in_sql_is_an_error_not_a_stop() {
          WHEN NEW.state = 'working' BEGIN SELECT RAISE(ABORT, 'no start'); END;",
     )
     .unwrap();
-    let tool = DelegateTool::new(w.home.clone(), None, w.agent.clone(), None);
+    let tool = DelegateTool::new(w.home.clone(), None, w.agent.clone(), Arc::default());
     let clean = ToolCtx::new("main", w.home.clone());
     let args = serde_json::json!({ "agent": "mail", "task": "sort the inbox" });
     match tool.run(&args, &clean).await {
@@ -267,7 +267,7 @@ async fn a_resume_whose_start_fails_in_sql_goes_back_to_stopped() {
     .unwrap();
     let resumed = resume(&handle, &id);
     assert_eq!(resumed.status, 200, "body: {}", resumed.body);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::LOADED_RUNNER_WAIT;
     while state(&w.home, &id) == DelegationState::Queued {
         assert!(Instant::now() < deadline, "the row stayed queued");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -275,4 +275,41 @@ async fn a_resume_whose_start_fails_in_sql_goes_back_to_stopped() {
     assert_eq!(state(&w.home, &id), DelegationState::Stopped);
     assert!(w.agent.tainted_at_start.lock().unwrap().is_empty());
     handle.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tainted_handoff_marks_the_workspace_first_and_a_failed_insert_leaves_no_row_or_marker() {
+    let w = world(0);
+    let raw = aux_store::open_keyed(&kernel_core::store_path(&w.home)).unwrap();
+    raw.execute_batch(
+        "CREATE TRIGGER no_row BEFORE INSERT ON delegations
+         BEGIN SELECT RAISE(ABORT, 'no row'); END;",
+    )
+    .unwrap();
+    let tool = DelegateTool::new(w.home.clone(), None, w.agent.clone(), Arc::default());
+    let mut tainted = ToolCtx::new("main", w.home.clone());
+    tainted.tainted = true;
+    let args = serde_json::json!({ "agent": "mail", "task": "sort the inbox" });
+    assert!(
+        tool.run(&args, &tainted).await.is_err(),
+        "a failed insert is an error"
+    );
+    let store = Store::open(&kernel_core::store_path(&w.home)).unwrap();
+    assert!(
+        store
+            .workspace_taint(&taint_key(&w.home, "mail"))
+            .unwrap()
+            .is_some(),
+        "the workspace taint is written before the row"
+    );
+    assert!(store.list_delegations(None).unwrap().is_empty(), "no row");
+    let markers: i64 = raw
+        .query_row(
+            "SELECT count(*) FROM workspace_taint WHERE workspace LIKE 'delegation:%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(markers, 0, "the transaction rolled the marker back");
+    assert!(w.agent.tainted_at_start.lock().unwrap().is_empty());
 }

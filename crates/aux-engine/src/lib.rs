@@ -68,7 +68,7 @@ pub use soul::{
     agent_dir, agents_dir, default_soul, load_or_create, soul_path, workspace_dir, Soul,
     SoulStatus, DEFAULT_SOUL, MAX_SOUL_BYTES,
 };
-pub use stop::{MarkerStop, ModeChangeStop, StopCheck};
+pub use stop::{marker_engaged, MarkerStop, ModeChangeStop, StopCheck};
 pub use trust::{
     complete_trust, refuse_when_unsandboxed_shell, request_trust, TrustCompleted, TrustError,
     TrustRequested, TRUST_CODE_TTL_SECS, TRUST_MAX_ATTEMPTS, TRUST_REQUEST_COOLDOWN_SECS,

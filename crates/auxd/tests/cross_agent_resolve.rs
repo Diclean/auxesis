@@ -123,8 +123,7 @@ fn runner_with(
         .with_approvals(approvals)
         .with_events(events)
         .with_bridge(bridge)
-        .with_delegations(Arc::new(executor))
-        .with_delegation_cancels(Arc::new(DelegationCancels::new()))
+        .with_delegations(Arc::new(executor), Arc::new(DelegationCancels::new()))
         .with_tools(tools)
 }
 
@@ -352,8 +351,7 @@ fn a_delegated_cards_frame_reaches_the_chiefs_channel() {
         .with_approvals(approvals)
         .with_events(events)
         .with_bridge(bridge)
-        .with_delegations(Arc::new(executor))
-        .with_delegation_cancels(Arc::new(DelegationCancels::new()))
+        .with_delegations(Arc::new(executor), Arc::new(DelegationCancels::new()))
         .with_tools(tools);
     // The frame is published while the turn runs, so watch the channel from a
     // side thread and run the turn here, like the rest of this file: it must be

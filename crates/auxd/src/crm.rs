@@ -1508,7 +1508,7 @@ pub fn run_job_with_mode(
     {
         return Err(PRIVATE_REFUSAL.to_string());
     }
-    if kernel_core::killswitch::is_stopped(home) {
+    if aux_engine::marker_engaged(home) {
         return Err("stopped by kill switch".to_string());
     }
     // The EventKit snapshot is local data at rest, read in both modes.

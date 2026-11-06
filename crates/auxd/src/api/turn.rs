@@ -42,7 +42,7 @@ use aux_store::{Message, Session, Store, StoreHandle};
 use kernel_broker::ToolRegistry;
 use kernel_broker::{retain_mountable, Action, Approver, Rule};
 use kernel_core::privacy::{admit_call, Destination, PathId, Reason, Refused};
-use kernel_core::{config_path, killswitch, Config, Lang};
+use kernel_core::{config_path, Config, Lang};
 use tokio::sync::broadcast;
 
 use super::approval::{ApiApprover, ApprovalRegistry};
@@ -334,10 +334,13 @@ pub struct EngineTurnRunner {
     /// The evidence registry a mail attachment lands in (B22). Production uses
     /// the turn's store and home; tests may inject a fake sink.
     evidence: Option<Arc<dyn aux_mail::EvidenceSink>>,
-    /// D33: the delegation runner the chief's `delegate` tool uses.
-    delegations: Option<Arc<dyn crate::delegation::DelegationExecutor>>,
-    /// D33: the per-delegation cancel tokens a task Stop fires.
-    delegation_cancels: Option<Arc<crate::delegation::DelegationCancels>>,
+    /// D33: the delegation runner the chief's `delegate` tool uses, always
+    /// paired with the per-delegation cancel tokens a task Stop fires (and a
+    /// resume's still-stopping gate reads): one never comes without the other.
+    delegations: Option<(
+        Arc<dyn crate::delegation::DelegationExecutor>,
+        Arc<crate::delegation::DelegationCancels>,
+    )>,
     /// AGENT-DEFAULT-2: the delegating caller's mode. A private caller makes
     /// this turn private, whatever the agent's own or the global mode.
     mode_floor: Option<kernel_core::privacy::ModeFn>,
@@ -478,7 +481,6 @@ impl EngineTurnRunner {
             mail: None,
             evidence: None,
             delegations: None,
-            delegation_cancels: None,
             mode_floor: None,
             inherited: aux_engine::handoff::Handoff::default(),
             #[cfg(any(test, feature = "test-util"))]
@@ -674,21 +676,15 @@ impl EngineTurnRunner {
     }
 
     /// D33: hand each turn the delegation runner the chief's `delegate` tool
-    /// calls. A runner without one simply does not offer the tool.
+    /// calls and the cancel registry its runs register in (mandatory: a run
+    /// missing from it would slip past a resume's still-stopping gate). A
+    /// runner without them simply does not offer the tool.
     pub fn with_delegations(
         mut self,
         delegations: Arc<dyn crate::delegation::DelegationExecutor>,
-    ) -> Self {
-        self.delegations = Some(delegations);
-        self
-    }
-
-    /// D33: the per-delegation cancel tokens a task Stop fires.
-    pub fn with_delegation_cancels(
-        mut self,
         cancels: Arc<crate::delegation::DelegationCancels>,
     ) -> Self {
-        self.delegation_cancels = Some(cancels);
+        self.delegations = Some((delegations, cancels));
         self
     }
 
@@ -1431,7 +1427,7 @@ impl EngineTurnRunner {
         }
         // Fail closed before the engine even creates a session: an engaged
         // kill switch must not leave a system prompt behind.
-        if killswitch::is_stopped(&self.home) {
+        if aux_engine::marker_engaged(&self.home) {
             return Err(TurnError::Stopped);
         }
         aux_engine::validate_agent(agent).map_err(|err| TurnError::InvalidAgent {
@@ -1693,12 +1689,12 @@ impl EngineTurnRunner {
             // PRIV-EVENTS-RACE: a quiet (private channel) turn hands no work out.
             // A delegation writes a `chat` child session and a delegation row
             // that outlive the turn and show on every general surface.
-            if let Some(delegations) = self.delegations.as_ref().filter(|_| !quiet) {
+            if let Some((delegations, cancels)) = self.delegations.as_ref().filter(|_| !quiet) {
                 registry.register_native(Box::new(crate::delegation::DelegateTool::new(
                     self.home.clone(),
                     events.cloned(),
                     Arc::clone(delegations),
-                    self.delegation_cancels.clone(),
+                    Arc::clone(cancels),
                 )));
             }
         }
@@ -3452,7 +3448,7 @@ mod tests {
     fn engine_runner_refuses_an_engaged_kill_switch_before_writing() {
         let dir = tempdir().unwrap();
         let home = fake_home(dir.path());
-        killswitch::engage(&home).unwrap();
+        kernel_core::killswitch::engage(&home).unwrap();
 
         let runner = EngineTurnRunner::new(&home);
         let err = runner.run_turn("main", None, "ping", None).unwrap_err();

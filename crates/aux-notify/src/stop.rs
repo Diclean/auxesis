@@ -39,9 +39,13 @@ impl<N> StopSwitchNotifier<N> {
     /// at the marker path counts, including a dangling symlink, so a
     /// malicious or broken marker can never leave notifications running
     /// while the daemon pauses. `Path::exists()` would follow the link and
-    /// read a dangling symlink as "not stopped".
+    /// read a dangling symlink as "not stopped". A read error other than
+    /// "absent" (EACCES, EIO, ENOTDIR) also counts as engaged: fail closed.
     pub fn is_stopped(&self) -> bool {
-        std::fs::symlink_metadata(&self.stop_marker).is_ok()
+        match std::fs::symlink_metadata(&self.stop_marker) {
+            Ok(_) => true,
+            Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+        }
     }
 }
 
@@ -58,6 +62,20 @@ impl<N: Notifier> Notifier for StopSwitchNotifier<N> {
 mod tests {
     use super::*;
     use crate::FakeNotifier;
+
+    #[test]
+    fn an_unreadable_marker_path_counts_as_stopped() {
+        // A regular file where the marker's parent should be: the read fails
+        // with ENOTDIR, never NotFound, even as root.
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-dir");
+        std::fs::write(&parent, b"x").unwrap();
+        let fake = FakeNotifier::new();
+        let notifier = StopSwitchNotifier::new(&fake, parent.join("STOP"));
+        assert!(notifier.is_stopped());
+        assert!(notifier.notify(&Notification::new("t", "b")).is_err());
+        assert_eq!(fake.count(), 0);
+    }
 
     #[test]
     fn delivers_while_the_marker_is_absent() {

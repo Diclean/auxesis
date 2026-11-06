@@ -521,6 +521,30 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_insert_rolls_back_the_row_and_its_marker() {
+        let store = store();
+        store
+            .create_delegation("dl-old", "aux", "mail", "t", None, PrivacyMode::Open)
+            .unwrap();
+        let failed = store.atomically(|store| {
+            store.create_delegation("dl-new", "aux", "mail", "t", None, PrivacyMode::Open)?;
+            store.mark_workspace_tainted("delegation:dl-new", "handoff")?;
+            // A duplicate id: the insert fails inside the transaction.
+            store.create_delegation("dl-old", "aux", "mail", "t", None, PrivacyMode::Open)
+        });
+        assert!(failed.is_err());
+        assert!(store.delegation("dl-new").unwrap().is_none(), "no row");
+        assert!(
+            store
+                .workspace_taint("delegation:dl-new")
+                .unwrap()
+                .is_none(),
+            "no marker"
+        );
+        assert!(store.delegation("dl-old").unwrap().is_some());
+    }
+
+    #[test]
     fn a_state_move_applies_only_from_its_state() {
         let store = store();
         store

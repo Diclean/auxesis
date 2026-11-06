@@ -995,15 +995,34 @@ public final class ShellModel: ObservableObject {
         }
     }
 
+    /// The one task whose last Resume was refused, with the plain reason
+    /// (one inline line on its row, never a modal).
+    @Published public private(set) var delegationResumeNote: (id: String, text: String)?
+
+    /// Resume a stopped task. The row stays stopped until auxd accepts: a
+    /// refusal (409 `delegation_still_stopping` while the stopped run is still
+    /// finishing) keeps it stopped and says so, never shows it working.
     public func resumeDelegation(_ delegation: Delegation) {
         guard let client else { return }
-        if let index = delegations.firstIndex(where: { $0.id == delegation.id }) {
-            delegations[index].state = .working
-        }
+        delegationResumeNote = nil
         Task { [weak self] in
-            try? await client.resumeDelegation(id: delegation.id)
+            do {
+                try await client.resumeDelegation(id: delegation.id)
+                if let index = self?.delegations.firstIndex(where: { $0.id == delegation.id }) {
+                    self?.delegations[index].state = .queued
+                }
+            } catch {
+                guard let self else { return }
+                self.delegationResumeNote = (delegation.id, Self.resumeNote(error, self.language))
+            }
             self?.refreshDelegations()
         }
+    }
+
+    static func resumeNote(_ error: Error, _ language: Language) -> String {
+        guard let auxd = error as? AuxdError else { return error.localizedDescription }
+        if auxd.apiErrorCode == "delegation_still_stopping" { return L10n.ui(.delegStillStopping, language) }
+        return auxd.message(language)
     }
 
     // MARK: What the model saw

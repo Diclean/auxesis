@@ -114,7 +114,7 @@ impl DispatchJobRunner {
     }
 
     fn is_stopped(&self) -> bool {
-        kernel_core::killswitch::is_stopped(&self.home)
+        aux_engine::marker_engaged(&self.home)
     }
 }
 

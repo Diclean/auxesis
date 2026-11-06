@@ -194,7 +194,7 @@ fn client_cards_have_one_meaning_in_tool_results_and_both_agent_prompts() {
     ));
     EngineTurnRunner::new(&home)
         .with_provider(Arc::clone(&aux_provider) as Arc<dyn ChatProvider>)
-        .with_delegations(Arc::new(NoDelegation))
+        .with_delegations(Arc::new(NoDelegation), Arc::default())
         .run_turn("aux", None, "Show Camille Exemple's client card", None)
         .unwrap();
     let aux_requests = aux_provider.requests();

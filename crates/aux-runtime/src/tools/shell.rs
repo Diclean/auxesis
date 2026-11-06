@@ -2290,7 +2290,8 @@ type DrainToken = std::sync::Arc<std::sync::atomic::AtomicU8>;
 
 /// A drainer task that has held the drain this long without starting (its
 /// token still [`TOKEN_TASK`]: a cold pool under a live daemon) is replaced
-/// by the next push. Three inline budgets: a caller's hand-back is not stale.
+/// by the next push after it; with no push, nothing re-arms. Three inline
+/// budgets: a caller's hand-back is not stale.
 const REARM_AFTER: Duration = Duration::from_secs(30);
 
 /// Under the backlog lock: the token of the drainer this push must start, if
@@ -2341,9 +2342,10 @@ const OVERFLOW_BACKLOG_MAX: usize = 32;
 /// Drains the whole [`OVERFLOW_BACKLOG`] before its drop returns: dropped by
 /// the blocking-pool task that ran it, or unrun on the caller (a runtime
 /// shutting down drops the task there, maybe during an unwind), as before
-/// SHELL-SWEEP-13. Inline, never handed to a thread: a detached thread dies
-/// with the exiting daemon, and a join bounded by [`MAX_SWEEP_TIME`] would
-/// still strand the reapers past the bound. One drainer at a time (the flag),
+/// SHELL-SWEEP-13. A shutdown drop drains inline, never handed to a thread: a
+/// detached thread dies with the exiting daemon. Only a caller whose queued
+/// task is gone hands the rest to one ([`spawn_drainer_thread`]), and drains
+/// inline when it cannot. One drainer at a time (the flag),
 /// and the token ([`TOKEN_TASK`]) says who holds it: a task a failed spawn
 /// left in the pool (`NoThreads`) skips while the caller holds it
 /// ([`TOKEN_CALLER`]), and drains the whole backlog when the caller hands it
@@ -2380,12 +2382,13 @@ impl Drop for DrainBacklog {
 
 /// How long a failed drainer spawn drains on the caller: the daemon's turn
 /// runtime is current-thread, so the drain blocks a turn with no cancel. A
-/// budget checked before each item: one starts only with room left for the
-/// longest item so far (a kill in progress is never cut). The rest goes back,
-/// flag still set, to the drainer task left queued in the pool (it drains
-/// everything when a pool thread runs it, or when shutdown drops it); with
-/// that task gone, one more bounded drain runs here, and what is still left
-/// stays queued, flag cleared, for the next push's new drainer.
+/// soft budget checked before each item: one starts only with room left for
+/// the longest item so far, and a kill in progress is never cut, so an item
+/// longer than every earlier one overruns it by up to its own length. The
+/// rest goes back, flag still set, to the drainer task left queued in the
+/// pool (it drains everything when a pool thread runs it, or when shutdown
+/// drops it); with that task gone, a fresh drainer thread takes it, or with
+/// no thread it all drains here, unbounded.
 const INLINE_DRAIN_BUDGET: Duration = Duration::from_secs(10);
 
 fn inline_drain_budget() -> Duration {
@@ -2416,8 +2419,40 @@ impl Drop for DrainerGone {
     }
 }
 
-/// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty; the
-/// empty pop clears the drainer flag under the same lock.
+/// Hands the [`OVERFLOW_BACKLOG`] to a fresh drainer on a thread of its own,
+/// under a fresh token (re-armed now, so [`claim_drainer`] may replace it like
+/// any task). False when the OS gives no thread: the closure dropped unrun
+/// never built its [`DrainBacklog`], so the token is still [`TOKEN_TASK`], and
+/// the caller takes it here and drains the whole backlog itself.
+fn spawn_drainer_thread() -> bool {
+    use std::sync::atomic::Ordering::SeqCst;
+    let token = DrainToken::new(std::sync::atomic::AtomicU8::new(TOKEN_TASK));
+    {
+        let mut backlog = overflow_backlog();
+        backlog.0 = true;
+        backlog.2 = Some((token.clone(), Instant::now()));
+    }
+    let task = token.clone();
+    #[cfg(test)]
+    let fail = FAIL_DRAINER_THREAD.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    let fail = false;
+    let spawned = !fail
+        && std::thread::Builder::new()
+            .name("shell-overflow-drain".into())
+            .spawn(move || drop(DrainBacklog(task)))
+            .is_ok();
+    // Taken here, the token makes the spawned task skip if it ever runs.
+    spawned
+        || token
+            .compare_exchange(TOKEN_TASK, TOKEN_GONE, SeqCst, SeqCst)
+            .is_err()
+}
+
+/// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty. The
+/// flag clears only on the empty pop, under the same lock and after the
+/// last item ran, so a push during that item finds it set and queues for
+/// this drainer's next pop: one drainer at a time.
 fn drain_backlog() {
     drain_backlog_until(None);
 }
@@ -2569,6 +2604,8 @@ thread_local! {
     static BACKLOG_ITEM_HOOK: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
     /// Test seam: the real `spawn_blocking` queues the drainer, then panics.
     static PANIC_AFTER_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Test seam: the fresh drainer thread of a drainer-gone caller fails.
+    static FAIL_DRAINER_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Test seam: the failed-spawn inline drain's budget on this thread.
     static INLINE_DRAIN_TEST_BUDGET: std::cell::Cell<Option<Duration>> =
         const { std::cell::Cell::new(None) };
@@ -2663,8 +2700,8 @@ fn overflow_retry(oldest: TreeReaper) {
             });
             // The token taken, a leftover drainer skips. The backlog, not
             // only this call's reaper, drains here within the budget; the
-            // rest goes back to the leftover, or, with it gone, drains here
-            // once more within the bound and then waits for the next push.
+            // rest goes back to the leftover, or, with it gone, to a fresh
+            // drainer thread (with none, it all drains here).
             let failed = std::panic::catch_unwind(spawn).is_err();
             if failed {
                 tracing::error!("shell: no blocking thread for the overflow backlog");
@@ -2695,15 +2732,20 @@ fn overflow_retry(oldest: TreeReaper) {
                          waits for the queued drainer (a pool thread, or shutdown)"
                     );
                 } else if left > 0 {
-                    run_on_caller(&runtime, &mut || left = drain_backlog_until(bound()));
-                    if left > 0 {
-                        // No drainer is left: the next push starts one.
-                        overflow_backlog().0 = false;
+                    // The queued task is gone: a fresh drainer owns the rest
+                    // (the flag stays set while it exists), on a plain thread
+                    // since the pool just failed; with no thread either, the
+                    // whole backlog drains here, unbounded, as before.
+                    tracing::warn!(
+                        left,
+                        "shell: the overflow backlog drain ran out of time and its drainer task \
+                         is gone; a fresh drainer thread takes the rest"
+                    );
+                    if !spawn_drainer_thread() {
                         tracing::error!(
-                            left,
-                            "shell: the overflow backlog drain ran out of time and its drainer \
-                             task is gone; the rest stays queued for the next push's drainer"
+                            "shell: no thread for the overflow backlog; it drains here"
                         );
+                        run_on_caller(&runtime, &mut || drain_backlog());
                     }
                 }
             }
@@ -6310,11 +6352,8 @@ await(q(bg.pid));
             let backlog = overflow_backlog();
             (backlog.0, backlog.1.len())
         };
-        // One 150 ms item plus runner overhead; a second would pass 300 ms.
-        assert!(
-            took < Duration::from_millis(300),
-            "a second item ran: {took:?}"
-        );
+        // `ran == 1` is the proof; the time only catches a runaway drain.
+        assert!(took < Duration::from_secs(5), "the drain overran: {took:?}");
         assert!(ran == 1 && left > 0, "ran {ran}, left {left}");
         assert_eq!(ran + left, OVERFLOW_BACKLOG_MAX, "a reaper was dropped");
         assert!(running, "the flag was cleared with reapers left");
@@ -6344,47 +6383,74 @@ await(q(bg.pid));
     }
 
     /// SHELL-SWEEP-14 (1): the drainer task gone before the hand-back (it
-    /// skipped while the caller held the token): the caller drains once more.
-    /// SHELL-SWEEP-15 (2): that drain is bounded too (here 50 ms, one 100 ms
-    /// item each): 2 of 4 run, the other 2 stay queued with the flag
-    /// cleared, so the next push starts a drainer. Never dropped.
+    /// skipped while the caller held the token). SHELL-SWEEP-15 r2 (P1): the
+    /// caller's bounded drain (50 ms, one 100 ms item) runs 1 of 4; the other
+    /// 3 go to a fresh drainer thread, or, with no thread, drain here
+    /// unbounded. Either way all 4 run, and nothing stays in the backlog.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_failed_spawn_with_its_task_gone_drains_everything_here() {
-        use std::sync::atomic::AtomicUsize;
+    async fn a_failed_spawn_with_its_task_gone_hands_the_rest_on_and_every_reaper_runs() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         let _serial = LATE_QUEUE_TEST.lock().await;
-        backlog_idle().await;
-        let live: &'static AtomicUsize =
-            Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
-        OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
-        FAIL_BACKLOG_SPAWN.with(|seam| seam.set(true));
-        BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(100)));
-        INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(50))));
-        let _reset = OnDrop(|| {
-            OVERFLOW_LIVE.with(|seam| seam.set(None));
-            FAIL_BACKLOG_SPAWN.with(|seam| seam.set(false));
-            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
-            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
-            clear_backlog();
-        });
-        // The task drops (and skips) while the caller drains its first item.
-        BACKLOG_ITEM_HOOK.with(|seam| {
-            seam.set(Some(|| {
-                drop(LEFTOVER_DRAINER.with(|left| left.borrow_mut().take()))
-            }))
-        });
-        let _unhook = OnDrop(|| BACKLOG_ITEM_HOOK.with(|seam| seam.set(None)));
-        for _ in 0..3 {
-            overflow_backlog()
-                .1
-                .push_back(idle_reaper(pinned_marker().0));
+        for no_thread in [false, true] {
+            backlog_idle().await;
+            let live: &'static AtomicUsize =
+                Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
+            OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+            FAIL_BACKLOG_SPAWN.with(|seam| seam.set(true));
+            FAIL_DRAINER_THREAD.with(|seam| seam.set(no_thread));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(100)));
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(50))));
+            let _reset = OnDrop(|| {
+                OVERFLOW_LIVE.with(|seam| seam.set(None));
+                FAIL_BACKLOG_SPAWN.with(|seam| seam.set(false));
+                FAIL_DRAINER_THREAD.with(|seam| seam.set(false));
+                BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+                INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+                BACKLOG_ITEM_HOOK.with(|seam| seam.set(None));
+                clear_backlog();
+            });
+            // The task drops (and skips) while the caller drains its first item.
+            BACKLOG_ITEM_HOOK.with(|seam| {
+                seam.set(Some(|| {
+                    drop(LEFTOVER_DRAINER.with(|left| left.borrow_mut().take()))
+                }))
+            });
+            for _ in 0..3 {
+                overflow_backlog()
+                    .1
+                    .push_back(idle_reaper(pinned_marker().0));
+            }
+            let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
+            let here = BACKLOG_HERE.with(std::cell::Cell::get);
+            overflow_retry(idle_reaper(pinned_marker().0));
+            let ran_here = BACKLOG_HERE.with(std::cell::Cell::get) - here;
+            assert_eq!(
+                ran_here,
+                if no_thread { 4 } else { 1 },
+                "no_thread {no_thread}"
+            );
+            for _ in 0..500 {
+                let backlog = overflow_backlog();
+                if backlog.1.is_empty() && !backlog.0 {
+                    break;
+                }
+                drop(backlog);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(
+                OVERFLOW_BACKLOGGED.load(SeqCst),
+                backlogged + 4,
+                "a reaper never ran"
+            );
+            let backlog = overflow_backlog();
+            assert!(
+                backlog.1.is_empty() && !backlog.0,
+                "stranded (no_thread {no_thread}): {} left, flag {}",
+                backlog.1.len(),
+                backlog.0
+            );
         }
-        let here = BACKLOG_HERE.with(std::cell::Cell::get);
-        overflow_retry(idle_reaper(pinned_marker().0));
-        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get) - here, 2);
-        let backlog = overflow_backlog();
-        assert_eq!(backlog.1.len(), 2, "the second drain was not bounded");
-        assert!(!backlog.0, "the flag stayed set with no drainer left");
     }
 
     /// SHELL-SWEEP-14 (2), the production shape: `spawn_blocking` panics
@@ -6712,8 +6778,8 @@ await(q(bg.pid));
     /// fast kill counts it as skipped (full retry) and `retry` never answers
     /// clean, though the later passes evict nothing.
     #[cfg(unix)]
-    #[test]
-    fn an_eviction_keeps_the_reaper_unprovable_for_every_later_pass() {
+    #[tokio::test]
+    async fn an_eviction_keeps_the_reaper_unprovable_for_every_later_pass() {
         let _reset = OnDrop(|| KILL_PROBE.with(|seam| seam.set(None)));
         KILL_PROBE.with(|seam| seam.set(Some(|_| libc::EPERM)));
         let mut reaper = idle_reaper(pinned_marker().0);
@@ -6732,6 +6798,13 @@ await(q(bg.pid));
         let ample = std::time::Instant::now() + Duration::from_secs(5);
         let _clean = scans_clean(1);
         assert_eq!(reaper.fast_kill_with(ample, ample, &|_| Lookup::Gone), 1);
+        // The stop path's verdict too (no kill, no scan: only the flag).
+        let unseen = |_pass: usize, _pid: i32| Visibility::Unseen;
+        let (mut reaper, sweep) = reaper
+            .kill_and_sweep((false, false), unseen, 1, ample - std::time::Instant::now())
+            .await
+            .unwrap();
+        assert_eq!(sweep, Sweep::Unchecked, "the stop path read it as clean");
         assert_eq!(reaper.retry(), Some(Sweep::Unchecked), "retired as clean");
     }
 

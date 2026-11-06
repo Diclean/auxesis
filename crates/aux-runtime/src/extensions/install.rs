@@ -673,7 +673,7 @@ fn make_writable_tree(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io:
         .file_name()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let Some(dir) = open_child_dir(&parent, name)? else {
-        return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+        return Err(refusal(rel, "est un lien ou un fichier", "is a link or a file"));
     };
     make_writable_fd(&dir)
 }
@@ -898,8 +898,11 @@ fn remove_after_open(
     // One rule: the trees go, then the mounts and secrets, and the state row
     // last, so a failure anywhere leaves the row (and its secret names) for a
     // retry. A refusal stops there and returns the error.
+    // One handle for the whole removal: the home is verified once, before any
+    // change, and the state row is unlinked through that same handle.
+    let home_handle = open_home(home)?;
     let mut removed = 0;
-    if let Some(handle) = open_home(home)?.as_ref() {
+    if let Some(handle) = home_handle.as_ref() {
         after_open();
         let mut first_error = None;
         removed = remove_trees(handle, name, &mut |err| {
@@ -908,12 +911,14 @@ fn remove_after_open(
         if let Some(err) = first_error {
             return Err(err);
         }
+        // A linked `state/` is refused here, before mounts or `.env` change.
+        anchored_dir_exists(handle, &Path::new("extensions").join("state"))?;
     }
     super::mount::remove_from_all_mounts(home, name)?;
     if !secret_names.is_empty() {
         remove_secrets(home, &secret_names)?;
     }
-    if let Some(handle) = open_home(home)?.as_ref() {
+    if let Some(handle) = home_handle.as_ref() {
         remove_state_row(handle, name)?;
     }
     Ok(removed)

@@ -122,6 +122,19 @@ mod tests {
         }
     }
 
+    /// ENOTDIR (a home that is a file) reads engaged, even as root.
+    #[test]
+    fn a_marker_path_through_a_file_reads_engaged() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::write(&home, b"not a directory").unwrap();
+        let err = std::fs::symlink_metadata(kernel_core::killswitch::stop_path(&home))
+            .expect_err("a path through a file never resolves");
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound, "{err:?}");
+        assert!(marker_engaged(&home), "a read error must read as engaged");
+        assert!(MarkerStop::new(&home).is_stopped());
+    }
+
     #[test]
     fn arc_stop_check_delegates() {
         use std::sync::Arc;

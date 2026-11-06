@@ -989,6 +989,7 @@ public final class ShellModel: ObservableObject {
         if let index = delegations.firstIndex(where: { $0.id == delegation.id }) {
             delegations[index].state = .stopped
         }
+        if delegationResumeNote?.id == delegation.id { delegationResumeNote = nil }
         Task { [weak self] in
             try? await client.stopDelegation(id: delegation.id)
             self?.refreshDelegations()
@@ -998,6 +999,12 @@ public final class ShellModel: ObservableObject {
     /// The one task whose last Resume was refused, with the plain reason
     /// (one inline line on its row, never a modal).
     @Published public private(set) var delegationResumeNote: (id: String, text: String)?
+
+    /// The refusal line `delegation`'s row shows, whatever state it is in now.
+    public func resumeNote(for delegation: Delegation) -> String? {
+        guard let note = delegationResumeNote, note.id == delegation.id else { return nil }
+        return note.text
+    }
 
     /// Resume a stopped task. The row stays stopped until auxd accepts: a
     /// refusal (409 `delegation_still_stopping` while the stopped run is still
@@ -1021,7 +1028,17 @@ public final class ShellModel: ObservableObject {
 
     static func resumeNote(_ error: Error, _ language: Language) -> String {
         guard let auxd = error as? AuxdError else { return error.localizedDescription }
-        if auxd.apiErrorCode == "delegation_still_stopping" { return L10n.ui(.delegStillStopping, language) }
+        switch auxd.apiErrorCode {
+        case "delegation_still_stopping": return L10n.ui(.delegStillStopping, language)
+        case "delegation_stuck": return L10n.ui(.delegStuck, language)
+        default: break
+        }
+        // The daemon's own words beat the generic "the service refused".
+        if auxd.budgetRefusal == nil,
+           let message = auxd.apiErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            return message
+        }
         return auxd.message(language)
     }
 

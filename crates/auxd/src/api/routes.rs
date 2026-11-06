@@ -1498,7 +1498,7 @@ struct StopResponse {
 async fn engage_stop(State(state): State<Arc<ApiState>>) -> Response {
     let home = state.home.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let was_stopped = kernel_core::killswitch::is_stopped(&home);
+        let was_stopped = aux_engine::marker_engaged(&home);
         kernel_core::killswitch::engage(&home).map(|()| !was_stopped)
     })
     .await;

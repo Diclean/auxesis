@@ -190,6 +190,8 @@ pub struct ApiState {
     pub(crate) delegations: Arc<dyn crate::delegation::DelegationExecutor>,
     /// D33: per-delegation cancel tokens a task Stop fires.
     pub(crate) delegation_cancels: Arc<crate::delegation::DelegationCancels>,
+    /// How long a stopped run may keep finishing before a resume says stuck.
+    pub(crate) delegation_stuck_after: Duration,
     /// Pending sends Stop all cancelled the last time it ran (`GET /v1/stop`).
     pub(crate) stop_cancelled: std::sync::atomic::AtomicUsize,
     /// Private-mode iMessage answers, in memory only (C12).
@@ -265,6 +267,9 @@ pub struct ApiOptions {
     pub delegations: Option<Arc<dyn crate::delegation::DelegationExecutor>>,
     /// D33: one delegated turn's deadline. `None` uses the built-in 120 s.
     pub delegation_timeout: Option<Duration>,
+    /// How long a stopped run may keep finishing before a resume answers
+    /// `delegation_stuck`. `None` uses ten minutes (tests shrink it).
+    pub delegation_stuck_after: Option<Duration>,
     /// Test seam: the real origin of tools a `ToolRegistryHook` registers.
     /// Test-util only.
     #[cfg(any(test, feature = "test-util"))]
@@ -292,6 +297,7 @@ impl Default for ApiOptions {
             extensions: None,
             delegations: None,
             delegation_timeout: None,
+            delegation_stuck_after: None,
             #[cfg(any(test, feature = "test-util"))]
             tool_origins: Vec::new(),
         }
@@ -625,7 +631,13 @@ pub fn spawn(home: &Path, options: ApiOptions) -> std::io::Result<ApiHandle> {
         home.to_path_buf(),
         sender.clone(),
     ));
-    let delegation_cancels = Arc::new(crate::delegation::DelegationCancels::new());
+    // A delegating injected runner brings its own cancel registry: the API
+    // adopts it, so Stop and resume read the one its runs register in.
+    let delegation_cancels = options
+        .runner
+        .as_ref()
+        .and_then(|runner| runner.delegation_cancels())
+        .unwrap_or_else(|| Arc::new(crate::delegation::DelegationCancels::new()));
     let delegations: Arc<dyn crate::delegation::DelegationExecutor> =
         options.delegations.clone().unwrap_or_else(|| {
             let executor = crate::delegation::EngineDelegationExecutor::new(
@@ -701,6 +713,9 @@ pub fn spawn(home: &Path, options: ApiOptions) -> std::io::Result<ApiHandle> {
         bridge,
         delegations,
         delegation_cancels,
+        delegation_stuck_after: options
+            .delegation_stuck_after
+            .unwrap_or(crate::delegation::DELEGATION_STUCK_AFTER),
         stop_cancelled: std::sync::atomic::AtomicUsize::new(0),
         private_answers: Arc::new(PrivateAnswers::default()),
     });

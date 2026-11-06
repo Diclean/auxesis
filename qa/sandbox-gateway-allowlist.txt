@@ -34,6 +34,8 @@ crates/aux-runtime/src/tools/write_file.rs | tokio::fs:: | product file tool: wr
 crates/auxd/src/api/auth.rs | OpenOptions::new( | read-only token open (O_NOFOLLOW) and the cfg(test) path-based helper kept to test symlink refusal
 crates/auxd/src/api/turn.rs | fs::create_dir_all( | cfg(test) fake-home fixture
 crates/auxd/src/api/turn.rs | fs::write( | cfg(test) fake-home fixture
+crates/auxd/src/delegation/claim_tests.rs | fs::create_dir_all( | cfg(test) fake-home fixture
+crates/auxd/src/delegation/claim_tests.rs | fs::write( | cfg(test) fake-home config fixture in a TempDir
 crates/auxd/src/delegation/source_tests.rs | fs::create_dir_all( | cfg(test) fake-home fixture
 crates/auxd/src/delegation/source_tests.rs | fs::write( | cfg(test) fake-home config fixture in a TempDir
 crates/auxd/src/delegation/where_tests.rs | fs::create_dir_all( | cfg(test) fake-home fixture

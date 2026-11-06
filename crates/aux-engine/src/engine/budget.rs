@@ -199,8 +199,8 @@ impl Settler {
         }
     }
 
-    /// Hand `work` to the worker. This never blocks. Once it ended, or with no
-    /// worker, the row stays held: it counts against the caps until its TTL
+    /// Hand `work` to the worker: no SQL, no store lock, no wait on the
+    /// worker. Once it ended, or with no worker, the row stays held: it counts against the caps until its TTL
     /// passes, and the next start's reconcile then settles it. Nothing here
     /// runs SQL; the row may already be raised to what was recorded.
     fn send(&self, work: Work) {
@@ -249,7 +249,7 @@ struct Gate {
 
 /// One budget's settling: the process has one, a test its own.
 #[derive(Default)]
-struct Budget {
+pub(super) struct Budget {
     gate: Mutex<Gate>,
     changed: Condvar,
     settler: OnceLock<Settler>,
@@ -283,6 +283,18 @@ impl Budget {
         settler.stop(deadline.saturating_duration_since(Instant::now()))
     }
 
+    /// Run `write`, a usage write outside settling, past the stop gate: counted
+    /// in flight, so a stop waits for it; refused once a stop is asked, so none
+    /// starts after it. The refusal is an error the caller handles as any
+    /// failed write, never a silent drop.
+    fn gated<T>(&self, write: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
+        let (_in_flight, open) = self.enter();
+        if !open {
+            return Err(stopped_error());
+        }
+        write()
+    }
+
     fn stopped(&self) -> bool {
         kernel_core::lock_recover(&self.gate).stop.is_some()
     }
@@ -301,6 +313,10 @@ impl Budget {
     }
 }
 
+fn stopped_error() -> StoreError {
+    StoreError::Io(std::io::Error::other("the budget settlement is stopped"))
+}
+
 /// One counted in flight; its drop lets a stop and the worker see it done.
 struct InFlight<'b>(&'b Budget);
 
@@ -311,6 +327,15 @@ impl Drop for InFlight<'_> {
     }
 }
 
+/// Run `write`, a usage write outside settling, on `store` past the
+/// process-wide stop gate (see [`Budget::gated`]).
+pub(crate) fn usage_write<T>(
+    store: &StoreHandle<'_>,
+    write: impl FnOnce(&Store) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    LazyLock::force(&PROCESS).gated(|| store.with(write))
+}
+
 /// Hand `work` to the process-wide worker, started on first use.
 fn hand_over(work: Work) {
     LazyLock::force(&PROCESS).settler().send(work);
@@ -319,13 +344,17 @@ fn hand_over(work: Work) {
 /// Stop the process-wide budget settlement before the process exits, and
 /// wait up to `bound` for it: a retry mid-statement when SQLCipher's exit hook
 /// frees its memory is a use-after-free. True once no settle statement is in
-/// flight, the worker's or an inline one's (also when none started); usage
-/// writes outside settling (`record_usage_call`, `record_usage_for`,
-/// `try_reserve_for`) are not gated. False means one may still be: call this
-/// again, which waits again and opens a new [`RECORD_WINDOW`]. Later settles
-/// are refused and handed to the worker, which raises their rows while it
-/// runs; one handed over after this returned true is not recorded, and its row
-/// stays held at what was last recorded until the next start's reconcile.
+/// flight, the worker's or an inline one's (also when none started), and
+/// none starts after it: the usage writes outside settling
+/// (`record_usage_call`, `record_usage_for`, `try_reserve_for`) pass the same
+/// gate, so one in flight is waited for and a later one is refused with an
+/// error its caller handles (a refused reservation denies the call). False
+/// means a statement may still be: call this again, which waits again and
+/// opens a new [`RECORD_WINDOW`]. Later settles are refused and handed to the
+/// worker, which raises their rows while it runs. Residual: a handover (a
+/// guard dropped unsettled) after the worker's last check is dropped, even
+/// when this returned true; it runs no SQL, and its row stays held at what was
+/// last recorded until the next start's reconcile.
 pub fn stop_settle_worker(bound: Duration) -> bool {
     LazyLock::force(&PROCESS).stop(bound)
 }
@@ -494,8 +523,8 @@ fn reconcile(store: &Arc<Mutex<Store>>, owed: &[Owed], stopped: &dyn Fn() -> boo
 /// unsettled (the future making the call was cancelled after the request
 /// went out), it hands the settlement worker the reserved estimate, or what
 /// [`HeldReservation::or_known`] reports where that is more, so the spend is
-/// never handed back as headroom. The drop never blocks, takes no store lock and
-/// never panics; the store row stays held (counted, never swept) until a
+/// never handed back as headroom. The drop takes no store lock, waits only
+/// on the gate's short mutex, and never panics; the store row stays held (counted, never swept) until a
 /// settle deletes it, so the reservation settles once.
 pub struct HeldReservation<'k, S: SettleStore> {
     budget: &'static Budget,
@@ -544,8 +573,7 @@ impl<'k, S: SettleStore> HeldReservation<'k, S> {
         let (_in_flight, open) = self.budget.enter();
         if !open {
             self.settle_later(*actual);
-            let stopped = std::io::Error::other("the budget settlement is stopped");
-            return Err(StoreError::Io(stopped));
+            return Err(stopped_error());
         }
         let settled = self.store.settle(&self.reservation, actual);
         if settled.is_err() {
@@ -841,8 +869,30 @@ pub(crate) fn admit(
     caps: &BudgetCaps,
     estimate: &UsageTotals,
 ) -> Result<Reservation, ChatError> {
-    let denial = match store.with(|store| store.try_reserve_for(run_id, agent, day, caps, estimate))
-    {
+    admit_in(
+        LazyLock::force(&PROCESS),
+        store,
+        run_id,
+        agent,
+        day,
+        caps,
+        estimate,
+    )
+}
+
+/// [`admit`] past `budget`'s stop gate: once a stop is asked, no reservation
+/// is taken, and the call is denied as a ledger that cannot answer.
+fn admit_in(
+    budget: &Budget,
+    store: &StoreHandle<'_>,
+    run_id: Option<&str>,
+    agent: &str,
+    day: &str,
+    caps: &BudgetCaps,
+    estimate: &UsageTotals,
+) -> Result<Reservation, ChatError> {
+    let reserve = || store.with(|store| store.try_reserve_for(run_id, agent, day, caps, estimate));
+    let denial = match budget.gated(reserve) {
         Ok(ReserveOutcome::Reserved(reservation)) => return Ok(reservation),
         Ok(ReserveOutcome::Denied(denial)) => denial,
         Err(err) => ledger_down(agent, day, err),
@@ -890,6 +940,23 @@ pub(crate) fn call_estimate(
 }
 
 impl<'a> ChatSession<'a> {
+    /// The budget whose stop gate this session's usage writes pass.
+    fn budget(&self) -> &'static Budget {
+        #[cfg(test)]
+        if let Some(budget) = self.budget {
+            return budget;
+        }
+        LazyLock::force(&PROCESS)
+    }
+
+    /// A usage write outside settling, past this session's stop gate.
+    fn usage_write<T>(
+        &self,
+        write: impl FnOnce(&Store) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.budget().gated(|| self.store.with(write))
+    }
+
     /// Reserve the estimated spend for one provider call, or fail the turn
     /// when a daily cap is reached. The reservation is taken atomically with
     /// the cap check, the caller's own reserve included, so concurrent turns
@@ -941,7 +1008,8 @@ impl<'a> ChatSession<'a> {
         let day = self.current_day()?;
         let estimate =
             reservation_estimate(request, request_model(self.provider, request), self.prices);
-        admit(
+        admit_in(
+            self.budget(),
             &self.store,
             self.run_id.as_deref(),
             &self.agent,
@@ -1033,14 +1101,14 @@ impl<'a> ChatSession<'a> {
             cached_tokens: usage.and_then(|usage| usage.cached_prompt_tokens),
             completion_tokens: usage.map(|usage| usage.completion_tokens),
         };
-        if let Err(err) = self.store.with(|store| store.record_usage_call(&call)) {
+        if let Err(err) = self.usage_write(|store| store.record_usage_call(&call)) {
             tracing::warn!(error = %err, "could not record a brain call's token counts");
         }
     }
 
     /// Insert one usage row, stamped with this turn's identity when it has one.
     fn record_usage_row(&self, kind: UsageKind, amount: u64, unit: &str) -> Result<(), ChatError> {
-        let recorded = self.store.with(|store| match self.run_id.as_deref() {
+        let recorded = self.usage_write(|store| match self.run_id.as_deref() {
             Some(run_id) => store.record_usage_for(run_id, &self.agent, kind, amount, unit),
             None => store.record_usage(&self.agent, kind, amount, unit),
         });
@@ -2332,6 +2400,64 @@ mod tests {
         assert!(kernel_core::lock_recover(worker).is_none(), "none started");
         assert!(held.settle(&job.actual).is_err(), "refused");
         assert_eq!(count(&dir, TRIES), 0, "no statement ran");
+    }
+
+    /// Usage writes outside settling meet the settle gate: one in flight when
+    /// the stop is asked is waited for, and every one attempted after it is
+    /// refused, so nothing lands once the stop has returned true.
+    #[test]
+    fn usage_writes_are_waited_for_or_refused_and_none_lands_after_a_stop() {
+        let harness = Harness::new();
+        let provider = FakeProvider::echo("fake");
+        let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+        let budget = budget();
+        session.budget = Some(budget);
+        let mut gate = tokenising_gate([7u8; 32]);
+        let message = SafeMessage::issue(&mut gate, &ChatMessage::user("hello")).unwrap();
+        let request = ChatRequest::new(vec![message]);
+        let response = ChatResponse::assistant("done");
+        let day = harness.store().local_day().unwrap();
+        let rows = || {
+            let store = harness.store();
+            let totals = store.usage_totals("main", &day).unwrap();
+            let calls = store.usage_call_totals(None, &day).unwrap().calls;
+            (totals.tokens_in, calls, store.reservation_count().unwrap())
+        };
+
+        // A write in flight when the stop is asked: the stop waits for it.
+        let stopper = std::sync::OnceLock::new();
+        session
+            .usage_write(|store| {
+                let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let flag = Arc::clone(&done);
+                stopper.get_or_init(|| {
+                    std::thread::spawn(move || {
+                        let ended = budget.stop(Duration::from_secs(10));
+                        flag.store(true, Ordering::SeqCst);
+                        ended
+                    })
+                });
+                while !budget.stopped() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                assert!(!done.load(Ordering::SeqCst), "the stop waits for a write");
+                store.record_usage("main", UsageKind::TokensIn, 5, "tokens")
+            })
+            .unwrap();
+        assert!(stopper.into_inner().unwrap().join().unwrap(), "then ends");
+        let landed = rows();
+        assert_eq!(landed.0, 5, "the write in flight landed before the stop");
+
+        // Each write attempted after the stop is refused, not lost silently.
+        session.record_usage_call(&request, &response, 1);
+        assert!(session.record_usage(&request, &response).is_err());
+        assert!(session.reserve_budget(&request).is_err());
+        assert_eq!(
+            rows(),
+            landed,
+            "nothing landed after the stop returned true"
+        );
     }
 
     /// Owed jobs the worker never got to try (still queued) have their amount

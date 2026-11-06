@@ -334,7 +334,6 @@ mod tests {
     /// regression fails the test instead of hanging the suite.
     const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// Wait (bounded) for a pid to die.
     /// A child killed but not yet reaped by its parent.
     fn is_zombie(pid: u32) -> bool {
         let stat = Command::new("/bin/ps")
@@ -344,6 +343,7 @@ mod tests {
         String::from_utf8_lossy(&out).trim_start().starts_with('Z')
     }
 
+    /// Wait (bounded) for a pid to die.
     fn wait_for_exit(pid: u32) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         while alive(pid) {
@@ -597,9 +597,10 @@ mod tests {
 
         let started = Instant::now();
         let grace_pidfile = pidfile.0.clone();
-        // What the grace returns comes back only after the post-grace sweep:
-        // the daemon aborts on it, and an abort runs no sweep of its own.
-        let graced = shutdown_everything(root.id(), None, move || {
+        // The order main's abort relies on: a grace that reports a budget
+        // settle still running (false) returns only after the post-grace
+        // sweep, and the abort that follows it runs no sweep of its own.
+        let settled = shutdown_everything(root.id(), None, move || {
             writeln!(stdin, "go").expect("release the shell");
             let _ = stdin.flush();
             // Wait until the child exists: the pid file is written after the
@@ -613,10 +614,11 @@ mod tests {
                 std::thread::sleep(POLL);
             }
             std::thread::sleep(POLL);
-            "graced"
+            false
         });
         let bounded = started.elapsed() < Duration::from_secs(3);
 
+        // Read the moment the caller would abort: the sweep is already done.
         let late = read_pid(&pidfile.0);
         let signalled = late.is_some_and(|pid| !alive(pid) || is_zombie(pid));
         let swept = late.is_some_and(wait_for_exit);
@@ -639,8 +641,8 @@ mod tests {
             swept,
             "a child spawned during the grace must be swept after it"
         );
-        assert_eq!(graced, "graced", "the grace's result comes back");
-        assert!(signalled, "already swept when it does");
+        assert!(!settled, "the grace's result comes back");
+        assert!(signalled, "swept before the caller can abort on it");
     }
 
     /// The post-grace sweep must never touch a process that is not a

@@ -403,6 +403,8 @@ impl<'a> ChatSession<'a> {
             handoff: crate::handoff::Handoff::default(),
             #[cfg(test)]
             day_source: None,
+            #[cfg(test)]
+            budget: None,
         })
     }
 

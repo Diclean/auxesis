@@ -11,7 +11,9 @@
 
 mod approvals;
 mod budget;
-pub(crate) use budget::{admit, call_estimate, day_denied, request_model, usage_actual};
+pub(crate) use budget::{
+    admit, call_estimate, day_denied, request_model, usage_actual, usage_write,
+};
 pub use budget::{stop_settle_worker, watch_held_reservations, HeldReservation, SettleStore};
 mod context;
 mod privacy;
@@ -310,6 +312,10 @@ pub struct ChatSession<'a> {
     /// starts enforcing the new day immediately.
     #[cfg(test)]
     day_source: Option<Box<dyn Fn() -> Result<String, StoreError> + Send>>,
+    /// Test seam: a budget of the test's own, whose stop the process-wide one
+    /// must not take.
+    #[cfg(test)]
+    budget: Option<&'static budget::Budget>,
 }
 
 /// Reject agent names that could escape `<home>/agents/`.

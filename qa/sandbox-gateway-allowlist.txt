@@ -26,7 +26,7 @@ crates/aux-store/src/encryption.rs | fs::rename( | atomic replace of the migrate
 crates/aux-store/src/encryption.rs | fs::hard_link( | keeps the plaintext original alive as the migration backup, beside the store.db that Store::open_verified checks in production
 crates/aux-store/src/encryption.rs | fs::remove_dir( | best-effort removal of the empty legacy keys/ directory after the rekey, beside the store.db that Store::open_verified checks in production
 crates/aux-runtime/src/tools/read_file.rs | OpenOptions::new( | product file tool: reads an approval-scoped user path, not the home gateway
-crates/aux-runtime/src/contacts_import.rs | OpenOptions::new( | read-only O_NOFOLLOW|O_NONBLOCK open of the owner-chosen import file (not the home gateway), size-capped
+crates/aux-runtime/src/contacts_import.rs | OpenOptions::new( | read-only O_NOFOLLOW + O_NONBLOCK open of the owner-chosen import file (not the home gateway), size-capped
 crates/aux-runtime/src/tools/read_file.rs | tokio::fs:: | product file tool: reads an approval-scoped user path, not the home gateway
 crates/aux-runtime/src/tools/write_file.rs | OpenOptions::new( | product file tool: writes an approval-scoped user path, not the home gateway
 crates/aux-runtime/src/tools/write_file.rs | fs::create_dir_all( | product file tool: writes an approval-scoped user path, not the home gateway
@@ -60,7 +60,6 @@ crates/aux-engine/src/layout.rs | fs::rename( | WO-07 one-time move of the legac
 # reviewed debt for the SandboxHome gateway follow-up.
 crates/aux-runtime/src/extensions/catalog.rs | fs::create_dir_all( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
 crates/aux-runtime/src/extensions/catalog.rs | fs::write( | verified catalog cache under ~/.auxesis/catalog; pending the SandboxHome gateway follow-up
-crates/aux-runtime/src/extensions/install.rs | OpenOptions::new( | the one O_NOFOLLOW|O_DIRECTORY anchored directory open: the 0700 re-force and the extensions/ listing of load_installed go through its fd
 crates/aux-runtime/src/extensions/scenarios.rs | fs::create_dir_all( | test-only fixture catalog and installs live in TempDir homes
 crates/aux-runtime/src/extensions/scenarios.rs | fs::write( | test-only fixture catalog, scripts and .env canaries live in TempDir homes
 crates/aux-runtime/src/extensions/scenarios.rs | fs::remove_file( | test-only planted state row in a TempDir home

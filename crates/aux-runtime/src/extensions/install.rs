@@ -120,53 +120,11 @@ pub(crate) fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Open the directory `rel` below the verified home, one component at a time
-/// with `openat(O_NOFOLLOW | O_DIRECTORY)`: a symlink at ANY level is refused,
-/// never followed. The root fd is checked to be the verified home's inode.
-#[cfg(unix)]
-fn open_dir_anchored(
-    handle: &kernel_core::SandboxHome,
-    rel: &Path,
-) -> std::io::Result<std::fs::File> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let flags = libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
-    let mut dir = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags)
-        .open(handle.real_path()?)?;
-    handle.reverify()?;
-    let (opened, held) = (dir.metadata()?, std::fs::symlink_metadata(handle.path())?);
-    if (opened.dev(), opened.ino()) != (held.dev(), held.ino()) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "the home changed while it was being opened",
-        ));
-    }
-    for part in rel.components() {
-        let Component::Normal(part) = part else {
-            return Err(std::io::ErrorKind::InvalidInput.into());
-        };
-        let name = std::ffi::CString::new(part.as_bytes())
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-        // SAFETY: `dir` is an open directory fd owned by this frame and `name` a
-        // NUL-terminated CString that outlives the call; openat borrows both.
-        let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), libc::O_RDONLY | flags) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
-        dir = unsafe { std::fs::File::from_raw_fd(fd) };
-    }
-    Ok(dir)
-}
-
 /// Whether the directory `rel` exists below the verified home, every component
 /// a real directory. A symlink or file on the way is an error, never followed.
 fn anchored_dir_exists(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io::Result<bool> {
     #[cfg(unix)]
-    let opened = open_dir_anchored(handle, rel).map(drop);
+    let opened = handle.open_dir(rel).map(drop);
     #[cfg(not(unix))]
     let opened = std::fs::read_dir(handle.real_path()?.join(rel)).map(drop);
     match opened {
@@ -177,7 +135,7 @@ fn anchored_dir_exists(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io
 }
 
 /// The entry names of the directory `rel` below the verified home, listed from
-/// the fd `open_dir_anchored` opened, never from a path: a link on the way is
+/// the fd the kernel's `open_dir` opened, never from a path: a link on the way is
 /// an error, and `None` means the directory is absent.
 fn list_dir_anchored(
     handle: &kernel_core::SandboxHome,
@@ -187,7 +145,7 @@ fn list_dir_anchored(
     let names = {
         use std::os::fd::AsRawFd;
         use std::os::unix::ffi::OsStrExt;
-        let dir = match open_dir_anchored(handle, rel) {
+        let dir = match handle.open_dir(rel) {
             Ok(dir) => dir,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
@@ -261,7 +219,7 @@ pub(crate) fn force_private_dir(
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
-        let file = open_dir_anchored(handle, rel)?;
+        let file = handle.open_dir(rel)?;
         if unsafe { libc::fchmod(file.as_raw_fd(), 0o700) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -475,7 +433,7 @@ pub async fn install(
             )));
         }
         Ok(_) => {
-            make_writable_tree(&dir)?;
+            make_writable_tree(&handle, &rel_dir)?;
             handle.remove_dir_all(&rel_dir)?;
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -520,7 +478,7 @@ pub async fn install(
         Ok(())
     })();
     if let Err(err) = setup {
-        return Err(discard_partial_install(&handle, &rel_dir, &dir, err));
+        return Err(discard_partial_install(&handle, &rel_dir, err));
     }
 
     let installed = InstalledExtension {
@@ -538,7 +496,6 @@ pub async fn install(
             return Err(discard_partial_install(
                 &handle,
                 &rel_dir,
-                &installed.dir,
                 InstallError::Unpack(err.to_string()),
             ));
         }
@@ -550,10 +507,9 @@ pub async fn install(
 fn discard_partial_install(
     handle: &kernel_core::SandboxHome,
     rel_dir: &Path,
-    dir: &Path,
     err: InstallError,
 ) -> InstallError {
-    let cleanup = make_writable_tree(dir).and_then(|()| handle.remove_dir_all(rel_dir));
+    let cleanup = make_writable_tree(handle, rel_dir).and_then(|()| handle.remove_dir_all(rel_dir));
     match cleanup {
         Ok(()) => err,
         Err(cleanup_err) => InstallError::Unpack(format!(
@@ -699,34 +655,55 @@ fn ensure_within(root: &Path, path: &Path) -> Result<(), InstallError> {
     }
 }
 
-/// Add the owner read/write/execute bits to a tree, never following a symlink.
+/// Add `u+rwx` to the directory `rel` and every directory below it.
 ///
-/// A `000`/`555` install tree otherwise wedges `remove_dir_all`. Directories
-/// get `u+rwx`, files `u+rw`; a symlink is left untouched (its target is never
-/// chmodded).
-fn make_writable_tree(path: &Path) -> std::io::Result<()> {
-    let meta = std::fs::symlink_metadata(path)?;
-    if meta.file_type().is_symlink() {
-        return Ok(());
-    }
+/// A `555` install tree otherwise wedges `remove_dir_all`. Each directory is
+/// opened through the verified home (a link anywhere is refused, never
+/// followed) and chmodded from its parent's fd with `AT_SYMLINK_NOFOLLOW`.
+/// Files need no bits: unlinking them takes the parent's.
+fn make_writable_tree(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = meta.permissions();
-        let mode = permissions.mode();
-        permissions.set_mode(if meta.is_dir() {
-            mode | 0o700
-        } else {
-            mode | 0o600
-        });
-        std::fs::set_permissions(path, permissions)?;
-    }
-    if meta.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            make_writable_tree(&entry?.path())?;
+        let parent = rel.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+        let name = rel.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
+        make_writable_at(&handle.open_dir(parent)?, name)?;
+        let dir = handle.open_dir(rel)?;
+        for child in list_dir_anchored(handle, rel)?.unwrap_or_default() {
+            if make_writable_at(&dir, &child)? {
+                make_writable_tree(handle, &rel.join(&child))?;
+            }
         }
     }
+    #[cfg(not(unix))]
+    let _ = (handle, rel);
     Ok(())
+}
+
+/// Add `u+rwx` to `name` in `dir` when it is a directory, never following a
+/// link. Returns whether it is one.
+#[cfg(unix)]
+fn make_writable_at(dir: &std::fs::File, name: &std::ffi::OsStr) -> std::io::Result<bool> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // SAFETY: an all-zero `stat` is a valid out-buffer for fstatat to fill.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    let flags = libc::AT_SYMLINK_NOFOLLOW;
+    // SAFETY: `dir` is an open directory fd and `name` a NUL-terminated CString,
+    // both alive for the call; `stat` is a valid out-pointer.
+    if unsafe { libc::fstatat(dir.as_raw_fd(), name.as_ptr(), &mut stat, flags) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Ok(false);
+    }
+    let mode = (stat.st_mode & 0o7777) | 0o700;
+    // SAFETY: as above; a link swapped in since is chmodded itself or refused.
+    if unsafe { libc::fchmodat(dir.as_raw_fd(), name.as_ptr(), mode, flags) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(true)
 }
 
 /// Strip one leading directory and refuse any traversal component.
@@ -750,12 +727,42 @@ fn safe_relative(path: &Path) -> Result<PathBuf, InstallError> {
 }
 
 /// Load one installed extension by name, preferring the highest version.
+/// A refusal reads as `None` here; [`try_load_installed`] tells them apart.
 pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
+    try_load_installed(home, name).ok().flatten()
+}
+
+/// The names of every installed extension, listed through the verified home:
+/// a link in place of `extensions/` is refused, never followed.
+pub fn installed_names(home: &Path) -> std::io::Result<Vec<String>> {
+    let handle = match kernel_core::SandboxHome::open_existing(home) {
+        Ok(handle) => handle,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let names = list_dir_anchored(&handle, Path::new("extensions"))?.unwrap_or_default();
+    let mut found: Vec<String> = (names.iter())
+        .filter_map(|name| Some(name.to_str()?.rsplit_once('@')?.0.to_owned()))
+        .collect();
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// `load_installed`, where `Ok(None)` is "not installed" and a link, an
+/// unreadable listing or an unreadable or malformed entry is an error.
+pub fn try_load_installed(home: &Path, name: &str) -> std::io::Result<Option<InstalledExtension>> {
     let root = extensions_dir(home);
-    let handle = kernel_core::SandboxHome::open_existing(home).ok()?;
+    let handle = match kernel_core::SandboxHome::open_existing(home) {
+        Ok(handle) => handle,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
     let mut best: Option<InstalledExtension> = None;
-    // Listed through the verified home: a link in place of `extensions/` lists nothing.
-    let names = list_dir_anchored(&handle, Path::new("extensions")).ok()??;
+    // Listed through the verified home: a link in place of `extensions/` is refused.
+    let Some(names) = list_dir_anchored(&handle, Path::new("extensions"))? else {
+        return Ok(None);
+    };
     for name_on_disk in names {
         let file_name = name_on_disk.to_string_lossy().to_string();
         let dir = root.join(&file_name);
@@ -766,13 +773,19 @@ pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
             continue;
         }
         let rel = Path::new("extensions").join(&file_name).join("entry.toml");
-        let super::ReadAt::Text(text) = super::read_text_at_checked(&handle, &rel, MAX_ENTRY_BYTES)
-        else {
-            continue;
+        let refused = || {
+            let at = rel.display();
+            let msg = format!(
+                "refus de sandbox : {at} est illisible. / sandbox refused: {at} cannot be read."
+            );
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg)
         };
-        let Ok(parsed) = toml::from_str::<Entry>(&text) else {
-            continue;
+        let text = match super::read_text_at_checked(&handle, &rel, MAX_ENTRY_BYTES) {
+            super::ReadAt::Absent => continue,
+            super::ReadAt::Unreadable => return Err(refused()),
+            super::ReadAt::Text(text) => text,
         };
+        let parsed = toml::from_str::<Entry>(&text).map_err(|_| refused())?;
         let candidate = InstalledExtension {
             name: name.to_owned(),
             version: version.to_owned(),
@@ -790,13 +803,13 @@ pub fn load_installed(home: &Path, name: &str) -> Option<InstalledExtension> {
             best = Some(candidate);
         }
     }
-    best
+    Ok(best)
 }
 
 /// Re-hash the installed artefact and confirm it still matches the entry.
 pub fn verify_installed(home: &Path, name: &str) -> Result<InstalledExtension, InstallError> {
-    let installed =
-        load_installed(home, name).ok_or_else(|| InstallError::NotInstalled(name.to_owned()))?;
+    let installed = try_load_installed(home, name)?
+        .ok_or_else(|| InstallError::NotInstalled(name.to_owned()))?;
     if installed.entry.source.kind == SourceType::Binary {
         let target = installed.dir.join(&installed.entry.run.command);
         let bytes = std::fs::read(&target)?;
@@ -832,10 +845,12 @@ fn remove_after_open(
     let state = super::mount::load_state(home, name);
     // The state is the record of this extension's secrets. Without it, the installed
     // entry names the same secrets, and it is read before the trees are deleted.
-    // Only this extension's own `EXT_<NAME>_...` names are ever deleted.
+    // Only this extension's own `EXT_<NAME>_...` names are ever deleted. An entry
+    // that cannot be read stops the removal before anything changes: deleting
+    // the tree would lose the only record of the secrets left in `.env`.
     let declared: Vec<String> = match state.as_ref() {
         Some(state) => state.secrets.clone(),
-        None => load_installed(home, name)
+        None => try_load_installed(home, name)?
             .map(|installed| installed.entry.secret_names())
             .unwrap_or_default(),
     };
@@ -891,45 +906,37 @@ fn remove_trees(
     name: &str,
     record: &mut impl FnMut(InstallError),
 ) -> usize {
+    remove_trees_after_check(handle, name, record, || {})
+}
+
+fn remove_trees_after_check(
+    handle: &kernel_core::SandboxHome,
+    name: &str,
+    record: &mut impl FnMut(InstallError),
+    after_check: impl FnOnce(),
+) -> usize {
     let extensions = Path::new("extensions");
-    // A root that exists but cannot be read is an error, never "nothing to remove".
-    let entries = anchored_dir_exists(handle, extensions).and_then(|exists| {
-        if !exists {
-            return Ok(None);
+    // Listed from the fd the kernel opened, never by path. A root that exists
+    // but cannot be read is an error, never "nothing to remove".
+    let names = match list_dir_anchored(handle, extensions) {
+        Ok(names) => names.unwrap_or_default(),
+        Err(err) => {
+            record(err.into());
+            return 0;
         }
-        std::fs::read_dir(handle.real_path()?.join(extensions)).map(Some)
-    });
-    let entries = entries.unwrap_or_else(|err| {
-        record(err.into());
-        None
-    });
+    };
+    after_check();
     let mut removed = 0;
-    for entry in entries.into_iter().flatten().flatten() {
-        let file_name = entry.file_name();
+    for file_name in names {
         if !file_name.to_string_lossy().starts_with(&format!("{name}@")) {
             continue;
         }
+        // Every component is opened `O_NOFOLLOW` from the home fd: a link or a
+        // file, at the tree or at a swapped `extensions/`, is refused.
         let rel = extensions.join(&file_name);
-        let result = (|| -> Result<(), InstallError> {
-            // `file_type` is the listing's own entry type: a link is never followed.
-            let kind = entry.file_type()?;
-            if !kind.is_dir() {
-                let (fr, en) = if kind.is_symlink() {
-                    ("est un lien symbolique", "is a symlink")
-                } else {
-                    ("n'est pas un dossier", "is not a directory")
-                };
-                let at = rel.display();
-                let msg = format!("refus de sandbox : {at} {fr}. / sandbox refused: {at} {en}.");
-                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg).into());
-            }
-            make_writable_tree(&handle.real_path()?.join(&rel))?;
-            handle.remove_dir_all(&rel)?;
-            Ok(())
-        })();
-        match result {
+        match make_writable_tree(handle, &rel).and_then(|()| handle.remove_dir_all(&rel)) {
             Ok(()) => removed += 1,
-            Err(err) => record(err),
+            Err(err) => record(err.into()),
         }
     }
     removed
@@ -1581,9 +1588,8 @@ mod tests {
         let state = home.path().join("extensions/state");
         std::os::unix::fs::symlink(outside.path(), &state).unwrap();
         let err = remove_state_row(&handle, "demo").unwrap_err();
-        // O_NOFOLLOW | O_DIRECTORY on a link: ELOOP on Linux, ENOTDIR on macOS.
-        let code = err.raw_os_error();
-        assert!(matches!(code, Some(libc::ELOOP | libc::ENOTDIR)), "{err}");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+        assert!(err.to_string().contains("refus de sandbox"), "{err}");
         assert!(outside.path().join("demo.json").is_file());
         assert!(std::fs::symlink_metadata(&state).is_ok());
     }
@@ -1602,7 +1608,7 @@ mod tests {
         let removed = remove_trees(&handle, "demo", &mut |err| errors.push(err.to_string()));
         assert_eq!(removed, 0);
         assert!(
-            errors.len() == 1 && errors[0].contains("is a symlink"),
+            errors.len() == 1 && errors[0].contains("refus de sandbox"),
             "{errors:?}"
         );
         assert!(outside.path().join("kept").is_file());
@@ -1645,14 +1651,11 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("demo.json"), b"{}").unwrap();
         let err = remove_through_a_swapped_link("extensions/state", outside.path());
-        // O_NOFOLLOW | O_DIRECTORY on a link: ELOOP on Linux, ENOTDIR on macOS.
         let InstallError::Io(io) = &err else {
             panic!("{err:?}")
         };
-        assert!(
-            matches!(io.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)),
-            "{err}"
-        );
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+        assert!(err.to_string().contains("extensions/state"), "{err}");
         assert!(outside.path().join("demo.json").is_file());
     }
 
@@ -1666,7 +1669,7 @@ mod tests {
             panic!("{err:?}")
         };
         assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
-        assert!(err.to_string().contains("is a symlink"), "{err}");
+        assert!(err.to_string().contains("demo@1.0.0"), "{err}");
         assert!(outside.path().join("kept").is_file());
     }
 
@@ -1684,14 +1687,15 @@ mod tests {
         crate::extensions::mount::store_state(home.path(), &demo_state()).unwrap();
         let row = home.path().join("extensions/state/demo.json");
         set_mode(&tree, 0o000).unwrap();
-        let result = remove(home.path(), "demo");
-        let unreadable = std::fs::read_dir(&tree).is_err();
-        let mode = std::fs::metadata(&tree).map(|meta| meta.permissions().mode() & 0o777);
-        set_mode(&tree, 0o700).unwrap();
-        if !unreadable {
+        // Decided before remove() runs: root reads a 000 tree.
+        if std::fs::read_dir(&tree).is_ok() {
+            set_mode(&tree, 0o700).unwrap();
             eprintln!("skipped: a 000 tree is readable here (root)");
             return;
         }
+        let result = remove(home.path(), "demo");
+        let mode = std::fs::metadata(&tree).map(|meta| meta.permissions().mode() & 0o777);
+        set_mode(&tree, 0o700).unwrap();
         let err = result.unwrap_err();
         assert!(err.to_string().contains("refus de sandbox"), "{err}");
         assert!(err.to_string().contains("demo@1.0.0"), "{err}");
@@ -1721,10 +1725,7 @@ mod tests {
         std::fs::remove_dir_all(home.path().join("extensions")).unwrap();
         std::os::unix::fs::symlink(outside.path(), home.path().join("extensions")).unwrap();
         let err = list_dir_anchored(&handle, root).unwrap_err();
-        assert!(
-            matches!(err.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)),
-            "{err}"
-        );
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
     }
 
     #[cfg(unix)]
@@ -2024,6 +2025,85 @@ mod tests {
         assert!(
             !extensions_dir(home.path()).join("demo@1.0.0").exists(),
             "a failed pin must leave nothing behind"
+        );
+    }
+
+    // The root is swapped for a link to an outside canary once remove_trees has
+    // checked it: the listing and every chmod stay on the checked directory.
+    #[cfg(unix)]
+    #[test]
+    fn an_extensions_root_swapped_after_the_check_is_refused_and_the_canary_survives() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let canary = outside.path().join("demo@1.0.0");
+        std::fs::create_dir(&canary).unwrap();
+        std::fs::write(canary.join("kept"), b"x").unwrap();
+        set_mode(&canary, 0o500).unwrap();
+        std::fs::create_dir_all(home.path().join("extensions/demo@1.0.0")).unwrap();
+        let handle = kernel_core::SandboxHome::open(home.path()).unwrap();
+        let root = home.path().join("extensions");
+        let mut errors = Vec::new();
+        let removed = remove_trees_after_check(
+            &handle,
+            "demo",
+            &mut |err| errors.push(err.to_string()),
+            || {
+                std::fs::rename(&root, home.path().join("moved")).unwrap();
+                std::os::unix::fs::symlink(outside.path(), &root).unwrap();
+            },
+        );
+        let mode = std::fs::metadata(&canary).unwrap().permissions().mode() & 0o777;
+        set_mode(&canary, 0o700).unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("refus de sandbox"), "{errors:?}");
+        assert!(canary.join("kept").is_file(), "the canary survives");
+        assert_eq!(mode, 0o500, "the canary's mode is kept");
+        assert!(home.path().join("moved/demo@1.0.0").is_dir());
+    }
+
+    // An entry that names the secrets but cannot be read is a refusal: verify
+    // does not call it "not installed", and remove (no state row) neither
+    // reports Ok nor deletes the tree while the EXT_* key stays in `.env`.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_entry_is_a_refusal_not_not_installed() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = extensions_dir(home.path()).join("demo@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entry = binary_entry("demo", b"x", "1.0.0");
+        entry.tools = vec![crate::extensions::catalog::EntryTool {
+            name: "ping".to_owned(),
+            description: String::new(),
+            network: Vec::new(),
+            secrets: vec!["EXT_DEMO__TOKEN".to_owned()],
+            auth: "none".to_owned(),
+            fs: Vec::new(),
+        }];
+        let toml_path = dir.join("entry.toml");
+        std::fs::write(&toml_path, toml::to_string(&entry).unwrap()).unwrap();
+        std::fs::write(home.path().join(".env"), "EXT_DEMO__TOKEN=keep\n").unwrap();
+        set_mode(&toml_path, 0o000).unwrap();
+        // Decided before anything runs: root reads a 000 file.
+        if std::fs::read(&toml_path).is_ok() {
+            set_mode(&toml_path, 0o600).unwrap();
+            eprintln!("skipped: a 000 entry is readable here (root)");
+            return;
+        }
+        let verified = verify_installed(home.path(), "demo");
+        let removed = remove(home.path(), "demo");
+        let _ = set_mode(&toml_path, 0o600);
+        assert!(
+            !matches!(verified, Ok(_) | Err(InstallError::NotInstalled(_))),
+            "{verified:?}"
+        );
+        assert!(removed.is_err(), "{removed:?}");
+        let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
+        assert!(env.contains("EXT_DEMO__TOKEN"), "{env}");
+        assert!(
+            dir.join("entry.toml").is_file(),
+            "the tree stays for a retry"
         );
     }
 }

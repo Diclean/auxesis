@@ -338,6 +338,22 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// `from` → `to` only: `false` when the row is gone or no longer in
+    /// `from` (another resume or a Stop landed first).
+    pub fn move_delegation_state(
+        &self,
+        id: &str,
+        from: DelegationState,
+        to: DelegationState,
+    ) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE delegations SET state = ?3, updated_at = datetime('now')
+             WHERE id = ?1 AND state = ?2",
+            rusqlite::params![id, from.as_str(), to.as_str()],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// `queued` → `working` only: `false` when the row is gone or no longer
     /// queued (a Stop landed first), so the run must not start.
     pub fn start_delegation(&self, id: &str) -> Result<bool, StoreError> {
@@ -490,6 +506,21 @@ mod tests {
         assert_eq!(delegation.result, None);
         assert_eq!(delegation.brain.as_deref(), Some("deepseek/x"));
         assert_eq!(delegation.caller_mode, PrivacyMode::Open);
+    }
+
+    #[test]
+    fn a_state_move_applies_only_from_its_state() {
+        let store = store();
+        store
+            .create_delegation("dl-1", "aux", "mail", "t", None, PrivacyMode::Open)
+            .unwrap();
+        let (stopped, queued) = (DelegationState::Stopped, DelegationState::Queued);
+        store.set_delegation_state("dl-1", stopped).unwrap();
+        let requeue = |id| store.move_delegation_state(id, stopped, queued).unwrap();
+        assert!(requeue("dl-1"));
+        assert!(!requeue("dl-1"), "only from stopped");
+        assert!(!requeue("dl-x"));
+        assert_eq!(store.delegation("dl-1").unwrap().unwrap().state, queued);
     }
 
     /// A v24 row has no stored mode: after the upgrade it reads as Private.

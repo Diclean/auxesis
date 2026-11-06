@@ -381,7 +381,13 @@ pub(crate) fn recover_interrupted(home: &std::path::Path) -> anyhow::Result<usiz
         .collect();
     let mut recovered = 0;
     for delegation in open {
-        let state = unfinished_state(Some(&delegation));
+        // A queued row never started since it was queued (a resume refused
+        // by the stop, or a start that failed): stopped, so it stays resumable.
+        let state = if delegation.state == DelegationState::Queued {
+            DelegationState::Stopped
+        } else {
+            unfinished_state(Some(&delegation))
+        };
         if store.set_delegation_state(&delegation.id, state)? {
             recovered += 1;
         }
@@ -781,6 +787,13 @@ impl Tool for DelegateTool {
                 if let Err(err) = inherit_taint(&self.home, &store, &ctx.agent, &args.agent, &id) {
                     return Ok(Err(err));
                 }
+            } else {
+                // A clean hand-off records its marker too: a resume reads a
+                // missing marker as unknown and re-taints.
+                store.mark_workspace_tainted(
+                    &handoff_taint_key(&id),
+                    &format!("{CLEAN_HANDOFF}{}", ctx.agent),
+                )?;
             }
             let delegation = store.create_delegation(
                 &id,
@@ -820,10 +833,35 @@ impl Tool for DelegateTool {
         }
         // Only a row still queued starts: a Stop that landed first keeps it
         // stopped and the agent never runs.
-        let started_row = gated_delegation_write(&id, || {
+        let started_row = match aux_engine::gated_store_write(|| {
             kernel_core::lock_recover(&store).start_delegation(&id)
-        })
-        .unwrap_or(false);
+        }) {
+            Ok(started) => started,
+            Err(err) if aux_engine::is_stop_refusal(&err) => {
+                tracing::warn!(delegation_id = %id, "delegation not started: the daemon is stopping");
+                false
+            }
+            // A failed start is an error, not a Stop: the row, which attempted
+            // nothing, goes back to stopped (resumable) when it still can.
+            Err(err) => {
+                let _ = gated_delegation_write(&id, || {
+                    kernel_core::lock_recover(&store).move_delegation_state(
+                        &id,
+                        DelegationState::Queued,
+                        DelegationState::Stopped,
+                    )
+                });
+                if let Some(events) = &self.events {
+                    let _ = crate::api::wire::send_bounded(
+                        events,
+                        &delegation_stopped_frame(&id, &args.agent, "could not start"),
+                    );
+                }
+                return Err(ToolError::Io(std::io::Error::other(format!(
+                    "the task could not start: {err}"
+                ))));
+            }
+        };
         if !started_row {
             if let Some(events) = &self.events {
                 let _ = crate::api::wire::send_bounded(
@@ -1066,25 +1104,44 @@ fn inherit_taint(
         .map_err(|err| err.to_string())
 }
 
-/// The sticky mark of a tainted caller's hand-off, keyed by the delegation:
-/// no workspace path, so no workspace trust clears it.
+/// The marker of a clean caller's hand-off starts with this; any other
+/// marker is a tainted caller's.
+const CLEAN_HANDOFF: &str = "clean hand-off from ";
+
+/// Every hand-off's marker, keyed by the delegation: no workspace path, so no
+/// workspace trust clears it. Its reason says whether the caller was clean
+/// ([`CLEAN_HANDOFF`]) or tainted. Bound: one row per delegation (plus one per
+/// hand-off a crash or the stop cut before its row); delegation rows are
+/// never deleted, so a marker lives as long as its row. A prune of
+/// delegations must delete `delegation:<id>` here too.
 fn handoff_taint_key(delegation_id: &str) -> String {
     format!("delegation:{delegation_id}")
 }
 
 /// Before a resumed run: a hand-off from a tainted caller marks the agent's
-/// workspace again (the owner may have trusted it since), failing closed.
+/// workspace again (the owner may have trusted it since), failing closed. No
+/// marker is unknown, never clean (a row from before markers, or a marker
+/// cleared by hand): it re-taints too, an over-taint for a row whose caller
+/// was clean.
 fn rearm_handoff_taint(
     home: &std::path::Path,
     db_path: &std::path::Path,
     delegation: &Delegation,
 ) -> Result<(), String> {
     let store = Store::open(db_path).map_err(|err| err.to_string())?;
-    let tainted = store
+    let marker = store
         .workspace_taint(&handoff_taint_key(&delegation.id))
-        .map_err(|err| err.to_string())?
-        .is_some();
-    if tainted {
+        .map_err(|err| err.to_string())?;
+    let clean = marker
+        .as_deref()
+        .is_some_and(|reason| reason.starts_with(CLEAN_HANDOFF));
+    if !clean {
+        if marker.is_none() {
+            tracing::warn!(
+                delegation_id = %delegation.id,
+                "resumed delegation has no hand-off marker: running it tainted"
+            );
+        }
         inherit_taint(
             home,
             &store,
@@ -1285,16 +1342,28 @@ pub async fn resume(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
     }
     let db_path = state.db_path.clone();
     let delegation_id = delegation.id.clone();
-    let reset = tokio::task::spawn_blocking(move || -> Result<(), String> {
+    // Only from stopped: of two concurrent resumes one wins, the other is a
+    // conflict, so the task never runs twice.
+    let reset = tokio::task::spawn_blocking(move || -> Result<bool, String> {
         gated_open(&db_path, |store| {
-            store
-                .set_delegation_state(&delegation_id, DelegationState::Queued)
-                .map(drop)
+            store.move_delegation_state(
+                &delegation_id,
+                DelegationState::Stopped,
+                DelegationState::Queued,
+            )
         })
     })
     .await;
     match reset {
-        Ok(Ok(())) => {}
+        Ok(Ok(true)) => {}
+        Ok(Ok(false)) => {
+            return error::error_response(
+                axum::http::StatusCode::CONFLICT,
+                "delegation_not_stopped",
+                "only a stopped delegation can resume",
+                None,
+            )
+        }
         Ok(Err(detail)) => return internal("resuming a delegation", &detail),
         Err(err) => return internal("joining the delegation writer", &err.to_string()),
     }
@@ -1368,11 +1437,17 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
         {
             Ok(Ok(run)) => run,
             Ok(Err(detail)) => {
-                // Fails closed: the agent never runs, and the row is no
-                // longer queued (a resume would try the same again).
+                // Fails closed: the agent never runs, and the row, which
+                // attempted nothing since the resume, is stopped again
+                // (resumable). After the stop this write is refused too: the
+                // row stays queued and the next start retires it to stopped.
                 tracing::warn!(error = %detail, "could not resume a delegation");
                 let _ = gated_open(&db_path, |store| {
-                    store.set_delegation_state(&id, DelegationState::Failed)
+                    store.move_delegation_state(
+                        &id,
+                        DelegationState::Queued,
+                        DelegationState::Stopped,
+                    )
                 });
                 return;
             }
@@ -1383,8 +1458,15 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
         };
         // The row is live again before the executor takes its first step;
         // a Stop that landed since the resume keeps it stopped.
-        if !gated_open(&db_path, |store| store.start_delegation(&id)).unwrap_or(false) {
-            return;
+        match gated_open(&db_path, |store| store.start_delegation(&id)) {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(detail) => {
+                // Not a Stop: logged; the queued row is retired to stopped at
+                // the next start.
+                tracing::warn!(error = %detail, "could not start a resumed delegation");
+                return;
+            }
         }
         match state.delegations.execute(run).await {
             Ok(result) => {

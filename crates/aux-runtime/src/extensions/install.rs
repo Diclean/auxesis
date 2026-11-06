@@ -1442,8 +1442,8 @@ fn remove_after_open(
     {
         scan_installed(home, name)?;
     }
-    // One rule: the trees go, then the mounts and secrets, and the state row
-    // last, so a failure anywhere leaves the row (and its secret names) for a
+    // One rule: the last approval is kept first, then the trees go, then the
+    // mounts and secrets, and the state row last, so a failure anywhere leaves the row (and its secret names) for a
     // retry. A refusal stops there and returns the error.
     // One handle for the whole removal: the home is verified once, before any
     // change, and the state row is unlinked through that same handle.
@@ -1451,6 +1451,9 @@ fn remove_after_open(
     let mut removed = 0;
     if let Some(handle) = home_handle.as_ref() {
         after_open();
+        // EXT-ANCHOR-11: the last approval is written first, before anything is
+        // torn down, so a failed write leaves the install whole for a retry.
+        keep_last_row(handle, name, forget)?;
         let mut first_error = None;
         removed = remove_trees(handle, name, &mut |err| {
             first_error.get_or_insert(err);
@@ -1468,10 +1471,35 @@ fn remove_after_open(
     // half-done removal all leave nothing in `.env`. The row goes last.
     remove_secret_namespace(home, &super::catalog::secret_prefix(name))?;
     if let Some(handle) = home_handle.as_ref() {
-        keep_last_row(handle, name, forget)?;
         remove_state_row(handle, name)?;
     }
     Ok(removed)
+}
+
+/// What a plain `remove` kept of the approval, for the owner (EXT-ANCHOR-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeptApproval {
+    /// No last approval: the next install is a first one.
+    None,
+    /// `state/<name>.last.json` holds the owner's last yes.
+    Kept,
+    /// The last row cannot be read: a later install is refused until `--forget`.
+    Unreadable,
+}
+
+/// The last approval `remove` keeps for `name`.
+pub fn kept_approval(home: &Path, name: &str) -> KeptApproval {
+    match super::mount::read_last(home, name) {
+        Ok(None) => KeptApproval::None,
+        Ok(Some(_)) => KeptApproval::Kept,
+        Err(_) => KeptApproval::Unreadable,
+    }
+}
+
+/// Whether the approval row of `name` holds text that is not a valid row:
+/// `remove` cannot keep it as the last approval.
+pub fn approval_row_is_corrupt(home: &Path, name: &str) -> bool {
+    super::mount::state_row_is_corrupt(home, name)
 }
 
 /// Delete every `extensions/<name>@*` tree through the verified home, after it

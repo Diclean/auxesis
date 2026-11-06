@@ -8,7 +8,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
-use aux_runtime::extensions::{self, Catalog, InstallOptions, SessionOptions};
+use aux_runtime::extensions::install::KeptApproval;
+use aux_runtime::extensions::{self, Catalog, Entry, InstallOptions, SessionOptions};
 use clap::{Args, Subcommand};
 use kernel_core::Lang;
 
@@ -51,8 +52,9 @@ enum ExtAction {
         /// With `--accept`: re-trust these changed fields, comma separated
         /// (e.g. `run.args,network`). A plain `--accept` refuses any change to
         /// `source.type`, `kind`, `sensitivity` or `[run]`, a new host
-        /// (`network`), a new secret name (`secrets`) or another `[oauth]`
-        /// table (`oauth`), and this list must name exactly what changed.
+        /// (`network`), a new secret name (`secrets`), another `[oauth]`
+        /// table (`oauth`) or a tool added, removed or changed (`tools`), and
+        /// this list must name exactly what changed.
         #[arg(
             long,
             alias = "accept-launch-change",
@@ -238,8 +240,7 @@ fn install(home: &Path, name: &str) -> ExitCode {
             let report = install_report(
                 &installed.name,
                 &installed.version,
-                &extensions::mount::network_pins(&installed.entry),
-                &installed.entry.secret_names(),
+                &installed.entry,
                 approval.err().map(|err| err.to_string()),
             );
             let _ = write!(std::io::stdout(), "{report}");
@@ -259,25 +260,45 @@ fn install(home: &Path, name: &str) -> ExitCode {
 
 /// What `aux ext install` prints: the build, every host and secret name it
 /// declares (EXT-ANCHOR-10), and, for an upgrade or a reinstall over a kept
-/// approval (EXT-ANCHOR-9 r2), that it was not started and why.
-fn install_report(
-    name: &str,
-    version: &str,
-    hosts: &[String],
-    secrets: &[String],
-    refused: Option<String>,
-) -> String {
+/// approval (EXT-ANCHOR-9 r2), that it was not started and why. EXT-ANCHOR-11:
+/// the hosts as declared too, each one dropped (a wildcard or an invalid
+/// `host:port`, never reachable) flagged, and the `[oauth]` client secret.
+fn install_report(name: &str, version: &str, entry: &Entry, refused: Option<String>) -> String {
     let list = |values: &[String]| match values.is_empty() {
         true => "none".to_owned(),
         false => json(values),
     };
+    let mut declared: Vec<String> = Vec::new();
+    for host in entry.tools.iter().flat_map(|tool| &tool.network) {
+        if !declared.contains(host) {
+            declared.push(host.clone());
+        }
+    }
+    let dropped: Vec<String> = (declared.iter())
+        .filter(|host| extensions::catalog::parse_host_port(host).is_none())
+        .cloned()
+        .collect();
+    let mut secrets = entry.secret_names();
+    let oauth = entry.oauth.as_ref();
+    if let Some(secret) = oauth.and_then(|oauth| oauth.client_secret_env.as_ref()) {
+        if !secret.is_empty() && !secrets.contains(secret) {
+            secrets.push(secret.clone());
+        }
+    }
     let mut out = format!(
-        "installed {}@{}\n  hosts: {}\n  secrets: {}\n",
+        "installed {}@{}\n  hosts: {}\n  declared hosts: {}\n  secrets: {}\n",
         extensions::escape_text(name),
         extensions::escape_text(version),
-        list(hosts),
-        list(secrets)
+        list(&extensions::mount::network_pins(entry)),
+        list(&declared),
+        list(&secrets)
     );
+    if !dropped.is_empty() {
+        out.push_str(&format!(
+            "warning: dropped hosts (wildcard or invalid, never reachable): {}\n",
+            json(&dropped)
+        ));
+    }
     if let Some(err) = refused {
         out.push_str(&format!(
             "not started: it needs verify --accept before it runs ({})\n",
@@ -507,6 +528,8 @@ fn remove(home: &Path, name: &str, forget: bool) -> ExitCode {
     if let Some(code) = reject_invalid_name(name) {
         return code;
     }
+    // Read before the row goes: a corrupt row is never kept as `.last`.
+    let corrupt_row = extensions::install::approval_row_is_corrupt(home, name);
     let removed = match forget {
         true => extensions::install::remove_and_forget(home, name),
         false => extensions::remove(home, name),
@@ -519,6 +542,14 @@ fn remove(home: &Path, name: &str, forget: bool) -> ExitCode {
                 &serde_json::json!({"name": name, "removed": removed, "forget": forget}),
             );
             let _ = writeln!(std::io::stdout(), "removed {name} ({removed} install(s))");
+            if !forget {
+                let kept = extensions::install::kept_approval(home, name);
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    remove_notes(name, corrupt_row, kept)
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -526,6 +557,27 @@ fn remove(home: &Path, name: &str, forget: bool) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// What a plain `remove` says about the approval it keeps (EXT-ANCHOR-11):
+/// kept, a corrupt row it could not keep, or an unreadable `.last`.
+fn remove_notes(name: &str, corrupt_row: bool, kept: KeptApproval) -> String {
+    let forget = format!("`aux ext remove {name} --forget` drops it");
+    let mut out = String::new();
+    if corrupt_row {
+        out.push_str(&format!(
+            "warning: the approval row of {name} is corrupt and was not kept as {name}.last\n"
+        ));
+    }
+    match kept {
+        KeptApproval::None => {}
+        KeptApproval::Kept => out.push_str(&format!("approval kept; {forget}\n")),
+        KeptApproval::Unreadable => out.push_str(&format!(
+            "warning: the kept approval {name}.last is unreadable and refuses any \
+             reinstall; {forget}\n"
+        )),
+    }
+    out
 }
 
 #[cfg(test)]
@@ -661,23 +713,52 @@ mod tests {
         );
     }
 
+    fn report_entry(network: &str, oauth: &str) -> Entry {
+        let text = format!(
+            "name = \"demo\"\nkind = \"mcp\"\nversion = \"1.0.0\"\nlicence = \"MIT\"\n\
+             reviewed = true\nsensitivity = \"public\"\nsummary_en = \"d\"\nsummary_fr = \"d\"\n\
+             [source]\ntype = \"binary\"\npackage = \"server\"\nsha256 = \"{}\"\n\
+             [run]\ntransport = \"stdio\"\ncommand = \"server\"\n\
+             [[tools]]\nname = \"ping\"\ndescription = \"Ping\"\nnetwork = [{network}]\n\
+             secrets = [\"EXT_DEMO__TOKEN\"]\nauth = \"none\"\nfs = []\n{oauth}",
+            "a".repeat(64)
+        );
+        toml::from_str(&text).unwrap()
+    }
+
     // EXT-ANCHOR-10: every install names its hosts and secret names; one that
     // waits for the owner says it was not started and names the command.
+    // EXT-ANCHOR-11: the declared hosts too, a dropped wildcard flagged, and
+    // the `[oauth]` client secret among the secret names.
     #[test]
     fn install_report_names_hosts_secrets_and_the_verify_command() {
-        let hosts = ["a.example:443".to_owned()];
-        let secrets = ["EXT_DEMO__TOKEN".to_owned()];
-        let fresh = install_report("demo", "1.0.0", &hosts, &secrets, None);
+        let fresh = install_report(
+            "demo",
+            "1.0.0",
+            &report_entry(r#""a.example:443""#, ""),
+            None,
+        );
         assert_eq!(
             fresh,
             "installed demo@1.0.0\n  hosts: [\"a.example:443\"]\n  \
-             secrets: [\"EXT_DEMO__TOKEN\"]\n"
+             declared hosts: [\"a.example:443\"]\n  secrets: [\"EXT_DEMO__TOKEN\"]\n"
         );
+        let oauth = "[oauth]\nauthorization_url = \"https://a.example/auth\"\n\
+                     token_url = \"https://a.example/token\"\nclient_id = \"c\"\n\
+                     client_secret_env = \"EXT_DEMO__CLIENT_SECRET\"\nscopes = []\n";
+        let entry = report_entry(r#""*.example:443", "b.example:443""#, oauth);
         let refused = "approval_required: extension `demo` changed since approval \
                        (new network hosts: \"b.example:443\"); run \
                        `aux ext verify demo --accept --accept-change network`";
-        let text = install_report("demo", "2.0.0", &[], &[], Some(refused.to_owned()));
-        assert!(text.contains("  hosts: none\n  secrets: none\n"), "{text}");
+        let text = install_report("demo", "2.0.0", &entry, Some(refused.to_owned()));
+        assert!(text.contains("  hosts: [\"b.example:443\"]\n"), "{text}");
+        let declared = "  declared hosts: [\"*.example:443\",\"b.example:443\"]\n";
+        assert!(text.contains(declared), "{text}");
+        let dropped = "warning: dropped hosts (wildcard or invalid, never reachable): \
+                       [\"*.example:443\"]\n";
+        assert!(text.contains(dropped), "{text}");
+        let secrets = "  secrets: [\"EXT_DEMO__TOKEN\",\"EXT_DEMO__CLIENT_SECRET\"]\n";
+        assert!(text.contains(secrets), "{text}");
         assert!(
             text.contains("not started: it needs verify --accept"),
             "{text}"
@@ -686,6 +767,23 @@ mod tests {
             text.contains("`aux ext verify demo --accept --accept-change network`)\n"),
             "{text}"
         );
+    }
+
+    // EXT-ANCHOR-11: a plain remove says what it kept, a corrupt row it could
+    // not keep, and an unreadable `.last`, each with `--forget`.
+    #[test]
+    fn remove_notes_name_the_kept_approval() {
+        let forget = "`aux ext remove demo --forget` drops it\n";
+        let kept = remove_notes("demo", false, KeptApproval::Kept);
+        assert_eq!(kept, format!("approval kept; {forget}"));
+        assert_eq!(remove_notes("demo", false, KeptApproval::None), "");
+        let corrupt = remove_notes("demo", true, KeptApproval::Unreadable);
+        assert!(
+            corrupt.contains("row of demo is corrupt and was not kept"),
+            "{corrupt}"
+        );
+        assert!(corrupt.contains("demo.last is unreadable"), "{corrupt}");
+        assert!(corrupt.ends_with(forget), "{corrupt}");
     }
 
     #[test]

@@ -321,6 +321,25 @@ async fn the_oauth_routes_require_the_local_access_key() {
     api.stop();
 }
 
+// EXT-ANCHOR-11: a frozen row is no approval: the start route refuses it
+// before any flow begins, and names the re-accept command.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oauth_start_refuses_a_frozen_extension() {
+    let server = MockServer::start().await;
+    let mut api = TestApi::start(&server);
+    let mut state = aux_runtime::extensions::mount::load_state(&api.home, EXTENSION).unwrap();
+    state.frozen = true;
+    store_state(&api.home, &state).unwrap();
+    let path = format!("/v1/extensions/{EXTENSION}/oauth/start");
+    let response = call(api.addr, "POST", &path, Some(&api.token), None).await;
+    assert_eq!(response.status, 409, "{}", response.body);
+    assert_eq!(response.json()["error"]["code"], "approval_required");
+    let message = response.json()["error"]["message"].to_string();
+    assert!(message.contains("frozen"), "{message}");
+    assert!(server.received_requests().await.unwrap().is_empty());
+    api.stop();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_extension_without_oauth_is_refused() {
     let server = MockServer::start().await;

@@ -90,7 +90,7 @@ fn approved_install(home: &FsPath, id: &str) -> Result<InstalledExtension, Box<R
         .then(|| load_installed(home, id))
         .flatten()
         .ok_or_else(|| Box::new(extension_not_found()))?;
-    require_approval(home, &installed).map_err(|err| {
+    let state = require_approval(home, &installed).map_err(|err| {
         // The exact re-trust command, changed field names included; a missing
         // or unreadable pin has none and keeps the generic hint.
         let message = match err {
@@ -106,6 +106,19 @@ fn approved_install(home: &FsPath, id: &str) -> Result<InstalledExtension, Box<R
             Some("reinstall or run aux ext verify --accept for this extension"),
         ))
     })?;
+    // EXT-ANCHOR-11: a frozen row (tool drift, or a pin saved before its start)
+    // is no yes either: nothing goes out until the owner re-accepts it.
+    if state.frozen {
+        let fix = aux_runtime::extensions::mount::accept_command(&state, &installed);
+        return Err(Box::new(error::error_response(
+            StatusCode::CONFLICT,
+            "approval_required",
+            format!(
+                "the extension is frozen and must be re-approved before using OAuth: run `{fix}`"
+            ),
+            Some("run aux ext verify --accept for this extension"),
+        )));
+    }
     Ok(installed)
 }
 

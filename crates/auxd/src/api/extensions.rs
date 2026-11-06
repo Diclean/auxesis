@@ -23,7 +23,7 @@ use axum::Json;
 use serde::Serialize;
 
 use aux_runtime::extensions::install::{load_installed, InstalledExtension};
-use aux_runtime::extensions::mount::require_approval;
+use aux_runtime::extensions::mount::{require_approval, MountError};
 use aux_runtime::extensions::oauth::{loopback_endpoints_allowed, oauth_endpoints, FileTokenStore};
 use aux_runtime::extensions::{TokenStore, OAUTH_TIMEOUT};
 
@@ -90,11 +90,19 @@ fn approved_install(home: &FsPath, id: &str) -> Result<InstalledExtension, Box<R
         .then(|| load_installed(home, id))
         .flatten()
         .ok_or_else(|| Box::new(extension_not_found()))?;
-    require_approval(home, &installed).map_err(|_| {
+    require_approval(home, &installed).map_err(|err| {
+        // The exact re-trust command, changed field names included; a missing
+        // or unreadable pin has none and keeps the generic hint.
+        let message = match err {
+            MountError::ApprovalRequired { fix, .. } => {
+                format!("the installed extension must be approved before using OAuth: run `{fix}`")
+            }
+            _ => "the installed extension must be approved before using OAuth".to_owned(),
+        };
         Box::new(error::error_response(
             StatusCode::CONFLICT,
             "approval_required",
-            "the installed extension must be approved before using OAuth",
+            message,
             Some("reinstall or run aux ext verify --accept for this extension"),
         ))
     })?;

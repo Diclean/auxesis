@@ -12,8 +12,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use aux_runtime::extensions::install::{install, load_installed, InstallOptions};
-use aux_runtime::extensions::mount::{network_pins, store_state, ExtensionState};
-use aux_runtime::extensions::session::accept_current;
+use aux_runtime::extensions::mount::{
+    artefact_pin, launch_pin, network_pins, store_state, ExtensionState,
+};
+use aux_runtime::extensions::session::{accept_current, accept_installed};
 use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions};
 use common::{http, HttpResponse};
@@ -67,6 +69,8 @@ impl TestApi {
                 network: network_pins(&installed.entry),
                 secrets: installed.entry.secret_names(),
                 oauth: installed.entry.oauth.clone(),
+                artefact: Some(artefact_pin(&installed.entry)),
+                launch: Some(launch_pin(&installed.entry)),
             },
         )
         .unwrap();
@@ -505,9 +509,9 @@ async fn oauth_refuses_unapproved_upgrades_before_reading_tokens_or_starting_a_f
         "unapproved flow wrote a token"
     );
 
-    // The real owner-accept path re-pins the installed v2 before OAuth proceeds.
+    // The real owner-accept path, naming v2, re-pins it before OAuth proceeds.
     store_state(&api.home, &v1_pin).unwrap();
-    accept_current(&api.home, NAME, true)
+    accept_installed(&api.home, NAME, true, Some("2.0.0"))
         .await
         .expect("accept v2");
     let response = call(api.addr, "POST", &start_path, Some(&api.token), None).await;

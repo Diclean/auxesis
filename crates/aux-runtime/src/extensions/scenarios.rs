@@ -350,6 +350,8 @@ async fn sensitive_extension_is_mountable_in_private_because_b14_is_covered() {
         network: Vec::new(),
         secrets: Vec::new(),
         oauth: None,
+        artefact: None,
+        launch: None,
     };
     state.tools.insert("ping".to_owned(), "00".to_owned());
     store_state(home.path(), &state).unwrap();
@@ -491,11 +493,27 @@ async fn accept_repins_the_current_identity() {
     assert!(verify_identity(home.path(), "demo", &session.tools).is_err());
     session.stop().await;
     assert!(is_frozen(home.path(), "demo"));
-    // `verify --accept` re-pins the live identity.
-    super::session::accept_current(home.path(), "demo", false)
+    // EXT-ANCHOR-7: the approval binds bytes, not the version name: new bytes
+    // at the approved 1.0.0 are refused by a plain `--accept` and by a mount.
+    let err = super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap_err()
+        .to_string();
+    let named = err.contains("--downgrade-to 1.0.0");
+    assert!(err.contains("sha256") && named, "{err}");
+    assert!(is_frozen(home.path(), "demo"), "nothing re-pinned");
+    let refused = super::mount::require_approval(home.path(), &installed).unwrap_err();
+    assert!(refused.to_string().contains("sha256"), "{refused}");
+    // `verify --accept` naming the build re-pins the live identity and bytes.
+    let accepted = super::session::accept_installed(home.path(), "demo", false, Some("1.0.0"))
         .await
         .unwrap();
+    let pin = hex(&Sha256::digest(v2.as_bytes()));
+    assert_eq!(accepted.state.artefact, Some(pin));
     assert!(!is_frozen(home.path(), "demo"));
+    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY);
+    let flagged = rows.iter().any(|row| row.contains(r#""downgrade":true"#));
+    assert!(flagged, "{rows:?}");
     let installed = load_installed(home.path(), "demo").unwrap();
     let session = session_for(home.path(), &installed, &SessionOptions::default())
         .await
@@ -535,6 +553,8 @@ async fn accept_refuses_a_tampered_binary_and_stays_frozen() {
         network: Vec::new(),
         secrets: Vec::new(),
         oauth: None,
+        artefact: None,
+        launch: None,
     };
     store_state(home.path(), &state).unwrap();
     // Tamper with the installed bytes: `accept` must re-hash before re-pinning.
@@ -568,7 +588,13 @@ async fn accept_refuses_a_silent_downgrade_past_a_corrupt_newer_entry() {
     std::fs::create_dir_all(&newer).unwrap();
     std::fs::write(newer.join("entry.toml"), b"not = [toml").unwrap();
     let accept = |to| super::session::accept_installed(home.path(), "demo", false, to);
-    let err = accept(None).await.unwrap_err().to_string();
+    let err = accept(None).await.unwrap_err();
+    // EXT-ANCHOR-7: the refusal carries the corrupt newer entries to print.
+    let super::session::SessionError::DowngradeRefused { corrupt_newer, .. } = &err else {
+        panic!("{err}");
+    };
+    assert_eq!(corrupt_newer, &["2.0.0"]);
+    let err = err.to_string();
     assert!(err.contains("2.0.0") && err.contains("1.0.0"), "{err}");
     assert!(accept(Some("3.0.0")).await.is_err(), "only the running one");
     let kept = load_state(home.path(), "demo").unwrap();
@@ -577,6 +603,33 @@ async fn accept_refuses_a_silent_downgrade_past_a_corrupt_newer_entry() {
     assert_eq!(accepted.state.version, "1.0.0");
     assert_eq!(accepted.corrupt_newer, ["2.0.0"]);
     assert!(!is_frozen(home.path(), "demo"));
+}
+
+// EXT-ANCHOR-7: the guard compares the exact version string, never an order
+// (`01.0.0` sorts equal to `1.0.0`); a row without an artefact pin is never
+// the approved build; a stray `--downgrade-to` on the approved build names
+// `--accept` alone.
+#[tokio::test]
+async fn accept_names_any_build_other_than_the_approved_one() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    let accept = |to| super::session::accept_installed(home.path(), "demo", false, to);
+    let err = accept(Some("1.0.0")).await.unwrap_err().to_string();
+    assert!(err.contains("`aux ext verify demo --accept`"), "{err}");
+    assert!(!err.contains("--downgrade-to"), "{err}");
+    let pinned = load_state(home.path(), "demo").unwrap();
+    for (version, artefact) in [("01.0.0", pinned.artefact.clone()), ("1.0.0", None)] {
+        let mut state = pinned.clone();
+        (state.version, state.artefact, state.frozen) = (version.to_owned(), artefact, true);
+        store_state(home.path(), &state).unwrap();
+        let err = accept(None).await.unwrap_err().to_string();
+        assert!(err.contains("--downgrade-to 1.0.0"), "{version}: {err}");
+        let kept = load_state(home.path(), "demo").unwrap();
+        assert!(kept.frozen && kept.version == version, "nothing re-pinned");
+    }
+    let accepted = accept(Some("1.0.0")).await.unwrap();
+    assert_eq!(accepted.state.artefact, pinned.artefact, "pin written back");
+    accept(None).await.expect("the approved build re-accepts");
 }
 
 #[tokio::test]
@@ -610,6 +663,8 @@ fn remove_never_touches_another_extensions_secret_keys() {
         // it because it belongs to `foo-bar`.
         secrets: vec!["EXT_FOO__TOKEN".to_owned(), "EXT_FOO_BAR__TOKEN".to_owned()],
         oauth: None,
+        artefact: None,
+        launch: None,
     };
     foo.tools.insert("ping".to_owned(), "00".to_owned());
     store_state(home.path(), &foo).unwrap();
@@ -622,6 +677,8 @@ fn remove_never_touches_another_extensions_secret_keys() {
         network: Vec::new(),
         secrets: vec!["EXT_FOO_BAR__TOKEN".to_owned()],
         oauth: None,
+        artefact: None,
+        launch: None,
     };
     store_state(home.path(), &bar).unwrap();
     std::fs::write(
@@ -838,10 +895,10 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
     assert_eq!(host.register_for_agent("alice", &mut registry), 0);
     host.stop().await;
 
-    // The owner's yes pins v2's version and hosts; the next start passes.
-    let state = super::session::accept_current(home.path(), "demo", false)
-        .await
-        .unwrap();
+    // The owner's yes, naming v2, pins its version and hosts; the next start passes.
+    let accept = |to| super::session::accept_installed(home.path(), "demo", false, to);
+    assert!(accept(None).await.is_err(), "another build needs its name");
+    let state = accept(Some("2.0.0")).await.unwrap().state;
     assert_eq!(state.version, "2.0.0");
     assert_eq!(state.network, vec!["a.example:443", "b.example:443"]);
     mount(home.path(), "demo", "bob").unwrap();
@@ -863,4 +920,69 @@ async fn an_upgrade_with_a_wider_network_needs_a_new_yes_before_it_runs() {
         "a new secret name must not start"
     );
     host.stop().await;
+}
+
+async fn assert_starts(home: &Path, want: bool) {
+    let host = ExtensionHost::start(home).await;
+    let names: Vec<String> = host.running().iter().map(|n| n.to_string()).collect();
+    host.stop().await;
+    assert_eq!(names.is_empty(), !want, "{names:?}");
+}
+
+// EXT-ANCHOR-7 r2: entry.toml sits in the install tree, so the approval binds
+// what runs and where, not only the sha256. A kind flip (which skips the
+// binary re-hash), a new command or args, or a lowered sensitivity is refused
+// at mount and at start; a row without the launch pin waits for `--accept`.
+#[tokio::test]
+async fn approval_binds_the_launch_fields_of_entry_toml() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    mount(home.path(), "demo", "alice").unwrap();
+    // (c) the unchanged entry starts.
+    assert_starts(home.path(), true).await;
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let approved = installed.entry.clone();
+    let rewrite = |entry: &Entry| {
+        std::fs::write(
+            installed.dir.join("entry.toml"),
+            toml::to_string(entry).unwrap(),
+        )
+        .unwrap()
+    };
+    let marker = home.path().join("ran");
+    // (a) Binary -> npm with another command and args, same sha256 and version.
+    let mut flipped = approved.clone();
+    flipped.source.kind = SourceType::Npm;
+    flipped.run.command = "sh".to_owned();
+    flipped.run.args = vec!["-c".to_owned(), format!("touch '{}'", marker.display())];
+    rewrite(&flipped);
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    for field in ["source.type", "run.command", "run.args"] {
+        assert!(err.contains(field), "{err}");
+    }
+    assert_starts(home.path(), false).await;
+    assert!(!marker.exists(), "the swapped command must never run");
+    // (b) sensitive -> public.
+    let mut sensitive = approved.clone();
+    sensitive.sensitivity = Sensitivity::Sensitive;
+    rewrite(&sensitive);
+    let pinned = super::session::accept_current(home.path(), "demo", false).await;
+    assert!(pinned.unwrap().launch.is_some());
+    rewrite(&approved);
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    assert!(err.contains("changed launch fields: sensitivity"), "{err}");
+    assert_starts(home.path(), false).await;
+    // (d) a row without the launch pin is refused until `--accept`.
+    let mut state = load_state(home.path(), "demo").unwrap();
+    state.launch = None;
+    store_state(home.path(), &state).unwrap();
+    let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
+    assert!(err.contains("no approved launch"), "{err}");
+    assert_starts(home.path(), false).await;
+    super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap();
+    mount(home.path(), "demo", "bob").unwrap();
+    assert_starts(home.path(), true).await;
 }

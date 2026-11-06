@@ -43,8 +43,9 @@ enum ExtAction {
         /// Accept the current tools after a freeze (owner re-approval).
         #[arg(long)]
         accept: bool,
-        /// With `--accept`: re-pin this build even though it is older than the
-        /// approved one (a newer entry is corrupt or gone).
+        /// With `--accept`: re-pin this build although it is not the approved
+        /// one (another version or other bytes, e.g. a newer entry is corrupt
+        /// or gone, or a row from before the artefact pin).
         #[arg(long, value_name = "VERSION", requires = "accept", requires = "name")]
         downgrade_to: Option<String>,
     },
@@ -233,6 +234,31 @@ fn warn_corrupt_newer(name: &str, running: &str, corrupt_newer: &[String]) {
     }
 }
 
+/// What an `--accept` now trusts: the artefact sha256, the hosts granted, and
+/// how it runs, so the owner sees the pin they just approved.
+fn trusted_summary(state: &extensions::ExtensionState) -> String {
+    let none = || "none".to_owned();
+    let hosts = match state.network.is_empty() {
+        true => none(),
+        false => state.network.join(", "),
+    };
+    let mut out = format!(
+        "  sha256: {}\n  hosts: {hosts}\n",
+        state.artefact.clone().unwrap_or_else(none)
+    );
+    if let Some(launch) = &state.launch {
+        let run = std::iter::once(launch.run.command.as_str())
+            .chain(launch.run.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push_str(&format!(
+            "  runs: {run} ({:?} source, {:?})\n",
+            launch.source, launch.sensitivity
+        ));
+    }
+    out
+}
+
 fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&str>) -> ExitCode {
     let names: Vec<String> = match name {
         Some(name) => vec![name.to_owned()],
@@ -270,9 +296,19 @@ fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&s
                     let version = &accepted.state.version;
                     warn_corrupt_newer(&name, version, &accepted.corrupt_newer);
                     let _ = writeln!(std::io::stdout(), "accepted {name}@{version}");
+                    let _ = write!(std::io::stdout(), "{}", trusted_summary(&accepted.state));
                     continue;
                 }
                 Err(err) => {
+                    // The refusal still names the corrupt newer entries.
+                    if let extensions::session::SessionError::DowngradeRefused {
+                        installed,
+                        corrupt_newer,
+                        ..
+                    } = &err
+                    {
+                        warn_corrupt_newer(&name, installed, corrupt_newer);
+                    }
                     let _ = writeln!(std::io::stderr(), "aux ext verify: {err}");
                     failed = true;
                     continue;

@@ -43,7 +43,6 @@ use kernel_broker::{
     retain_mountable, ApprovalRequest, Approver, ApproverError, Rule, ToolRegistry,
 };
 use kernel_core::budget::{Budgets, PriceTable};
-use kernel_core::killswitch;
 use kernel_core::privacy::{admit_call, Destination, PathId, PrivacyMode};
 use kernel_core::{Config, ContextConfig};
 use std::path::{Path, PathBuf};
@@ -302,7 +301,7 @@ impl AgentJobRunner {
 
     /// True while the `<home>/STOP` marker exists.
     fn is_stopped(&self) -> bool {
-        killswitch::is_stopped(&self.home)
+        aux_engine::marker_engaged(&self.home)
     }
 
     /// Record a failure and notify. The reason is scrubbed and capped.

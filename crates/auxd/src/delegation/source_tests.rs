@@ -216,7 +216,7 @@ async fn contact_delegation(
             .with_provider(provider.clone())
             .with_approvals(approvals.clone())
             .with_events(events.clone())
-            .with_delegations(executor);
+            .with_delegations(executor, Arc::default());
         if scheduled {
             runner = runner.with_source("schedule");
         }

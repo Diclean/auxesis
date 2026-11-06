@@ -2754,6 +2754,10 @@
       "en" : "Sent back to Aux:",
       "fr" : "Renvoyé à Aux :"
     },
+    "delegStillStopping" : {
+      "en" : "Still stopping, try again in a moment",
+      "fr" : "Arrêt en cours, réessayez dans un instant"
+    },
     "delegStopTask" : {
       "en" : "Stop this task",
       "fr" : "Arrêter cette tâche"

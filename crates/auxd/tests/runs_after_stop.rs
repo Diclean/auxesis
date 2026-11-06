@@ -77,7 +77,7 @@ async fn a_run_and_a_delegation_after_the_stop_write_no_row() {
     let now: Arc<auxd::scheduler::NowFn> = Arc::new(chrono::Utc::now);
     let lease = Duration::from_secs(60);
     let agent = Arc::new(CountingAgent(AtomicUsize::new(0)));
-    let tool = DelegateTool::new(home.clone(), None, agent.clone(), None);
+    let tool = DelegateTool::new(home.clone(), None, agent.clone(), Arc::default());
     let ctx = ToolCtx::new("main", home.clone());
     let args = serde_json::json!({ "agent": "mail", "task": "sort the inbox" });
 

@@ -48,7 +48,7 @@ public enum UIKey: String, CaseIterable {
     // Delegations
     case delegDone, delegNeedsYou, delegStopped, delegWorking, delegQueued, delegFailed, delegPercent
     case delegSentBack, delegSentBackToAux, delegOpenIn, delegAskedAt, delegAskedByAux, delegResume
-    case delegStopTask, delegCouldntFinish, delegKeptPartial
+    case delegStopTask, delegCouldntFinish, delegKeptPartial, delegStillStopping
 
     // Approvals
     case apDrafted, apSend, apEdit, apNotNow, apShowDraft, apHideDraft, apWaits, apTo, apSendingIn, apUndo
@@ -438,6 +438,7 @@ public extension L10n {
         .delegAskedAt: "Asked at %@",
         .delegAskedByAux: "Asked by Aux at %@",
         .delegResume: "Resume",
+        .delegStillStopping: "Still stopping, try again in a moment",
         .delegStopTask: "Stop this task",
         .delegCouldntFinish: "%@ couldn't finish. Retry",
         .delegKeptPartial: "Stopped. Partial work kept, nothing filed or sent.",
@@ -1455,6 +1456,7 @@ public extension L10n {
         .delegResume: "Reprendre",
         .delegSentBack: "%@ renvoyé :",
         .delegSentBackToAux: "Renvoyé à Aux :",
+        .delegStillStopping: "Arrêt en cours, réessayez dans un instant",
         .delegStopTask: "Arrêter cette tâche",
         .delegStopped: "Arrêté",
         .delegWorking: "En cours",

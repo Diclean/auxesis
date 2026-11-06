@@ -26,7 +26,6 @@
 use crate::api::jobs::RoutineSchedule;
 use aux_store::{Job, Store, StoreError, RUN_FAILED, RUN_OK};
 use chrono::{DateTime, Duration, Utc};
-use kernel_core::killswitch;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -60,7 +59,7 @@ impl StopSwitch {
 
     /// True while the `STOP` marker exists.
     pub fn is_engaged(&self) -> bool {
-        killswitch::is_stopped(&self.home)
+        aux_engine::marker_engaged(&self.home)
     }
 }
 

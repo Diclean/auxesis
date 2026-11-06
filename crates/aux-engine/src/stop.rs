@@ -41,8 +41,20 @@ impl MarkerStop {
 
 impl StopCheck for MarkerStop {
     fn is_stopped(&self) -> bool {
-        kernel_core::killswitch::is_stopped(&self.home)
+        marker_engaged(&self.home)
     }
+}
+
+/// The kill switch, failing safe: engaged when the kernel reads it engaged
+/// or when the marker path cannot be read for any reason other than "absent"
+/// (EACCES, EIO, ...). The kernel's own path fallback reads such an error as
+/// off; this never does.
+pub fn marker_engaged(home: &std::path::Path) -> bool {
+    kernel_core::killswitch::is_stopped(home)
+        || match std::fs::symlink_metadata(kernel_core::killswitch::stop_path(home)) {
+            Ok(_) => true,
+            Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+        }
 }
 
 /// A [`StopCheck`] that engages when the privacy mode is no longer the one a run
@@ -87,6 +99,27 @@ mod tests {
         kernel_core::killswitch::release(&home).unwrap();
         assert!(!stop.is_stopped());
         assert_eq!(stop.home(), home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_marker_path_reads_engaged() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(!marker_engaged(&home));
+        // A home whose entries cannot be looked up (EACCES): never "off".
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::symlink_metadata(home.join("STOP"))
+            .err()
+            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound);
+        let engaged = marker_engaged(&home);
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Root bypasses the mode bits; the check is only meaningful otherwise.
+        if !readable {
+            assert!(engaged, "a read error must read as engaged");
+        }
     }
 
     #[test]

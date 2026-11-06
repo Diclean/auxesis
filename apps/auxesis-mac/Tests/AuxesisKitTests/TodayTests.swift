@@ -129,6 +129,15 @@ import Testing
         XCTAssertEqual(ShellModel.briefNote("something_new"), .briefRunFailed)
     }
 
+    func testAStillStoppingResumeSaysSoInPlainWords() {
+        let busy = AuxdError.http(
+            status: 409,
+            body: #"{"error":{"code":"delegation_still_stopping","message":"the stopped run is still finishing"}}"#
+        )
+        XCTAssertEqual(ShellModel.resumeNote(busy, .en), "Still stopping, try again in a moment")
+        XCTAssertFalse(ShellModel.resumeNote(AuxdError.transport("down"), .en).isEmpty)
+    }
+
     func testFixtureShowsTheBriefAndRunFillsTheEmptyDay() {
         let team = FixtureDaemon(scenario: .team)
         let shell = ShellModel(store: Store(transport: team, language: .en), client: team)

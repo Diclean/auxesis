@@ -62,7 +62,7 @@ pub async fn run(State(state): State<Arc<ApiState>>, body: Bytes) -> Response {
             None,
         );
     }
-    if kernel_core::killswitch::is_stopped(&state.home) {
+    if aux_engine::marker_engaged(&state.home) {
         return error::error_response(
             StatusCode::CONFLICT,
             "stopped",

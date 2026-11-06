@@ -95,7 +95,7 @@ async fn a_live_delegation_and_a_tainted_handoff_after_the_stop_write_no_row() {
         resume: Notify::new(),
         after_stop: Mutex::new(None),
     });
-    let tool = DelegateTool::new(home.clone(), None, agent.clone(), None);
+    let tool = DelegateTool::new(home.clone(), None, agent.clone(), Arc::default());
     let mut tainted = ToolCtx::new("main", home.clone());
     tainted.tainted = true;
 

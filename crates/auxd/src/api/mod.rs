@@ -649,8 +649,7 @@ pub fn spawn(home: &Path, options: ApiOptions) -> std::io::Result<ApiHandle> {
         let mut runner = EngineTurnRunner::new(home)
             .with_events(sender.clone())
             .with_approvals(Arc::clone(&approvals))
-            .with_delegations(Arc::clone(&delegations))
-            .with_delegation_cancels(Arc::clone(&delegation_cancels))
+            .with_delegations(Arc::clone(&delegations), Arc::clone(&delegation_cancels))
             .with_bridge(Arc::clone(&bridge));
         #[cfg(any(test, feature = "test-util"))]
         {

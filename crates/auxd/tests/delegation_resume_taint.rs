@@ -64,7 +64,7 @@ async fn a_tainted_handoff_resumed_after_a_restart_runs_tainted() {
     });
 
     // A tainted caller hands Mail a task; the workspace is marked before Mail runs.
-    let tool = DelegateTool::new(home.clone(), None, agent.clone(), None);
+    let tool = DelegateTool::new(home.clone(), None, agent.clone(), Arc::default());
     let mut tainted = ToolCtx::new("main", home.clone());
     tainted.tainted = true;
     let args = serde_json::json!({ "agent": "mail", "task": "sort the inbox" });

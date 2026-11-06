@@ -54,7 +54,7 @@ fn row(home: &std::path::Path, id: &str) -> aux_store::Delegation {
 }
 
 async fn until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::LOADED_RUNNER_WAIT;
     while !done() {
         assert!(Instant::now() < deadline, "{what}");
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -109,10 +109,15 @@ async fn a_late_stopped_run_never_lands_on_the_resumed_row() {
     until("run #1 never started", || runs() == 1).await;
     assert_eq!(post(&handle, &id, "stop"), 200);
     assert_eq!(row(&home, &id).state, DelegationState::Stopped);
-    assert_eq!(
-        post(&handle, &id, "resume"),
+    common::assert_error(
+        &common::post(
+            handle.addr(),
+            &format!("/v1/delegations/{id}/resume"),
+            Some(TOKEN),
+            "{}",
+        ),
         409,
-        "run #1 is still finishing: no second run beside it"
+        "delegation_still_stopping",
     );
 
     // Run #1 finishes late: its result never lands on the stopped row.
@@ -135,5 +140,115 @@ async fn a_late_stopped_run_never_lands_on_the_resumed_row() {
     .await;
     assert_eq!(row(&home, &id).result.as_deref(), Some("run2"));
     assert_eq!(runs(), 2);
+    handle.shutdown();
+}
+
+const CHIEF_CONFIG: &str = r#"
+version = 1
+privacy.mode = "open"
+default_agent = "aux"
+approvals = "ask"
+
+[[providers]]
+id = "fakey"
+base_url = "http://127.0.0.1:9/v1"
+model = "fake-model"
+kind = "fake"
+
+[[rules]]
+agent = "aux"
+tool = "delegate"
+action = "allow"
+"#;
+
+/// A run the chief's `delegate` tool started registers in the daemon's cancel
+/// registry (the runner cannot have delegations without it), so a resume of
+/// it is refused while it still lives and accepted once it ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tool_started_run_gates_its_resume_until_it_ends() {
+    use aux_providers::{ChatMessage, ChatResponse, FakeProvider};
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(kernel_core::config_path(&home), CHIEF_CONFIG).unwrap();
+    std::fs::write(api::token_path(&home), format!("{TOKEN}\n")).unwrap();
+    let provider = Arc::new(FakeProvider::scripted(
+        "fakey",
+        vec![
+            ChatResponse::new(ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![aux_providers::ToolCall::new(
+                    "call_1",
+                    "delegate",
+                    serde_json::json!({ "agent": "mail", "task": "sort the inbox" }),
+                )],
+            )),
+            ChatResponse::assistant("Done."),
+        ],
+    ));
+    let agent = Arc::new(Slow {
+        runs: Mutex::new(0),
+        release: (0..2).map(|_| Arc::new(Notify::new())).collect(),
+    });
+    let handle = Arc::new(
+        api::spawn(
+            &home,
+            ApiOptions {
+                port: 0,
+                provider: Some(provider),
+                delegations: Some(agent.clone() as Arc<dyn DelegationExecutor>),
+                ..ApiOptions::default()
+            },
+        )
+        .unwrap(),
+    );
+    let runs = || *agent.runs.lock().unwrap();
+    let chat = {
+        let handle = Arc::clone(&handle);
+        tokio::task::spawn_blocking(move || {
+            common::post(
+                handle.addr(),
+                "/v1/threads/aux/messages",
+                Some(TOKEN),
+                r#"{"content":"ask Mail"}"#,
+            )
+            .status
+        })
+    };
+    until("the tool never started the run", || runs() == 1).await;
+    let id = Store::open(&kernel_core::store_path(&home))
+        .unwrap()
+        .list_delegations(None)
+        .unwrap()[0]
+        .id
+        .clone();
+
+    // Stopped mid-turn: the run is slow to notice, so it still lives.
+    assert_eq!(post(&handle, &id, "stop"), 200);
+    common::assert_error(
+        &common::post(
+            handle.addr(),
+            &format!("/v1/delegations/{id}/resume"),
+            Some(TOKEN),
+            "{}",
+        ),
+        409,
+        "delegation_still_stopping",
+    );
+
+    // Once it ends, the resume is accepted and runs once.
+    agent.release[0].notify_one();
+    until("the resume never became possible", || {
+        post(&handle, &id, "resume") == 200
+    })
+    .await;
+    until("the resumed run never started", || runs() == 2).await;
+    agent.release[1].notify_one();
+    until("the resumed run never finished", || {
+        row(&home, &id).state == DelegationState::Done
+    })
+    .await;
+    assert_eq!(row(&home, &id).result.as_deref(), Some("run2"));
+    let _ = chat.await;
     handle.shutdown();
 }

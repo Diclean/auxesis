@@ -867,6 +867,7 @@ fn orphan_pids_holding_marker_until(
     let me = unsafe { libc::geteuid() };
     let own = std::process::id() as i32;
     let mut out = Vec::new();
+    let mut complete = true;
     let expired = || deadline.is_some_and(|d| Instant::now() >= d);
     for &pid in pids {
         if expired() {
@@ -894,12 +895,14 @@ fn orphan_pids_holding_marker_until(
                 pid,
                 start: started,
             }),
-            // Unknown, not "not holding": the pass is incomplete.
-            Holds::Cut => return (out, false),
+            // Unknown, not "not holding": the pass is incomplete. Past the
+            // deadline it stops; an unreadable list only skips this pid.
+            Holds::Cut if expired() => return (out, false),
+            Holds::Cut => complete = false,
             Holds::No => {}
         }
     }
-    (out, true)
+    (out, complete)
 }
 
 /// Reads `(ppid, uid, start)` for a pid. Production code uses
@@ -1705,11 +1708,11 @@ fn late_retry(reaper: TreeReaper) {
     }
 }
 
-/// A fast kill of every reaper: seen loops until `deadline`, marker passes
-/// until one batch-wide marker deadline, a fixed [`LATE_MARKER_RESERVE`] after
-/// `deadline`. The reserve is therefore real even when the seen loops used all
-/// of the budget, and N queued reapers cost about the budget plus one reserve,
-/// not N reserves. The sum of what each skipped.
+/// A fast kill of every reaper: seen loops until `deadline`, then each
+/// reaper's marker pass until [`LATE_MARKER_RESERVE`] after `deadline`, or a
+/// reserve of its own when that has passed: each escapee holds its own marker,
+/// so each pass must run. N queued reapers cost at most the budget plus N
+/// reserves, on the rare no-thread path. The sum of what each skipped.
 fn fast_kill_all(queued: Vec<TreeReaper>, deadline: Instant) -> usize {
     let marker_deadline = deadline + LATE_MARKER_RESERVE;
     let mut skipped = 0;
@@ -1901,7 +1904,9 @@ impl TreeReaper {
             // failed (this process is always in it), as in the sweep: the pass
             // did not run. Newest pid first: the escapee is a recent process,
             // and a cut-off budget should lose the old ones.
-            let deadline = marker_deadline;
+            // Each reaper's own pass gets the reserve: its escapee holds its own
+            // marker, and no other reaper's pass would find it.
+            let deadline = marker_deadline.max(Instant::now() + LATE_MARKER_RESERVE);
             let mut all = match Instant::now() < deadline {
                 true => {
                     #[cfg(test)]
@@ -4270,10 +4275,13 @@ await(q(bg.pid));
         reaper.seen.extend(fakes);
         let all = reaper.seen.len();
         let past = std::time::Instant::now();
-        // Past both deadlines nothing is tried, the marker pass included.
+        // Past both deadlines no seen entry is tried; the marker pass still
+        // gets its own reserve (plus one only if that pass was cut).
         let skipped = reaper.fast_kill(past, past);
-        // Every seen entry, plus one: the marker pass never started.
-        assert_eq!(skipped, all + 1, "the budget miscounted what it skipped");
+        assert!(
+            skipped == all || skipped == all + 1,
+            "the budget miscounted what it skipped: {skipped} of {all}"
+        );
         let ample = std::time::Instant::now() + Duration::from_secs(5);
         let skipped = reaper.fast_kill(ample, ample);
         assert_eq!(skipped, 0, "an ample budget skips nothing");
@@ -4321,21 +4329,20 @@ await(q(bg.pid));
         assert_eq!(passes, 1, "no marker pass ran after the seen budget");
     }
 
-    /// SHELL-SWEEP-8 (1): the reserve is taken once for the batch, so a long
-    /// queue stays close to the budget plus one reserve, not a reserve each.
+    /// Every reaper of a batch gets its own marker pass, the last one too,
+    /// even when the shared deadline and the first reserve are spent: its
+    /// escapee holds only its own marker.
     #[cfg(unix)]
     #[test]
-    fn the_batch_shares_one_marker_reserve() {
+    fn every_reaper_of_a_batch_gets_its_marker_pass() {
         let (marker, _pin) = pinned_marker();
-        let queued: Vec<TreeReaper> = (0..200).map(|_| idle_reaper(marker)).collect();
-        let started = std::time::Instant::now();
-        fast_kill_all(queued, started);
-        let took = started.elapsed();
-        // Loose on purpose: a per-reaper reserve is 200 x 100 ms.
-        assert!(
-            took < Duration::from_secs(1),
-            "200 reapers took {took:?}: the reserve is per reaper"
-        );
+        let queued: Vec<TreeReaper> = (0..3).map(|_| idle_reaper(marker)).collect();
+        MARKER_PASSES.with(|passes| passes.set(0));
+        let now = std::time::Instant::now();
+        let past = now.checked_sub(LATE_MARKER_RESERVE * 2).unwrap_or(now);
+        fast_kill_all(queued, past);
+        let passes = MARKER_PASSES.with(|passes| passes.replace(0));
+        assert_eq!(passes, 3, "a queued reaper's escapee went unhunted");
     }
 
     /// SHELL-SWEEP-8 (2, 3): through `fast_kill_all`, with a spent seen budget,

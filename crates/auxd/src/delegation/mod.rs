@@ -25,7 +25,6 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kernel_broker::{NativeTool, Risk, Tool, ToolClass, ToolCtx, ToolError, ToolOutput, Trust};
-use kernel_core::killswitch;
 use kernel_core::privacy::ModeFn;
 use serde::Deserialize;
 use tokio::sync::broadcast;
@@ -46,6 +45,10 @@ const MAX_DELEGATION_TEXT_BYTES: usize = 8 * 1024;
 
 const DELEGATION_DEADLINE: Duration = Duration::from_secs(120);
 const DELEGATION_STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// How long a stopped run may keep finishing before a resume calls it stuck:
+/// far past the 120 s deadline, its grace and any provider timeout.
+pub const DELEGATION_STUCK_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// How often the deadline loop checks whether the child is parked on a card.
 const DELEGATION_POLL: Duration = Duration::from_millis(100);
@@ -74,6 +77,8 @@ pub fn new_id() -> String {
 #[derive(Debug, Default)]
 pub struct DelegationCancels {
     inner: Mutex<HashMap<String, Vec<Arc<TurnCancel>>>>,
+    /// When each still-live id was first stopped. Always locked after `inner`.
+    stopping: Mutex<HashMap<String, Instant>>,
 }
 
 impl DelegationCancels {
@@ -120,8 +125,27 @@ impl DelegationCancels {
         })
     }
 
+    /// How long the live run of `id` has been stopping, since its first Stop.
+    /// `None` once nothing of it lives.
+    pub fn stopping_for(&self, id: &str) -> Option<Duration> {
+        let _inner = kernel_core::lock_recover(&self.inner);
+        kernel_core::lock_recover(&self.stopping)
+            .get(id)
+            .map(Instant::elapsed)
+    }
+
+    /// Start the stuck clock of `only` (every id when `None`) if it is live.
+    fn stamp_stopping(&self, only: Option<&str>) {
+        let inner = kernel_core::lock_recover(&self.inner);
+        let mut stopping = kernel_core::lock_recover(&self.stopping);
+        for id in inner.keys().filter(|id| only.is_none_or(|o| **id == o)) {
+            stopping.entry(id.clone()).or_insert_with(Instant::now);
+        }
+    }
+
     /// Fire one task's token.
     pub fn cancel(&self, id: &str) {
+        self.stamp_stopping(Some(id));
         let tokens: Vec<Arc<TurnCancel>> = kernel_core::lock_recover(&self.inner)
             .get(id)
             .cloned()
@@ -133,6 +157,7 @@ impl DelegationCancels {
 
     /// Fire every live task's token (Stop all).
     pub fn cancel_all(&self) {
+        self.stamp_stopping(None);
         let tokens: Vec<Arc<TurnCancel>> = kernel_core::lock_recover(&self.inner)
             .values()
             .flatten()
@@ -166,6 +191,7 @@ impl Drop for DelegationRegistration {
             tokens.retain(|token| !Arc::ptr_eq(token, &self.token));
             if tokens.is_empty() {
                 inner.remove(&self.id);
+                kernel_core::lock_recover(&self.registry.stopping).remove(&self.id);
             }
         }
     }
@@ -1416,6 +1442,15 @@ pub async fn resume(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
         .delegation_cancels
         .claim(&delegation.id, TurnCancel::new())
     else {
+        let stuck = state
+            .delegation_cancels
+            .stopping_for(&delegation.id)
+            .is_some_and(|age| age >= state.delegation_stuck_after);
+        if stuck {
+            let message = "the stopped run is stuck; restart Aux to reset it";
+            let conflict = axum::http::StatusCode::CONFLICT;
+            return error::error_response(conflict, "delegation_stuck", message, None);
+        }
         return error::error_response(
             axum::http::StatusCode::CONFLICT,
             "delegation_still_stopping",
@@ -1532,12 +1567,12 @@ pub fn spawn_run(
                 // (resumable). After the stop this write is refused too: the
                 // row stays queued and the next start retires it to stopped.
                 tracing::warn!(error = %detail, "could not resume a delegation");
-                retire_queued(&state, &id, &agent, "could not resume");
+                retire_queued(&db_path, &state.events, &id, &agent, "could not resume");
                 return;
             }
             Err(err) => {
                 tracing::warn!(error = %err, "joining the delegation opener");
-                retire_queued(&state, &id, &agent, "could not resume");
+                retire_queued(&db_path, &state.events, &id, &agent, "could not resume");
                 return;
             }
         };
@@ -1550,7 +1585,7 @@ pub fn spawn_run(
                 // Not a Stop: the row, which attempted nothing, goes back to
                 // stopped (resumable) instead of staying queued.
                 tracing::warn!(error = %detail, "could not start a resumed delegation");
-                retire_queued(&state, &id, &agent, "could not start");
+                retire_queued(&db_path, &state.events, &id, &agent, "could not start");
                 return;
             }
         }
@@ -1601,16 +1636,20 @@ pub fn spawn_run(
 /// A resumed row that attempted nothing goes back from queued to stopped
 /// (resumable) and the UI hears it. Past the stop gate the write is refused:
 /// the row stays queued and the next start retires it to stopped.
-fn retire_queued(state: &ApiState, id: &str, agent: &str, reason: &str) {
-    let moved = gated_open(&state.db_path, |store| {
+fn retire_queued(
+    db_path: &std::path::Path,
+    events: &broadcast::Sender<String>,
+    id: &str,
+    agent: &str,
+    reason: &str,
+) {
+    let moved = gated_open(db_path, |store| {
         store.move_delegation_state(id, DelegationState::Queued, DelegationState::Stopped)
     });
     // Only a row that really moved is announced stopped.
     if matches!(moved, Ok(true)) {
-        let _ = crate::api::wire::send_bounded(
-            &state.events,
-            &delegation_stopped_frame(id, agent, reason),
-        );
+        let _ =
+            crate::api::wire::send_bounded(events, &delegation_stopped_frame(id, agent, reason));
     }
 }
 
@@ -1635,7 +1674,7 @@ pub async fn stop_status(State(state): State<Arc<ApiState>>) -> Response {
         .stop_cancelled
         .load(std::sync::atomic::Ordering::Relaxed);
     let result = tokio::task::spawn_blocking(move || -> (bool, Option<String>) {
-        let stopped = killswitch::is_stopped(&home);
+        let stopped = aux_engine::marker_engaged(&home);
         let since = if stopped {
             std::fs::metadata(home.join("STOP"))
                 .ok()
@@ -2059,7 +2098,7 @@ mod tests {
     fn a_working_row_under_an_engaged_stop_recovers_stopped() {
         let dir = tempfile::tempdir().unwrap();
         let id = open_row_with_a_step(dir.path(), DelegationState::Working);
-        killswitch::engage(dir.path()).unwrap();
+        kernel_core::killswitch::engage(dir.path()).unwrap();
         assert_eq!(
             state_after_recovery(dir.path(), &id),
             DelegationState::Stopped
@@ -2178,6 +2217,8 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod claim_tests;
 #[cfg(test)]
 mod source_tests;
 #[cfg(test)]

@@ -287,6 +287,12 @@ pub trait TurnRunner: Send + Sync + 'static {
 
     /// NEW-CHAT-1: drop any in-memory pointer to `agent`'s old thread.
     fn forget_thread(&self, _agent: &str) {}
+
+    /// The cancel registry this runner's delegations register in, when it
+    /// delegates: the API adopts it so both read one registry.
+    fn delegation_cancels(&self) -> Option<Arc<crate::delegation::DelegationCancels>> {
+        None
+    }
 }
 
 /// Test seam: mutate the tool registry a turn will run with, right after
@@ -1380,6 +1386,12 @@ impl StopCheck for AgentStop {
 }
 
 impl TurnRunner for EngineTurnRunner {
+    fn delegation_cancels(&self) -> Option<Arc<crate::delegation::DelegationCancels>> {
+        self.delegations
+            .as_ref()
+            .map(|(_, cancels)| Arc::clone(cancels))
+    }
+
     fn run_turn(
         &self,
         agent: &str,
@@ -2528,7 +2540,7 @@ impl TurnEvents for TurnMessageLog {
 fn map_turn_chat_error(err: ChatError, home: &Path, agent: &str, lang: Lang) -> TurnError {
     match err {
         ChatError::Stopped
-            if !kernel_core::killswitch::stop_path(home).exists()
+            if !aux_engine::marker_engaged(home)
                 && agent_mode_fn(home, agent)() == kernel_core::privacy::PrivacyMode::Private =>
         {
             privacy_stop(lang)

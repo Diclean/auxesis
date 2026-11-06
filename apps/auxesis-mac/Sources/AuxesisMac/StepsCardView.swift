@@ -155,8 +155,8 @@ private struct TaskActions: View {
                 if let brain = delegation.brain { Text(BrainName.display(brain)).foregroundStyle(palette.ink3.color) }
             }
             .font(.meta)
-            if delegation.state == .stopped, let note = shell.delegationResumeNote, note.id == delegation.id {
-                Text(note.text).font(.meta).foregroundStyle(palette.red.color)
+            if let note = shell.resumeNote(for: delegation) {
+                Text(note).font(.meta).foregroundStyle(palette.red.color)
                     .accessibilityIdentifier("delegation-resume-note-\(delegation.id)")
             }
         }

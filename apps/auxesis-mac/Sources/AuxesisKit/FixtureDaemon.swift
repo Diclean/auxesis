@@ -67,6 +67,8 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
     /// Tests: the failure the next answer answers with instead of an answer
     /// (a refused edit, a broken service). Nothing is recorded as sent.
     public var resolveFailure: AuxdError?
+    /// Tests: the refusal `resumeDelegation` answers with; `nil` resumes.
+    public var resumeFailure: AuxdError?
     /// Tests: every contacts call, in order (a preview, then the import).
     public private(set) var contactsRequests: [ContactsImportRequest] = []
 
@@ -379,6 +381,7 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
     }
 
     public func resumeDelegation(id: String) async throws {
+        if let resumeFailure { throw resumeFailure }
         if let index = delegationList.firstIndex(where: { $0.id == id }) { delegationList[index].state = .working }
     }
 

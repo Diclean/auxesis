@@ -136,6 +136,26 @@ import Testing
         )
         XCTAssertEqual(ShellModel.resumeNote(busy, .en), "Still stopping, try again in a moment")
         XCTAssertFalse(ShellModel.resumeNote(AuxdError.transport("down"), .en).isEmpty)
+        // Any other refusal keeps the daemon's own words.
+        let other = AuxdError.http(
+            status: 409,
+            body: #"{"error":{"code":"delegation_not_stopped","message":"only a stopped delegation can resume"}}"#
+        )
+        XCTAssertEqual(ShellModel.resumeNote(other, .en), "only a stopped delegation can resume")
+    }
+
+    func testAStuckResumeKeepsTheRowStoppedWithItsNoteUntilStop() {
+        let team = FixtureDaemon(scenario: .stopped)
+        team.resumeFailure = AuxdError.http(status: 409, body: #"{"error":{"code":"delegation_stuck"}}"#)
+        let shell = ShellModel(store: Store(transport: team, language: .en), client: team)
+        shell.refreshDelegations()
+        XCTAssertTrue(waitUntil { shell.delegations.contains { $0.id == "dl-3" } })
+        guard let row = shell.delegations.first(where: { $0.id == "dl-3" }) else { return XCTFail("no dl-3") }
+        shell.resumeDelegation(row)
+        XCTAssertTrue(waitUntil { shell.resumeNote(for: row) == L10n.ui(.delegStuck, .en) })
+        XCTAssertEqual(shell.delegations.first { $0.id == "dl-3" }?.state, .stopped)
+        shell.stopDelegation(row)
+        XCTAssertNil(shell.resumeNote(for: row))
     }
 
     func testFixtureShowsTheBriefAndRunFillsTheEmptyDay() {

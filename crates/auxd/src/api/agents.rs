@@ -357,7 +357,7 @@ pub async fn stop_all(State(state): State<Arc<ApiState>>) -> Response {
     let delegation_cancels = Arc::clone(&state.delegation_cancels);
     let pending_sends = state.approvals.pending().len();
     let result = tokio::task::spawn_blocking(move || -> Result<(bool, usize), String> {
-        let was_stopped = killswitch::is_stopped(&home);
+        let was_stopped = aux_engine::marker_engaged(&home);
         killswitch::engage(&home).map_err(|err| err.to_string())?;
         // B-API v3 × E-18: stop-all also fires the cancellation tokens of
         // every in-flight turn, so they abort now (the shell tool reaps its

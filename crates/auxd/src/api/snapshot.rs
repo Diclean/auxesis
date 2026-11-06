@@ -33,7 +33,7 @@ use std::time::Duration;
 use aux_providers::provider_name_is_key_shaped;
 use aux_store::{Message, Run, Session};
 use kernel_broker::{sanitize_external_text, sanitize_text};
-use kernel_core::{config_path, killswitch, store_path, Config, UsageKind, UsageTotals};
+use kernel_core::{config_path, store_path, Config, UsageKind, UsageTotals};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -430,7 +430,7 @@ fn privacy_mode_label(home: &Path, agent: &str) -> String {
 /// directories), each enriched with live state.
 pub fn agents_snapshot(home: &Path) -> anyhow::Result<Vec<AgentJson>> {
     let config = load_config(home);
-    let stop = killswitch::is_stopped(home);
+    let stop = aux_engine::marker_engaged(home);
 
     let connection = open_read_only(home)?;
     let jobs = match &connection {
@@ -1937,7 +1937,7 @@ pub fn jobs_snapshot(home: &Path) -> anyhow::Result<Vec<JobJson>> {
         None => Vec::new(),
     };
     let now = chrono::Utc::now();
-    let stopped = kernel_core::killswitch::is_stopped(home);
+    let stopped = aux_engine::marker_engaged(home);
     jobs.into_iter()
         .map(|job| {
             let name = preview_capped(home, &job.name, ACTIVITY_SUMMARY_MAX_CHARS);
@@ -2015,7 +2015,7 @@ pub(crate) fn change_stamp(home: &Path) -> StoreChangeStamp {
     };
     let config = file_stamp(&config_path(home));
     let agents_dir = file_stamp(&home.join("agents")).map(|(millis, _len)| millis);
-    let stop = killswitch::is_stopped(home);
+    let stop = aux_engine::marker_engaged(home);
 
     let mut stamp = StoreChangeStamp {
         events: 0,
@@ -2212,7 +2212,7 @@ mod tests {
         let after_config = change_stamp(&home);
         assert_ne!(after_usage, after_config, "config change");
 
-        killswitch::engage(&home).unwrap();
+        kernel_core::killswitch::engage(&home).unwrap();
         let after_stop = change_stamp(&home);
         assert_ne!(after_config, after_stop, "STOP engagement");
     }
@@ -3088,7 +3088,7 @@ mod tests {
         let notes = agents.iter().find(|agent| agent.name == "notes").unwrap();
         assert_eq!(notes.usage_today.tokens_in, 7);
 
-        assert!(killswitch::engage(&home).is_ok());
+        assert!(kernel_core::killswitch::engage(&home).is_ok());
         let agents = agents_snapshot(&home).unwrap();
         assert!(agents.iter().all(|agent| agent.stop));
     }

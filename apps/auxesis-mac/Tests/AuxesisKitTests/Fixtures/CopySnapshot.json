@@ -2970,6 +2970,10 @@
       "en" : "Go",
       "fr" : "Aller"
     },
+    "grantCalendarFreebusy" : {
+      "en" : "read free times only",
+      "fr" : "lire les disponibilités seulement"
+    },
     "grantCalendarRead" : {
       "en" : "read the calendar",
       "fr" : "lire l’agenda"

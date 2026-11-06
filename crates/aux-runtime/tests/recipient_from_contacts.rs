@@ -374,6 +374,7 @@ async fn run_for_owner(
         clock: &NoClock,
         stop: &NeverStopped,
         approval_timeout: default_approval_timeout(),
+        freebusy_denials: &[],
     };
     executor
         .execute(

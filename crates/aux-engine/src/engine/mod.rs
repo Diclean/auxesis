@@ -304,6 +304,8 @@ pub struct ChatSession<'a> {
     card_expired: Option<String>,
     /// Injected directory for the `known-contacts` recipient policy.
     skill_recipients: Option<Arc<dyn RecipientDirectory>>,
+    /// The rules that refuse this agent's free-times read, for its refusal.
+    skill_freebusy_denials: Vec<aux_runtime::executor::ReadDenial>,
     /// The session's minted `(token, value)` pairs, for local rehydration.
     skill_tokens: Arc<Mutex<SessionTokenStore>>,
     /// The task's tokens, kept whole, and this run's handoff.

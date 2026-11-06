@@ -194,6 +194,18 @@ pub struct SeeGrant {
     pub level: AccessLevel,
 }
 
+/// How Mail's See list names the free times it reads. The row only shows
+/// them: `calendar.freebusy` (with `calendar.read`) decides the read.
+pub const FREE_TIMES_VIA: &str = "free times only (local)";
+
+impl SeeGrant {
+    /// True for a row that decides no read (the free-times row): it never
+    /// exceeds a chief and never makes grants differ from the shipped ones.
+    pub fn is_display_only(&self) -> bool {
+        self.scope == "calendar" && self.via == FREE_TIMES_VIA
+    }
+}
+
 /// One "Can do" row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoGrant {
@@ -369,6 +381,20 @@ fn skill_scope(skill: &str) -> Option<&str> {
 }
 
 impl AgentGrants {
+    /// True when both decide every call alike: equal but for display-only rows.
+    pub fn decides_like(&self, other: &AgentGrants) -> bool {
+        let deciding = |grants: &AgentGrants| AgentGrants {
+            see: grants
+                .see
+                .iter()
+                .filter(|see| !see.is_display_only())
+                .cloned()
+                .collect(),
+            ..grants.clone()
+        };
+        deciding(self) == deciding(other)
+    }
+
     /// True when the agent's `do` list covers `scope` at all (any level but
     /// `Off`).
     pub fn allows_scope(&self, scope: &str) -> bool {
@@ -621,7 +647,7 @@ pub fn default_grants(agent: &str) -> Option<AgentGrants> {
                 see("mail", "IMAP (local)", AccessLevel::Read),
                 see("contacts", "Address Book", AccessLevel::Ask),
                 // The free times `calendar.freebusy` reads: busy spans only.
-                see("calendar", "free times only (local)", AccessLevel::Read),
+                see("calendar", FREE_TIMES_VIA, AccessLevel::Read),
             ],
             can_do: vec![
                 do_grant("mail.read", ActionLevel::Auto),

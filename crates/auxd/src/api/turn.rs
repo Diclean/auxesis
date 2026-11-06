@@ -1779,6 +1779,8 @@ impl EngineTurnRunner {
         );
         // A generated grant `ask` never softens the owner's own deny.
         deny_again(agent, &registry, &owner_rules, &mut rules);
+        let freebusy_denials =
+            freebusy_denials(&self.home, agent, &origins, &owner_rules, &ceilings);
         // The tools ceiling last too, as outside the API: a grant `ask`
         // pushed above must never soften a tool the agent's lists deny.
         apply_tools_ceiling(agent, &registry, &ceilings, &mut rules);
@@ -2170,7 +2172,8 @@ impl EngineTurnRunner {
             let mut session = ChatSession::start(setup)
                 .map_err(|err| map_turn_chat_error(err, &self.home, agent, config.ui.language))?
                 .with_card_expiries(Arc::clone(&expiries))
-                .with_tool_gate("suggest_memory", Arc::clone(&suggestions_on));
+                .with_tool_gate("suggest_memory", Arc::clone(&suggestions_on))
+                .with_freebusy_denials(freebusy_denials);
             // DELEGATION-SOURCE-1: the delegated ask's row says who wrote it.
             if let Some(source) = self.source {
                 session = session
@@ -2621,7 +2624,9 @@ fn apply_own_grants(
     match crate::agents::grants(home, agent) {
         Ok(grants) => {
             apply_grant_rules(rules, agent, registry, &grants, origins);
-            Some(&grants) != aux_runtime::grants::default_grants(agent).as_ref()
+            // The display-only See row decides nothing (READS-4).
+            !aux_runtime::grants::default_grants(agent)
+                .is_some_and(|shipped| grants.decides_like(&shipped))
         }
         Err(crate::agents::RegistryError::UnknownAgent(_)) => {
             let grants = implicit_grants(agent, lists, rules);
@@ -2793,6 +2798,54 @@ pub fn apply_chief_ceiling(
     }
     rules.extend(asks.iter().cloned());
     asks
+}
+
+/// The rules that refuse `agent`'s free-times read, each naming the file the
+/// owner edits (READS-4). The agent's own grants are read before the chief
+/// cap, so a chief deny is never blamed on them.
+fn freebusy_denials(
+    home: &Path,
+    agent: &str,
+    origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
+    owner_rules: &[Rule],
+    lists: &[Vec<String>],
+) -> Vec<aux_runtime::executor::ReadDenial> {
+    use aux_runtime::executor::ReadDenial;
+    use aux_runtime::grants::{AgentGrants, ToolOrigin, FREEBUSY_TOOL as TOOL};
+    let origin = origins.get(TOOL).copied().unwrap_or(ToolOrigin::Unknown);
+    let scope = aux_runtime::grants::tool_scope(TOOL);
+    let denies = |grants: Option<&AgentGrants>, id: &str| {
+        grants.is_none_or(|grants| grants.action_for_origin(id, TOOL, origin, scope).is_err())
+    };
+    let owner_denies = |id: &str| {
+        kernel_broker::matching_rule(owner_rules, id, TOOL, false)
+            .is_some_and(|(_, rule)| rule.action == Action::Deny)
+    };
+    let unlisted = |lists: &[Vec<String>]| !lists.iter().all(|tools| listed(tools, TOOL));
+    let ids = crate::agents::ceilings(home, agent);
+    let mut out = Vec::new();
+    if owner_denies(agent) || ids.iter().any(|id| owner_denies(id)) {
+        out.push(ReadDenial::OwnerRule);
+    }
+    if denies(crate::agents::uncapped_grants(home, agent).as_ref(), agent) {
+        out.push(ReadDenial::OwnGrants);
+    }
+    if unlisted(lists) {
+        out.push(ReadDenial::OwnTools);
+    }
+    let agents = crate::agents::registry(home).ok();
+    for id in ids {
+        let grants = agents
+            .as_deref()
+            .map(|a| crate::agents::ceiling_grants(a, id));
+        if denies(grants.as_ref(), id) {
+            out.push(ReadDenial::ChiefGrants(id));
+        }
+        if unlisted(&tool_lists(home, id)) {
+            out.push(ReadDenial::ChiefTools(id));
+        }
+    }
+    out
 }
 
 /// One agent whose access caps another (see [`apply_chief_ceiling`]).
@@ -4186,6 +4239,32 @@ mod tests {
         assert_eq!(denied("scout"), (false, false));
     }
 
+    /// READS-4: a Mail `grants.toml` without the free-times row is still the
+    /// shipped grants (its `mail.send` ask adds no owner card under `auto`).
+    #[test]
+    fn a_grants_file_without_the_free_times_row_is_still_the_shipped_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir_all(home.join("agents/mail")).unwrap();
+        let registry = kernel_broker::ToolRegistry::new();
+        let customised = |grants: &aux_runtime::grants::AgentGrants| {
+            crate::agents::write_grants(home, "mail", grants).unwrap();
+            apply_own_grants(
+                home,
+                "mail",
+                &registry,
+                &HashMap::new(),
+                &[],
+                &mut Vec::new(),
+            )
+        };
+        let mut old = aux_runtime::grants::default_grants("mail").unwrap();
+        old.see.retain(|see| !see.is_display_only());
+        assert!(!customised(&old));
+        old.can_do.retain(|grant| grant.skill != "mail.read");
+        assert!(customised(&old));
+    }
+
     /// Two ceilings are decided together: an ask from one never follows the
     /// other's deny, since the last matching rule wins.
     #[test]
@@ -5474,29 +5553,36 @@ mod m4_invite_tests {
         let off = format!("{BASE}\n[[do]]\nskill = \"calendar.read\"\nlevel = \"off\"\n");
         let both = format!("{off}\n[[do]]\nskill = \"calendar.freebusy\"\nlevel = \"auto\"\n");
         // READS-3: a chief that lists tools without `calendar_freebusy` caps
-        // the read too, and the refusal says what to add to which list.
+        // the read too. READS-4: the refusal names the file of the rule that
+        // refused, and no other: Mail's grants, Mail's tools list, the
+        // chief's tools list or the chief's grants.
         const MAIN: &str = "---\nname: main\ntools:\n  - mail.list\n  - mail.search\n  \
             - mail.thread\n  - mail.read\n  - mail.draft\n  - mail.send\n---\nMain.\n";
+        const MAIN_GRANTS: &str = "[[do]]\nskill = \"mail.read\"\nlevel = \"auto\"\n\n\
+            [[do]]\nskill = \"mail.draft\"\nlevel = \"auto\"\n\n\
+            [[do]]\nskill = \"mail.send\"\nlevel = \"auto\"\n";
+        // An owner edit (not a past shipped file, which would be updated).
+        let mail_md = include_str!("../agents/mail/agent.md")
+            .replace("  - calendar_freebusy\n", "")
+            + "Owner edit.\n";
+        let (grants_file, tools_file) = ("agents/mail/grants.toml", "agents/mail/agent.md");
+        use aux_runtime::grants::CHIEF_AGENT as CHIEF;
+        let chief_tools = "chief's tools list in agents/main/agent.md";
+        let chief_grants = "agents/main/grants.toml";
         let cases = [
-            (BASE, false),
-            (off.as_str(), false),
-            (both.as_str(), false),
-            ("", true),
+            (("mail", "grants.toml", BASE.to_string()), grants_file),
+            (("mail", "grants.toml", off.clone()), grants_file),
+            (("mail", "grants.toml", both), grants_file),
+            (("mail", "agent.md", mail_md), tools_file),
+            ((CHIEF, "agent.md", MAIN.to_string()), chief_tools),
+            (
+                (CHIEF, "grants.toml", MAIN_GRANTS.to_string()),
+                chief_grants,
+            ),
         ];
-        // Each refuses with the broker's deny and names the line to add.
-        for (grants, chief_lists) in cases {
-            let mut files = Vec::new();
-            if !grants.is_empty() {
-                files.push(("mail", "grants.toml", grants.to_string()));
-            }
-            if chief_lists {
-                files.push((
-                    aux_runtime::grants::CHIEF_AGENT,
-                    "agent.md",
-                    MAIN.to_string(),
-                ));
-            }
-            HOME_FILES.with(|cell| *cell.borrow_mut() = files);
+        let all = [grants_file, tools_file, chief_tools, chief_grants];
+        for (home_file, file) in cases {
+            HOME_FILES.with(|cell| *cell.borrow_mut() = vec![home_file]);
             let fill = serde_json::json!({
                 "slots": { "person": "Camille Exemple", "topic": "the Q3 review" },
                 "calls": [{ "tool": "mail_send", "arguments": {
@@ -5511,15 +5597,12 @@ mod m4_invite_tests {
                 None,
                 Answer::Yes,
             );
-            assert_eq!((cards.len(), sent.len()), (0, 0), "{grants}\n{cards:?}");
-            let hint = concat!(
-                r#"matched: deny. This agent may not read the owner's free times: its grants need "#,
-                r#"`[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off), "#,
-                "an owner rule for this read names the tool `calendar_freebusy`, and every tools ",
-                "list over the agent needs `calendar_freebusy`: its own, and the chief's when the ",
-                "chief lists tools (add calendar_freebusy to the chief's tools list)"
-            );
-            assert!(stored.contains(hint), "{grants}\n{stored}");
+            assert_eq!((cards.len(), sent.len()), (0, 0), "{file}\n{cards:?}");
+            let hint =
+                "matched: deny. This agent may not read the owner's free times. To allow it, ";
+            assert!(stored.contains(hint), "{file}\n{stored}");
+            let named: Vec<_> = all.into_iter().filter(|f| stored.contains(f)).collect();
+            assert_eq!(named, [file], "{stored}");
         }
     }
 

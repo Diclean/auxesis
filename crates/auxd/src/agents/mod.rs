@@ -440,7 +440,8 @@ fn clamp(grants: &AgentGrants, chief: &AgentGrants) -> AgentGrants {
         ActionLevel::Auto => 2,
     };
     let mut out = grants.clone();
-    for grant in &mut out.see {
+    // A display-only row decides no read, so it never exceeds the chief.
+    for grant in out.see.iter_mut().filter(|grant| !grant.is_display_only()) {
         let own = chief.see.iter().filter(|own| own.scope == grant.scope);
         let max = own.map(|own| own.level).min_by_key(|level| see(*level));
         let max = max.unwrap_or(AccessLevel::Off);
@@ -797,6 +798,20 @@ fn read_agent_grants(home: &Path, id: &str) -> Result<Option<AgentGrants>, Regis
     Ok(Some(AgentGrants::from(file)))
 }
 
+/// One agent's grants as its own `grants.toml` (or the seed) says, before
+/// any chief cap. `None` when unreadable or the agent is not seeded.
+pub(crate) fn uncapped_grants(home: &Path, id: &str) -> Option<AgentGrants> {
+    match read_agent_grants(home, id) {
+        Ok(Some(grants)) => Some(grants),
+        Ok(None) => seed_for(home, chief_id(home))
+            .ok()?
+            .into_iter()
+            .find(|agent| agent.id == id)
+            .map(|agent| agent.grants),
+        Err(_) => None,
+    }
+}
+
 /// A parse error of a home file: file, line and column, never the text.
 fn redacted(err: &toml::de::Error, file: &str, text: &str) -> RegistryError {
     RegistryError::Config(
@@ -863,7 +878,8 @@ fn subset(child: &AgentGrants, chief: &AgentGrants) -> bool {
         Ok(GrantLevel::Ask) => 1,
         Ok(GrantLevel::Allow) => 2,
     };
-    child.see.iter().all(|grant| {
+    // A display-only row decides no read, so it never exceeds the chief.
+    child.see.iter().filter(|grant| !grant.is_display_only()).all(|grant| {
         let own = chief.see.iter().filter(|own| own.scope == grant.scope);
         see(grant.level) <= own.map(|own| see(own.level)).min().unwrap_or(0)
     }) && child.can_do.iter().all(|grant| {
@@ -1699,6 +1715,32 @@ mod tests {
         narrow.can_do.retain(|g| g.skill != "mail.read");
         let refused = write_grants(home, CHIEF_AGENT, &narrow);
         assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+    }
+
+    /// READS-4: Mail's free-times row refuses no chief without a calendar See
+    /// row and caps nothing; a real calendar row still exceeds that chief.
+    #[test]
+    fn the_free_times_see_row_refuses_no_chief_narrowing() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        std::fs::create_dir_all(home.join("agents/mail")).unwrap();
+        let mut chief = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        chief.see.retain(|see| see.scope != "calendar");
+        write_grants(home, CHIEF_AGENT, &chief).unwrap();
+        let shipped = aux_runtime::grants::default_grants("mail").unwrap();
+        assert_eq!(grants(home, "mail").unwrap(), shipped);
+        write_grants(home, "mail", &shipped).unwrap();
+        let mut wider = shipped.clone();
+        let row = wider.see.iter_mut().find(|see| see.is_display_only());
+        row.unwrap().via = "local".to_string();
+        let refused = write_grants(home, "mail", &wider);
+        assert!(matches!(refused, Err(RegistryError::ExceedsChief)));
+        let mail = grants(home, "mail").unwrap();
+        assert!(!mail.allows_scope("calendar"));
+        assert!(mail
+            .check_tool("mail", "apple_calendar_list_events")
+            .is_err());
     }
 
     /// The chief is never held to itself: a set wider than its shipped one is

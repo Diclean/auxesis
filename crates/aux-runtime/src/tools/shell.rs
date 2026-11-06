@@ -443,6 +443,9 @@ fn descendant_pids(pid: i32) -> Vec<i32> {
 /// process listing to filter (one `all_pids()` per scan).
 #[cfg(unix)]
 fn session_pids(sid: i32, pids: &[i32]) -> Vec<i32> {
+    if sid == NO_SESSION {
+        return Vec::new();
+    }
     let mut pids_out = Vec::new();
     for &pid in pids {
         if pid == sid {
@@ -1536,17 +1539,10 @@ fn late_retry_logged(reaper: &mut TreeReaper) {
     }
 }
 
-/// Queues `reaper`'s retry (first in, first out) for the late-retry thread,
-/// starting it if needed. No thread: only this retry runs here, and the
-/// failure is logged with the retries still queued for the next thread.
-fn late_retry(reaper: TreeReaper) {
-    let mut queue = late_retries();
-    queue.1.push_back(reaper);
-    if std::mem::replace(&mut queue.0, true) {
-        return;
-    }
-    drop(queue);
-    let worker = || loop {
+/// Runs the queued retries one by one until the queue is empty; the empty
+/// pop marks the late-retry thread idle under the same lock.
+fn drain_late_retries() {
+    loop {
         let next = {
             let mut queue = late_retries();
             let next = queue.1.pop_front();
@@ -1557,21 +1553,67 @@ fn late_retry(reaper: TreeReaper) {
             return;
         };
         late_retry_logged(&mut next);
-    };
-    let spawned = std::thread::Builder::new()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the late-retry thread cannot be spawned on this thread;
+    /// the count says how often the seam refused.
+    static FAIL_LATE_SPAWN: std::cell::Cell<(bool, usize)> =
+        const { std::cell::Cell::new((false, 0)) };
+}
+
+/// Total time the no-thread fallback spends on seen-set kills.
+const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
+
+fn spawn_late_thread() -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAIL_LATE_SPAWN.with(|seam| {
+        let (fail, refused) = seam.get();
+        seam.set((fail, refused + usize::from(fail)));
+        fail
+    }) {
+        return Err(std::io::Error::other("test seam: no late-retry thread"));
+    }
+    std::thread::Builder::new()
         .name("shell-late-retry".into())
-        .spawn(worker);
-    if let Err(err) = spawned {
-        let (mine, pending) = {
+        .spawn(drain_late_retries)
+        .map(drop)
+}
+
+/// Queues `reaper`'s retry (first in, first out) for the late-retry thread,
+/// starting it if needed. No thread: the caller (a turn thread or a tokio
+/// worker) takes the whole queue and marks it idle, then gives every reaper
+/// only a fast kill, never the up-to-2 s sweep: each unreaped root's group,
+/// then its seen processes while [`LATE_INLINE_BUDGET`] lasts.
+fn late_retry(reaper: TreeReaper) {
+    let mut queue = late_retries();
+    queue.1.push_back(reaper);
+    if std::mem::replace(&mut queue.0, true) {
+        return;
+    }
+    let pending = queue.1.len();
+    drop(queue);
+    if let Err(err) = spawn_late_thread() {
+        let queued: Vec<TreeReaper> = {
             let mut queue = late_retries();
             queue.0 = false;
-            // The queue was idle, so this reaper is first.
-            (queue.1.pop_front(), queue.1.len())
+            queue.1.drain(..).collect()
         };
-        tracing::error!(%err, pending, "shell: no late-retry thread; this retry runs inline");
-        if let Some(mut mine) = mine {
-            late_retry_logged(&mut mine);
+        let deadline = std::time::Instant::now() + LATE_INLINE_BUDGET;
+        let mut over_budget = 0usize;
+        for mut reaper in queued {
+            let in_budget = std::time::Instant::now() < deadline;
+            over_budget += usize::from(!in_budget);
+            reaper.fast_kill(in_budget);
         }
+        tracing::error!(
+            %err,
+            pending,
+            over_budget,
+            "shell: no late-retry thread; the queued reapers got a group kill only"
+        );
     }
 }
 
@@ -1721,6 +1763,31 @@ impl TreeReaper {
         )
     }
 
+    /// The no-thread fallback, with no scan: SIGKILL the still-unreaped root's
+    /// group (pinned by the root) and, when `seen_too`, every seen process
+    /// re-checked as the same process. Then disarm.
+    fn fast_kill(&mut self, seen_too: bool) {
+        self.armed = false;
+        #[cfg(unix)]
+        {
+            if let Some(pid) = self.child.as_ref().and_then(|child| child.id()) {
+                // SAFETY: the root is held unreaped, so `-pid` names its group.
+                unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            }
+            let lookup = &pid_ppid_uid_start;
+            for tracked in self
+                .seen
+                .iter()
+                .filter(|t| seen_too && t.still_same(lookup))
+            {
+                // SAFETY: SIGKILL of a seen process, re-checked just before.
+                unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = seen_too;
+    }
+
     /// End of a call: an armed reaper retries on a blocking thread, and the
     /// call returns only after it, with the retry's sweep. A panic is the error.
     async fn retire(mut self) -> Result<Option<Sweep>, tokio::task::JoinError> {
@@ -1786,8 +1853,12 @@ fn wait_exited_unreaped(_pid: i32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Poll (signal 0, harmless even on a reused id) until group `pgid` is
-/// empty, at most `max_time`.
+/// Poll (signal 0) until group `pgid` is empty, at most `max_time`. The root
+/// is reaped by now, so once its group empties the id may name a new group.
+/// Signal 0 sends nothing, so a recycled id only changes the answer: "not
+/// empty" adds a note and keeps the reaper armed, "empty" is the truth for
+/// the original group. Its retry, the root reaped, never signals a group or
+/// session by that id (marker and seen set only).
 async fn wait_group_empty(pgid: i32, max_time: Duration) -> bool {
     #[cfg(unix)]
     {
@@ -2738,22 +2809,27 @@ mod tests {
         }
 
         /// The production normal-exit path: launch, wait for the direct
-        /// child, then `sweep_leftovers` — unchanged production code.
+        /// child to exit *unreaped* (its pid keeps pinning the session id),
+        /// then `sweep_leftovers` — unchanged production code. The caller
+        /// reaps the child after its leftover checks.
         async fn run_once(
             command_line: &str,
             dir: &std::path::Path,
-        ) -> (i32, Marker, tempfile::TempDir) {
+        ) -> (i32, Marker, tempfile::TempDir, tokio::process::Child) {
             let sandbox =
                 ShellSandbox::new(cfg!(target_os = "macos"), false, !cfg!(target_os = "macos"));
             let launched =
                 sandbox::launch(command_line, dir, &sandbox, Duration::from_secs(10)).unwrap();
             let marker = Marker::from_file(&launched.marker_file).unwrap();
             let mut command = launched.command;
-            let mut child = command.spawn().unwrap();
+            let child = command.spawn().unwrap();
             let root = child.id().unwrap() as i32;
-            let _status = child.wait().await.unwrap();
+            tokio::task::spawn_blocking(move || wait_exited_unreaped(root))
+                .await
+                .unwrap()
+                .unwrap();
             let _ = sweep_leftovers(root, &marker, &mut HashSet::new());
-            (root, marker, launched.temp)
+            (root, marker, launched.temp, child)
         }
 
         let iterations = std::env::var("SHELL_STRESS_ITERATIONS")
@@ -2765,14 +2841,14 @@ mod tests {
         for iteration in 0..iterations {
             let dir = tempdir().unwrap();
             // The taint-regression shape: a backgrounded writer.
-            let (root_a, marker_a, _t1) = run_once(
+            let (root_a, marker_a, _t1, mut child_a) = run_once(
                 "(sleep 0.3; printf x > survived_a) </dev/null >/dev/null 2>&1 & echo dropped",
                 dir.path(),
             )
             .await;
             // A backgrounded forker with long-lived helpers: keeps spawning
             // while the sweep runs, so a fork can land after a pass's scan.
-            let (root_b, marker_b, _t2) =
+            let (root_b, marker_b, _t2, mut child_b) =
                 run_once("while :; do sleep 30 & done & echo dropped", dir.path()).await;
 
             // Nothing may be left: neither right after the sweep, nor later.
@@ -2785,6 +2861,8 @@ mod tests {
             left.extend(leftovers(root_a, &marker_a));
             left.extend(leftovers(root_b, &marker_b));
             let wrote = dir.path().join("survived_a").exists();
+            let _ = child_a.wait().await;
+            let _ = child_b.wait().await;
             if !left.is_empty() || wrote {
                 misses += 1;
                 println!("MISS iteration {iteration}: leftover_pids={left:?} writer_file={wrote}");
@@ -3814,7 +3892,9 @@ await(q(bg.pid));
     #[cfg(unix)]
     #[tokio::test]
     async fn a_late_retry_never_kills_the_session_of_a_reused_root_pid() {
-        let leader = "exec perl -MPOSIX -e 'POSIX::setsid; exec q(sh), q(-c), q(sleep 60 & wait)'";
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        let leader =
+            "exec /usr/bin/perl -MPOSIX -e 'POSIX::setsid; exec q(sh), q(-c), q(sleep 60 & wait)'";
         let mut guard = Spawned(vec![spawn_sh(leader)], Vec::new());
         let reused = guard.0[0].id() as i32;
         let member = (0..500).find_map(|_| {
@@ -3845,6 +3925,90 @@ await(q(bg.pid));
             member.still_same(&pid_ppid_uid_start),
             "C {member:?} of the session that reused the root's pid was killed"
         );
+    }
+
+    /// Serialises the tests that drive the global late-retry queue.
+    static LATE_QUEUE_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// SHELL-SWEEP-6 (1): the late-retry thread cannot be spawned. Every
+    /// queued reaper still gets a kill: each root's group (a shell and its
+    /// `sleep`) is gone, and none of them is left in the queue.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_late_thread_still_kills_every_queued_reaper() {
+        use std::os::unix::process::CommandExt;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        for _ in 0..1000 {
+            if !late_retries().0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let mut reapers = Vec::new();
+        let mut roots = Vec::new();
+        let mut sleepers = Spawned(Vec::new(), Vec::new());
+        for _ in 0..3 {
+            let mut root = std::process::Command::new("/bin/sh");
+            root.args(["-c", "sleep 60 & wait"]).process_group(0);
+            let mut root = tokio::process::Command::from(root);
+            let root = root.kill_on_drop(true).spawn().unwrap();
+            let pid = root.id().unwrap() as i32;
+            let sleeper = (0..500).find_map(|_| {
+                std::thread::sleep(Duration::from_millis(10));
+                child_pids(pid).first().copied()
+            });
+            let sleeper = TrackedPid::of(sleeper.expect("the root never forked")).unwrap();
+            sleepers.1.push(sleeper);
+            roots.push(Some(pid));
+            let marker_file = tempfile::tempfile().unwrap();
+            let marker = Marker::from_file(&marker_file).unwrap();
+            let mut reaper = TreeReaper::new(root, marker).holding(marker_file);
+            reaper.disarm();
+            reapers.push(reaper);
+        }
+        let last = reapers.pop().unwrap();
+        late_retries().1.extend(reapers);
+        FAIL_LATE_SPAWN.with(|seam| seam.set((true, 0)));
+        late_retry(last);
+        let (_, refused) = FAIL_LATE_SPAWN.with(|seam| seam.replace((false, 0)));
+        assert_eq!(refused, 1, "the spawn-failure path never ran");
+        let left = late_retries()
+            .1
+            .iter()
+            .filter(|r| roots.contains(&r.root))
+            .count();
+        assert_eq!(left, 0, "queued reapers were left in the queue");
+        for sleeper in &sleepers.1 {
+            let gone = gone_within(sleeper.pid, Duration::from_secs(2)).await;
+            assert!(
+                gone,
+                "queued reaper's process {} was never killed",
+                sleeper.pid
+            );
+        }
+    }
+
+    /// SHELL-SWEEP-6 (3): a sweep left not clean keeps the reaper armed; its
+    /// retry runs after the reap, so it is never clean: its note reaches the
+    /// output after "[after the retry]", the no-session one unless the
+    /// machine-wide sweep found something else to report.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_retry_after_the_reap_notes_no_session() {
+        assert_eq!(session_pids(NO_SESSION, &all_pids()), Vec::<i32>::new());
+        let dir = tempdir().unwrap();
+        let mut tool = test_tool(DEFAULT_TIMEOUT);
+        tool.sweep_visibility = Some((0, Visibility::OutOfMemory));
+        let out = tool
+            .run(&json!({"command": "echo hi"}), &ctx(dir.path()))
+            .await
+            .unwrap();
+        let text = &out.content;
+        let after = text.split("[after the retry] ").nth(1);
+        let after = after.unwrap_or_else(|| panic!("no retry note: {text}"));
+        let no_session = after.starts_with(Undescribed::NoSession.note());
+        assert!(no_session || after.starts_with("[cleanup "), "{text}");
+        assert!(!out.is_error, "content: {}", out.content);
     }
 
     /// SHELL-SWEEP-4 (5): the stop path reads the same seam as the exit path:

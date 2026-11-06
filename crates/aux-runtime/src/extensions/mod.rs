@@ -74,14 +74,24 @@ pub const CATALOG_PUBKEY: [u8; 32] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-/// `text` safe on one terminal line: a control, bidi (U+202A–E, U+2066–9,
-/// U+200E/F, U+061C) or invisible format character is shown as `\u{..}`.
+/// `text` safe on one terminal line: every character of the Unicode
+/// categories Cc (controls), Cf (format: bidi, invisible, tags, interlinear
+/// annotation), Zl and Zp (line and paragraph separators) is shown as
+/// `\u{..}`. The Cf set is spelled by range (Unicode 15.1), with no new
+/// dependency; an unassigned code point inside a range is escaped too.
 pub fn escape_text(text: &str) -> String {
     let hidden = |c: char| {
         c.is_control()
-            || matches!(c, '\u{061c}' | '\u{00ad}' | '\u{feff}')
-            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}')
-            || matches!(c, '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206f}')
+            || matches!(
+                c,
+                '\u{00ad}' | '\u{061c}' | '\u{06dd}' | '\u{070f}' | '\u{08e2}' | '\u{180e}'
+            )
+            || matches!(c, '\u{feff}' | '\u{110bd}' | '\u{110cd}')
+            || matches!(c, '\u{0600}'..='\u{0605}' | '\u{0890}'..='\u{0891}')
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}')
+            || matches!(c, '\u{2060}'..='\u{206f}' | '\u{fff9}'..='\u{fffb}')
+            || matches!(c, '\u{13430}'..='\u{1343f}' | '\u{1bca0}'..='\u{1bca3}')
+            || matches!(c, '\u{1d173}'..='\u{1d17a}' | '\u{e0000}'..='\u{e007f}')
     };
     text.chars()
         .map(|c| match hidden(c) {
@@ -284,5 +294,19 @@ mod tests {
             load_verified_catalog(home.path()).is_none(),
             "the placeholder key must refuse every catalog, even a present cache"
         );
+    }
+
+    // EXT-ANCHOR-10: every Cc, Cf, Zl and Zp character is escaped, tags and
+    // interlinear annotation included; printable text is kept as it is.
+    #[test]
+    fn escape_text_escapes_every_control_format_and_separator() {
+        let hidden = "\u{1b}\u{85}\u{ad}\u{600}\u{61c}\u{180e}\u{200b}\u{200e}\u{2028}\u{2029}\
+                      \u{202e}\u{2066}\u{feff}\u{fff9}\u{fffa}\u{fffb}\u{110bd}\u{1d173}\
+                      \u{e0001}\u{e0041}\u{e007f}";
+        for c in hidden.chars() {
+            let shown = escape_text(&format!("a{c}b"));
+            assert_eq!(shown, format!("a\\u{{{:x}}}b", u32::from(c)), "{c:?}");
+        }
+        assert_eq!(escape_text("café 中 🙂 a-b_c"), "café 中 🙂 a-b_c");
     }
 }

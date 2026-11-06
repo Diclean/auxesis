@@ -384,6 +384,9 @@ pub fn valid_secret_name(extension: &str, secret: &str) -> bool {
 }
 
 /// Parse `host:port` (case-insensitive host, no wildcard).
+///
+/// The host never holds `*`, `:` or `@`: a wildcard, `a:b:443` and a
+/// bracketed IPv6 literal (`[::1]:443`, never supported here) are refused.
 pub fn parse_host_port(text: &str) -> Option<(String, u16)> {
     // Printable ASCII only: no whitespace, control, bidi or other format
     // character can hide in a host the owner approves (an IDN is punycode).
@@ -392,7 +395,7 @@ pub fn parse_host_port(text: &str) -> Option<(String, u16)> {
     }
     let (host, port) = text.rsplit_once(':')?;
     let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    if host.is_empty() || host.contains('/') {
+    if host.is_empty() || host.contains(&['/', '*', ':', '@'][..]) {
         return None;
     }
     let port: u16 = port.trim().parse().ok()?;
@@ -792,6 +795,12 @@ fs = []
             "zero\u{200b}width.example:443",
             "bom\u{feff}.example:443",
             "café.example:443",
+            // EXT-ANCHOR-10: no wildcard, no `:` or `@` inside the host.
+            "*:443",
+            "*.example.org:443",
+            "a:b:443",
+            "[::1]:443",
+            "user@example.org:443",
         ] {
             assert_eq!(parse_host_port(host), None, "{host:?}");
         }

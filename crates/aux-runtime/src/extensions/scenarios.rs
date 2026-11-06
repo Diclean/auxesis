@@ -484,8 +484,9 @@ async fn accept_repins_the_current_identity() {
     let script = fixture_script("Ping the fixture");
     install_fixture(home.path(), "demo", &script).await;
     mount(home.path(), "demo", "alice").unwrap();
-    // The owner installs a new build (its own pinned sha256) without re-pinning
-    // its tools, so the changed description freezes it on the next start.
+    // The owner installs a new build (its own pinned sha256) as the CLI does:
+    // over the approval nothing is re-pinned, so the changed description
+    // freezes it on the next start.
     let v2 = fixture_script("Ping the fixture v2");
     let scratch = tempfile::tempdir().unwrap();
     let path = write_script(scratch.path(), "server", &v2);
@@ -496,7 +497,7 @@ async fn accept_repins_the_current_identity() {
         &entry,
         &InstallOptions {
             allow_loopback: true,
-            pin: false,
+            pin: true,
         },
     )
     .await
@@ -519,8 +520,22 @@ async fn accept_repins_the_current_identity() {
     assert!(is_frozen(home.path(), "demo"), "nothing re-pinned");
     let refused = super::mount::require_approval(home.path(), &installed).unwrap_err();
     assert!(refused.to_string().contains("sha256"), "{refused}");
-    // `verify --accept` naming the build re-pins the live identity and bytes.
-    let accepted = super::session::accept_installed(home.path(), "demo", false, Some("1.0.0"))
+    // EXT-ANCHOR-10: naming the build is not enough: the changed `ping` is
+    // named too, never re-pinned silently, and the row stays frozen.
+    let err = super::session::accept_installed(home.path(), "demo", false, Some("1.0.0"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("changed \"ping\""), "{err}");
+    let fix = "`aux ext verify demo --accept --accept-change tools`";
+    assert!(err.contains(fix), "{err}");
+    assert!(is_frozen(home.path(), "demo"), "nothing unfrozen");
+    // `verify --accept --accept-change tools` re-pins the live identity.
+    let options = super::session::AcceptOptions {
+        launch_change: &["tools".to_owned()],
+        ..Default::default()
+    };
+    let accepted = super::session::accept_with(home.path(), "demo", &options, |_| {})
         .await
         .unwrap();
     let pin = hex(&Sha256::digest(v2.as_bytes()));
@@ -1260,4 +1275,81 @@ async fn accept_prints_and_audits_before_the_child_starts() {
         ["trusted ran=false", "pinned", "done ran=true"]
     );
     assert_eq!(outcomes(home.path()), ["pinned", "started"]);
+}
+
+// EXT-ANCHOR-10: `remove` keeps the last approval, so `remove && install` of
+// a wider build is no fresh yes: it is not started, and the mount names the
+// field. `remove --forget` drops it for a true first install.
+#[tokio::test]
+async fn remove_then_install_diffs_over_the_last_approval() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    remove(home.path(), "demo").unwrap();
+    assert!(load_state(home.path(), "demo").is_none());
+    let last = home.path().join("extensions/state/demo.last.json");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&last).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let mut wider = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Public);
+    wider.tools[0].network = vec!["b.example:443".to_owned()];
+    install_upgrade(home.path(), wider.clone(), &script).await;
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert!(kept.network.is_empty(), "the last yes is back: {kept:?}");
+    let err = mount(home.path(), "demo", "alice").unwrap_err().to_string();
+    assert!(err.starts_with("approval_required"), "{err}");
+    assert!(
+        err.contains("new network hosts: \"b.example:443\""),
+        "{err}"
+    );
+    assert!(err.contains("--accept-change network"), "{err}");
+    // `--forget` drops the last row too: the next install is a first one.
+    super::install::remove_and_forget(home.path(), "demo").unwrap();
+    assert!(!last.exists() && load_state(home.path(), "demo").is_none());
+    install_upgrade(home.path(), wider, &script).await;
+    let fresh = load_state(home.path(), "demo").unwrap();
+    assert_eq!(fresh.network, vec!["b.example:443"]);
+    mount(home.path(), "demo", "alice").unwrap();
+}
+
+// EXT-ANCHOR-10: `tools` is a trust field. v2 with the same hosts but a new
+// tool is refused by a plain `--accept`, which names the tool and keeps the
+// freeze; `--accept-change tools` re-pins it, and only when a tool changed.
+#[tokio::test]
+async fn accept_refuses_a_new_tool_until_tools_is_named() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    let extra = r#"{"name":"extra","description":"Extra","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},{"name":"leak""#;
+    let v2 = script.replacen(r#"{"name":"leak""#, extra, 1);
+    assert_ne!(v2, script);
+    let entry = fixture_entry("demo", v2.as_bytes(), "2.0.0", Sensitivity::Public);
+    install_upgrade(home.path(), entry, &v2).await;
+    let accept = super::session::accept_installed(home.path(), "demo", false, Some("2.0.0"));
+    let err = accept.await.unwrap_err().to_string();
+    assert!(err.contains("added \"extra\""), "{err}");
+    let fix = "`aux ext verify demo --accept --accept-change tools`";
+    assert!(err.contains(fix), "{err}");
+    assert!(is_frozen(home.path(), "demo"), "nothing unfrozen");
+    let pinned = load_state(home.path(), "demo").unwrap().tools;
+    assert!(!pinned.contains_key("extra"), "{pinned:?}");
+    let options = super::session::AcceptOptions {
+        launch_change: &["tools".to_owned()],
+        ..Default::default()
+    };
+    let accepted = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    let state = accepted.unwrap().state;
+    assert!(
+        state.tools.contains_key("extra") && !state.frozen,
+        "{state:?}"
+    );
+    let again = super::session::accept_with(home.path(), "demo", &options, |_| {}).await;
+    let again = again.unwrap_err().to_string();
+    assert!(
+        again.contains("has no changed tool: drop `tools`"),
+        "{again}"
+    );
 }

@@ -457,7 +457,7 @@ pub async fn run(State(state): State<Arc<ApiState>>) -> Response {
                 router.as_ref(),
                 &store,
                 Local::now(),
-                || kernel_core::killswitch::is_stopped(&home),
+                || aux_engine::marker_engaged(&home),
                 BriefTrigger::Manual,
             )
             .map_err(RouteError::from)?;

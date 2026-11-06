@@ -477,9 +477,6 @@ impl AgentJobRunner {
         let approver = Arc::new(NonInteractiveApprover::default());
         let active_skills = aux_engine::load_active_skills(&self.home, &agent_config.skills)
             .map_err(std::io::Error::other)?;
-        // A job transcript is its own session, durably marked `job`: it can
-        // never become the agent's chat thread. Like a private chat, a private
-        // run stores no title.
         // The rules come first: a turn they refuse leaves no empty session.
         let rules = self.turn_rules(
             &job.agent,
@@ -488,19 +485,23 @@ impl AgentJobRunner {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )?;
+        // Like a private chat, a private run stores no title.
         let title = (mode != PrivacyMode::Private).then(|| format!("job {}", job.name));
-        let session = kernel_core::sync::lock_recover(store).create_session_of_kind(
-            &job.agent,
-            title.as_deref(),
-            "job",
-        )?;
+        // Past the budget stop no store write runs: the gate refuses it.
+        let session = aux_engine::gated_store_write(|| {
+            kernel_core::sync::lock_recover(store).create_session_of_kind(
+                &job.agent,
+                title.as_deref(),
+                "job",
+            )
+        })?;
         // Load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
         crate::agent_skills::load_agent_skills(&self.home, &job.agent, store);
         // The current-thread runtime is cached per blocking worker
         // thread, not rebuilt per run.
         let outcome = crate::turn_runtime::block_on(async {
-            let mut session = ChatSession::start(ChatSetup {
+            let started = ChatSession::start(ChatSetup {
                 mode: agent_mode_fn(&self.home, &job.agent),
                 contacts,
                 store: StoreHandle::Shared(Arc::clone(store)),
@@ -523,9 +524,28 @@ impl AgentJobRunner {
                 session_id: Some(session.id),
                 events: None,
                 run_id: None,
-            })?
-            .with_input_source("schedule");
-            session.send(&spec.prompt).await
+            });
+            // A start that fails here has written nothing the owner could
+            // read: the empty `job` session goes, and the error is the run's.
+            let mut chat = match started {
+                Ok(chat) => chat.with_input_source("schedule"),
+                Err(err) => {
+                    // Through the stop gate: a start refused because the
+                    // daemon is stopping leaves the row, never a late write.
+                    if let Err(remove) = aux_engine::gated_store_write(|| {
+                        kernel_core::sync::lock_recover(store).delete_session(session.id)
+                    }) {
+                        tracing::warn!(
+                            job_id = job.id,
+                            session_id = session.id,
+                            error = %remove,
+                            "could not remove the empty job session after a failed start"
+                        );
+                    }
+                    return Err(err);
+                }
+            };
+            chat.send(&spec.prompt).await
         })??;
         // A private run's answer holds the session's tokens. Its summary stays
         // in the local run record, so it is rehydrated here, on the Mac.
@@ -1593,11 +1613,13 @@ mod tests {
         assert!(err.to_string().contains("unreadable"), "{err}");
     }
 
-    /// A scheduled job of an agent with a malformed `agent.toml` fails closed
-    /// through the whole run: a failed run that names the file, no model call,
-    /// no session row.
+    /// A scheduled job of an agent with a malformed `agent.toml` is refused by
+    /// the run's preflight (`agent::config`), before any turn is built: a
+    /// failed run that names the file, no model call, no session row. (The
+    /// turn's own rules and the start are covered by the two `run_turn` tests
+    /// below; the preflight always catches a bad file first.)
     #[test]
-    fn a_scheduled_job_fails_closed_on_a_malformed_agent_toml() {
+    fn a_scheduled_job_with_a_malformed_agent_toml_is_refused_in_preflight() {
         let mut harness = Harness::new();
         let dir = aux_engine::agent_dir(&harness.home, "main");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1624,10 +1646,10 @@ mod tests {
         assert!(harness.store().list_sessions().unwrap().is_empty());
     }
 
-    /// The same for a config that cannot be opened as a file at all (a
-    /// directory where `agent.toml` should be).
+    /// The same preflight refusal for a config that cannot be opened as a file
+    /// at all (a directory where `agent.toml` should be).
     #[test]
-    fn a_scheduled_job_fails_closed_on_an_agent_toml_that_cannot_be_opened() {
+    fn a_scheduled_job_with_an_unopenable_agent_toml_is_refused_in_preflight() {
         let mut harness = Harness::new();
         let dir = aux_engine::agent_dir(&harness.home, "main");
         std::fs::create_dir_all(dir.join("agent.toml")).unwrap();
@@ -1682,6 +1704,42 @@ mod tests {
         assert!(
             harness.store().list_sessions().unwrap().is_empty(),
             "no session row for a refused turn"
+        );
+    }
+
+    /// `ChatSession::start` can fail after the job's session row was written
+    /// (here the agent name is too long, so the start refuses it): the empty
+    /// `job` session is removed, and the error still comes back.
+    #[test]
+    fn a_job_whose_chat_start_fails_leaves_no_empty_session() {
+        let harness = Harness::new();
+        let agent = "a".repeat(65);
+        let provider = Arc::new(FakeProvider::echo("fake"));
+        let runner = harness.runner(Arc::clone(&provider), vec![], &Budgets::default());
+        let job = harness
+            .store()
+            .create_job(&agent, "morning", "every 15m", &job_payload("hello"), None)
+            .unwrap();
+        let spec = AgentJobSpec::parse(&job).unwrap();
+
+        let err = runner
+            .run_turn(
+                &harness.store,
+                &job,
+                &spec,
+                Arc::new(RwLock::new(ToolRegistry::new())),
+                provider.as_ref(),
+                &AgentConfig::default(),
+                PrivacyMode::Open,
+                aux_runtime::known_names::empty_contacts(),
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("64 characters"), "{err}");
+        assert_eq!(provider.request_count(), 0);
+        assert!(
+            harness.store().list_sessions().unwrap().is_empty(),
+            "a failed start left an empty job session"
         );
     }
 

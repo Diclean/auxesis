@@ -39,8 +39,9 @@ impl Store {
     }
 
     /// Create a session of `kind`: `chat` for conversations, `job` for a
-    /// scheduled-run transcript. Only `chat` sessions can become an agent's
-    /// current thread, so a job run never hijacks the chat.
+    /// scheduled-run transcript. A job transcript is its own session, durably
+    /// marked `job`: only `chat` sessions can become an agent's current
+    /// thread, so a job run never hijacks the chat.
     pub fn create_session_of_kind(
         &self,
         agent: &str,

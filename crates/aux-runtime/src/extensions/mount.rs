@@ -90,7 +90,7 @@ pub fn launch_pin(entry: &super::catalog::Entry) -> LaunchPin {
 }
 
 /// The names of the fields that differ between two launch pins.
-fn changed_launch_fields(pinned: &LaunchPin, now: &LaunchPin) -> Vec<&'static str> {
+pub(crate) fn changed_launch_fields(pinned: &LaunchPin, now: &LaunchPin) -> Vec<&'static str> {
     let mut changed = Vec::new();
     let mut check = |differs: bool, field| {
         if differs {
@@ -140,6 +140,15 @@ pub enum MountError {
         /// Extension name.
         name: String,
         /// Content-free reason: what changed.
+        reason: String,
+    },
+    /// The install could not be checked for another reason than other bytes:
+    /// no `--accept` fixes it, so none is suggested.
+    #[error("extension `{name}` failed its install check: {reason}")]
+    Unverified {
+        /// Extension name.
+        name: String,
+        /// What failed.
         reason: String,
     },
     /// The agent name is empty.
@@ -406,6 +415,25 @@ pub fn require_approval(
     Ok(state)
 }
 
+/// A re-hash refusal as a mount error. Only other bytes ask the owner for
+/// `--accept` (the reason carries both hashes); a read failure is IO and never
+/// does, since a re-approval cannot fix it.
+fn install_refusal(name: &str, err: super::install::InstallError) -> MountError {
+    use super::install::InstallError;
+    match err {
+        InstallError::NotInstalled(_) => MountError::NotInstalled(name.to_owned()),
+        InstallError::HashMismatch { .. } => MountError::ApprovalRequired {
+            name: name.to_owned(),
+            reason: err.to_string(),
+        },
+        InstallError::Io(err) => MountError::Io(err),
+        other => MountError::Unverified {
+            name: name.to_owned(),
+            reason: other.to_string(),
+        },
+    }
+}
+
 /// Mount `name` for `agent`.
 ///
 /// The extension must be installed **and** carry a pinned identity row; a
@@ -415,13 +443,8 @@ pub fn mount(home: &Path, name: &str, agent: &str) -> Result<(), MountError> {
         return Err(MountError::InvalidAgent);
     }
     // Re-hashed like a start: a binary rewritten in place is never mounted.
-    let installed = super::install::verify_installed(home, name).map_err(|err| match err {
-        super::install::InstallError::NotInstalled(_) => MountError::NotInstalled(name.to_owned()),
-        other => MountError::ApprovalRequired {
-            name: name.to_owned(),
-            reason: other.to_string(),
-        },
-    })?;
+    let installed =
+        super::install::verify_installed(home, name).map_err(|err| install_refusal(name, err))?;
     let state = load_state(home, name).ok_or_else(|| MountError::MissingState(name.to_owned()))?;
     if state.frozen {
         return Err(MountError::Frozen(name.to_owned()));
@@ -530,7 +553,7 @@ pub fn accept(home: &Path, name: &str) -> Result<(), MountError> {
     ledger::log(
         home,
         "ext.verify",
-        &serde_json::json!({"name": name, "version": state.version, "accepted": true}),
+        &serde_json::json!({"name": name, "version": state.version, "accepted": true, "sha256": state.artefact}),
     );
     Ok(())
 }
@@ -1058,6 +1081,47 @@ mod tests {
             err.contains("changed launch fields: source.type, sensitivity, run.args"),
             "{err}"
         );
+    }
+
+    // EXT-ANCHOR-8: changed bytes at the approved build are refused at mount
+    // with both hashes; a read failure is IO and never suggests `--accept`.
+    #[test]
+    fn a_mount_refuses_changed_bytes_and_maps_a_read_failure_to_io() {
+        let home = tempfile::tempdir().unwrap();
+        install_entry(
+            home.path(),
+            "demo",
+            super::super::catalog::Sensitivity::Public,
+        );
+        store_state(home.path(), &state("demo")).unwrap();
+        let server = super::super::install_dir(home.path(), "demo", "1.0.0").join("server");
+        std::fs::write(&server, b"#!other-bytes").unwrap();
+        let err = mount(home.path(), "demo", "alice").unwrap_err();
+        assert!(matches!(err, MountError::ApprovalRequired { .. }), "{err}");
+        let other = {
+            use sha2::Digest;
+            super::super::hex(&sha2::Sha256::digest(b"#!other-bytes"))
+        };
+        let text = err.to_string();
+        assert!(
+            text.contains(&server_sha()) && text.contains(&other),
+            "{text}"
+        );
+        assert!(!is_mounted(home.path(), "demo", "alice"));
+        std::fs::remove_file(&server).unwrap();
+        std::fs::create_dir(&server).unwrap();
+        let err = mount(home.path(), "demo", "alice").unwrap_err();
+        assert!(matches!(err, MountError::Io(_)), "{err}");
+        assert!(!err.to_string().contains("--accept"), "{err}");
+        assert!(!is_mounted(home.path(), "demo", "alice"));
+    }
+
+    #[test]
+    fn an_unverified_install_never_asks_for_accept() {
+        let other = super::super::install::InstallError::Unpack("bad".to_owned());
+        let err = install_refusal("demo", other);
+        assert!(matches!(err, MountError::Unverified { .. }), "{err}");
+        assert!(!err.to_string().contains("--accept"), "{err}");
     }
 
     #[test]

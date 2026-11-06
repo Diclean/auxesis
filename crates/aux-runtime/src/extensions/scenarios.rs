@@ -1605,6 +1605,42 @@ async fn a_freeze_before_the_restore_is_kept() {
     assert_eq!(audit["frozen"], true, "{audit}");
 }
 
+// EXT-ANCHOR-12 r2: a freeze after the store, while the build starts, is kept
+// by the final unfreeze: v1's row comes back frozen, `frozen_during_start` is
+// audited, and the advice names v2 over v1 (never `tools`: they match).
+#[tokio::test]
+async fn a_freeze_during_the_start_restores_the_approved_row_frozen() {
+    let home = tempfile::tempdir().unwrap();
+    let script = fixture_script("Ping the fixture");
+    install_fixture(home.path(), "demo", &script).await;
+    let before = load_state(home.path(), "demo").unwrap();
+    let mut entry = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
+    entry.tools[0].network = vec!["b.example:443".to_owned()];
+    install_upgrade(home.path(), entry, &script).await;
+    let options = super::session::AcceptOptions {
+        downgrade_to: Some("2.0.0"),
+        launch_change: &["network".to_owned()],
+        ..Default::default()
+    };
+    let path = home.path().to_path_buf();
+    let freeze_v2 = |_: &ExtensionState| freeze(&path, "demo", "daemon drift").unwrap();
+    let err = super::session::accept_with(home.path(), "demo", &options, freeze_v2).await;
+    let err = err.unwrap_err().to_string();
+    assert!(err.contains("frozen or changed while it started"), "{err}");
+    assert!(err.contains("--downgrade-to 2.0.0"), "{err}");
+    assert!(!err.contains("tools"), "{err}");
+    let kept = load_state(home.path(), "demo").unwrap();
+    let frozen = ExtensionState {
+        frozen: true,
+        ..before
+    };
+    assert_eq!(format!("{kept:?}"), format!("{frozen:?}"));
+    let audit = audit_row(home.path(), "frozen_during_start");
+    assert_eq!(audit["refused_version"], "2.0.0", "{audit}");
+    assert_eq!(audit["restored_version"], "1.0.0", "{audit}");
+    assert_eq!(audit["frozen"], true, "{audit}");
+}
+
 // EXT-ANCHOR-12: another row written between the store and the restore is
 // kept as it is: the audit says `kept_current` and restores nothing.
 #[tokio::test]

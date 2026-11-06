@@ -301,11 +301,56 @@ pub fn store_state(home: &Path, state: &ExtensionState) -> std::io::Result<()> {
 pub(crate) struct StateLock(std::fs::File);
 
 impl StateLock {
-    /// Block until this process holds the lock of `name`. The file is opened
-    /// fd-relative, `O_NOFOLLOW | O_NONBLOCK` (a planted FIFO never hangs),
-    /// and must be a regular file.
+    /// How long a caller waits for the lock before it is refused as busy (as
+    /// `kernel_core::config_lock`): holders only read and write one row.
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+    const STEP: std::time::Duration = std::time::Duration::from_millis(20);
+
+    /// Take the lock of `name`, waiting at most [`Self::WAIT`] (blocking: for
+    /// sync callers and `spawn_blocking`). The file is opened fd-relative,
+    /// `O_NOFOLLOW | O_NONBLOCK` (a planted FIFO never hangs), and must be a
+    /// regular file with one link (a hard link is refused).
     pub(crate) fn acquire(home: &Path, name: &str) -> std::io::Result<Self> {
+        Self::acquire_within(home, name, Self::WAIT)
+    }
+
+    fn acquire_within(home: &Path, name: &str, wait: std::time::Duration) -> std::io::Result<Self> {
+        let file = Self::open(home, name)?;
+        let deadline = std::time::Instant::now() + wait;
+        while !Self::try_hold(&file)? {
+            if std::time::Instant::now() >= deadline {
+                return Err(state_busy(name));
+            }
+            std::thread::sleep(Self::STEP);
+        }
+        Ok(Self(file))
+    }
+
+    /// [`Self::acquire`] for async callers: the wait sleeps on the runtime
+    /// timer and never blocks a tokio worker.
+    pub(crate) async fn acquire_async(home: &Path, name: &str) -> std::io::Result<Self> {
+        let file = Self::open(home, name)?;
+        let deadline = std::time::Instant::now() + Self::WAIT;
+        while !Self::try_hold(&file)? {
+            if std::time::Instant::now() >= deadline {
+                return Err(state_busy(name));
+            }
+            tokio::time::sleep(Self::STEP).await;
+        }
+        Ok(Self(file))
+    }
+
+    fn try_hold(file: &std::fs::File) -> std::io::Result<bool> {
+        match file.try_lock() {
+            Ok(()) => Ok(true),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+            Err(std::fs::TryLockError::Error(err)) => Err(err),
+        }
+    }
+
+    fn open(home: &Path, name: &str) -> std::io::Result<std::fs::File> {
         use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::MetadataExt;
         let handle = kernel_core::SandboxHome::open(home)?;
         let dirs = Path::new("extensions/state");
         handle.create_dir_all(dirs)?;
@@ -329,11 +374,11 @@ impl StateLock {
         }
         // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
-        if !file.metadata()?.is_file() {
+        let meta = file.metadata()?;
+        if !meta.is_file() || meta.nlink() != 1 {
             return Err(std::io::ErrorKind::InvalidData.into());
         }
-        file.lock()?;
-        Ok(Self(file))
+        Ok(file)
     }
 
     /// The freeze epoch: how many freezes this lock file has seen.
@@ -347,6 +392,14 @@ impl StateLock {
         file.seek(std::io::SeekFrom::End(0))?;
         file.write_all(b"\n")
     }
+}
+
+/// The refusal when another aux process holds the row lock past the wait.
+pub(crate) fn state_busy(name: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        format!("extension state of `{name}` is busy (another aux process is writing it); retry in a moment"),
+    )
 }
 
 /// `extensions/state/<name>.last.json`: the approval a `remove` keeps
@@ -817,7 +870,12 @@ impl ExtensionHost {
             match session_for(home, &installed, &SessionOptions::default()).await {
                 Ok(session) => {
                     let session = Arc::new(session);
-                    if verify_identity(home, &name, &session.tools).is_ok() {
+                    // r2: `freeze` may wait on the row lock: off the worker.
+                    let (path, id, tools) =
+                        (home.to_path_buf(), name.clone(), session.tools.clone());
+                    let verified =
+                        tokio::task::spawn_blocking(move || verify_identity(&path, &id, &tools));
+                    if matches!(verified.await, Ok(Ok(()))) {
                         host.sessions.insert(name, session);
                     }
                 }
@@ -1064,6 +1122,36 @@ mod tests {
         let made = std::process::Command::new("mkfifo").arg(&fifo).status();
         assert!(made.unwrap().success());
         assert!(StateLock::acquire(home.path(), "other").is_err());
+    }
+
+    // EXT-ANCHOR-12 r2: two holders exclude each other; a second taker waits,
+    // then is refused as busy, and gets the lock once the first lets go. A
+    // freeze past the wait still writes the row frozen. A hard-linked lock
+    // file is refused.
+    #[test]
+    fn the_row_lock_excludes_a_second_holder() {
+        let home = tempfile::tempdir().unwrap();
+        store_state(home.path(), &state("demo")).unwrap();
+        let held = StateLock::acquire(home.path(), "demo").unwrap();
+        let wait = std::time::Duration::from_millis(150);
+        let path = home.path().to_path_buf();
+        let start = std::time::Instant::now();
+        let second =
+            std::thread::spawn(move || StateLock::acquire_within(&path, "demo", wait).map(|_| ()));
+        let err = second.join().unwrap().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(err.to_string().contains("busy"), "{err}");
+        assert!(start.elapsed() >= wait, "it waited before refusing");
+        assert!(freeze(home.path(), "demo", "while held").is_err());
+        assert!(
+            is_frozen(home.path(), "demo"),
+            "a busy lock never stops a freeze"
+        );
+        drop(held);
+        assert!(StateLock::acquire_within(home.path(), "demo", wait).is_ok());
+        let dir = home.path().join("extensions/state");
+        std::fs::hard_link(dir.join("demo.lock"), home.path().join("twin")).unwrap();
+        assert!(StateLock::acquire(home.path(), "demo").is_err());
     }
 
     fn unreadable_table(home: &Path) -> PathBuf {

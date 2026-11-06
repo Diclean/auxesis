@@ -87,22 +87,49 @@ fn classify(message: &Message, registry: &ToolRegistry) -> Row {
     }
 }
 
+/// Schemes whose body is never a host (READS-8 rev 2, view-source READS-9),
+/// as shown: the scheme and its colon.
+const BODY_ONLY: [&str; 6] = [
+    "javascript:",
+    "data:",
+    "vbscript:",
+    "about:",
+    "blob:",
+    "view-source:",
+];
+
+/// The [`BODY_ONLY`] entry a scheme names, case-insensitively, once the tabs
+/// and newlines WHATWG drops from a URL are removed (`java\tscript`).
+fn body_only(scheme: &str) -> Option<&'static str> {
+    BODY_ONLY.iter().copied().find(|shown| {
+        let mut cleaned = scheme.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r'));
+        let name = shown.trim_end_matches(':');
+        name.chars()
+            .all(|n| cleaned.next().is_some_and(|c| c.eq_ignore_ascii_case(&n)))
+            && cleaned.next().is_none()
+    })
+}
+
 /// The host (and port) of a model-chosen URL: never its user info, path,
 /// query or fragment, which can carry what the page was asked (READS-6).
 /// A URL with no host (`file:///etc/passwd`) gives its scheme, never the
 /// path (READS-7), and an opaque one (`javascript:alert(1)`, `data:,x`)
-/// gives `javascript:` / `data:`, never its body (READS-8). Every taint row,
+/// gives `javascript:` / `data:`, never its body (READS-8). Leading C0
+/// controls and spaces are dropped first, as WHATWG does (READS-9); text
+/// before `://` that no scheme can hold gives nothing. Every taint row,
 /// Activity entry and card shows this.
-/// Schemes whose body is never a host (READS-8 rev 2).
-const BODY_ONLY: [&str; 5] = ["javascript", "data", "vbscript", "about", "blob"];
-
 pub(crate) fn url_host(raw: &str) -> &str {
-    let rest = raw.trim_start();
+    let rest = raw.trim_start_matches(|c: char| c <= '\u{20}' || c.is_whitespace());
     // Schemes that never name a host: their scheme only, whatever follows
     // (`javascript://token`, `data:x@token` would otherwise parse a host).
     if let Some((scheme, _)) = rest.split_once(':') {
-        if BODY_ONLY.iter().any(|s| scheme.eq_ignore_ascii_case(s)) {
-            return &rest[..=scheme.len()];
+        if let Some(shown) = body_only(scheme) {
+            // No tab or newline dropped: show the scheme as written.
+            return if scheme.len() + 1 == shown.len() {
+                &rest[..=scheme.len()]
+            } else {
+                shown
+            };
         }
     }
     if let Some(scheme) = opaque_scheme(rest) {
@@ -122,12 +149,13 @@ pub(crate) fn url_host(raw: &str) -> &str {
     let host_ok = host
         .chars()
         .all(|c| c.is_alphanumeric() || ".-_:[]%".contains(c));
-    if (host.is_empty() || !host_ok) && scheme_ok {
-        scheme
-    } else if host_ok {
-        host
-    } else {
+    if !scheme_ok {
+        // `java%73cript://token`: no scheme, so what follows is a body.
         ""
+    } else if host.is_empty() || !host_ok {
+        scheme
+    } else {
+        host
     }
 }
 
@@ -299,6 +327,20 @@ mod tests {
             ("user:pw@a.example/x", "a.example"),
             ("a.example:8443/x", "a.example:8443"),
             ("[::1]:80/x", "[::1]:80"),
+            // READS-9: C0 controls, tabs and newlines, escapes, view-source.
+            ("\u{1}javascript://s3cr3t-token", "javascript:"),
+            ("\u{0}data://tok", "data:"),
+            ("\u{1c}JAVASCRIPT://tok", "JAVASCRIPT:"),
+            ("\u{1}\t javascript:x@tok", "javascript:"),
+            ("java\tscript:x", "javascript:"),
+            ("jav\na\r\tscript://tok", "javascript:"),
+            ("java%73cript://s3cr3t-token", ""),
+            ("vbscript:x@tok", "vbscript:"),
+            (
+                "view-source:javascript:letmein@s3cr3t-token",
+                "view-source:",
+            ),
+            ("VIEW-SOURCE:https://u:p@a.example/x", "VIEW-SOURCE:"),
         ] {
             assert_eq!(url_host(url), shown, "{url}");
         }
@@ -313,6 +355,19 @@ mod tests {
             assert!(reason.is_some_and(|r| r.ends_with(": data:") || r.ends_with(": javascript:")));
             let bare = host_only_reason(body.to_string());
             assert!(bare.is_some_and(|r| r.ends_with(':')), "{body}");
+        }
+        for url in [
+            "\u{1}javascript://s3cr3t-token",
+            "java\tscript:x@s3cr3t-token",
+            "java%73cript://s3cr3t-token",
+            "view-source:javascript:letmein@s3cr3t-token",
+        ] {
+            let shown = host_only(Some(url.to_string())).unwrap_or_default();
+            assert!(!shown.contains("s3cr3t") && !shown.contains('x'), "{url}");
+            let reason = host_only_reason(format!("http_fetch: {url}")).unwrap_or_default();
+            assert!(!reason.contains("s3cr3t"), "{url}: {reason}");
+            let bare = host_only_reason(url.to_string()).unwrap_or_default();
+            assert!(!bare.contains("s3cr3t"), "{url}: {bare}");
         }
         assert_eq!(host_only(Some(String::new())), None);
         assert_eq!(host_only(None), None);

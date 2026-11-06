@@ -1764,11 +1764,7 @@ impl EngineTurnRunner {
         if let Some(tools) = agent_md_tools {
             ceilings.push(tools);
         }
-        for name in constrained_names(&registry) {
-            if !ceilings.iter().all(|tools| listed(tools, &name)) {
-                rules.push(Rule::new(agent, name, Action::Deny));
-            }
-        }
+        apply_tools_ceiling(agent, &registry, &ceilings, &mut rules);
         // D33: the per-agent grant ceiling ([`apply_own_grants`]).
         let customised_grants = apply_own_grants(
             &self.home, agent, &registry, &origins, &ceilings, &mut rules,
@@ -2859,11 +2855,31 @@ pub fn constrain_non_api_turn(
             (name, kind)
         })
         .collect();
-    let owner_rules = rules.clone();
+    // The tools ceiling first, so the owner denies replayed last hold it too.
     let lists = tool_lists(home, agent);
+    apply_tools_ceiling(agent, registry, &lists, rules);
+    let owner_rules = rules.clone();
     apply_own_grants(home, agent, registry, &origins, &lists, rules);
     apply_chief_ceiling(home, agent, registry, &origins, &owner_rules, rules);
     deny_again(agent, registry, &owner_rules, rules);
+}
+
+/// The tools ceiling (B-API v3, F7): each list in `lists` caps `agent`, and a
+/// tool must be on every one. The lists never grant anything: every covered
+/// name ([`constrained_names`]) that some list leaves out is denied, so a
+/// later tool addition can never widen the agent silently. The daemon's turn
+/// and every turn outside the API ([`constrain_non_api_turn`]) use this one.
+fn apply_tools_ceiling(
+    agent: &str,
+    registry: &kernel_broker::ToolRegistry,
+    lists: &[Vec<String>],
+    rules: &mut Vec<Rule>,
+) {
+    for name in constrained_names(registry) {
+        if !lists.iter().all(|tools| listed(tools, &name)) {
+            rules.push(Rule::new(agent, name, Action::Deny));
+        }
+    }
 }
 
 /// The scoped tools a skill run can call through its connector that this

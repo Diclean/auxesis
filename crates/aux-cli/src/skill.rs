@@ -1161,6 +1161,33 @@ mod tests {
         assert_eq!(invite_as(home, "calendar", operator).await, refused);
     }
 
+    /// AGENT-CEILING-CHAT: `aux skill run` holds the agent to its own tools
+    /// list as the daemon does. Calendar listing only `mail.read` and
+    /// `recall` is refused the invite before any call; listing both of its
+    /// tools, it runs.
+    #[tokio::test]
+    async fn a_skill_run_is_held_to_the_agents_tools_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let agent_dir = aux_engine::agent_dir(home, "calendar");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let list = |tools: &str| {
+            let md = format!("---\nname: calendar\ntools: [{tools}]\n---\nAgent.\n");
+            std::fs::write(agent_dir.join("agent.md"), md).unwrap();
+        };
+        list("mail.read, recall");
+        assert_eq!(
+            invite_as(home, "calendar", Vec::new()).await,
+            ("refused".to_string(), 0)
+        );
+        list("calendar.create_event, mail.send");
+        assert_eq!(
+            invite_as(home, "calendar", Vec::new()).await,
+            ("done".to_string(), 2)
+        );
+    }
+
     /// STOP raised before the run: the CLI refuses and sends nothing.
     #[tokio::test]
     async fn stop_refuses_the_cli_run_before_any_call() {

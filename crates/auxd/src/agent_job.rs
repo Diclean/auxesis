@@ -40,7 +40,7 @@ use aux_notify::{Notification, Notifier};
 use aux_providers::ChatProvider;
 use aux_store::{Job, Store, StoreHandle};
 use kernel_broker::{
-    retain_mountable, Action, ApprovalRequest, Approver, ApproverError, Rule, ToolRegistry,
+    retain_mountable, ApprovalRequest, Approver, ApproverError, Rule, ToolRegistry,
 };
 use kernel_core::budget::{Budgets, PriceTable};
 use kernel_core::killswitch;
@@ -436,10 +436,9 @@ impl AgentJobRunner {
         format!("condition {verdict}")
     }
 
-    /// The rules one job turn of `agent` runs under: the owner's, its tools
-    /// list (every registered tool it does not list is denied),
-    /// MAIL-NO-SHELL, then its own grants held to the chief
-    /// ([`crate::api::constrain_non_api_turn`]).
+    /// The rules one job turn of `agent` runs under: the owner's,
+    /// MAIL-NO-SHELL, then its tools lists, its own grants and the chief
+    /// ceiling ([`crate::api::constrain_non_api_turn`]).
     fn turn_rules(
         &self,
         agent: &str,
@@ -447,14 +446,6 @@ impl AgentJobRunner {
         registry: &mut ToolRegistry,
     ) -> Vec<Rule> {
         let mut rules = self.rules.clone();
-        if let Some(tools) = &agent_config.tools {
-            let names: Vec<String> = registry.names().into_iter().map(str::to_string).collect();
-            for name in &names {
-                if !tools.iter().any(|tool| tool == name) {
-                    rules.push(Rule::new(agent, name, Action::Deny));
-                }
-            }
-        }
         aux_engine::config::keep_shell_from_domain_agent(
             &self.home,
             agent,

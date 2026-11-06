@@ -821,7 +821,9 @@ enum FdInfo {
 fn fd_info_outcome(rc: libc::c_int, expected: usize, errno: Option<i32>) -> FdInfo {
     match rc {
         _ if pidfdinfo_filled_buffer(rc, expected) => FdInfo::Full,
-        rc if rc > 0 => FdInfo::Skip,
+        // A short write means our struct and the kernel's differ: the fd
+        // could not be read, so it is unknown, never "not the marker".
+        rc if rc > 0 => FdInfo::Unknown,
         _ => match errno {
             Some(libc::ESRCH) => FdInfo::Gone,
             Some(libc::EBADF) => FdInfo::Skip,
@@ -861,6 +863,9 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
         pfi: ProcFileInfo,
         pvi: libc::vnode_info,
     }
+    // xnu's `vnode_fdinfo` is 176 bytes; a different layout would make every
+    // read short, so it must not build.
+    const _: () = assert!(std::mem::size_of::<VnodeFdInfo>() == 176);
 
     // 8 bytes per fd; the command's own RLIMIT_NOFILE caps it at
     // MAX_OPEN_FILES, so this buffer always covers a tracked process.
@@ -1984,8 +1989,9 @@ fn late_retry(reaper: TreeReaper) {
 /// leaves an escapee that may still run, so the reaper fails closed: it goes
 /// back to the FRONT of the queue, past the cap, for the late thread's full
 /// retry, and its cleanup note is logged. A complete pass is the end of it.
-/// The queue grows by one reaper per cut pass at most, and only until the late
-/// thread (or the no-thread fallback in [`late_retry`]) takes it.
+/// The queue never holds more than one reaper past the cap: when that slot is
+/// taken, a cut reaper runs its full retry here instead, on the caller's
+/// thread, so it is never dropped unkilled and the queue stays bounded.
 fn overflow_fast_kill(mut oldest: TreeReaper) {
     let deadline = Instant::now() + LATE_INLINE_BUDGET;
     let skipped = oldest.fast_kill(deadline, deadline + LATE_MARKER_RESERVE);
@@ -1999,9 +2005,25 @@ fn overflow_fast_kill(mut oldest: TreeReaper) {
         skipped,
         note = UNCHECKED_NOTE,
         "shell: the late-retry queue is full ({LATE_QUEUE_MAX}); the oldest reaper's fast kill \
-         was cut, so it stays queued for the full retry"
+         was cut, so it gets the full retry"
     );
-    late_retries().1.push_front(oldest);
+    let requeued = {
+        let mut queue = late_retries();
+        match queue.1.len() <= LATE_QUEUE_MAX {
+            true => {
+                queue.1.push_front(oldest);
+                None
+            }
+            false => Some(oldest),
+        }
+    };
+    if let Some(mut oldest) = requeued {
+        let sweep = oldest.retry();
+        tracing::warn!(
+            ?sweep,
+            "shell: the late-retry queue is past its cap; the cut reaper ran its full retry now"
+        );
+    }
 }
 
 /// A fast kill of every reaper: seen loops until `deadline`, then each
@@ -5019,7 +5041,7 @@ await(q(bg.pid));
         const SIZE: usize = 200;
         let size = SIZE as libc::c_int;
         assert_eq!(fd_info_outcome(size, SIZE, Some(0)), FdInfo::Full);
-        assert_eq!(fd_info_outcome(size - 8, SIZE, Some(0)), FdInfo::Skip);
+        assert_eq!(fd_info_outcome(size - 8, SIZE, Some(0)), FdInfo::Unknown);
         assert_eq!(fd_info_outcome(-1, SIZE, Some(libc::ESRCH)), FdInfo::Gone);
         assert_eq!(fd_info_outcome(-1, SIZE, Some(libc::EBADF)), FdInfo::Skip);
         for errno in [libc::ENOMEM, libc::EPERM, libc::EIO, libc::EINVAL, 0] {

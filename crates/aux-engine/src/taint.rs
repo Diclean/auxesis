@@ -90,9 +90,14 @@ fn classify(message: &Message, registry: &ToolRegistry) -> Row {
 /// The host (and port) of a model-chosen URL: never its user info, path,
 /// query or fragment, which can carry what the page was asked (READS-6).
 /// A URL with no host (`file:///etc/passwd`) gives its scheme, never the
-/// path (READS-7). Every taint row, Activity entry and card shows this.
+/// path (READS-7), and an opaque one (`javascript:alert(1)`, `data:,x`)
+/// gives `javascript:` / `data:`, never its body (READS-8). Every taint row,
+/// Activity entry and card shows this.
 pub(crate) fn url_host(raw: &str) -> &str {
     let rest = raw.trim_start();
+    if let Some(scheme) = opaque_scheme(rest) {
+        return scheme;
+    }
     let (scheme, rest) = rest.split_once("://").unwrap_or(("", rest));
     let authority = rest
         .split(|c: char| matches!(c, '/' | '?' | '#' | '\\') || c.is_whitespace())
@@ -102,34 +107,77 @@ pub(crate) fn url_host(raw: &str) -> &str {
     let scheme_ok = scheme
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
-    if host.is_empty() && scheme_ok {
+    // A real host is letters, digits and `.-_:[]%`; anything else is the
+    // body of a URL with no host (`javascript://alert(1)`), not shown.
+    let host_ok = host
+        .chars()
+        .all(|c| c.is_alphanumeric() || ".-_:[]%".contains(c));
+    if (host.is_empty() || !host_ok) && scheme_ok {
         scheme
-    } else {
+    } else if host_ok {
         host
+    } else {
+        ""
     }
+}
+
+/// `scheme:` of a URL with no `//` after the colon and no port (`scheme:`
+/// then 1-5 digits ends the text or a path), which has a body and no host.
+/// `host:8443/x` and `user:pw@host` are not opaque.
+fn opaque_scheme(url: &str) -> Option<&str> {
+    let (scheme, after) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    if !chars.next()?.is_ascii_alphabetic()
+        || !chars.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        || after.starts_with("//")
+    {
+        return None;
+    }
+    let authority = after
+        .split(|c: char| matches!(c, '/' | '?' | '#' | '\\'))
+        .next();
+    if authority.is_some_and(|authority| authority.contains('@')) {
+        return None;
+    }
+    let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+    let ends = after[digits..]
+        .chars()
+        .next()
+        .is_none_or(|c| matches!(c, '/' | '?' | '#' | '\\') || c.is_whitespace());
+    if (1..=5).contains(&digits) && ends {
+        return None;
+    }
+    Some(&url[..=scheme.len()])
 }
 
 /// A stored taint detail as the host only: rows written before READS-6 kept
 /// the whole URL, and resume shows them again (READS-7). A detail with
 /// nothing a URL could cut away (a host, `acp (timed out)`) is kept as
-/// written; one that leaves nothing is dropped.
+/// written; one that leaves nothing, or is empty, is dropped.
 pub(crate) fn host_only(detail: Option<String>) -> Option<String> {
-    let detail = detail?;
-    if !detail.contains(['/', '?', '#', '@', '\\']) {
+    let detail = detail.filter(|detail| !detail.is_empty())?;
+    if !detail.contains(['/', '?', '#', '@', '\\', ':']) {
         return Some(detail);
     }
     Some(url_host(&detail).to_string()).filter(|host| !host.is_empty())
 }
 
 /// A stored workspace mark (`tool: detail`, see [`TaintSource::summary`])
-/// with its detail cut to the host, as [`host_only`].
+/// with its detail cut to the host, as [`host_only`]. A mark with no prefix
+/// is a bare tool name: shown as is, escaped (READS-8), unless it looks like
+/// a URL (it has a `:`, `@`, `?`, `#` or `\\` in it, or starts with `/`), which is cut as above.
 pub(crate) fn host_only_reason(reason: String) -> Option<String> {
     match reason.split_once(": ") {
         Some((tool, detail)) => Some(match host_only(Some(detail.to_string())) {
             Some(host) => format!("{tool}: {host}"),
             None => tool.to_string(),
         }),
-        None => host_only(Some(reason)),
+        None if reason.starts_with('/') || reason.contains([':', '@', '?', '#', '\\']) => {
+            host_only(Some(reason))
+        }
+        None => Some(kernel_broker::sanitize_text(&reason))
+            .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|name| !name.is_empty()),
     }
 }
 
@@ -218,6 +266,43 @@ mod tests {
         assert_eq!(host_only(acp.clone()), acp);
         assert_eq!(host_only_reason("shell".into()).as_deref(), Some("shell"));
         assert_eq!(host_only_reason("/etc/passwd".into()), None);
+    }
+
+    /// READS-8: an opaque URL gives its scheme, never its body; an empty
+    /// host is no host; a bare tool name is shown as is, escaped.
+    #[test]
+    fn opaque_urls_and_bare_names_never_show_a_body() {
+        for (url, shown) in [
+            ("data:,x", "data:"),
+            ("data:text/html;base64,AAAA", "data:"),
+            ("javascript:alert(1)", "javascript:"),
+            (" JavaScript:alert(1)", "JavaScript:"),
+            ("javascript:alert('a@b')", ""),
+            ("javascript://alert(1)", "javascript"),
+            ("mailto:a@b.example", "b.example"),
+            ("user:pw@a.example/x", "a.example"),
+            ("a.example:8443/x", "a.example:8443"),
+            ("[::1]:80/x", "[::1]:80"),
+        ] {
+            assert_eq!(url_host(url), shown, "{url}");
+        }
+        for body in [
+            "data:,x",
+            "data:text/html;base64,AAAA",
+            "javascript:alert(1)",
+        ] {
+            let shown = host_only(Some(body.to_string()));
+            assert!(shown.as_deref().is_some_and(|s| s.ends_with(':')), "{body}");
+            let reason = host_only_reason(format!("http_fetch: {body}"));
+            assert!(reason.is_some_and(|r| r.ends_with(": data:") || r.ends_with(": javascript:")));
+            let bare = host_only_reason(body.to_string());
+            assert!(bare.is_some_and(|r| r.ends_with(':')), "{body}");
+        }
+        assert_eq!(host_only(Some(String::new())), None);
+        assert_eq!(host_only(None), None);
+        let name = host_only_reason("mcp/files\u{7}  tool".into());
+        assert_eq!(name.as_deref(), Some("mcp/files tool"));
+        assert_eq!(host_only_reason(String::new()), None);
     }
 
     #[test]

@@ -866,6 +866,10 @@ pub enum FileFault {
     Parse,
     /// It cannot be opened or read, or is not UTF-8.
     Read,
+    /// It is a symbolic link, which is never followed (READS-8).
+    Symlink,
+    /// Its mode refuses reading (for example `000`) (READS-8).
+    Denied,
     /// It is over the size limit.
     TooLarge,
 }
@@ -875,6 +879,8 @@ impl FileFault {
         match self {
             FileFault::Parse => "does not parse",
             FileFault::Read => "cannot be read",
+            FileFault::Symlink => "is a symbolic link, which is not followed",
+            FileFault::Denied => "cannot be opened: its permissions refuse reading",
             FileFault::TooLarge => "is too large",
         }
     }
@@ -934,8 +940,9 @@ fn grants_step(id: &str, gap: GrantsGap, chief: bool) -> String {
     }
     if chief && suggests_row {
         parts.push(format!(
-            "a calendar.freebusy row at level = \"auto\" in {file} grants the free times \
-             to every agent under the chief `{id}`, not only this one"
+            "a calendar.freebusy row at level = \"auto\" in {file} lifts the free-times \
+             ceiling for every agent under the chief `{id}`, not only this one (each \
+             agent's own grants still apply)"
         ));
     }
     parts.join("; ")
@@ -948,6 +955,12 @@ fn grants_step(id: &str, gap: GrantsGap, chief: bool) -> String {
 fn never_step(who: &str, id: &str, entries: &[String], own: bool, chief_blocks: bool) -> String {
     let file = format!("agents/{id}/grants.toml");
     let named: Vec<String> = entries.iter().map(|e| format!("\"{e}\"")).collect();
+    if entries.is_empty() {
+        return format!(
+            "a `never` entry in {file} keeps {who} out of the calendar, but no entry could \
+             be named: open that file and check `never`"
+        );
+    }
     if own && !entries.is_empty() && entries.iter().all(|e| e == FREEBUSY_TOOL) {
         let alone = if chief_blocks {
             " (this alone will not help while the chief's hard block applies)"
@@ -1030,9 +1043,11 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
                 false,
                 false,
             ),
-            ReadDenial::ChiefTools(chief, file) => {
+            ReadDenial::ChiefTools(chief, file) => format!(
+                "{} (the chief's list is the ceiling for every agent under `{chief}`; each \
+                 agent's own list still applies)",
                 tools_step("the chief's tools list", chief, file)
-            }
+            ),
             ReadDenial::ChiefFile(chief, file) => broken(chief, file, " for every agent under it"),
         })
         .collect();
@@ -4769,6 +4784,28 @@ mod tests {
         );
         assert!(!has(&[own], "will not help"));
         assert!(!has(&[ReadDenial::OwnNever(Vec::new())], "remove"));
+        // READS-8: no entry at all still says why, and names the file.
+        for (denial, who) in [
+            (ReadDenial::OwnNever(Vec::new()), "keeps this agent out"),
+            (
+                ReadDenial::ChiefNever("main", Vec::new()),
+                "keeps the chief `main`",
+            ),
+        ] {
+            let text = hint(&[denial]);
+            assert!(
+                text.contains(who) && text.contains("no entry could be named"),
+                "{text}"
+            );
+            assert!(!text.contains("entries  in"), "{text}");
+        }
+        // READS-8: the chief's tools step says it is the ceiling, not a grant.
+        let tools = hint(&[ReadDenial::ChiefTools("main", "agent.md")]);
+        assert!(
+            tools.contains("ceiling for every agent under `main`"),
+            "{tools}"
+        );
+        assert!(!tools.contains("grants to every agent"), "{tools}");
         for fault in [FileFault::Parse, FileFault::Read, FileFault::TooLarge] {
             let text = format!("agents/mail/grants.toml {}, so", fault.words());
             assert!(has(
@@ -4777,8 +4814,16 @@ mod tests {
             ));
         }
         assert_eq!(FileFault::TooLarge.words(), "is too large");
+        let words = [
+            FileFault::Read,
+            FileFault::Symlink,
+            FileFault::Denied,
+            FileFault::TooLarge,
+        ];
+        let words: std::collections::HashSet<_> = words.map(FileFault::words).into();
+        assert_eq!(words.len(), 4, "each fault has its own words");
         let rows = |row, read_cap| GrantsGap::Rows { row, read_cap };
-        let reach = "grants the free times to every agent under the chief `main`";
+        let reach = "lifts the free-times ceiling for every agent under the chief `main`";
         for gap in [rows(None, None), rows(Some(ActionLevel::Ask), None)] {
             assert!(has(&[ReadDenial::ChiefGrants("main", gap)], reach));
             assert!(!has(&[ReadDenial::OwnGrants(gap)], "every agent under"));

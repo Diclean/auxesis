@@ -1911,6 +1911,8 @@ mod tests {
         for (url, shown) in [
             ("file:///etc/passwd", "http_fetch: file"),
             ("/a/b", "http_fetch"),
+            ("data:,x", "http_fetch: data:"),
+            ("javascript:alert(1)", "http_fetch: javascript:"),
         ] {
             assert_eq!(
                 taint_source("http_fetch", &json!({ "url": url })).summary(),
@@ -1976,6 +1978,33 @@ mod tests {
             resumed.taint().summary().as_deref(),
             Some("http_fetch: evil.example")
         );
+    }
+
+    /// READS-8: a write-ahead session mark stored with the whole URL (before
+    /// READS-6) comes back as the host only, or the scheme of an opaque one.
+    #[tokio::test]
+    async fn a_stored_session_mark_resumes_as_the_host_only() {
+        for (stored, shown) in [
+            (
+                "https://u:p@evil.example/inbox?q=1",
+                "http_fetch: evil.example",
+            ),
+            ("javascript:alert(1)", "http_fetch: javascript:"),
+        ] {
+            let harness = Harness::new();
+            let provider = FakeProvider::echo("fake");
+            let session = harness.start(&provider, vec![], RecordingApprover::new(false));
+            let session_id = session.session.id;
+            drop(session);
+            harness
+                .store()
+                .mark_session_tainted(session_id, "http_fetch", Some(stored))
+                .unwrap();
+            let echo = FakeProvider::echo("fake");
+            let resumed = harness.start_resumed(&echo, RecordingApprover::new(true), session_id);
+            assert!(resumed.taint().forces_ask(), "{stored}");
+            assert_eq!(resumed.taint().summary().as_deref(), Some(shown));
+        }
     }
 
     /// Declares nothing about its output class, so it is private data by

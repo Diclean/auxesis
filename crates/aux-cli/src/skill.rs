@@ -411,10 +411,11 @@ fn held_to_grants(
     home: &Path,
     agent: &str,
     mut rules: Vec<kernel_broker::Rule>,
-) -> Vec<kernel_broker::Rule> {
+) -> Result<Vec<kernel_broker::Rule>, String> {
     let no_tools = kernel_broker::ToolRegistry::new();
-    auxd::api::constrain_non_api_turn(home, agent, &no_tools, &mut rules);
-    rules
+    auxd::api::constrain_non_api_turn(home, agent, &no_tools, &mut rules)
+        .map_err(|err| err.to_string())?;
+    Ok(rules)
 }
 
 /// Execute one skill for real: validate → rehydrate → approve → broker →
@@ -468,13 +469,14 @@ fn run_skill(
             return ExitCode::FAILURE;
         }
     };
-    let rules = match operator_rules(&verified) {
-        Ok(rules) => held_to_grants(home, agent_name, rules),
-        Err(err) => {
-            eprintln!("aux skill run: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let rules =
+        match operator_rules(&verified).and_then(|rules| held_to_grants(home, agent_name, rules)) {
+            Ok(rules) => rules,
+            Err(err) => {
+                eprintln!("aux skill run: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
     let store = match Store::open_verified(&verified) {
         Ok(store) => Arc::new(Mutex::new(store)),
         Err(err) => {
@@ -1107,7 +1109,7 @@ mod tests {
     ) -> (String, usize) {
         let connector = CountingConnector::default();
         let sink = Arc::new(kernel_broker::MemoryAuditSink::new());
-        let rules = held_to_grants(home, agent, operator);
+        let rules = held_to_grants(home, agent, operator).unwrap();
         let outcome = run_as(
             agent,
             &AlwaysYes,
@@ -1186,6 +1188,19 @@ mod tests {
             invite_as(home, "calendar", Vec::new()).await,
             ("done".to_string(), 2)
         );
+    }
+
+    /// An unreadable `agent.toml` refuses the skill run, as it fails the
+    /// daemon's turn, instead of denying every tool.
+    #[test]
+    fn a_skill_run_refuses_an_unreadable_agent_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let agent_dir = aux_engine::agent_dir(home, "calendar");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(agent_dir.join("agent.toml"), "not = [toml").unwrap();
+        let err = held_to_grants(home, "calendar", Vec::new()).unwrap_err();
+        assert!(err.contains("unreadable"), "{err}");
     }
 
     /// STOP raised before the run: the CLI refuses and sends nothing.

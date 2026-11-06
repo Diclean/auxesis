@@ -438,13 +438,14 @@ impl AgentJobRunner {
 
     /// The rules one job turn of `agent` runs under: the owner's,
     /// MAIL-NO-SHELL, then its tools lists, its own grants and the chief
-    /// ceiling ([`crate::api::constrain_non_api_turn`]).
+    /// ceiling ([`crate::api::constrain_non_api_turn`]). An unreadable
+    /// `agent.toml` fails the run, as it fails the daemon's own turn.
     fn turn_rules(
         &self,
         agent: &str,
         agent_config: &AgentConfig,
         registry: &mut ToolRegistry,
-    ) -> Vec<Rule> {
+    ) -> Result<Vec<Rule>, ChatError> {
         let mut rules = self.rules.clone();
         aux_engine::config::keep_shell_from_domain_agent(
             &self.home,
@@ -453,8 +454,9 @@ impl AgentJobRunner {
             registry,
             &mut rules,
         );
-        crate::api::constrain_non_api_turn(&self.home, agent, registry, &mut rules);
-        rules
+        crate::api::constrain_non_api_turn(&self.home, agent, registry, &mut rules)
+            .map_err(std::io::Error::other)?;
+        Ok(rules)
     }
 
     /// Run one turn under `mode` (the mode the run was admitted in) with the
@@ -490,7 +492,7 @@ impl AgentJobRunner {
             &mut registry
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        )?;
         // Load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
         crate::agent_skills::load_agent_skills(&self.home, &job.agent, store);
@@ -1530,6 +1532,66 @@ mod tests {
         );
     }
 
+    /// The job path reads an agent's tools lists as the daemon does: an
+    /// `agent.toml` listing `mail.send` allows `mail_send` and still denies an
+    /// unlisted tool, and an `agent.md` list narrows a broader `agent.toml`.
+    #[test]
+    fn a_jobs_tools_lists_match_logical_names_and_intersect() {
+        let harness = Harness::new();
+        std::fs::write(
+            kernel_core::config_path(&harness.home),
+            "version = 1\ndefault_agent = \"main\"\nprivacy.mode = \"open\"\n",
+        )
+        .unwrap();
+        let dir = aux_engine::agent_dir(&harness.home, "scout");
+        std::fs::create_dir_all(&dir).unwrap();
+        let provider = Arc::new(FakeProvider::scripted("fake", Vec::new()));
+        let runner = harness.runner(provider, Vec::new(), &Budgets::default());
+        let denied = |tool: &str| {
+            let mut registry = ToolRegistry::new();
+            let rules = runner
+                .turn_rules("scout", &AgentConfig::default(), &mut registry)
+                .unwrap();
+            kernel_broker::matching_rule(&rules, "scout", tool, false)
+                .is_some_and(|(_, rule)| rule.action == Action::Deny)
+        };
+        std::fs::write(dir.join("agent.toml"), "tools = [\"mail.send\"]\n").unwrap();
+        assert!(
+            !denied("mail_send"),
+            "the logical name allows the wire name"
+        );
+        assert!(denied("mail_read"), "an unlisted tool stays denied");
+        std::fs::write(
+            dir.join("agent.toml"),
+            "tools = [\"mail.send\", \"mail.read\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("agent.md"),
+            "---\nname: scout\ntools: [mail.read]\n---\nA.\n",
+        )
+        .unwrap();
+        assert!(denied("mail_send"), "agent.md narrows agent.toml");
+        assert!(!denied("mail_read"), "a tool on both lists stays allowed");
+    }
+
+    /// An unreadable `agent.toml` fails the job turn, as it fails the
+    /// daemon's own turn, instead of denying every tool.
+    #[test]
+    fn a_job_turn_fails_on_an_unreadable_agent_toml() {
+        let harness = Harness::new();
+        let dir = aux_engine::agent_dir(&harness.home, "main");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agent.toml"), "not = [toml").unwrap();
+        let provider = Arc::new(FakeProvider::scripted("fake", Vec::new()));
+        let runner = harness.runner(provider, Vec::new(), &Budgets::default());
+        let mut registry = ToolRegistry::new();
+        let err = runner
+            .turn_rules("main", &AgentConfig::default(), &mut registry)
+            .unwrap_err();
+        assert!(err.to_string().contains("unreadable"), "{err}");
+    }
+
     /// A job turn is held to the agent's own grants, not only to the chief:
     /// with Calendar's `mail.send` set `off`, the send its skill would make is
     /// denied though the chief may send. With the shipped grants it asks.
@@ -1547,7 +1609,9 @@ mod tests {
         let runner = harness.runner(provider, Vec::new(), &Budgets::default());
         let send = |agent: &str| {
             let mut registry = ToolRegistry::new();
-            let rules = runner.turn_rules(agent, &AgentConfig::default(), &mut registry);
+            let rules = runner
+                .turn_rules(agent, &AgentConfig::default(), &mut registry)
+                .unwrap();
             kernel_broker::matching_rule(&rules, agent, "mail_send", false)
                 .map(|(_, rule)| rule.action)
         };

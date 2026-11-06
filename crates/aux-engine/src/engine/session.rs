@@ -398,6 +398,7 @@ impl<'a> ChatSession<'a> {
             card_expiries: None,
             card_expired: None,
             skill_recipients: None,
+            skill_freebusy_denials: Vec::new(),
             skill_tokens,
             inherited: None,
             handoff: crate::handoff::Handoff::default(),
@@ -457,6 +458,15 @@ impl<'a> ChatSession<'a> {
     /// Inject the directory the `known-contacts` recipient policy reads.
     pub fn with_skill_recipients(mut self, directory: Arc<dyn RecipientDirectory>) -> Self {
         self.skill_recipients = Some(directory);
+        self
+    }
+
+    /// The rules that refuse this agent's free-times read, for its refusal.
+    pub fn with_freebusy_denials(
+        mut self,
+        denials: Vec<aux_runtime::executor::ReadDenial>,
+    ) -> Self {
+        self.skill_freebusy_denials = denials;
         self
     }
 

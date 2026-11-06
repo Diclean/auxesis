@@ -806,6 +806,7 @@ async fn run_executor_fill(
         clock: &clock,
         stop: &NeverStopped,
         approval_timeout: default_approval_timeout(),
+        freebusy_denials: &[],
     };
     let outcome = exec
         .execute(
@@ -1104,6 +1105,7 @@ async fn run_invite_with(
         clock: &RealClock,
         stop: &NeverStopped,
         approval_timeout: default_approval_timeout(),
+        freebusy_denials: &[],
     };
     let (tokens, context) = (TokenMap::default(), mail_exec_context());
     let outcome = exec
@@ -1403,6 +1405,7 @@ async fn an_approved_private_invite_names_the_real_to_address_as_its_attendee() 
         clock: &RealClock,
         stop: &NeverStopped,
         approval_timeout: default_approval_timeout(),
+        freebusy_denials: &[],
     };
     let outcome = exec
         .execute(&skill, &fill, &mail_exec_context(), &tokens, &Taint::Clean)
@@ -1593,6 +1596,7 @@ async fn reply_to_named_full(
         clock: &RealClock,
         stop: &NeverStopped,
         approval_timeout: default_approval_timeout(),
+        freebusy_denials: &[],
     }
     .execute(&skill, &fill, &run, &TokenMap::default(), &Taint::Clean)
     .await;

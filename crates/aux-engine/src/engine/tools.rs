@@ -411,6 +411,7 @@ impl<'a> ChatSession<'a> {
                 cancel: self.cancel.clone(),
             },
             approval_timeout: default_approval_timeout(),
+            freebusy_denials: &self.skill_freebusy_denials,
         };
         let tokens = self.token_snapshot();
         // Only the immediately preceding owner turn of this session can bind a

@@ -94,7 +94,8 @@ public final class AgentTemplatesModel: ObservableObject, Identifiable {
 
     static let skillKeys: [String: UIKey] = [
         "mail.read": .grantMailRead, "mail.draft": .grantMailDraft, "mail.send": .grantMailSend,
-        "calendar.read": .grantCalendarRead, "calendar.write": .grantCalendarWrite,
+        "calendar.read": .grantCalendarRead, "calendar.freebusy": .grantCalendarFreebusy,
+        "calendar.write": .grantCalendarWrite,
         "clients.read": .grantClientsRead, "clients.note": .grantClientsNote,
         "documents.read": .grantDocumentsRead, "documents.file": .grantDocumentsFile,
     ]

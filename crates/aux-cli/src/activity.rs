@@ -503,6 +503,11 @@ fn event_summary(home: &Path, kind: &str, payload: &str) -> String {
         return preview(home, payload);
     };
     kernel_broker::scrub_json_value(&mut value);
+    if kind.trim().starts_with("skill.") {
+        if let Some(source) = value.get_mut("taint_source") {
+            *source = serde_json::json!(source.as_str().map(taint_origin));
+        }
+    }
     match kind.trim() {
         "tool.decision" => {
             let tool = value.get("tool").and_then(|v| v.as_str()).unwrap_or("tool");
@@ -537,6 +542,22 @@ fn event_summary(home: &Path, kind: &str, payload: &str) -> String {
             }
             preview(home, &compact_json(&value))
         }
+    }
+}
+
+/// A taint source (`tool: detail`) shown as its tool and, for a fetched URL,
+/// the host only: a skill row never prints the page's full address.
+fn taint_origin(source: &str) -> String {
+    let Some((tool, detail)) = source.split_once(": ") else {
+        return source.to_string();
+    };
+    let host = detail.split_once("://").map(|(_, rest)| {
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        authority.rsplit('@').next().unwrap_or_default()
+    });
+    match host {
+        Some(host) if !host.is_empty() => format!("{tool}: {host}"),
+        _ => tool.to_string(),
     }
 }
 
@@ -1067,6 +1088,26 @@ mod tests {
             .unwrap();
         let entries = collect(&home, &args()).unwrap();
         assert_eq!(entries[1].summary, "read_file denied");
+    }
+
+    #[test]
+    fn skill_rows_show_the_taint_host_not_the_fetched_url() {
+        let (dir, store) = home_with_store();
+        let source = "http_fetch: https://user@a.example:8443/inbox/42?token=x#frag";
+        let row = serde_json::json!({ "tool": "calendar_freebusy", "taint_source": source });
+        let kind = "skill.prepare_read_authorized";
+        store.log_event(kind, &row.to_string()).unwrap();
+        let summary = &collect(&dir.path().join("home"), &args()).unwrap()[0].summary;
+        assert!(
+            summary.contains(r#""http_fetch: a.example:8443""#),
+            "{summary}"
+        );
+        assert!(
+            !summary.contains("inbox") && !summary.contains("token"),
+            "{summary}"
+        );
+        assert_eq!(taint_origin("mail_read: message 42"), "mail_read");
+        assert_eq!(taint_origin("unknown taint"), "unknown taint");
     }
 
     #[test]

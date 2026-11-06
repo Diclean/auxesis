@@ -378,6 +378,7 @@ async fn execute_fill(
         clock: deps.clock,
         stop: deps.stop,
         approval_timeout: default_approval_timeout(),
+        freebusy_denials: &[],
     };
     Ok(executor
         .execute(skill, &fill, run, tokens, &Taint::Clean)

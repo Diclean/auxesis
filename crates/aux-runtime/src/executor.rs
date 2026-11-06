@@ -804,16 +804,66 @@ struct ExecCall {
 /// The broker's name for a mail read the run does before its card.
 const MAIL_READ_TOOL: &str = "mail_read";
 
-/// The audit row that authorizes one read before the card.
+/// The audit row that authorizes one read before the card. Rows written
+/// before READS-3 as `skill.prepare_read` are kept as they are: they read as
+/// any other `skill.*` row, so they need no alias.
 const PREPARE_READ_EVENT: &str = "skill.prepare_read_authorized";
 
-/// What a refused free-times read tells the owner to change. Grants name the
-/// skill, owner rules and tools lists the wire tool.
+/// What a refused free-times read tells the owner to change when the
+/// daemon did not say which rule refused it. Grants name the skill, owner
+/// rules and tools lists the wire tool.
 const FREEBUSY_HINT: &str = "This agent may not read the owner's free times: its grants need \
      `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off), an \
      owner rule for this read names the tool `calendar_freebusy`, and every tools list over \
      the agent needs `calendar_freebusy`: its own, and the chief's when the chief lists tools \
      (add calendar_freebusy to the chief's tools list)";
+
+/// One rule that refuses an agent's free-times read, as the daemon built it:
+/// the refusal names the file the owner edits for that rule only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadDenial {
+    /// An owner rule in `config.toml` denies `calendar_freebusy`.
+    OwnerRule,
+    /// The agent's own grants (`agents/<agent>/grants.toml`).
+    OwnGrants,
+    /// The agent's own tools list (`agents/<agent>/agent.md`).
+    OwnTools,
+    /// A chief's grants (`agents/<chief>/grants.toml`).
+    ChiefGrants(&'static str),
+    /// A chief's tools list (`agents/<chief>/agent.md`).
+    ChiefTools(&'static str),
+}
+
+/// The free-times refusal hint for `denials`; [`FREEBUSY_HINT`] when the
+/// caller did not say which rule refused.
+pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
+    if denials.is_empty() {
+        return FREEBUSY_HINT.to_string();
+    }
+    let steps: Vec<String> = denials
+        .iter()
+        .map(|denial| match denial {
+            ReadDenial::OwnerRule => "remove the config.toml rule that denies it".to_string(),
+            ReadDenial::OwnGrants => format!(
+                "add `[[do]] skill = \"calendar.freebusy\" level = \"auto\"` to \
+                 agents/{agent}/grants.toml (and leave calendar.read not off)"
+            ),
+            ReadDenial::OwnTools => {
+                format!("add `calendar_freebusy` to the tools list in agents/{agent}/agent.md")
+            }
+            ReadDenial::ChiefGrants(c) => {
+                format!("turn calendar.read on in agents/{c}/grants.toml")
+            }
+            ReadDenial::ChiefTools(chief) => format!(
+                "add `calendar_freebusy` to the chief's tools list in agents/{chief}/agent.md"
+            ),
+        })
+        .collect();
+    format!(
+        "This agent may not read the owner's free times. To allow it, {}",
+        steps.join("; ")
+    )
+}
 use crate::grants::FREEBUSY_TOOL;
 
 /// The per-run state threaded through approval and execution.
@@ -856,6 +906,8 @@ pub struct Executor<'a> {
     pub stop: &'a dyn RunStop,
     /// How long silence is tolerated before it is a refusal.
     pub approval_timeout: Duration,
+    /// The rules that refuse this agent's free-times read (empty: unknown).
+    pub freebusy_denials: &'a [ReadDenial],
 }
 
 impl Executor<'_> {
@@ -1622,14 +1674,17 @@ impl Executor<'_> {
             }
             _ => {
                 // One row per authorized read, with the taint the way the
-                // broker's `tool.decision` row carries it; no content.
-                let row = json!({
+                // broker's `tool.decision` row carries it (a clean row has no
+                // `taint_source`); no content.
+                let mut row = json!({
                     "agent": agent,
                     "tool": tool,
                     "skill": context.name,
                     "tainted": taint.forces_ask(),
-                    "taint_source": taint.summary(),
                 });
+                if let Some(source) = taint.summary() {
+                    row["taint_source"] = json!(source);
+                }
                 return self
                     .sink
                     .log_event(PREPARE_READ_EVENT, &row)
@@ -1660,7 +1715,8 @@ impl Executor<'_> {
             Err(err) => err.to_string(),
         };
         if tool == FREEBUSY_TOOL {
-            return Err(format!("{reason}. {FREEBUSY_HINT}"));
+            let hint = freebusy_hint(agent, self.freebusy_denials);
+            return Err(format!("{reason}. {hint}"));
         }
         Err(reason)
     }
@@ -3028,6 +3084,7 @@ mod tests {
             clock,
             stop: &NEVER_STOPPED,
             approval_timeout: default_approval_timeout(),
+            freebusy_denials: &[],
         }
     }
 
@@ -4231,6 +4288,7 @@ mod tests {
             clock: &clock,
             stop: &stop,
             approval_timeout: default_approval_timeout(),
+            freebusy_denials: &[],
         };
 
         let outcome = exec
@@ -4260,18 +4318,25 @@ mod tests {
         )
         .unwrap();
         let tool = crate::grants::FREEBUSY_TOOL;
-        // A fixed zone, so the read is asserted on every host (READS-3).
-        event_time::TEST_ZONE.with(|zone| *zone.borrow_mut() = Some("Europe/Paris".into()));
+        // A fixed zone (READS-3), reset when the test ends (READS-4).
+        let _zone = event_time::TestZone::set("Europe/Paris");
         // Taint never changes the answer: a tainted run still reads under an
-        // auto grant (no rule) and still refuses under an ask (round 2).
-        let cases = [Action::Deny, Action::Ask, Action::Allow]
-            .into_iter()
-            .flat_map(|action| [(action, Taint::Clean), (action, Taint::Unknown)]);
-        for (action, taint) in cases {
-            let rules = match action {
-                Action::Allow => Vec::new(),
-                action => vec![Rule::new("assistant", tool, action)],
-            };
+        // auto grant (no rule) or an owner allow (READS-4), and still refuses
+        // under an ask (round 2).
+        let cases = [
+            Some(Action::Deny),
+            Some(Action::Ask),
+            Some(Action::Allow),
+            None,
+        ]
+        .into_iter()
+        .flat_map(|mode| [(mode, Taint::Clean), (mode, Taint::Unknown)]);
+        for (mode, taint) in cases {
+            let rules: Vec<_> = mode
+                .map(|a| Rule::new("assistant", tool, a))
+                .into_iter()
+                .collect();
+            let action = mode.unwrap_or(Action::Allow);
             let sink = Arc::new(MemoryAuditSink::new());
             let broker = broker_with_rules(&sink, rules);
             let (approver, connector) = (
@@ -4293,11 +4358,14 @@ mod tests {
                 .await;
             let read: Vec<_> = connector.calls().into_iter().map(|(l, _)| l).collect();
             if action == Action::Allow {
-                // One authorization row, with the run's taint and no content.
+                // One row: the taint, no content, no clean `taint_source`.
                 let rows = sink.payloads(PREPARE_READ_EVENT);
-                let row = json!({ "agent": "assistant", "tool": tool, "skill": skill.name,
-                    "tainted": taint.forces_ask(), "taint_source": taint.summary() });
-                assert_eq!(rows, vec![row], "{taint:?}");
+                let mut row = json!({ "agent": "assistant", "tool": tool, "skill": skill.name,
+                    "tainted": taint.forces_ask() });
+                if let Some(source) = taint.summary() {
+                    row["taint_source"] = json!(source);
+                }
+                assert_eq!(rows, vec![row], "{mode:?} {taint:?}");
                 assert_eq!(read, vec![free_times::CALENDAR_READ.to_string()]);
                 continue;
             }
@@ -4314,6 +4382,34 @@ mod tests {
             assert!(read.is_empty(), "{action:?}: {read:?}");
             assert_eq!(approver.card_count(), 0);
         }
+    }
+
+    /// READS-4: the free-times refusal names the file for each rule that
+    /// refused it, and only those; no rule named keeps the full hint.
+    #[test]
+    fn the_free_times_hint_names_the_file_of_the_rule_that_refused() {
+        let hint = |denials: &[ReadDenial]| freebusy_hint("mail", denials);
+        assert_eq!(hint(&[]), FREEBUSY_HINT);
+        let cases = [
+            (ReadDenial::ChiefGrants("main"), "main/grants.toml"),
+            (
+                ReadDenial::ChiefTools("main"),
+                "chief's tools list in agents/main/agent.md",
+            ),
+            (ReadDenial::OwnGrants, "mail/grants.toml"),
+            (ReadDenial::OwnTools, "mail/agent.md"),
+            (ReadDenial::OwnerRule, "config.toml"),
+        ];
+        for case in cases {
+            let text = hint(&[case.0]);
+            let named: Vec<_> = cases.iter().filter(|(_, f)| text.contains(f)).collect();
+            assert_eq!(named, [&case], "{text}");
+        }
+        let both = hint(&[ReadDenial::OwnGrants, ReadDenial::ChiefTools("main")]);
+        assert!(
+            both.contains("not off); add `calendar_freebusy` to the chief's"),
+            "{both}"
+        );
     }
 
     /// Every prepare read the connector can be asked for, recorded by name.
@@ -4360,7 +4456,7 @@ mod tests {
     /// refused, no calendar read, no card (READS-3).
     #[tokio::test]
     async fn an_unloggable_free_times_read_reads_no_calendar() {
-        event_time::TEST_ZONE.with(|zone| *zone.borrow_mut() = Some("Europe/Paris".into()));
+        let _zone = event_time::TestZone::set("Europe/Paris");
         let text = b"---\nname: reply-availability\nversion: 1\ntools: [mail.send]\ninputs:\n  email: { type: email }\napproval: each_action\n---\nPropose {free_times}.\n";
         let skill = parse_skill(text, "s.md", "reply-availability", &mail_agent()).unwrap();
         let (tokens, _person, email) = session();

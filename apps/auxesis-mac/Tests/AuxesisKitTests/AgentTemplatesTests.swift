@@ -53,6 +53,14 @@ import Testing
                        ["Fait seul : lire les e-mails, rédiger des brouillons", "Vous demande d’abord : envoyer des e-mails"])
     }
 
+    func testTheFreeTimesGrantHasAPlainLabel() {
+        let grants = AgentGrants(see: [], canDo: [.init(skill: "calendar.freebusy", level: "auto")],
+                                 never: [], egressNote: "")
+        XCTAssertEqual(AgentTemplatesModel.grantLines(grants, .en), ["Does on its own: read free times only"])
+        XCTAssertEqual(AgentTemplatesModel.grantLines(grants, .fr),
+                       ["Fait seul : lire les disponibilités seulement"])
+    }
+
     func testAnAgentThatExistsCannotBePicked() async {
         let client = fake(mailCreated: true)
         let model = AgentTemplatesModel(client: client, language: .en)

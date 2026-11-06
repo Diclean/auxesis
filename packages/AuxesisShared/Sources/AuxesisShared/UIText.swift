@@ -175,7 +175,7 @@ public enum UIKey: String, CaseIterable {
 
     // Add an agent (templates)
     case addAgent, addAgentMenu, addAgentLede, addAgentAdded, addAgentConfirm, addAgentExceedsChief, addAgentDoes, addAgentAsks
-    case grantMailRead, grantMailDraft, grantMailSend, grantCalendarRead, grantCalendarWrite, grantClientsRead, grantClientsNote, grantDocumentsRead, grantDocumentsFile
+    case grantMailRead, grantMailDraft, grantMailSend, grantCalendarRead, grantCalendarFreebusy, grantCalendarWrite, grantClientsRead, grantClientsNote, grantDocumentsRead, grantDocumentsFile
 }
 
 public extension L10n {
@@ -213,6 +213,7 @@ public extension L10n {
         .grantMailDraft: "draft replies",
         .grantMailSend: "send mail",
         .grantCalendarRead: "read the calendar",
+        .grantCalendarFreebusy: "read free times only",
         .grantCalendarWrite: "add events",
         .grantClientsRead: "read client records",
         .grantClientsNote: "add client notes",
@@ -943,6 +944,7 @@ public extension L10n {
         .grantMailDraft: "rédiger des brouillons",
         .grantMailSend: "envoyer des e-mails",
         .grantCalendarRead: "lire l’agenda",
+        .grantCalendarFreebusy: "lire les disponibilités seulement",
         .grantCalendarWrite: "ajouter des événements",
         .grantClientsRead: "lire les fiches clients",
         .grantClientsNote: "annoter les fiches clients",

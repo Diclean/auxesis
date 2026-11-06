@@ -46,6 +46,26 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// Sets [`TEST_ZONE`] for this thread until dropped, so a later test on the
+/// same thread (`--test-threads=1`) reads the host zone again.
+#[cfg(test)]
+pub(crate) struct TestZone;
+
+#[cfg(test)]
+impl TestZone {
+    pub(crate) fn set(zone: &str) -> Self {
+        TEST_ZONE.with(|cell| *cell.borrow_mut() = Some(zone.to_string()));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestZone {
+    fn drop(&mut self) {
+        TEST_ZONE.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
 /// Resolve a create's times in its `time_zone`, else `owner_zone` (stated on
 /// the card). Idempotent, so an owner edit goes through the same rules.
 pub fn resolve_event_times(arguments: &Value, owner_zone: Option<&str>) -> Result<Value, String> {

@@ -717,6 +717,8 @@ fn mount_facts(dir: &std::fs::File, name: &std::ffi::CStr) -> std::io::Result<Mo
     Ok(facts)
 }
 
+/// Linux: a kernel without `STATX_MNT_ID` (before 5.8) fails closed: every
+/// removal is refused there.
 #[cfg(target_os = "linux")]
 fn os_mount(fd: std::os::fd::RawFd, facts: &mut MountFacts) -> std::io::Result<()> {
     // SAFETY: zeroed `statx` is a valid out-parameter.
@@ -763,30 +765,31 @@ fn file_id(dir: &std::fs::File) -> std::io::Result<FileId> {
 
 /// Delete the directory `rel` below the verified home and everything in it,
 /// through fds only (see [`remove_tree_in`]).
+/// `rel` is `extensions/<tree>`: like the removal scan, a mount at
+/// `extensions/` itself is refused, and the tree is checked against the home's
+/// mount (not the mount of `extensions/`).
 fn remove_tree_at(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io::Result<()> {
     let parent = handle.open_dir(rel.parent().unwrap_or(Path::new("")))?;
     let name = rel
         .file_name()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let home = mount_facts(&parent, c".")?;
-    remove_tree_in(&parent, name, rel, &home, false, &mut |_| {})
+    let home = home_facts(&parent)?;
+    remove_tree_in(&parent, name, rel, &home, &mut |_| {})
 }
 
 /// Delete `name` in the open `parent` and everything below it, through fds
 /// only: the tree is opened `O_NOFOLLOW` from `parent` (a link or a file is
 /// refused, a root on another device is a mount point), emptied by
 /// [`empty_tree`], then unlinked if `name` still names it. `rel` names it in
-/// errors; `after_open` is the test seam once the tree is open. A `scan` only
-/// walks the tree, checking every directory against `home`, and deletes nothing.
+/// errors; `after_open` is the test seam once the tree is open.
 fn remove_tree_in(
     parent: &std::fs::File,
     name: &std::ffi::OsStr,
     rel: &Path,
     home: &MountFacts,
-    scan: bool,
     after_open: &mut dyn FnMut(&str),
 ) -> std::io::Result<()> {
-    let Some(tree) = open_child_dir(parent, name, home, rel, MOUNT_POINT)? else {
+    let Some(tree) = open_child_dir(parent, name, home, rel, MOUNT_POINT, None)? else {
         return Err(refusal(
             rel,
             "est un lien ou un fichier",
@@ -795,10 +798,7 @@ fn remove_tree_in(
     };
     after_open("opened");
     let id = file_id(&tree)?;
-    empty_tree(rel, &tree, home, scan)?;
-    if scan {
-        return Ok(());
-    }
+    empty_tree(rel, &tree, home, None)?;
     unlink_dir_checked(parent, name, id, rel)
 }
 
@@ -811,21 +811,24 @@ fn c_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
 /// Open the directory `name` in `parent` `O_NOFOLLOW`; `None` for a file or a
 /// link. One that [`is_mount`] against `home` is refused with `other_dev`
 /// before anything changes. A `000` directory is first given `u+rwx` by
-/// [`unlock_locked`], and the open after it must show the same identity, so a
-/// locked tree stays removable.
+/// [`unlock_locked`] (`u+rx` in a `scan`, recorded there with its old mode),
+/// and the open after it must show the same identity, so a locked tree stays
+/// removable.
 fn open_child_dir(
     parent: &std::fs::File,
     name: &std::ffi::OsStr,
     home: &MountFacts,
     rel: &Path,
     other_dev: (&str, &str),
+    scan: Option<&mut Unlocked>,
 ) -> std::io::Result<Option<std::fs::File>> {
     use std::os::fd::{AsRawFd, FromRawFd};
     let name = c_name(name)?;
     let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
     let at = parent.as_raw_fd();
     let mounted = || refusal(rel, other_dev.0, other_dev.1);
-    let mut unlocked: Option<FileId> = None;
+    let grant = if scan.is_some() { 0o500 } else { 0o700 };
+    let mut unlocked: Option<(FileId, u32)> = None;
     loop {
         // SAFETY: `at` is an open directory fd and `name` a NUL-terminated CString.
         let fd = unsafe { libc::openat(at, name.as_ptr(), flags) };
@@ -835,8 +838,13 @@ fn open_child_dir(
             if is_mount(&mount_facts(&dir, &name)?, home) {
                 return Err(mounted());
             }
-            if unlocked.is_some_and(|id| file_id(&dir).ok() != Some(id)) {
-                return Err(refusal(rel, CHANGED.0, CHANGED.1));
+            if let Some((id, old)) = unlocked {
+                if file_id(&dir)? != id {
+                    return Err(refusal(rel, CHANGED.0, CHANGED.1));
+                }
+                if let Some(list) = scan {
+                    list.push((dir.try_clone()?, id, old));
+                }
             }
             return Ok(Some(dir));
         }
@@ -848,20 +856,24 @@ fn open_child_dir(
             _ => return Err(err),
         }
         // `None`: not a directory, the open's own error stands.
-        unlocked = Some(unlock_locked(at, &name, home, &mounted)?.ok_or(err)?);
+        unlocked = Some(unlock_locked(at, &name, home, &mounted, grant)?.ok_or(err)?);
     }
 }
 
-/// Give the unreadable directory `name` in `at` `u+rwx` through an `O_PATH`
+/// Add `grant` to the unreadable directory `name` in `at` through an `O_PATH`
 /// fd (no permission needed to open it): it is checked against `home` on that
-/// fd, then changed through `/proc/self/fd`, never by its name.
+/// fd, then changed through `/proc/self/fd`, never by its name. `O_DIRECTORY`
+/// is load-bearing: `O_PATH | O_NOFOLLOW` alone opens a link itself, and the
+/// `/proc` chmod would then follow it, so a non-directory fd is never changed.
+/// Returns its identity and its old mode.
 #[cfg(target_os = "linux")]
 fn unlock_locked(
     at: std::os::fd::RawFd,
     name: &std::ffi::CStr,
     home: &MountFacts,
     mounted: &dyn Fn() -> std::io::Error,
-) -> std::io::Result<Option<FileId>> {
+    grant: u32,
+) -> std::io::Result<Option<(FileId, u32)>> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::MetadataExt;
     let flags = libc::O_PATH | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
@@ -880,27 +892,34 @@ fn unlock_locked(
         return Err(mounted());
     }
     let meta = locked.metadata()?;
-    let mode = (meta.mode() & 0o7777) | 0o700;
+    if !meta.is_dir() {
+        return Ok(None);
+    }
+    let old = meta.mode() & 0o7777;
     let path = std::ffi::CString::new(format!("/proc/self/fd/{}", locked.as_raw_fd()))?;
-    // SAFETY: NUL-terminated path; it resolves to the inode `locked` holds.
-    if unsafe { libc::chmod(path.as_ptr(), mode as libc::mode_t) } != 0 {
+    // SAFETY: NUL-terminated path; it resolves to the directory `locked` holds.
+    if unsafe { libc::chmod(path.as_ptr(), (old | grant) as libc::mode_t) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(Some((meta.dev(), meta.ino())))
+    Ok(Some(((meta.dev(), meta.ino()), old)))
 }
 
-/// Give the unreadable directory `name` in `at` `u+rwx`. With no `O_PATH`
-/// here, by name (`AT_SYMLINK_NOFOLLOW`) once `fstatat` shows a directory on
-/// the home's device; the caller's open must then show that identity and the
-/// home's mount. A same-uid swap between the two calls can still add `u+rwx`
-/// to the swapped-in directory.
+/// Add `grant` to the unreadable directory `name` in `at`; returns its
+/// identity and old mode. With no `O_PATH` here, by name
+/// (`AT_SYMLINK_NOFOLLOW`) once `fstatat` shows a directory on the home's
+/// device; the caller's open must then show that identity and the home's
+/// mount. Residual (documented, not closed): the chmod comes before the full
+/// mount check (only the device is compared first, so a nullfs mount on the
+/// same device is refused only after its root gained `grant`), and a same-uid
+/// swap between the two calls can add `grant` to the swapped-in directory.
 #[cfg(not(target_os = "linux"))]
 fn unlock_locked(
     at: std::os::fd::RawFd,
     name: &std::ffi::CStr,
     home: &MountFacts,
     mounted: &dyn Fn() -> std::io::Error,
-) -> std::io::Result<Option<FileId>> {
+    grant: u32,
+) -> std::io::Result<Option<(FileId, u32)>> {
     // SAFETY: zeroed `stat` is a valid out-parameter for `fstatat`.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     // SAFETY: valid fd, NUL-terminated name, valid out-pointer.
@@ -913,30 +932,57 @@ fn unlock_locked(
     if id.0 != home.dev {
         return Err(mounted());
     }
-    let mode = (st.st_mode & 0o7777) | 0o700;
+    let old = st.st_mode & 0o7777;
+    let mode = old | grant as libc::mode_t;
     // SAFETY: as above; `AT_SYMLINK_NOFOLLOW` never follows a link.
     let changed = unsafe { libc::fchmodat(at, name.as_ptr(), mode, libc::AT_SYMLINK_NOFOLLOW) };
     if changed != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(Some(id))
+    #[allow(clippy::unnecessary_cast)]
+    let old = old as u32;
+    Ok(Some((id, old)))
 }
 
+/// The directories a scan unlocked, each with its identity and old mode: put
+/// back through the held fd as the scan leaves each one, and all of them when
+/// the scan stops on a refusal, so a refused removal changes no mode.
+type Unlocked = Vec<(std::fs::File, FileId, u32)>;
+
 /// Add `u+rwx` to the open directory `dir` (`fchmod`), so a `555` level can be
-/// emptied. A `scan` only adds what it needs to look inside (`u+rx`).
-fn unlock(dir: &std::fs::File, scan: bool) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
+/// emptied. A `scan` only adds what it needs to look inside (`u+rx`) and
+/// records the old mode.
+fn unlock(dir: &std::fs::File, scan: Option<&mut Unlocked>) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mode = dir.metadata()?.permissions().mode() & 0o7777;
-    if scan && mode & 0o500 == 0o500 {
-        return Ok(());
+    let Some(list) = scan else {
+        return set_fd_mode(dir, mode | 0o700);
+    };
+    if mode & 0o500 != 0o500 {
+        set_fd_mode(dir, mode | 0o500)?;
+        list.push((dir.try_clone()?, file_id(dir)?, mode));
     }
-    let mode = mode | 0o700;
+    Ok(())
+}
+
+fn set_fd_mode(dir: &std::fs::File, mode: u32) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
     // SAFETY: `dir` is an open fd owned by the caller.
     match unsafe { libc::fchmod(dir.as_raw_fd(), mode as libc::mode_t) } {
         0 => Ok(()),
         _ => Err(std::io::Error::last_os_error()),
     }
+}
+
+/// Put back every mode in `list`, deepest first; the first failure is returned.
+fn restore_modes(list: &mut Unlocked) -> std::io::Result<()> {
+    let mut first = Ok(());
+    while let Some((dir, _, mode)) = list.pop() {
+        if let Err(err) = set_fd_mode(&dir, mode) {
+            first = first.and(Err(err));
+        }
+    }
+    first
 }
 
 fn unlink_at(
@@ -1001,26 +1047,27 @@ struct Level {
 /// made `u+rwx`; anything else, a link included, is unlinked as itself. The
 /// parent fds of the deepest [`WINDOW`] levels stay open; above them the
 /// up-walk re-opens the names from `root`, refusing a changed identity. A
-/// `scan` walks the same way and unlinks nothing.
+/// `scan` walks the same way, unlinks nothing, adds only `u+rx` and puts each
+/// directory's old mode back as it leaves it (the caller restores the rest).
 fn empty_tree(
     rel: &Path,
     root: &std::fs::File,
     home: &MountFacts,
-    scan: bool,
+    mut scan: Option<&mut Unlocked>,
 ) -> std::io::Result<()> {
     let mut stack: Vec<Level> = Vec::new();
     // Levels from `low` up hold their parent's fd.
     let mut low = 0;
     let mut dir = root.try_clone()?;
-    unlock(&dir, scan)?;
+    unlock(&dir, scan.as_deref_mut())?;
     let mut todo = list_fd(&dir)?;
     loop {
         if let Some(name) = todo.pop() {
-            match open_child_dir(&dir, &name, home, rel, HAS_MOUNT)? {
-                None if scan => {}
+            match open_child_dir(&dir, &name, home, rel, HAS_MOUNT, scan.as_deref_mut())? {
+                None if scan.is_some() => {}
                 None => unlink_at(&dir, &name, 0)?,
                 Some(child) => {
-                    unlock(&child, scan)?;
+                    unlock(&child, scan.as_deref_mut())?;
                     let id = file_id(&child)?;
                     let rest = std::mem::replace(&mut todo, list_fd(&child)?);
                     let parent = Some(std::mem::replace(&mut dir, child));
@@ -1045,14 +1092,20 @@ fn empty_tree(
         dir = match level.parent {
             Some(parent) => parent,
             None => {
-                let (parent, start) = reopen(rel, root, home, &mut stack)?;
+                let (parent, start) = reopen(rel, root, home, &mut stack, scan.as_deref_mut())?;
                 low = start;
                 parent
             }
         };
         todo = level.rest;
-        if !scan {
-            unlink_dir_checked(&dir, &level.name, level.id, rel)?;
+        match scan.as_deref_mut() {
+            None => unlink_dir_checked(&dir, &level.name, level.id, rel)?,
+            // The scan is done with this directory: its old mode goes back.
+            Some(list) if list.last().is_some_and(|last| last.1 == level.id) => {
+                let (left, _, mode) = list.pop().expect("checked above");
+                set_fd_mode(&left, mode)?;
+            }
+            Some(_) => {}
         }
     }
 }
@@ -1065,11 +1118,12 @@ fn reopen(
     root: &std::fs::File,
     home: &MountFacts,
     stack: &mut [Level],
+    mut scan: Option<&mut Unlocked>,
 ) -> std::io::Result<(std::fs::File, usize)> {
     let low = stack.len().saturating_sub(WINDOW);
     let mut dir = root.try_clone()?;
     for (at, level) in stack.iter_mut().enumerate() {
-        let next = open_child_dir(&dir, &level.name, home, rel, HAS_MOUNT)?;
+        let next = open_child_dir(&dir, &level.name, home, rel, HAS_MOUNT, scan.as_deref_mut())?;
         let next = next.ok_or_else(|| refusal(rel, CHANGED.0, CHANGED.1))?;
         if file_id(&next)? != level.id {
             return Err(refusal(rel, CHANGED.0, CHANGED.1));
@@ -1193,19 +1247,33 @@ fn scan_installed(home: &Path, name: &str) -> std::io::Result<Scan> {
     Ok((best, corrupt))
 }
 
+/// A verified install, with the versions above it whose `entry.toml` is
+/// corrupt: they never run, and the caller shows them to the owner.
+#[derive(Debug)]
+pub struct VerifiedInstall {
+    /// The build that runs (the highest valid entry), re-hashed.
+    pub installed: InstalledExtension,
+    /// Versions newer than `installed` skipped as corrupt, lowest first.
+    pub corrupt_newer: Vec<String>,
+}
+
 /// Re-hash the installed artefact and confirm it still matches the entry.
 pub fn verify_installed(home: &Path, name: &str) -> Result<InstalledExtension, InstallError> {
+    Ok(verify_installed_report(home, name)?.installed)
+}
+
+/// [`verify_installed`], plus the corrupt newer entries beside the running build.
+pub fn verify_installed_report(home: &Path, name: &str) -> Result<VerifiedInstall, InstallError> {
     let (installed, corrupt) = scan_installed(home, name)?;
     let installed = installed.ok_or_else(|| InstallError::NotInstalled(name.to_owned()))?;
     // A corrupt newer entry never runs (`load_installed` skips it), so the valid
-    // build that does run is verified (and re-pinned by `--accept`); the
-    // corrupt one is only reported.
-    let newer = |version: &&String| {
+    // build that does run is verified; the corrupt one goes back to the caller
+    // (`aux ext verify` prints it, `--accept` refuses a silent downgrade).
+    let newer = |version: &String| {
         super::catalog::compare_versions(version, &installed.version) == std::cmp::Ordering::Greater
     };
-    for version in corrupt.iter().filter(newer) {
-        tracing::warn!(extension = %name, %version, "corrupt newer entry: running build verified");
-    }
+    let mut corrupt_newer: Vec<String> = corrupt.into_iter().filter(newer).collect();
+    corrupt_newer.sort_by(|a, b| super::catalog::compare_versions(a, b));
     if installed.entry.source.kind == SourceType::Binary {
         // Read through the verified home: a link planted for the artefact is
         // refused, never followed, so an outside file is never hashed.
@@ -1225,7 +1293,10 @@ pub fn verify_installed(home: &Path, name: &str) -> Result<InstalledExtension, I
             });
         }
     }
-    Ok(installed)
+    Ok(VerifiedInstall {
+        installed,
+        corrupt_newer,
+    })
 }
 
 /// Remove every `<name>@*` tree, its state, its mounts and its secrets.
@@ -1340,7 +1411,7 @@ fn remove_trees_after_check(
             if id(&dir)? != root {
                 return Err(refusal(extensions, "a changé", "changed"));
             }
-            remove_tree_in(&root_dir, &file_name, &rel, &home, false, &mut *after_check)
+            remove_tree_in(&root_dir, &file_name, &rel, &home, &mut *after_check)
         });
         match result {
             Ok(()) => removed += 1,
@@ -1350,14 +1421,10 @@ fn remove_trees_after_check(
     removed
 }
 
-/// The home's [`MountFacts`] (`..` of `extensions/`), once `extensions/` and every
-/// directory of the trees `names` show them. A link tree is left to the removal.
-fn scan_for_mounts(
-    root: &std::fs::File,
-    names: &[std::ffi::OsString],
-) -> std::io::Result<MountFacts> {
+/// The home's [`MountFacts`] (`..` of the open `extensions/` dir `root`); a
+/// mount at `extensions/` itself is refused.
+fn home_facts(root: &std::fs::File) -> std::io::Result<MountFacts> {
     use std::os::fd::{AsRawFd, FromRawFd};
-    let extensions = Path::new("extensions");
     let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
     // SAFETY: `root` is an open directory fd and `..` a NUL-terminated string.
     let fd = unsafe { libc::openat(root.as_raw_fd(), c"..".as_ptr(), flags) };
@@ -1367,15 +1434,34 @@ fn scan_for_mounts(
     // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
     let home = mount_facts(&unsafe { std::fs::File::from_raw_fd(fd) }, c"..")?;
     if is_mount(&mount_facts(root, c"extensions")?, &home) {
+        let extensions = Path::new("extensions");
         return Err(refusal(extensions, MOUNT_POINT.0, MOUNT_POINT.1));
     }
-    for name in names {
-        let rel = extensions.join(name);
-        if let Some(tree) = open_child_dir(root, name, &home, &rel, MOUNT_POINT)? {
-            empty_tree(&rel, &tree, &home, true)?;
-        }
-    }
     Ok(home)
+}
+
+/// The home's [`MountFacts`], once `extensions/` and every entry of the trees
+/// `names` show them. A link tree is left to the removal. Every mode the scan
+/// changed is put back, whether it passes or refuses.
+fn scan_for_mounts(
+    root: &std::fs::File,
+    names: &[std::ffi::OsString],
+) -> std::io::Result<MountFacts> {
+    let home = home_facts(root)?;
+    let mut unlocked = Unlocked::new();
+    let mut scan = || -> std::io::Result<()> {
+        for name in names {
+            let rel = Path::new("extensions").join(name);
+            let found = open_child_dir(root, name, &home, &rel, MOUNT_POINT, Some(&mut unlocked));
+            if let Some(tree) = found? {
+                empty_tree(&rel, &tree, &home, Some(&mut unlocked))?;
+            }
+        }
+        Ok(())
+    };
+    let scanned = scan();
+    let restored = restore_modes(&mut unlocked);
+    scanned.and(restored).map(|()| home)
 }
 
 /// A `PermissionDenied` sandbox refusal at `rel`, in French and English.
@@ -1542,7 +1628,8 @@ mod tests {
         let parent = std::fs::File::open(dir.path()).unwrap();
         let home = mount_facts(&parent, c".").unwrap();
         let open = |at: &std::fs::File, name: &str| {
-            open_child_dir(at, std::ffi::OsStr::new(name), &home, &locked, HAS_MOUNT).unwrap()
+            let name = std::ffi::OsStr::new(name);
+            open_child_dir(at, name, &home, &locked, HAS_MOUNT, None).unwrap()
         };
         assert!(open(&parent, "link").is_none(), "a link is never opened");
         let opened = open(&parent, "locked");
@@ -2785,8 +2872,11 @@ mod tests {
         std::fs::create_dir_all(root.join("demo@2.0.0")).unwrap();
         std::fs::write(root.join("demo@2.0.0/entry.toml"), b"not = [toml").unwrap();
         let loaded = load_installed(home.path(), "demo").expect("the running build");
-        let verified = verify_installed(home.path(), "demo").unwrap();
-        assert_eq!([loaded.version, verified.version], ["1.0.0", "1.0.0"]);
+        let verified = verify_installed_report(home.path(), "demo").unwrap();
+        let versions = [loaded.version, verified.installed.version];
+        assert_eq!(versions, ["1.0.0", "1.0.0"]);
+        // EXT-ANCHOR-6: the corrupt newer entry goes back to the caller.
+        assert_eq!(verified.corrupt_newer, ["2.0.0"]);
     }
 
     // A volume mounted in the tree, at its root or at `extensions/` is refused,
@@ -2820,6 +2910,96 @@ mod tests {
                 "nothing under it changed"
             );
         }
+    }
+
+    // EXT-ANCHOR-6: the scan adds only u+rx and puts every mode back, so a
+    // refused removal leaves 000/0400/0100 ancestors exactly as they were at
+    // any depth (a passing scan too); the removal after it still deletes them.
+    // On the scan itself: the guarded home refuses a 000 dir before `remove`.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_scan_puts_back_every_locked_ancestors_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let modes = [0o000, 0o400, 0o100];
+        for turn in 0..modes.len() {
+            let home = tempfile::tempdir().unwrap();
+            let work = extensions_dir(home.path()).join("demo@1.0.0/work");
+            let chain = [work.join("a"), work.join("a/b"), work.join("a/b/c")];
+            std::fs::create_dir_all(chain[2].join("mnt")).unwrap();
+            let want: Vec<u32> = (0..3).map(|at| modes[(at + turn) % 3]).collect();
+            for (dir, mode) in chain.iter().zip(&want).rev() {
+                set_mode(dir, *mode).unwrap();
+            }
+            // Read top-down (each level briefly u+x to reach the next), then put back.
+            let modes_now = || -> Vec<u32> {
+                let mut got = Vec::new();
+                for dir in &chain {
+                    got.push(std::fs::metadata(dir).unwrap().permissions().mode() & 0o777);
+                    set_mode(dir, got[got.len() - 1] | 0o100).unwrap();
+                }
+                for (dir, mode) in chain.iter().zip(&got).rev() {
+                    set_mode(dir, *mode).unwrap();
+                }
+                got
+            };
+            let root = std::fs::File::open(extensions_dir(home.path())).unwrap();
+            let names = [std::ffi::OsString::from("demo@1.0.0")];
+            MOUNT_SEAM.with(|at| *at.borrow_mut() = Some(b"mnt".to_vec()));
+            let err = scan_for_mounts(&root, &names).unwrap_err().to_string();
+            MOUNT_SEAM.with(|at| *at.borrow_mut() = None);
+            assert!(err.contains("contains a mount point"), "{err}");
+            assert_eq!(modes_now(), want, "turn {turn}: every mode put back");
+            let facts = scan_for_mounts(&root, &names).unwrap();
+            assert_eq!(modes_now(), want, "turn {turn}: a passing scan too");
+            let rel = Path::new("extensions/demo@1.0.0");
+            remove_tree_in(&root, &names[0], rel, &facts, &mut |_| {}).unwrap();
+            assert!(!work.exists(), "then removed");
+        }
+    }
+
+    // EXT-ANCHOR-6: the install-path removal agrees with the scan on a mount
+    // at `extensions/` itself.
+    #[cfg(unix)]
+    #[test]
+    fn remove_tree_at_refuses_a_mount_at_the_extensions_root() {
+        let home = tempfile::tempdir().unwrap();
+        let tree = extensions_dir(home.path()).join("demo@1.0.0/work");
+        std::fs::create_dir_all(&tree).unwrap();
+        let handle = kernel_core::SandboxHome::open_existing(home.path()).unwrap();
+        let rel = Path::new("extensions/demo@1.0.0");
+        MOUNT_SEAM.with(|at| *at.borrow_mut() = Some(b"extensions".to_vec()));
+        let result = remove_tree_at(&handle, rel);
+        MOUNT_SEAM.with(|at| *at.borrow_mut() = None);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("extensions is a mount point"), "{err}");
+        assert!(tree.is_dir(), "nothing removed");
+        remove_tree_at(&handle, rel).unwrap();
+        assert!(!tree.exists());
+    }
+
+    // EXT-ANCHOR-6: the Linux O_PATH unlock opens directories only: a link to
+    // a locked directory is never chmodded through `/proc/self/fd`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_o_path_unlock_never_opens_a_link() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        set_mode(&locked, 0o000).unwrap();
+        std::os::unix::fs::symlink(&locked, dir.path().join("link")).unwrap();
+        let parent = std::fs::File::open(dir.path()).unwrap();
+        let home = mount_facts(&parent, c".").unwrap();
+        let mounted = || std::io::Error::other("mounted");
+        let at = parent.as_raw_fd();
+        let found = unlock_locked(at, c"link", &home, &mounted, 0o700).unwrap();
+        let mode = std::fs::metadata(&locked).unwrap().permissions().mode() & 0o777;
+        assert!(found.is_none() && mode == 0, "a link is refused");
+        let unlocked = unlock_locked(at, c"locked", &home, &mounted, 0o500).unwrap();
+        let (_, old) = unlocked.unwrap();
+        let mode = std::fs::metadata(&locked).unwrap().permissions().mode() & 0o777;
+        assert_eq!((old, mode), (0o000, 0o500), "u+rx only, old mode returned");
     }
 
     #[test]

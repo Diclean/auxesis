@@ -553,6 +553,32 @@ async fn accept_refuses_a_tampered_binary_and_stays_frozen() {
     );
 }
 
+// EXT-ANCHOR-6: the approved 2.0.0 entry went corrupt, so 1.0.0 is what would
+// run. `--accept` never re-pins it silently: it names both versions and keeps
+// the freeze, and only the owner's explicit `--downgrade-to 1.0.0` re-pins it.
+#[tokio::test]
+async fn accept_refuses_a_silent_downgrade_past_a_corrupt_newer_entry() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    let mut state = load_state(home.path(), "demo").unwrap();
+    state.version = "2.0.0".to_owned();
+    state.frozen = true;
+    store_state(home.path(), &state).unwrap();
+    let newer = extensions_dir(home.path()).join("demo@2.0.0");
+    std::fs::create_dir_all(&newer).unwrap();
+    std::fs::write(newer.join("entry.toml"), b"not = [toml").unwrap();
+    let accept = |to| super::session::accept_installed(home.path(), "demo", false, to);
+    let err = accept(None).await.unwrap_err().to_string();
+    assert!(err.contains("2.0.0") && err.contains("1.0.0"), "{err}");
+    assert!(accept(Some("3.0.0")).await.is_err(), "only the running one");
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert!(kept.frozen && kept.version == "2.0.0", "nothing re-pinned");
+    let accepted = accept(Some("1.0.0")).await.unwrap();
+    assert_eq!(accepted.state.version, "1.0.0");
+    assert_eq!(accepted.corrupt_newer, ["2.0.0"]);
+    assert!(!is_frozen(home.path(), "demo"));
+}
+
 #[tokio::test]
 async fn remove_deletes_only_this_extensions_secrets() {
     let home = tempfile::tempdir().unwrap();

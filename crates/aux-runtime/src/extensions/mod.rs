@@ -46,7 +46,8 @@ pub use catalog::{
     Transport, CATALOG_FORMAT,
 };
 pub use install::{
-    install, remove, verify_installed, InstallError, InstallOptions, InstalledExtension,
+    install, remove, verify_installed, verify_installed_report, InstallError, InstallOptions,
+    InstalledExtension, VerifiedInstall,
 };
 pub use mount::{
     freeze, is_frozen, is_mounted, mount, mounted_extensions, unmount, ExtensionHost,

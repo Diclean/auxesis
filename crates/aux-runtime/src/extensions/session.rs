@@ -105,6 +105,21 @@ pub enum SessionError {
     /// The installed artefact failed its re-hash before it could be re-pinned.
     #[error(transparent)]
     Install(#[from] super::install::InstallError),
+    /// `--accept` would re-pin a build older than the approved one (a newer
+    /// entry went corrupt or was deleted), or `--downgrade-to` does not name
+    /// exactly that older build: nothing is re-pinned.
+    #[error(
+        "`{name}` runs {installed}, approved {approved}: an older build is re-pinned \
+         only by `aux ext verify {name} --accept --downgrade-to {installed}`"
+    )]
+    DowngradeRefused {
+        /// Extension name.
+        name: String,
+        /// The version the owner approved.
+        approved: String,
+        /// The version that would run.
+        installed: String,
+    },
 }
 
 /// A started egress proxy plus its loopback port.
@@ -769,15 +784,48 @@ pub async fn accept_current(
     name: &str,
     allow_loopback: bool,
 ) -> Result<ExtensionState, SessionError> {
+    let accepted = accept_installed(home, name, allow_loopback, None).await?;
+    Ok(accepted.state)
+}
+
+/// What `--accept` re-pinned, and the corrupt newer entries it saw.
+#[derive(Debug)]
+pub struct Accepted {
+    /// The new pinned state.
+    pub state: ExtensionState,
+    /// Versions newer than the re-pinned build whose entry is corrupt.
+    pub corrupt_newer: Vec<String>,
+}
+
+/// [`accept_current`]: a build older than the approved one is refused
+/// ([`SessionError::DowngradeRefused`]) unless `downgrade_to` names exactly
+/// that build, and `downgrade_to` is refused for any other build. The refusal
+/// comes before the build starts and leaves the state as it was.
+pub async fn accept_installed(
+    home: &Path,
+    name: &str,
+    allow_loopback: bool,
+    downgrade_to: Option<&str>,
+) -> Result<Accepted, SessionError> {
     // Re-hash the installed bytes first: a tampered binary is refused before it
     // runs or is pinned, and the freeze stays.
-    let installed = super::install::verify_installed(home, name)?;
-    let session = session_for(home, &installed, &SessionOptions { allow_loopback }).await?;
-    let pins = pinned_tools(&session.tools);
+    let report = super::install::verify_installed_report(home, name)?;
+    let installed = report.installed;
     let mut state =
         super::mount::load_state(home, name).ok_or_else(|| SessionError::MissingState {
             name: name.to_owned(),
         })?;
+    let older = super::catalog::compare_versions(&installed.version, &state.version)
+        == std::cmp::Ordering::Less;
+    if downgrade_to != older.then_some(installed.version.as_str()) {
+        return Err(SessionError::DowngradeRefused {
+            name: name.to_owned(),
+            approved: state.version.clone(),
+            installed: installed.version.clone(),
+        });
+    }
+    let session = session_for(home, &installed, &SessionOptions { allow_loopback }).await?;
+    let pins = pinned_tools(&session.tools);
     state.tools = pins
         .into_iter()
         .map(|pin| (pin.name, pin.identity))
@@ -799,7 +847,10 @@ pub async fn accept_current(
         super::ledger::VERIFY,
         &serde_json::json!({"name": name, "version": state.version, "accepted": true}),
     );
-    Ok(state)
+    Ok(Accepted {
+        state,
+        corrupt_newer: report.corrupt_newer,
+    })
 }
 
 /// Compare a live tool list against the pinned identities.

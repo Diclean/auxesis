@@ -26,7 +26,7 @@ use aux_store::Store;
 use auxd::api::{self, ApiHandle, ApiOptions};
 use kernel_core::{config_path, store_path};
 
-use common::{http, HttpResponse};
+use common::{http, http_with_read_timeout, HttpResponse, LOADED_RUNNER_WAIT};
 
 const FAKE_CONFIG: &str = r#"
 version = 1
@@ -142,6 +142,34 @@ async fn call(
     let body = body.map(str::to_string);
     tokio::task::spawn_blocking(move || {
         http(addr, &method, &path, token.as_deref(), body.as_deref())
+    })
+    .await
+    .unwrap()
+}
+
+/// Like [`call`], with an explicit client read timeout for a request the
+/// server legitimately queues behind other turns.
+async fn call_queued(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+    read_timeout: Duration,
+) -> HttpResponse {
+    let method = method.to_string();
+    let path = path.to_string();
+    let token = token.map(str::to_string);
+    let body = body.map(str::to_string);
+    tokio::task::spawn_blocking(move || {
+        http_with_read_timeout(
+            addr,
+            &method,
+            &path,
+            token.as_deref(),
+            body.as_deref(),
+            read_timeout,
+        )
     })
     .await
     .unwrap()
@@ -419,12 +447,21 @@ async fn concurrent_first_sends_create_exactly_one_session() {
         let token = t.token.clone();
         sends.push(tokio::spawn(async move {
             let body = body;
-            call(
+            // The daemon runs the eight first sends one after another (one
+            // first-send lane per agent, held for the whole turn - that is
+            // what keeps them in one session), so the last reply arrives
+            // after eight full turns, not one. The default 10 s client read
+            // is one request's budget: on a loaded runner (this binary's
+            // other tests starting daemons beside it) the queue alone
+            // outlasts it. Bound the wait by the work: the shared loaded-
+            // runner budget, the same one every other condition wait uses.
+            call_queued(
                 addr,
                 "POST",
                 "/v1/threads/main/messages",
                 Some(&token),
                 Some(&body),
+                LOADED_RUNNER_WAIT,
             )
             .await
         }));

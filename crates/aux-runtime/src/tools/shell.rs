@@ -6431,11 +6431,13 @@ await(q(bg.pid));
                 "no_thread {no_thread}"
             );
             for _ in 0..500 {
-                let backlog = overflow_backlog();
-                if backlog.1.is_empty() && !backlog.0 {
+                let idle = {
+                    let backlog = overflow_backlog();
+                    backlog.1.is_empty() && !backlog.0
+                };
+                if idle {
                     break;
                 }
-                drop(backlog);
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             assert_eq!(

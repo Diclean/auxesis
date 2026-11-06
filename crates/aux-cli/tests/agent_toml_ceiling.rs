@@ -3,8 +3,10 @@
 //! `AUXESIS_SANDBOX=1`, an ephemeral API port). The run is refused before any
 //! call, and the error names the file that failed.
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 const BRIEF: &str = include_str!("../../aux-runtime/src/skills/fixtures/skills/brief.md");
 const AGENT: &str = "---\nname: main\nbrain: cloud\ndefault_mode: open\nchannels: [mac]\n\
@@ -15,14 +17,8 @@ const FILL: &str = concat!(
 );
 
 fn run_brief(dir: &Path, home: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_aux"))
+    common::sandbox_command(env!("CARGO_BIN_EXE_aux"), dir, home)
         .args(["skill", "run", "brief", FILL])
-        .env_clear()
-        .env("HOME", dir)
-        .env("AUXESIS_HOME", home)
-        .env("AUXESIS_SANDBOX", "1")
-        .env("AUXESIS_API_PORT", "0")
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .output()
         .expect("run aux")
 }

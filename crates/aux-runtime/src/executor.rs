@@ -822,6 +822,10 @@ const FREEBUSY_HINT: &str = "This agent may not read the owner's free times: its
 /// One rule that refuses an agent's free-times read, as the daemon built it:
 /// the refusal names the file the owner edits for that rule only. A rule
 /// that asks refuses too: nobody could answer it before the card.
+///
+/// The hint reaches the owner through the model (the refusal is the tool
+/// result), so it names relative paths under the Auxesis home and rule
+/// names only, never a value or an absolute path (READS-4, kept in READS-6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadDenial {
     /// A `config.toml` rule refuses `calendar_freebusy` for `agent` (this
@@ -835,21 +839,99 @@ pub enum ReadDenial {
     },
     /// The agent's own grants (`agents/<agent>/grants.toml`) leave it out
     /// or ask.
-    OwnGrants,
-    /// This `never` entry in the agent's own grants covers it.
-    OwnNever(String),
+    OwnGrants(GrantsGap),
+    /// These `never` entries in the agent's own grants cover it.
+    OwnNever(Vec<String>),
     /// The agent's own tools list in this file (`agent.md`, `agent.toml`).
     OwnTools(&'static str),
     /// A chief's grants (`agents/<chief>/grants.toml`) leave it out or ask.
-    ChiefGrants(&'static str),
-    /// This `never` entry in a chief's grants covers it.
-    ChiefNever(&'static str, String),
+    ChiefGrants(&'static str, GrantsGap),
+    /// These `never` entries in a chief's grants cover it.
+    ChiefNever(&'static str, Vec<String>),
     /// A chief's tools list in this file (`agent.md`, `agent.toml`).
     ChiefTools(&'static str, &'static str),
 }
 
+/// Why one `grants.toml` refuses the free times, as written (READS-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantsGap {
+    /// The file does not parse: every scoped tool is refused.
+    Unreadable,
+    /// The strictest `calendar.freebusy` row (`None`: none), and
+    /// `calendar.read` when below `auto` (it caps the free times).
+    Rows {
+        row: Option<ActionLevel>,
+        read_cap: Option<ActionLevel>,
+    },
+}
+
 /// The `[[do]]` row that grants the free times (with calendar.read not off).
 const FREEBUSY_DO: &str = "`[[do]] skill = \"calendar.freebusy\" level = \"auto\"`";
+
+/// What one `grants.toml` must change; never more than the free times.
+fn grants_step(id: &str, gap: GrantsGap) -> String {
+    let file = format!("agents/{id}/grants.toml");
+    let GrantsGap::Rows { row, read_cap } = gap else {
+        return format!(
+            "grants.toml unreadable: {file} does not parse, so it refuses every scoped \
+             tool; fix that file"
+        );
+    };
+    let mut parts = Vec::new();
+    if let Some(cap) = read_cap {
+        parts.push(format!(
+            "calendar.read is level = \"{}\" in {file} and caps the free times (the most \
+             restrictive row wins), so this read stays refused while it is; it is not \
+             changed here, as raising or removing it opens every calendar read",
+            cap.as_str()
+        ));
+    }
+    if let Some(level) = row.filter(|level| *level != ActionLevel::Auto) {
+        parts.push(format!(
+            "change the existing `[[do]] skill = \"calendar.freebusy\"` row in {file} from \
+             level = \"{}\" to level = \"auto\" (the most restrictive row wins: adding a \
+             second row does nothing)",
+            level.as_str()
+        ));
+    }
+    if parts.is_empty() {
+        parts.push(format!("add {FREEBUSY_DO} to {file}"));
+    }
+    parts.join("; ")
+}
+
+/// A `never` hint: an entry wider than the free times is a hard block,
+/// never offered for removal; only the agent's own exact
+/// `calendar_freebusy` entry may go.
+fn never_step(who: &str, id: &str, entries: &[String], own: bool) -> String {
+    let file = format!("agents/{id}/grants.toml");
+    let named: Vec<String> = entries.iter().map(|e| format!("\"{e}\"")).collect();
+    if own && entries.iter().all(|e| e == FREEBUSY_TOOL) {
+        return format!("remove {} from `never` in {file}", named.join(", "));
+    }
+    format!(
+        "the `never` entries {} in {file} are a hard block: they keep {who} out of the \
+         calendar and cannot be overridden for this read",
+        named.join(", ")
+    )
+}
+
+/// A tools-list hint. A legacy `dot.toml` is edited in place: an
+/// `agent.toml` beside it would replace it and drop its provider and model.
+fn tools_step(list: &str, id: &str, file: &str) -> String {
+    if file == "soul.md" {
+        return format!(
+            "agents/{id}/soul.md cannot be read, which refuses every tool; fix that file"
+        );
+    }
+    let legacy = if file == "dot.toml" {
+        " (edit dot.toml itself; never create an agent.toml there, it would replace \
+         dot.toml and drop its provider and model)"
+    } else {
+        ""
+    };
+    format!("add `calendar_freebusy` to {list} in agents/{id}/{file}{legacy}")
+}
 
 /// The free-times refusal hint for `denials`; [`FREEBUSY_HINT`] when the
 /// caller did not say which rule refused.
@@ -886,26 +968,19 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
                     )
                 }
             }
-            ReadDenial::OwnGrants => format!(
-                "add {FREEBUSY_DO} to agents/{agent}/grants.toml (and leave calendar.read \
-                 not off)"
+            ReadDenial::OwnGrants(gap) => grants_step(agent, *gap),
+            ReadDenial::OwnNever(entries) => never_step("this agent", agent, entries, true),
+            ReadDenial::OwnTools(file) => tools_step("the tools list", agent, file),
+            ReadDenial::ChiefGrants(chief, gap) => grants_step(chief, *gap),
+            ReadDenial::ChiefNever(chief, entries) => never_step(
+                &format!("the chief `{chief}` and every agent under it"),
+                chief,
+                entries,
+                false,
             ),
-            ReadDenial::OwnNever(entry) => {
-                format!("remove \"{entry}\" from `never` in agents/{agent}/grants.toml")
+            ReadDenial::ChiefTools(chief, file) => {
+                tools_step("the chief's tools list", chief, file)
             }
-            ReadDenial::OwnTools(file) => {
-                format!("add `calendar_freebusy` to the tools list in agents/{agent}/{file}")
-            }
-            ReadDenial::ChiefGrants(chief) => format!(
-                "add {FREEBUSY_DO} to agents/{chief}/grants.toml (and leave calendar.read \
-                 not off)"
-            ),
-            ReadDenial::ChiefNever(chief, entry) => {
-                format!("remove \"{entry}\" from `never` in agents/{chief}/grants.toml")
-            }
-            ReadDenial::ChiefTools(chief, file) => format!(
-                "add `calendar_freebusy` to the chief's tools list in agents/{chief}/{file}"
-            ),
         })
         .collect();
     format!(
@@ -913,7 +988,7 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
         steps.join("; ")
     )
 }
-use crate::grants::FREEBUSY_TOOL;
+use crate::grants::{ActionLevel, FREEBUSY_TOOL};
 
 /// The per-run state threaded through approval and execution.
 struct RunState<'a, 'r> {
@@ -4456,8 +4531,12 @@ mod tests {
             tool: tool.to_string(),
             ask,
         };
+        let missing = GrantsGap::Rows {
+            row: None,
+            read_cap: None,
+        };
         let cases = [
-            (ReadDenial::ChiefGrants("main"), "main/grants.toml"),
+            (ReadDenial::ChiefGrants("main", missing), "main/grants.toml"),
             (
                 ReadDenial::ChiefTools("main", "agent.md"),
                 "chief's tools list in agents/main/agent.md",
@@ -4466,7 +4545,7 @@ mod tests {
                 ReadDenial::ChiefTools("main", "agent.toml"),
                 "chief's tools list in agents/main/agent.toml",
             ),
-            (ReadDenial::OwnGrants, "mail/grants.toml"),
+            (ReadDenial::OwnGrants(missing), "mail/grants.toml"),
             (ReadDenial::OwnTools("agent.md"), "mail/agent.md"),
             (ReadDenial::OwnTools("agent.toml"), "mail/agent.toml"),
             (rule("mail", "calendar_*", false), "config.toml"),
@@ -4477,29 +4556,42 @@ mod tests {
             assert_eq!(named, [case], "{text}");
         }
         let both = hint(&[
-            ReadDenial::OwnGrants,
+            ReadDenial::OwnGrants(missing),
             ReadDenial::ChiefTools("main", "agent.md"),
         ]);
         assert!(
-            both.contains("not off); add `calendar_freebusy` to the chief's"),
+            both.contains("mail/grants.toml; add `calendar_freebusy` to the chief's"),
             "{both}"
         );
         // The chief is offered the free times only, never its calendar read.
-        let chief = hint(&[ReadDenial::ChiefGrants("main")]);
+        let chief = hint(&[ReadDenial::ChiefGrants("main", missing)]);
         assert!(
             chief.contains("skill = \"calendar.freebusy\" level = \"auto\""),
             "{chief}"
         );
         assert!(!chief.contains("turn calendar.read on"), "{chief}");
-        let never = hint(&[ReadDenial::ChiefNever("main", "calendar".into())]);
+        // READS-6: a chief's `never` is a hard block, never offered for
+        // removal; an own entry wider than the free times is one too.
+        let never = hint(&[ReadDenial::ChiefNever("main", vec!["calendar".into()])]);
         assert!(
-            never.contains("remove \"calendar\" from `never` in agents/main/grants.toml"),
+            never.contains(
+                "`never` entries \"calendar\" in agents/main/grants.toml are a hard block: \
+                 they keep the chief `main` and every agent under it out of the calendar and \
+                 cannot be overridden for this read"
+            ),
             "{never}"
         );
-        let own = hint(&[ReadDenial::OwnNever("calendar_".into())]);
+        assert!(!never.contains("remove"), "{never}");
+        let own = hint(&[ReadDenial::OwnNever(vec!["calendar_".into()])]);
+        assert!(own.contains("\"calendar_\" in agents/mail/"), "{own}");
         assert!(
-            own.contains("\"calendar_\" from `never` in agents/mail/"),
+            own.contains("hard block") && !own.contains("remove"),
             "{own}"
+        );
+        let exact = hint(&[ReadDenial::OwnNever(vec!["calendar_freebusy".into()])]);
+        assert!(
+            exact.contains("remove \"calendar_freebusy\" from `never` in agents/mail/"),
+            "{exact}"
         );
         // An owner rule names its tool; one wider than the free-times read
         // (every agent, or more tools) is kept and a narrow allow added.
@@ -4526,6 +4618,72 @@ mod tests {
         );
         assert!(global.contains("agent = \"mail\""), "{global}");
         assert!(!global.contains("remove"), "{global}");
+    }
+
+    /// READS-6: an `ask` row is changed, never doubled (the most restrictive
+    /// row wins); a calendar.read cap is explained, never widened; every
+    /// matching `never` entry is named; an unreadable grants.toml is named
+    /// as such; a legacy dot.toml is edited in place.
+    #[test]
+    fn the_free_times_hint_never_widens_past_the_free_times() {
+        let hint = |denials: &[ReadDenial]| freebusy_hint("mail", denials);
+        let rows = |row, read_cap| GrantsGap::Rows { row, read_cap };
+        let ask = hint(&[ReadDenial::OwnGrants(rows(Some(ActionLevel::Ask), None))]);
+        assert!(
+            ask.contains(
+                "change the existing `[[do]] skill = \"calendar.freebusy\"` row in \
+                 agents/mail/grants.toml from level = \"ask\" to level = \"auto\""
+            ),
+            "{ask}"
+        );
+        assert!(!ask.contains("add `[[do]]"), "{ask}");
+        let chief = hint(&[ReadDenial::ChiefGrants(
+            "main",
+            rows(Some(ActionLevel::Off), None),
+        )]);
+        assert!(
+            chief.contains("main/grants.toml from level = \"off\""),
+            "{chief}"
+        );
+        for read in [ActionLevel::Ask, ActionLevel::Off] {
+            let capped = hint(&[ReadDenial::OwnGrants(rows(None, Some(read)))]);
+            assert!(
+                capped.contains(&format!(
+                    "calendar.read is level = \"{}\" in agents/mail/grants.toml and caps",
+                    read.as_str()
+                )),
+                "{capped}"
+            );
+            assert!(capped.contains("it is not changed here"), "{capped}");
+            assert!(!capped.contains("add `[[do]]"), "{capped}");
+            assert!(!capped.contains("to level = \"auto\""), "{capped}");
+        }
+        let both = hint(&[ReadDenial::OwnGrants(rows(
+            Some(ActionLevel::Ask),
+            Some(ActionLevel::Ask),
+        ))]);
+        assert!(both.contains("caps the free times") && both.contains("change the existing"));
+        let many = hint(&[ReadDenial::ChiefNever(
+            "main",
+            vec!["calendar".into(), "calendar_free".into()],
+        )]);
+        assert!(many.contains("\"calendar\", \"calendar_free\""), "{many}");
+        for denial in [
+            ReadDenial::OwnGrants(GrantsGap::Unreadable),
+            ReadDenial::ChiefGrants("mail", GrantsGap::Unreadable),
+        ] {
+            let broken = hint(&[denial]);
+            assert!(
+                broken.contains("grants.toml unreadable: agents/mail/grants.toml"),
+                "{broken}"
+            );
+            assert!(!broken.contains("add `[[do]]"), "{broken}");
+        }
+        let legacy = hint(&[ReadDenial::OwnTools("dot.toml")]);
+        assert!(legacy.contains("in agents/mail/dot.toml"), "{legacy}");
+        assert!(legacy.contains("never create an agent.toml"), "{legacy}");
+        let current = hint(&[ReadDenial::OwnTools("agent.toml")]);
+        assert!(!current.contains("dot.toml"), "{current}");
     }
 
     /// Every prepare read the connector can be asked for, recorded by name.

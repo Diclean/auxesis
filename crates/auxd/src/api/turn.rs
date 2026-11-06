@@ -2896,30 +2896,42 @@ fn freebusy_denials(
     origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
     owner_rules: &[Rule],
 ) -> Vec<aux_runtime::executor::ReadDenial> {
-    use aux_runtime::executor::ReadDenial;
+    use aux_runtime::executor::{GrantsGap, ReadDenial};
     use aux_runtime::grants::{
-        AgentGrants, GrantLevel, GrantRefusalKind, ToolOrigin, FREEBUSY_TOOL as TOOL,
+        ActionLevel, AgentGrants, GrantLevel, GrantRefusalKind, ToolOrigin, FREEBUSY_SKILL,
+        FREEBUSY_TOOL as TOOL,
     };
     let origin = origins.get(TOOL).copied().unwrap_or(ToolOrigin::Unknown);
     let scope = aux_runtime::grants::tool_scope(TOOL);
-    // `None`: the grants let it run. `Some(Some(entry))`: a `never` entry.
-    let refuses = |grants: Option<&AgentGrants>, id: &str| -> Option<Option<String>> {
-        let Some(grants) = grants else {
-            return Some(None);
-        };
-        match grants.action_for_origin(id, TOOL, origin, scope) {
-            Ok(GrantLevel::Allow) => None,
-            Ok(GrantLevel::Ask) => Some(None),
-            Err(refusal) if refusal.kind == GrantRefusalKind::Never => Some(
-                grants
+    // `None`: the grants let it run. `Ok(entries)`: every `never` entry that
+    // covers it (READS-6). `Err(gap)`: the rows, or a file that won't parse.
+    let refuses =
+        |grants: Option<&AgentGrants>, id: &str| -> Option<Result<Vec<String>, GrantsGap>> {
+            if crate::agents::grants_unreadable(home, id) {
+                return Some(Err(GrantsGap::Unreadable));
+            }
+            let Some(grants) = grants else {
+                return Some(Err(GrantsGap::Rows {
+                    row: None,
+                    read_cap: None,
+                }));
+            };
+            match grants.action_for_origin(id, TOOL, origin, scope) {
+                Ok(GrantLevel::Allow) => None,
+                Err(refusal) if refusal.kind == GrantRefusalKind::Never => Some(Ok(grants
                     .never
                     .iter()
-                    .find(|n| *n == TOOL || TOOL.starts_with(n.as_str()) || scope == Some(n))
-                    .cloned(),
-            ),
-            Err(_) => Some(None),
-        }
-    };
+                    .filter(|n| *n == TOOL || TOOL.starts_with(n.as_str()) || scope == Some(n))
+                    .cloned()
+                    .collect())),
+                _ => Some(Err(GrantsGap::Rows {
+                    row: grants.level_for_skill(FREEBUSY_SKILL),
+                    read_cap: grants
+                        .level_for_skill("calendar.read")
+                        .filter(|level| *level != ActionLevel::Auto),
+                })),
+            }
+        };
     let owner_rule = |id: &str| {
         kernel_broker::matching_rule(owner_rules, id, TOOL, false)
             .filter(|(_, rule)| rule.action != Action::Allow)
@@ -2943,8 +2955,8 @@ fn freebusy_denials(
         .filter_map(owner_rule)
         .collect();
     match refuses(crate::agents::uncapped_grants(home, agent).as_ref(), agent) {
-        Some(Some(entry)) => out.push(ReadDenial::OwnNever(entry)),
-        Some(None) => out.push(ReadDenial::OwnGrants),
+        Some(Ok(entries)) => out.push(ReadDenial::OwnNever(entries)),
+        Some(Err(gap)) => out.push(ReadDenial::OwnGrants(gap)),
         None => {}
     }
     out.extend(unlisted(agent).into_iter().map(ReadDenial::OwnTools));
@@ -2952,10 +2964,11 @@ fn freebusy_denials(
     for id in ids {
         let grants = agents
             .as_deref()
-            .map(|a| crate::agents::ceiling_grants(a, id));
+            .map(|a| crate::agents::ceiling_grants(a, id))
+            .or_else(|| crate::agents::uncapped_grants(home, id));
         match refuses(grants.as_ref(), id) {
-            Some(Some(entry)) => out.push(ReadDenial::ChiefNever(id, entry)),
-            Some(None) => out.push(ReadDenial::ChiefGrants(id)),
+            Some(Ok(entries)) => out.push(ReadDenial::ChiefNever(id, entries)),
+            Some(Err(gap)) => out.push(ReadDenial::ChiefGrants(id, gap)),
             None => {}
         }
         out.extend(
@@ -2991,10 +3004,24 @@ fn checked_tool_lists(home: &Path, id: &str) -> Result<Vec<Vec<String>>, agent::
         .collect())
 }
 
-/// [`tool_lists`], each with the file it comes from (`agent.toml`,
-/// `agent.md`), so a refusal names the file to edit.
+/// [`tool_lists`], each with the file it comes from (`agent.toml`, a
+/// legacy `dot.toml`, `agent.md`), so a refusal names the file to edit.
 fn labelled_tool_lists(home: &Path, id: &str) -> Vec<(&'static str, Vec<String>)> {
-    checked_labelled_tool_lists(home, id).unwrap_or_else(|_| vec![("agent.toml", Vec::new())])
+    checked_labelled_tool_lists(home, id)
+        .unwrap_or_else(|_| vec![(sidecar_name(home, id), Vec::new())])
+}
+
+/// The sidecar `agent::config` reads: `dot.toml` only while `agent.toml`
+/// is absent (READS-6: never tell the owner to create an agent.toml that
+/// would shadow it).
+fn sidecar_name(home: &Path, id: &str) -> &'static str {
+    let dir = aux_engine::agent_dir(home, id);
+    let seen = |name: &str| std::fs::symlink_metadata(dir.join(name)).is_ok();
+    if !seen(agent::AGENT_CONFIG_FILE) && seen(agent::LEGACY_AGENT_CONFIG_FILE) {
+        agent::LEGACY_AGENT_CONFIG_FILE
+    } else {
+        agent::AGENT_CONFIG_FILE
+    }
 }
 
 fn checked_labelled_tool_lists(
@@ -3005,7 +3032,7 @@ fn checked_labelled_tool_lists(
     lists.extend(
         agent::config(home, id)?
             .tools
-            .map(|tools| ("agent.toml", tools)),
+            .map(|tools| (sidecar_name(home, id), tools)),
     );
     match aux_runtime::skills::load_agent(&aux_engine::agent_dir(home, id)) {
         Ok(md)
@@ -3015,7 +3042,15 @@ fn checked_labelled_tool_lists(
             lists.push(("agent.md", md.tools))
         }
         Ok(_) => {}
-        Err(_) => lists.push(("agent.md", Vec::new())),
+        Err(err) => lists.push((
+            match err.file.as_str() {
+                "soul.md" => "soul.md",
+                "dot.toml" => agent::LEGACY_AGENT_CONFIG_FILE,
+                "agent.toml" => agent::AGENT_CONFIG_FILE,
+                _ => "agent.md",
+            },
+            Vec::new(),
+        )),
     }
     Ok(lists)
 }
@@ -5757,7 +5792,11 @@ mod m4_invite_tests {
         let mail_toml = "tools = [\"mail.read\", \"mail.send\"]\n".to_string();
         let toml_file = "agents/mail/agent.toml";
         let (denied, asked) = ("matched: deny. ", "nothing was read. ");
-        let never_hint = "from `never` in agents/mail/grants.toml";
+        // READS-6: a `never` wider than the free times is a hard block; an
+        // ask row is changed, never doubled; a legacy dot.toml is named,
+        // never agent.toml.
+        let never_hint = "\"calendar\" in agents/mail/grants.toml are a hard block";
+        let mail_dot = "agents/mail/dot.toml";
         let cases = [
             (
                 ("mail", "grants.toml", BASE.to_string()),
@@ -5769,7 +5808,8 @@ mod m4_invite_tests {
             (("mail", "grants.toml", asks), grants_file, asked),
             (("mail", "grants.toml", never), grants_file, denied),
             (("mail", "agent.md", mail_md), tools_file, denied),
-            (("mail", "agent.toml", mail_toml), toml_file, denied),
+            (("mail", "agent.toml", mail_toml.clone()), toml_file, denied),
+            (("mail", "dot.toml", mail_toml), mail_dot, denied),
             ((CHIEF, "agent.md", MAIN.to_string()), chief_tools, denied),
             (
                 (CHIEF, "grants.toml", MAIN_GRANTS.to_string()),
@@ -5781,11 +5821,13 @@ mod m4_invite_tests {
             grants_file,
             tools_file,
             toml_file,
+            mail_dot,
             chief_tools,
             chief_grants,
         ];
         for (home_file, file, refused) in cases {
             let is_never = home_file.2.starts_with("never");
+            let is_ask = home_file.2.ends_with(&format!("{free}\"ask\"\n"));
             HOME_FILES.with(|cell| *cell.borrow_mut() = vec![home_file]);
             let fill = serde_json::json!({
                 "slots": { "person": "Camille Exemple", "topic": "the Q3 review" },
@@ -5802,13 +5844,37 @@ mod m4_invite_tests {
                 Answer::Yes,
             );
             assert_eq!((cards.len(), sent.len()), (0, 0), "{file}\n{cards:?}");
+            // The refusal sits in a JSON tool result: read its quotes plain.
+            let stored = stored.replace("\\\"", "\"");
             let hint =
                 format!("{refused}This agent may not read the owner's free times. To allow it, ");
             assert!(stored.contains(&hint), "{file}\n{stored}");
             assert_eq!(stored.contains(never_hint), is_never, "{stored}");
+            assert!(!stored.contains("remove \""), "{stored}");
+            let change = "from level = \"ask\" to level = \"auto\"";
+            assert_eq!(stored.contains(change), is_ask, "{stored}");
             let named: Vec<_> = all.into_iter().filter(|f| stored.contains(f)).collect();
             assert_eq!(named, [file], "{stored}");
         }
+    }
+
+    /// READS-6: a grants.toml that won't parse is named as unreadable,
+    /// never as grants that leave the free times out.
+    #[test]
+    fn free_times_denials_name_an_unreadable_grants_file() {
+        use aux_runtime::executor::{GrantsGap, ReadDenial};
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let mail = aux_engine::agent_dir(&home, "mail");
+        std::fs::create_dir_all(&mail).unwrap();
+        std::fs::write(mail.join("grants.toml"), "[[do]\n").unwrap();
+        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let own: Vec<_> = denials
+            .iter()
+            .filter(|d| matches!(d, ReadDenial::OwnGrants(_)))
+            .collect();
+        let unreadable = ReadDenial::OwnGrants(GrantsGap::Unreadable);
+        assert_eq!(own, [&unreadable], "{denials:?}");
     }
 
     /// A fully busy week says so and proposes no time; a no sends nothing; a

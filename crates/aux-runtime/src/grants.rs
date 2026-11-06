@@ -385,6 +385,10 @@ impl AgentGrants {
     /// for display-only rows, where each such row here is one `shipped`
     /// holds exactly (READS-5: only Mail's shipped free-times row, never one
     /// another agent gained or one at another level).
+    ///
+    /// A shipped display-only row the owner deleted still counts as shipped
+    /// (READS-6, kept on purpose): the row decides no read, so the grants
+    /// still decide every call as the shipped ones, and nothing widens.
     pub fn decides_like(&self, shipped: &AgentGrants) -> bool {
         let shipped_rows = self
             .see
@@ -427,7 +431,7 @@ impl AgentGrants {
     }
 
     /// The most restrictive level granted for one exact skill, if any.
-    fn level_for_skill(&self, skill: &str) -> Option<ActionLevel> {
+    pub fn level_for_skill(&self, skill: &str) -> Option<ActionLevel> {
         self.can_do
             .iter()
             .filter(|grant| grant.skill == skill)

@@ -812,6 +812,12 @@ pub(crate) fn uncapped_grants(home: &Path, id: &str) -> Option<AgentGrants> {
     }
 }
 
+/// True when `agents/<id>/grants.toml` exists and cannot be read or parsed
+/// (READS-6: named as such, never as missing grants).
+pub(crate) fn grants_unreadable(home: &Path, id: &str) -> bool {
+    read_agent_grants(home, id).is_err()
+}
+
 /// A parse error of a home file: file, line and column, never the text.
 fn redacted(err: &toml::de::Error, file: &str, text: &str) -> RegistryError {
     RegistryError::Config(

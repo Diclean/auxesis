@@ -227,9 +227,19 @@ impl DelegationRun {
         Arc::clone(&self.cancel)
     }
 
+    /// Every store access of a live run, past the budget stop gate: after the
+    /// stop it is refused (an error, no SQL), so [`Self::stopped`] reads it as
+    /// stopped and no step, progress, approval or state row is written.
     fn with_store<T>(&self, f: impl FnOnce(&Store) -> Result<T, String>) -> Result<T, String> {
         let guard = kernel_core::lock_recover(&self.store);
-        f(&guard)
+        let mut out = None;
+        match aux_engine::gated_store_write(|| {
+            out = Some(f(&guard));
+            Ok(())
+        }) {
+            Ok(()) => out.unwrap_or_else(|| Err("the store access did not run".into())),
+            Err(_) => Err("the daemon is stopping".into()),
+        }
     }
 
     /// Append and stream one step. Returns `false` when the owner stopped this
@@ -740,14 +750,6 @@ impl Tool for DelegateTool {
         let db_path = kernel_core::store_path(&self.home);
         let store = Store::open(&db_path)
             .map_err(|err| ToolError::Io(std::io::Error::other(err.to_string())))?;
-        // A tainted caller's hand-off runs without a card,
-        // so the agent inherits the taint before its turn starts: its
-        // workspace is marked, and its own effectful calls still ask. A clean
-        // agent can never launder the caller's taint. Fails closed.
-        if ctx.tainted {
-            inherit_taint(&self.home, &store, &ctx.agent, &args.agent)
-                .map_err(|err| ToolError::Io(std::io::Error::other(err)))?;
-        }
         let store = Arc::new(Mutex::new(store));
         let brain = crate::agents::definition(&self.home, &args.agent)
             .ok()
@@ -786,6 +788,43 @@ impl Tool for DelegateTool {
             }
             Err(err) => return Err(ToolError::Io(std::io::Error::other(err.to_string()))),
         };
+        // A tainted caller's hand-off runs without a card, so the agent
+        // inherits the taint before its turn starts: its workspace is marked,
+        // and its own effectful calls still ask. A clean agent can never
+        // launder the caller's taint. After the created row, so a refused
+        // hand-off leaves no mark; before the agent runs, and fails closed: a
+        // mark not written (the stop included) never runs the agent.
+        if ctx.tainted {
+            let marked = aux_engine::gated_store_write(|| {
+                Ok(inherit_taint(
+                    &self.home,
+                    &kernel_core::lock_recover(&store),
+                    &ctx.agent,
+                    &args.agent,
+                ))
+            });
+            let failed = match marked {
+                Ok(Ok(())) => None,
+                Ok(Err(err)) => Some(err),
+                Err(err) if aux_engine::is_stop_refusal(&err) => {
+                    tracing::warn!(
+                        delegation_id = %id,
+                        "delegation skipped: the daemon is stopping"
+                    );
+                    return Ok(ToolOutput::error(
+                        "the daemon is stopping: the task was not handed over",
+                    ));
+                }
+                Err(err) => Some(err.to_string()),
+            };
+            if let Some(err) = failed {
+                let _ = gated_delegation_write(&id, || {
+                    kernel_core::lock_recover(&store)
+                        .set_delegation_state(&id, DelegationState::Failed)
+                });
+                return Err(ToolError::Io(std::io::Error::other(err)));
+            }
+        }
         if let Some(events) = &self.events {
             let _ = crate::api::wire::send_bounded(
                 events,
@@ -895,10 +934,12 @@ impl Tool for DelegateTool {
                 Ok(ToolOutput::ok(shown))
             }
             Err(reason) => {
-                let row = {
-                    let guard = kernel_core::lock_recover(&store);
-                    guard.delegation(&id).ok().flatten()
-                };
+                // Read past the stop gate: after the stop, no row (and no write).
+                let row = aux_engine::gated_store_write(|| {
+                    kernel_core::lock_recover(&store).delegation(&id)
+                })
+                .ok()
+                .flatten();
                 let stopped = row
                     .as_ref()
                     .is_some_and(|delegation| delegation.state == DelegationState::Stopped);
@@ -987,7 +1028,9 @@ impl Drop for OrphanGuard {
         self.cancel.cancel();
         let closed = {
             let guard = kernel_core::lock_recover(&self.store);
-            let row = guard.delegation(&self.id).ok().flatten();
+            let row = aux_engine::gated_store_write(|| guard.delegation(&self.id))
+                .ok()
+                .flatten();
             let open = row.as_ref().is_some_and(|row| {
                 matches!(
                     row.state,
@@ -1208,10 +1251,7 @@ pub async fn resume(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
     let db_path = state.db_path.clone();
     let id_for_read = id.clone();
     let read = tokio::task::spawn_blocking(move || -> Result<Option<Delegation>, String> {
-        let store = Store::open(&db_path).map_err(|err| err.to_string())?;
-        store
-            .delegation(&id_for_read)
-            .map_err(|err| err.to_string())
+        gated_open(&db_path, |store| store.delegation(&id_for_read))
     })
     .await;
     let delegation = match read {
@@ -1231,11 +1271,11 @@ pub async fn resume(State(state): State<Arc<ApiState>>, Path(id): Path<String>) 
     let db_path = state.db_path.clone();
     let delegation_id = delegation.id.clone();
     let reset = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let store = Store::open(&db_path).map_err(|err| err.to_string())?;
-        store
-            .set_delegation_state(&delegation_id, DelegationState::Queued)
-            .map_err(|err| err.to_string())?;
-        Ok(())
+        gated_open(&db_path, |store| {
+            store
+                .set_delegation_state(&delegation_id, DelegationState::Queued)
+                .map(drop)
+        })
     })
     .await;
     match reset {
@@ -1262,14 +1302,13 @@ async fn set_state(state: Arc<ApiState>, id: String, target: DelegationState) ->
     let home = state.home.clone();
     let db_path = state.db_path.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Option<Delegation>, String> {
-        let store = Store::open(&db_path).map_err(|err| err.to_string())?;
-        let Some(delegation) = store.delegation(&id).map_err(|err| err.to_string())? else {
-            return Ok(None);
-        };
-        store
-            .set_delegation_state(&id, target)
-            .map_err(|err| err.to_string())?;
-        Ok(Some(delegation))
+        gated_open(&db_path, |store| {
+            let Some(delegation) = store.delegation(&id)? else {
+                return Ok(None);
+            };
+            store.set_delegation_state(&id, target)?;
+            Ok(Some(delegation))
+        })
     })
     .await;
     match result {
@@ -1305,7 +1344,16 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
         let cancel = TurnCancel::new();
         let _registration = state.delegation_cancels.register(&id, Arc::clone(&cancel));
         let run = match tokio::task::spawn_blocking(move || {
-            DelegationRun::open(&delegation, &home, &open_path, events, Arc::clone(&cancel))
+            aux_engine::gated_store_write(|| {
+                Ok(DelegationRun::open(
+                    &delegation,
+                    &home,
+                    &open_path,
+                    events,
+                    Arc::clone(&cancel),
+                ))
+            })
+            .unwrap_or_else(|err| Err(err.to_string()))
         })
         .await
         {
@@ -1320,15 +1368,15 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
             }
         };
         // The row is live again before the executor takes its first step.
-        if let Ok(store) = Store::open(&db_path) {
-            let _ = store.set_delegation_state(&id, DelegationState::Working);
-        }
+        let _ = gated_open(&db_path, |store| {
+            store.set_delegation_state(&id, DelegationState::Working)
+        });
         match state.delegations.execute(run).await {
             Ok(result) => {
-                let applied = Store::open(&db_path)
-                    .ok()
-                    .and_then(|store| store.set_delegation_result(&id, &result, 0).ok())
-                    .unwrap_or(false);
+                let applied = gated_open(&db_path, |store| {
+                    store.set_delegation_result(&id, &result, 0)
+                })
+                .unwrap_or(false);
                 if !applied {
                     let _ = crate::api::wire::send_bounded(
                         &state.events,
@@ -1342,17 +1390,17 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
                 );
             }
             Err(reason) => {
-                let row = Store::open(&db_path)
+                let row = gated_open(&db_path, |store| store.delegation(&id))
                     .ok()
-                    .and_then(|store| store.delegation(&id).ok().flatten());
+                    .flatten();
                 let stopped = row
                     .as_ref()
                     .is_some_and(|delegation| delegation.state == DelegationState::Stopped);
                 if !stopped {
-                    if let Ok(store) = Store::open(&db_path) {
-                        // Nothing attempted is stopped, not failed.
-                        let _ = store.set_delegation_state(&id, unfinished_state(row.as_ref()));
-                    }
+                    // Nothing attempted is stopped, not failed.
+                    let _ = gated_open(&db_path, |store| {
+                        store.set_delegation_state(&id, unfinished_state(row.as_ref()))
+                    });
                 }
                 let _ = crate::api::wire::send_bounded(
                     &state.events,
@@ -1365,6 +1413,15 @@ pub fn spawn_run(state: Arc<ApiState>, delegation: Delegation) {
             }
         }
     });
+}
+
+/// Open the store and run `access` on it, the opening included, past the
+/// budget stop gate: after the stop no SQL runs and the access is an error.
+fn gated_open<T>(
+    db_path: &std::path::Path,
+    access: impl FnOnce(&Store) -> Result<T, aux_store::StoreError>,
+) -> Result<T, String> {
+    aux_engine::gated_store_write(|| access(&Store::open(db_path)?)).map_err(|err| err.to_string())
 }
 
 /// `GET /v1/stop` → `{stopped, since, cancelled_sends}`.

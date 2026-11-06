@@ -433,8 +433,11 @@ impl ApiHandle {
         }
     }
 
-    /// Stop the server and the broadcaster (aborts their tasks).
+    /// Stop the server and the broadcaster (aborts their tasks). Every live
+    /// delegation is cancelled first, so it ends and closes its row while the
+    /// budget stop gate is still open, before the daemon's stop.
     pub fn shutdown(&self) {
+        self.state.delegation_cancels.cancel_all();
         for task in &self.tasks {
             task.abort();
         }

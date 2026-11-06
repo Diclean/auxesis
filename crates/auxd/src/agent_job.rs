@@ -422,10 +422,20 @@ impl AgentJobRunner {
         if !met || delivered || capped || held {
             next.last_hash = Some(hash);
         }
+        // Past the budget stop gate: after the stop, nothing is written.
         let store = kernel_core::sync::lock_recover(store);
-        let _ = store.set_job_payload(job.id, &next.payload());
-        if delivered && watch.stop_after_hit {
-            let _ = store.set_job_enabled(job.id, false);
+        let written = aux_engine::gated_store_write(|| {
+            let payload = store.set_job_payload(job.id, &next.payload());
+            if delivered && watch.stop_after_hit {
+                let _ = store.set_job_enabled(job.id, false);
+            }
+            payload
+        });
+        if written.as_ref().is_err_and(aux_engine::is_stop_refusal) {
+            tracing::warn!(
+                job_id = job.id,
+                "watch state skipped: the daemon is stopping"
+            );
         }
         let verdict = match (met, delivered, capped) {
             (false, ..) => "not met",

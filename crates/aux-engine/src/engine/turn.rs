@@ -457,7 +457,10 @@ impl<'a> ChatSession<'a> {
                 Err(poisoned) => poisoned.into_inner(),
             };
             budget.start_turn();
-            if let Ok(day) = self.store.with(|store| store.local_day()) {
+            // Past the stop gate: after a stop the read is refused, the web
+            // budget keeps its day and no SQL runs (the turn's first store
+            // write below is refused too).
+            if let Ok(day) = self.gated_write(|store| store.local_day()) {
                 budget.set_day(&day);
             }
         }
@@ -993,7 +996,7 @@ impl<'a> ChatSession<'a> {
                 _ => meta.map(str::to_string),
             };
             let pairs = self.pairs_in(&[content, meta.as_deref().unwrap_or_default()]);
-            let (dropped, row) = self.store.with(|store| {
+            let (dropped, row) = self.gated_write(|store| {
                 let dropped = store.record_session_tokens(self.session.id, &pairs)?;
                 let row = store.append_message(
                     self.session.id,
@@ -1012,7 +1015,7 @@ impl<'a> ChatSession<'a> {
             }
             return Ok(row);
         }
-        Ok(self.store.with(|store| {
+        Ok(self.gated_write(|store| {
             store.append_message(
                 self.session.id,
                 role_str(message.role),
@@ -1200,10 +1203,7 @@ impl<'a> ChatSession<'a> {
                     (role.as_str(), content, Some(meta.as_str()))
                 })
                 .collect();
-            match self
-                .store
-                .with(|store| store.append_messages_atomic(self.session.id, &refs))
-            {
+            match self.gated_write(|store| store.append_messages_atomic(self.session.id, &refs)) {
                 Ok(stored) => stored,
                 Err(err) => {
                     tracing::error!(

@@ -356,6 +356,14 @@ pub fn gated_usage_write<T>(
     LazyLock::force(&PROCESS).gated(write)
 }
 
+/// [`gated_usage_write`] for a write that is no usage write (an ACP turn's
+/// taint mark and answer row): the same gate, the caller decides what a refusal costs.
+pub fn gated_store_write<T>(
+    write: impl FnOnce() -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    gated_usage_write(write)
+}
+
 /// Run `write`, a usage write outside settling, on `store` past the
 /// process-wide stop gate (see [`Budget::gated`]).
 pub(crate) fn usage_write<T>(
@@ -379,7 +387,12 @@ fn hand_over(work: Work) {
 /// whole budget check (day read, reservation, denial audit) and the ACP
 /// ledger's ([`gated_usage_write`]) pass the same gate, so one in flight is
 /// waited for and a later one is refused with no store access, an error its
-/// caller handles (a refused reservation denies the call). False
+/// caller handles (a refused reservation denies the call). So do a turn's
+/// day read, its message rows and a cancelled batch's close, and the ACP
+/// ledger's taint mark and answer row ([`gated_store_write`]); a paid turn
+/// whose answer is refused fails with an error and a loud log. Not gated yet:
+/// the engine's tool-result rows, the system prompt row and its taint marks
+/// (`session.rs`, `context.rs`, `taint.rs`). False
 /// means a statement may still be: call this again, which waits again and
 /// opens a new [`RECORD_WINDOW`]. Later settles are refused and handed to the
 /// worker, which raises their rows while it runs. Residual: a handover (a
@@ -973,7 +986,7 @@ pub(crate) fn call_estimate(
 
 impl<'a> ChatSession<'a> {
     /// The budget whose stop gate this session's usage writes pass.
-    fn budget(&self) -> &'static Budget {
+    pub(super) fn budget(&self) -> &'static Budget {
         #[cfg(test)]
         if let Some(budget) = self.budget {
             return budget;
@@ -981,8 +994,9 @@ impl<'a> ChatSession<'a> {
         LazyLock::force(&PROCESS)
     }
 
-    /// A usage write outside settling, past this session's stop gate.
-    fn usage_write<T>(
+    /// A store write of this turn (usage, message row, day read), past this
+    /// session's stop gate.
+    pub(super) fn gated_write<T>(
         &self,
         write: impl FnOnce(&Store) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
@@ -1145,14 +1159,14 @@ impl<'a> ChatSession<'a> {
             cached_tokens: usage.and_then(|usage| usage.cached_prompt_tokens),
             completion_tokens: usage.map(|usage| usage.completion_tokens),
         };
-        if let Err(err) = self.usage_write(|store| store.record_usage_call(&call)) {
+        if let Err(err) = self.gated_write(|store| store.record_usage_call(&call)) {
             tracing::warn!(error = %err, "could not record a brain call's token counts");
         }
     }
 
     /// Insert one usage row, stamped with this turn's identity when it has one.
     fn record_usage_row(&self, kind: UsageKind, amount: u64, unit: &str) -> Result<(), ChatError> {
-        let recorded = self.usage_write(|store| match self.run_id.as_deref() {
+        let recorded = self.gated_write(|store| match self.run_id.as_deref() {
             Some(run_id) => store.record_usage_for(run_id, &self.agent, kind, amount, unit),
             None => store.record_usage(&self.agent, kind, amount, unit),
         });
@@ -2447,14 +2461,17 @@ mod tests {
     }
 
     /// Triggers that count every row written to a usage table, the reservation
-    /// and event tables included, so a `budget.denied` row counts too.
+    /// and event tables included, so a `budget.denied` row counts too, and the
+    /// message and session taint rows of a turn.
     const WATCH_WRITES: &str = "CREATE TABLE touched(n);
         CREATE TRIGGER t1 AFTER INSERT ON usage BEGIN INSERT INTO touched VALUES (1); END;
         CREATE TRIGGER t2 AFTER INSERT ON usage_calls BEGIN INSERT INTO touched VALUES (1); END;
         CREATE TRIGGER t3 AFTER INSERT ON events BEGIN INSERT INTO touched VALUES (1); END;
         CREATE TRIGGER t4 AFTER INSERT ON usage_reservations BEGIN INSERT INTO touched VALUES (1); END;
         CREATE TRIGGER t5 AFTER UPDATE ON usage_reservations BEGIN INSERT INTO touched VALUES (1); END;
-        CREATE TRIGGER t6 AFTER DELETE ON usage_reservations BEGIN INSERT INTO touched VALUES (1); END;";
+        CREATE TRIGGER t6 AFTER DELETE ON usage_reservations BEGIN INSERT INTO touched VALUES (1); END;
+        CREATE TRIGGER t7 AFTER INSERT ON messages BEGIN INSERT INTO touched VALUES (1); END;
+        CREATE TRIGGER t8 AFTER INSERT ON session_taint BEGIN INSERT INTO touched VALUES (1); END;";
 
     /// Usage writes outside settling meet the settle gate: one in flight when
     /// the stop is asked is waited for, and every one attempted after it is
@@ -2472,6 +2489,7 @@ mod tests {
             .unwrap();
         let provider = FakeProvider::echo("fake");
         let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+        let base = count(&dir, "SELECT COUNT(*) FROM touched");
         let budget = budget();
         session.budget = Some(budget);
         let day = harness.store().local_day().unwrap();
@@ -2490,7 +2508,7 @@ mod tests {
         // A write in flight when the stop is asked: the stop waits for it.
         let stopper = std::sync::OnceLock::new();
         session
-            .usage_write(|store| {
+            .gated_write(|store| {
                 let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let flag = Arc::clone(&done);
                 stopper.get_or_init(|| {
@@ -2509,7 +2527,7 @@ mod tests {
             })
             .unwrap();
         assert!(stopper.into_inner().unwrap().join().unwrap(), "then ends");
-        assert_eq!(touched(), 1, "the write in flight landed before the stop");
+        assert_eq!(touched(), base + 1, "the write in flight landed first");
         assert_eq!(day_reads.load(Ordering::SeqCst), 0);
 
         // Each attempt after the stop is refused before it touches the store.
@@ -2523,10 +2541,67 @@ mod tests {
         let mut open =
             harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
         open.budget = Some(budget);
+        let base = touched();
         let denied = open.reserve_budget(&request).err();
         assert!(matches!(denied, Some(ChatError::BudgetDenied { .. })));
-        assert_eq!(touched(), 1, "no row (budget.denied included) after a stop");
+        assert_eq!(
+            touched(),
+            base,
+            "no row (budget.denied included) after a stop"
+        );
         assert_eq!(day_reads.load(Ordering::SeqCst), 0, "no read either");
+    }
+
+    /// A turn after the stop reads no day, stores no row, calls no provider.
+    #[tokio::test]
+    async fn a_turn_after_the_stop_stores_no_message_and_makes_no_call() {
+        let mut harness = Harness::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        harness.store = Arc::new(Mutex::new(Store::open(&path).unwrap()));
+        let provider = FakeProvider::repeating("fake", ChatResponse::assistant("never"));
+        let mut session = harness.start(&provider, vec![], RecordingApprover::new(false));
+        aux_store::open_keyed(&path)
+            .unwrap()
+            .execute_batch(WATCH_WRITES)
+            .unwrap();
+        let budget = budget();
+        session.budget = Some(budget);
+        assert!(budget.stop(Duration::from_secs(10)));
+
+        let err = session.send("hello").await.unwrap_err();
+
+        assert!(matches!(err, ChatError::Store(_)), "got {err:?}");
+        assert_eq!(provider.request_count(), 0, "no provider call");
+        let touched = count(&dir, "SELECT COUNT(*) FROM touched");
+        assert_eq!(touched, 0, "no message row after the stop");
+        assert!(session.gated_write(|store| store.local_day()).is_err());
+    }
+
+    /// A `reserve_budget` reservation settles under its own budget's stop.
+    #[test]
+    fn a_reservation_settles_under_the_budget_it_was_admitted_under() {
+        let harness = Harness::new();
+        let mut budgets = Budgets::default();
+        budgets.default.tokens_in = Some(1_000_000);
+        let provider = FakeProvider::echo("fake");
+        let mut session =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+        let budget = budget();
+        session.budget = Some(budget);
+        let mut gate = tokenising_gate([7u8; 32]);
+        let message = SafeMessage::issue(&mut gate, &ChatMessage::user("hello")).unwrap();
+        let request = ChatRequest::new(vec![message]);
+        let held = session.reserve_budget(&request).unwrap().unwrap();
+        assert!(budget.stop(Duration::from_secs(10)));
+        let actual = UsageActual {
+            tokens_in: 1,
+            tokens_in_estimated: true,
+            tokens_out: 1,
+            tokens_out_estimated: true,
+            usd_cents: 0,
+        };
+        assert!(held.settle(&actual).is_err(), "refused by its own budget");
     }
 
     /// Owed jobs the worker never got to try (still queued) have their amount

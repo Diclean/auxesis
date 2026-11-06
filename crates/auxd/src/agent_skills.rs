@@ -17,7 +17,7 @@ use serde_json::Value;
 /// through the shared store's `AuditSink`, once per `(agent, file hash)`.
 pub fn load_agent_skills(home: &Path, agent: &str, store: &Arc<Mutex<Store>>) {
     let agent_dir = aux_engine::agent_dir(home, agent);
-    let Some(inner) = StoreHandle::Shared(Arc::clone(store)).audit_sink() else {
+    let Some(inner) = aux_engine::gated_audit_sink(&StoreHandle::Shared(Arc::clone(store))) else {
         return;
     };
     let sink = DedupSink { inner };

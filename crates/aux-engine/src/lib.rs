@@ -52,9 +52,9 @@ pub use config::{
     ProviderSelectError, RulesError,
 };
 pub use engine::{
-    gated_store_write, gated_usage_write, is_stop_refusal, stop_settle_worker, validate_agent,
-    watch_held_reservations, ChatError, ChatSession, ChatSetup, HeldReservation, SettleStore,
-    ToolGate, TurnOutcome, ESTIMATED_UNIT, MAX_TOOL_ROUNDS,
+    gated_audit_sink, gated_store_write, gated_usage_write, is_stop_refusal, stop_settle_worker,
+    validate_agent, watch_held_reservations, ChatError, ChatSession, ChatSetup, HeldReservation,
+    SettleStore, ToolGate, TurnOutcome, ESTIMATED_UNIT, MAX_TOOL_ROUNDS,
 };
 pub use events::{ToolEndOutcome, TurnEvents};
 #[cfg(feature = "ner-gliner")]

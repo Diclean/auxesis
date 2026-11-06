@@ -15,7 +15,7 @@ pub(crate) use budget::{
     admit, admitted, call_estimate, day_denied, request_model, usage_actual, usage_write,
 };
 pub use budget::{
-    gated_store_write, gated_usage_write, is_stop_refusal, stop_settle_worker,
+    gated_audit_sink, gated_store_write, gated_usage_write, is_stop_refusal, stop_settle_worker,
     watch_held_reservations, HeldReservation, SettleStore,
 };
 mod context;

@@ -42,7 +42,7 @@ fn configured_agent_ids(home: &std::path::Path, agent: &str) -> Vec<String> {
 /// The broker's audit sink: the turn's shared store. A borrowed store cannot
 /// back it, because the kernel sink must be `Send + Sync`.
 fn audit_sink(store: &StoreHandle<'_>) -> Result<Arc<dyn kernel_broker::AuditSink>, ChatError> {
-    store.audit_sink().ok_or(ChatError::SharedStoreRequired)
+    super::budget::gated_audit_sink(store).ok_or(ChatError::SharedStoreRequired)
 }
 
 impl<'a> ChatSession<'a> {
@@ -59,6 +59,12 @@ impl<'a> ChatSession<'a> {
     /// session instead: a **bounded** page of its history is hydrated into
     /// the conversation (E-13 — persisted history is never deleted) and the
     /// system prompt is only (re)persisted when the session has none.
+    ///
+    /// After [`stop_settle_worker`](crate::stop_settle_worker) returned true the
+    /// start is refused with `BudgetDenied` before any store access (the
+    /// admission: a start in flight is waited for by the stop, a later one
+    /// writes no session, system prompt, private or taint row). The ACP ledger
+    /// refuses through the write gate instead.
     pub fn start(setup: ChatSetup<'a>) -> Result<Self, ChatError> {
         validate_agent(&setup.agent)?;
         // Before any store access: past the stop no session starts, so none of

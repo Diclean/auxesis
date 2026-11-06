@@ -271,6 +271,17 @@ impl TurnHost for StoreTurnHost {
                 }
             }
         };
+        // The stop's refusal is the budget stop, as the reservation's; any
+        // other store error stays a store error.
+        let outcome = outcome.map_err(|err| {
+            if aux_engine::is_stop_refusal(&err) {
+                AcpError::BudgetDenied {
+                    reason: "the daemon is stopping: the usage settle was handed over".to_string(),
+                }
+            } else {
+                AcpError::Store(err)
+            }
+        });
         if let Err(err) = &outcome {
             // The caller keeps logging the returned error; record it under
             // the run too, so the receipt marks usage as unverifiable instead
@@ -286,7 +297,8 @@ impl TurnHost for StoreTurnHost {
             return Ok(local_row(self.session_id, "assistant", text, Some(meta)));
         }
         // Past the stop gate: a paid turn's answer cannot be saved after the
-        // stop. Fail the turn, loudly; the text itself is not logged.
+        // stop. Fail the turn with the budget stop, loudly; the text itself is
+        // not logged.
         aux_engine::gated_store_write(|| {
             lock_store(&self.store).append_message(self.session_id, "assistant", text, Some(meta))
         })
@@ -317,7 +329,9 @@ impl TurnHost for StoreTurnHost {
 }
 
 /// A store write of the turn failed. Only the stop gate's refusal is "the
-/// daemon is stopping" (an I/O stop); any other store error stays a store error.
+/// daemon is stopping", which is the budget stop (`BudgetDenied`, as the
+/// reservation's) so the daemon edge reports the stop; any other store error
+/// stays a store error. `what` is the row that was not written.
 fn write_failed(err: aux_store::StoreError, what: &str, session_id: i64) -> AcpError {
     if aux_engine::is_stop_refusal(&err) {
         tracing::error!(
@@ -325,9 +339,9 @@ fn write_failed(err: aux_store::StoreError, what: &str, session_id: i64) -> AcpE
             what,
             "acp: a paid turn's write was NOT saved: the daemon is stopping"
         );
-        AcpError::Io(std::io::Error::other(format!(
-            "the answer was not saved: {err}"
-        )))
+        AcpError::BudgetDenied {
+            reason: format!("the daemon is stopping: {what} was not saved"),
+        }
     } else {
         tracing::error!(error = %err, session = session_id, what, "acp: a store write failed");
         AcpError::Store(err)

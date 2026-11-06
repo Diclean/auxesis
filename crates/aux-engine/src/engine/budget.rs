@@ -383,6 +383,39 @@ pub fn gated_store_write<T>(
     gated_usage_write(write)
 }
 
+/// [`StoreHandle::audit_sink`] with every row past the stop gate: the broker's
+/// decision rows are counted in flight and refused after the stop (an error to
+/// the broker, a warning with no text here). The store's own sink is not gated.
+pub fn gated_audit_sink(store: &StoreHandle<'_>) -> Option<Arc<dyn kernel_broker::AuditSink>> {
+    let inner = store.audit_sink()?;
+    Some(Arc::new(GatedAudit(inner)))
+}
+
+struct GatedAudit(Arc<dyn kernel_broker::AuditSink>);
+
+impl kernel_broker::AuditSink for GatedAudit {
+    fn log_event(
+        &self,
+        kind: &str,
+        payload: &serde_json::Value,
+    ) -> Result<i64, kernel_broker::AuditError> {
+        let mut logged = None;
+        let gate = gated_store_write(|| {
+            logged = Some(self.0.log_event(kind, payload));
+            Ok(())
+        });
+        match (gate, logged) {
+            (Ok(()), Some(result)) => result,
+            _ => {
+                tracing::warn!("audit row skipped: the daemon is stopping");
+                Err(kernel_broker::AuditError::backend(
+                    "the budget settlement is stopped",
+                ))
+            }
+        }
+    }
+}
+
 /// Run `write`, a usage write outside settling, on `store` past the
 /// process-wide stop gate (see [`Budget::gated`]).
 pub(crate) fn usage_write<T>(
@@ -411,8 +444,22 @@ fn hand_over(work: Work) {
 /// ledger's taint mark and answer row ([`gated_store_write`]); a paid turn
 /// whose answer is refused fails with an error and a loud log. So do the
 /// engine's tool-result rows, the system prompt row, the private and taint
-/// marks and the web fetch events, and the daemon's ACP user row, failed-turn
-/// receipt and abandoned-approval audit row. False
+/// marks and the web fetch events, the broker's audit rows
+/// ([`gated_audit_sink`]), and the daemon's session row, ACP user row,
+/// failed-turn receipt, abandoned-approval audit row, mail draft row and
+/// reserved-tool audit row.
+///
+/// The rule: **true means no store write follows**. A write behind the gate is
+/// refused (ACP, the daemon: an error or a skipped row, never written); the
+/// engine's session start is waited for through the admission instead
+/// ([`admitted`]: counted in flight, so the stop waits for it, and refused
+/// whole once a stop is asked). Residuals, stated: a `web.fetch` audit row is
+/// refused after the stop although the egress happened; the post-hoc skill
+/// attribution mark (`turn.rs`) is refused, so a persisted session never
+/// learns it was tainted (in memory it goes unknown, fail-closed); a Private
+/// (ephemeral) ACP turn whose taint mark fails still fails though nothing is
+/// persisted (fail-closed, kept on purpose); the CLI's own audit sinks
+/// (`aux-cli`) are not gated, as no daemon stop runs there. False
 /// means a statement may still be: call this again, which waits again and
 /// opens a new [`RECORD_WINDOW`]. Later settles are refused and handed to the
 /// worker, which raises their rows while it runs. Residual: a handover (a

@@ -99,12 +99,12 @@ use aux_providers::ChatProvider;
 pub use deltas::{DeltaStream, StreamSinks};
 pub use snapshot::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, MESSAGE_MAX_BYTES};
 use tokio::sync::broadcast;
-#[cfg(any(test, feature = "test-util"))]
-pub use turn::ToolRegistryHook;
 pub use turn::{
     apply_chief_ceiling, constrain_non_api_turn, EngineTurnRunner, FailingTurnRunner, TurnError,
     TurnRecord, TurnRunner,
 };
+#[cfg(any(test, feature = "test-util"))]
+pub use turn::{StoreDraftSink, ToolRegistryHook};
 use turn_cancels::TurnCancels;
 
 /// Port the local API listens on by default (T9 for `auxd`: 2-8-9-3).

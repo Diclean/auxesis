@@ -168,16 +168,19 @@ async fn an_acp_turn_after_the_stop_reserves_nothing_and_writes_no_row() {
     let mut paid = backend(Box::new(PaidBeforeStop(paid)), workspace.clone());
     let answered = paid.run_turn(request(), &mut observer).await;
     assert!(stopped.load(Ordering::SeqCst), "the stop returned true");
-    let Err(AcpError::Io(err)) = answered else {
+    let Err(AcpError::BudgetDenied { reason }) = answered else {
         panic!("the paid answer cannot be saved after the stop: {answered:?}");
     };
-    assert!(err.to_string().contains("not saved"), "{err}");
+    assert!(reason.contains("not saved"), "{reason}");
 
     let refused = capped.reserve_turn(10);
     assert!(matches!(refused, Err(AcpError::BudgetDenied { .. })));
     // The unlimited turn: its usage write and failed-settle marker are refused.
     let settled = unlimited.settle_turn(None, &UsageUpdate::default());
-    assert!(settled.is_err(), "refused, not lost silently");
+    assert!(
+        matches!(settled, Err(AcpError::BudgetDenied { .. })),
+        "refused as the stop, not lost silently: {settled:?}"
+    );
     // A new unlimited turn is refused too: no paid call starts after the stop.
     assert!(
         unlimited.reserve_turn(10).is_err(),
@@ -188,4 +191,10 @@ async fn an_acp_turn_after_the_stop_reserves_nothing_and_writes_no_row() {
     let result = denied.run_turn(request(), &mut StopMidTurn(stopped)).await;
     assert!(matches!(result, Err(AcpError::BudgetDenied { .. })));
     assert_eq!(touched(), before, "no SQL write ran after the stop");
+    // The held reservation's settle is the stop too, never a store error.
+    let held_settle = capped.settle_turn(held, &UsageUpdate::default());
+    assert!(
+        matches!(held_settle, Err(AcpError::BudgetDenied { .. })),
+        "{held_settle:?}"
+    );
 }

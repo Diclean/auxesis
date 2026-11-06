@@ -970,7 +970,8 @@ impl StoreHandle<'_> {
 
     /// The audit sink the broker writes its decisions through. Only a shared
     /// store can back it: the kernel's sink is `Send + Sync`, and a borrowed
-    /// store is neither, so a borrowed handle has no sink (`None`).
+    /// store is neither, so a borrowed handle has no sink (`None`). Not past the
+    /// daemon's stop gate: the daemon uses `aux_engine::gated_audit_sink`.
     pub fn audit_sink(&self) -> Option<Arc<dyn kernel_broker::AuditSink>> {
         match self {
             Self::Borrowed(_) => None,

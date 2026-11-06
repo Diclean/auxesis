@@ -1114,30 +1114,13 @@ fn remove_after_open(
     if !valid_name(name) {
         return Err(InstallError::NotInstalled(name.to_owned()));
     }
-    // The state is the record of this extension's secrets. Without it, the installed
-    // entry names the same secrets, and it is read before the trees are deleted.
-    // Only this extension's own `EXT_<NAME>__...` names are ever deleted. An entry
-    // that cannot be read stops the removal before anything changes: deleting
-    // the tree would lose the only record of the secrets left in `.env`. With no
-    // record at all (a corrupt row, or no row and a corrupt entry), `None`: every
-    // key under this extension's own prefix is swept instead.
-    let declared: Option<Vec<String>> = match super::mount::load_state(home, name) {
-        Some(state) => Some(state.secrets),
-        None if super::mount::state_row_is_corrupt(home, name) => None,
-        None => match scan_installed(home, name)? {
-            (installed, corrupt) if corrupt.is_empty() => Some(
-                installed
-                    .map(|it| it.entry.secret_names())
-                    .unwrap_or_default(),
-            ),
-            _ => None,
-        },
-    };
-    let secret_names: Option<Vec<String>> = declared.map(|list| {
-        list.into_iter()
-            .filter(|secret| super::catalog::valid_secret_name(name, secret))
-            .collect()
-    });
+    // An installed entry that cannot be read stops the removal before anything
+    // changes (no row and a corrupt entry is not refused: it is swept below).
+    if super::mount::load_state(home, name).is_none()
+        && !super::mount::state_row_is_corrupt(home, name)
+    {
+        scan_installed(home, name)?;
+    }
     // One rule: the trees go, then the mounts and secrets, and the state row
     // last, so a failure anywhere leaves the row (and its secret names) for a
     // retry. A refusal stops there and returns the error.
@@ -1158,12 +1141,11 @@ fn remove_after_open(
         anchored_dir_exists(handle, &Path::new("extensions").join("state"))?;
     }
     super::mount::remove_from_all_mounts(home, name)?;
-    // The row goes last: its secret names are never lost before the keys are.
-    match secret_names {
-        Some(list) if list.is_empty() => {}
-        Some(list) => remove_secrets(home, &list)?,
-        None => remove_secret_namespace(home, &super::catalog::secret_prefix(name))?,
-    }
+    // Every key under this extension's own `EXT_<NAME>__` prefix goes, not only
+    // the names a record lists: every valid secret name carries the prefix, so an
+    // OAuth token (never in the record), an unreadable row and a retry after a
+    // half-done removal all leave nothing in `.env`. The row goes last.
+    remove_secret_namespace(home, &super::catalog::secret_prefix(name))?;
     if let Some(handle) = home_handle.as_ref() {
         remove_state_row(handle, name)?;
     }
@@ -2367,6 +2349,23 @@ mod tests {
         let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
         assert!(!env.contains("EXT_DEMO__TOKEN"), "{env}");
         assert!(env.contains("KEEP=1"), "{env}");
+    }
+
+    // DeepSeek #169 r2: a key no record names (the OAuth token store's) goes too;
+    // a neighbour extension's namespace and other keys stay.
+    #[test]
+    fn remove_drops_an_oauth_token_no_record_names() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = extensions_dir(home.path()).join("demo@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        let entry = binary_entry("demo", b"x", "1.0.0");
+        std::fs::write(dir.join("entry.toml"), toml::to_string(&entry).unwrap()).unwrap();
+        let env = "EXT_DEMO__OAUTH_TOKENS=refresh\nEXT_DEMO_X__K=1\nKEEP=1\n";
+        std::fs::write(home.path().join(".env"), env).unwrap();
+        assert_eq!(remove(home.path(), "demo").unwrap(), 1);
+        let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
+        assert!(!env.contains("EXT_DEMO__OAUTH_TOKENS"), "{env}");
+        assert!(env.contains("EXT_DEMO_X__K=1") && env.contains("KEEP=1"), "{env}");
     }
 
     #[tokio::test]

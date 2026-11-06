@@ -668,12 +668,62 @@ fn ensure_within(root: &Path, path: &Path) -> Result<(), InstallError> {
 /// `O_NOFOLLOW | O_DIRECTORY`: a link is never followed. An unreadable
 /// directory is an error. Files need no bits: unlinking takes the parent's.
 fn make_writable_tree(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io::Result<()> {
-    make_writable_fd(&handle.open_dir(rel)?)
+    let parent = handle.open_dir(rel.parent().unwrap_or(Path::new("")))?;
+    let name = rel
+        .file_name()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let Some(dir) = open_child_dir(&parent, name)? else {
+        return Err(std::io::Error::from(std::io::ErrorKind::NotADirectory));
+    };
+    make_writable_fd(&dir)
+}
+
+/// Open the directory `name` in `parent` `O_NOFOLLOW`; a `000` directory gets
+/// `u+rwx` by name first (`AT_SYMLINK_NOFOLLOW`, after `fstatat` shows a real
+/// directory), so a locked tree stays removable. `None` for a file or a link.
+fn open_child_dir(
+    parent: &std::fs::File,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<Option<std::fs::File>> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
+    let at = parent.as_raw_fd();
+    for retry in [true, false] {
+        // SAFETY: `at` is an open directory fd and `name` a NUL-terminated CString.
+        let fd = unsafe { libc::openat(at, name.as_ptr(), flags) };
+        if fd >= 0 {
+            // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
+            return Ok(Some(unsafe { std::fs::File::from_raw_fd(fd) }));
+        }
+        let err = std::io::Error::last_os_error();
+        match err.raw_os_error() {
+            // A file or a link: the kernel's removal unlinks it as itself.
+            Some(libc::ENOTDIR | libc::ELOOP) => return Ok(None),
+            Some(libc::EACCES) if retry => {}
+            _ => return Err(err),
+        }
+        // SAFETY: zeroed `stat` is a valid out-parameter for `fstatat`.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: valid fd, NUL-terminated name, valid out-pointer.
+        let found = unsafe { libc::fstatat(at, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+        if found != 0 || st.st_mode & libc::S_IFMT != libc::S_IFDIR {
+            return Err(err);
+        }
+        let mode = (st.st_mode & 0o7777) | 0o700;
+        // SAFETY: as above; `AT_SYMLINK_NOFOLLOW` never follows a link.
+        let changed = unsafe { libc::fchmodat(at, name.as_ptr(), mode, libc::AT_SYMLINK_NOFOLLOW) };
+        if changed != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
 }
 
 fn make_writable_fd(dir: &std::fs::File) -> std::io::Result<()> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
     let mode = (dir.metadata()?.permissions().mode() & 0o7777) | 0o700;
     // SAFETY: `dir` is an open fd owned by the caller.
@@ -681,21 +731,9 @@ fn make_writable_fd(dir: &std::fs::File) -> std::io::Result<()> {
         return Err(std::io::Error::last_os_error());
     }
     for child in list_fd(dir)? {
-        let name = std::ffi::CString::new(child.as_bytes())
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
-        // SAFETY: `dir` is an open directory fd and `name` a NUL-terminated CString.
-        let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags) };
-        if fd < 0 {
-            let err = std::io::Error::last_os_error();
-            // A file or a link: the kernel's removal unlinks it as itself.
-            match err.raw_os_error() {
-                Some(libc::ENOTDIR | libc::ELOOP) => continue,
-                _ => return Err(err),
-            }
+        if let Some(sub) = open_child_dir(dir, &child)? {
+            make_writable_fd(&sub)?;
         }
-        // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
-        make_writable_fd(&unsafe { std::fs::File::from_raw_fd(fd) })?;
     }
     Ok(())
 }
@@ -857,9 +895,9 @@ fn remove_after_open(
         .into_iter()
         .filter(|secret| super::catalog::valid_secret_name(name, secret))
         .collect();
-    // One rule: the trees go, then the state row, and only once both are really
-    // gone are the mounts and secrets purged. A refusal stops there and returns
-    // the error, leaving the state row and `.env` for a retry.
+    // One rule: the trees go, then the mounts and secrets, and the state row
+    // last, so a failure anywhere leaves the row (and its secret names) for a
+    // retry. A refusal stops there and returns the error.
     let mut removed = 0;
     if let Some(handle) = open_home(home)?.as_ref() {
         after_open();
@@ -870,11 +908,13 @@ fn remove_after_open(
         if let Some(err) = first_error {
             return Err(err);
         }
-        remove_state_row(handle, name)?;
     }
     super::mount::remove_from_all_mounts(home, name)?;
     if !secret_names.is_empty() {
         remove_secrets(home, &secret_names)?;
+    }
+    if let Some(handle) = open_home(home)?.as_ref() {
+        remove_state_row(handle, name)?;
     }
     Ok(removed)
 }
@@ -1059,6 +1099,22 @@ fn read_env(handle: &kernel_core::SandboxHome) -> std::io::Result<Option<String>
 mod tests {
     use super::*;
     use crate::extensions::catalog::{EntryKind, Run, Sensitivity, Source};
+
+    #[test]
+    fn a_locked_directory_is_opened_and_made_writable_without_following_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(locked.join("inner")).unwrap();
+        set_mode(&locked.join("inner"), 0o000).unwrap();
+        set_mode(&locked, 0o000).unwrap();
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("link")).unwrap();
+        let parent = std::fs::File::open(dir.path()).unwrap();
+        let link = open_child_dir(&parent, std::ffi::OsStr::new("link")).unwrap();
+        assert!(link.is_none(), "a link is never opened");
+        let opened = open_child_dir(&parent, std::ffi::OsStr::new("locked")).unwrap();
+        make_writable_fd(&opened.expect("a 000 directory opens")).unwrap();
+        assert!(std::fs::read_dir(locked.join("inner")).is_ok());
+    }
 
     fn binary_entry(name: &str, bytes: &[u8], version: &str) -> Entry {
         Entry {

@@ -135,20 +135,32 @@ pub(crate) fn url_host(raw: &str) -> &str {
     if let Some(scheme) = opaque_scheme(rest) {
         return scheme;
     }
-    let (scheme, rest) = rest.split_once("://").unwrap_or(("", rest));
+    let (separated, (scheme, rest)) = match rest.split_once("://") {
+        Some(parts) => (true, parts),
+        None => (false, ("", rest)),
+    };
     let authority = rest
         .split(|c: char| matches!(c, '/' | '?' | '#' | '\\') || c.is_whitespace())
         .next()
         .unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
+    // Before `://` a scheme starts with a letter (`1x://`, `://` hold none).
     let scheme_ok = scheme
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+        .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        && (!separated || scheme.starts_with(|c: char| c.is_ascii_alphabetic()));
     // A real host is letters, digits and `.-_:[]%`; anything else is the
     // body of a URL with no host (`javascript://alert(1)`), not shown.
-    let host_ok = host
-        .chars()
-        .all(|c| c.is_alphanumeric() || ".-_:[]%".contains(c));
+    // A colon outside `[...]` is a port: 0-5 digits, once (`a.example:8443`,
+    // `[::1]:80`); `x:s3cr3t` is an opaque body, never a host (READS-9).
+    let unbracketed = host.rsplit_once(']').map_or(host, |(_, tail)| tail);
+    let port_ok = unbracketed
+        .split_once(':')
+        .is_none_or(|(_, port)| port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit()));
+    let host_ok = port_ok
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || ".-_:[]%".contains(c));
     if !scheme_ok {
         // `java%73cript://token`: no scheme, so what follows is a body.
         ""
@@ -341,6 +353,19 @@ mod tests {
                 "view-source:",
             ),
             ("VIEW-SOURCE:https://u:p@a.example/x", "VIEW-SOURCE:"),
+            // READS-9 rev 2: an opaque body never parses as host:port, and
+            // text before `://` must start with a letter.
+            ("\u{0}java%73cript:s3cr3t", ""),
+            ("java%73cript:s3cr3t", ""),
+            ("\u{0}java%73cript:USER:PASS", ""),
+            ("a:s3cr3t:80", ""),
+            ("1javascript://s3cr3t-token", ""),
+            ("-javascript://s3cr3t-token", ""),
+            ("://s3cr3t-token", ""),
+            ("https://a.example:8443/x", "a.example:8443"),
+            ("https://münchen.example/x", "münchen.example"),
+            ("http://[::1]:80/x", "[::1]:80"),
+            ("localhost:3000", "localhost:3000"),
         ] {
             assert_eq!(url_host(url), shown, "{url}");
         }

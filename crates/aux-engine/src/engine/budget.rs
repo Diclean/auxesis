@@ -9,7 +9,7 @@ use kernel_core::budget::{
     UsageActual, UsageKind, UsageTotals,
 };
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{mpsc, Arc, Mutex, OnceLock, Weak};
+use std::sync::{mpsc, Arc, Condvar, LazyLock, Mutex, OnceLock, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -88,8 +88,9 @@ pub(super) fn settle_streamed<S: SettleStore>(
 pub trait SettleStore: sealed::Sealed {
     /// Settle `reservation` at `actual`. The store settles a reservation once.
     fn settle(&self, reservation: &Reservation, actual: &UsageActual) -> Result<(), StoreError>;
-    /// Hand that settle to the settlement worker: never blocks, never locks.
-    fn settle_later(&self, reservation: &Reservation, actual: UsageActual);
+    /// The shared store the settlement worker can retry in; a borrowed one
+    /// has none, and its row stays held for the daemon's reconcile.
+    fn shared(&self) -> Option<&Arc<Mutex<Store>>>;
 }
 
 mod sealed {
@@ -103,11 +104,10 @@ impl SettleStore for StoreHandle<'_> {
         self.with(|store| store.settle_reservation(reservation, actual))
     }
 
-    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
-        // A borrowed store cannot reach the worker: its row stays held for
-        // the daemon's reconcile.
-        if let StoreHandle::Shared(store) = self {
-            store.settle_later(reservation, actual);
+    fn shared(&self) -> Option<&Arc<Mutex<Store>>> {
+        match self {
+            StoreHandle::Shared(store) => Some(store),
+            StoreHandle::Borrowed(_) => None,
         }
     }
 }
@@ -117,12 +117,8 @@ impl SettleStore for Arc<Mutex<Store>> {
         kernel_core::lock_recover(self).settle_reservation(reservation, actual)
     }
 
-    fn settle_later(&self, reservation: &Reservation, actual: UsageActual) {
-        hand_over(Work::Settle(Box::new(SettleJob {
-            store: Arc::clone(self),
-            reservation: reservation.clone(),
-            actual,
-        })));
+    fn shared(&self) -> Option<&Arc<Mutex<Store>>> {
+        Some(self)
     }
 }
 
@@ -149,9 +145,9 @@ const FIRST_RETRY: Duration = Duration::from_millis(if cfg!(test) { 1 } else { 5
 const RETRY_CAP: Duration = Duration::from_millis(if cfg!(test) { 4 } else { 60_000 });
 /// After a stop, how long the worker records what its owed jobs are known to
 /// have spent; one write each, cut off once it passes. With a store lock
-/// wait before the first write and the store's busy timeout (5 s) in it, the
-/// whole stop stays under main's bound.
-const RECORD_WINDOW: Duration = Duration::from_millis(if cfg!(test) { 100 } else { 1000 });
+/// wait before the first write and the store's busy timeout (5 s) in it, a
+/// stop call may take longer: the next one opens a new window.
+const RECORD_WINDOW: Duration = Duration::from_millis(if cfg!(test) { 250 } else { 1000 });
 
 const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } else { 60_000 });
 
@@ -162,8 +158,6 @@ const RECONCILE_EVERY: Duration = Duration::from_millis(if cfg!(test) { 20 } els
 /// rows, so a store that stops settling cannot grow this queue without end.
 struct Settler {
     work: mpsc::Sender<Work>,
-    /// When a stop was asked for; set once, never cleared.
-    stop: Arc<OnceLock<Instant>>,
     worker: Mutex<Option<Running>>,
 }
 
@@ -174,19 +168,26 @@ struct Running {
 }
 
 impl Settler {
-    fn start() -> Self {
+    /// Start the worker, unless `budget` is already stopped: none runs then.
+    fn start(budget: &'static Budget) -> Self {
         let (work, queue) = mpsc::channel();
-        let stop = Arc::new(OnceLock::new());
         let (done_tx, done) = mpsc::channel();
-        let flag = Arc::clone(&stop);
-        let spawned = std::thread::Builder::new()
-            .name("budget-settle".to_string())
-            .spawn(move || {
-                settle_jobs(&queue, &flag);
-                let _ = done_tx.send(());
-            });
+        let spawned = if budget.stopped() {
+            Err(std::io::Error::other("the budget settlement is stopped"))
+        } else {
+            std::thread::Builder::new()
+                .name("budget-settle".to_string())
+                .spawn(move || {
+                    settle_jobs(&queue, budget);
+                    let _ = done_tx.send(());
+                })
+        };
         let worker = match spawned {
             Ok(thread) => Some(Running { thread, done }),
+            Err(err) if budget.stopped() => {
+                tracing::debug!(error = %err, "no settlement worker after a stop");
+                None
+            }
             Err(err) => {
                 tracing::error!(error = %err, "no settlement worker: dropped calls stay held");
                 None
@@ -194,20 +195,17 @@ impl Settler {
         };
         Self {
             work,
-            stop,
             worker: Mutex::new(worker),
         }
     }
 
-    /// Hand `work` to the worker. This never blocks. Once stopped, or with no
+    /// Hand `work` to the worker. This never blocks. Once it ended, or with no
     /// worker, the row stays held: it counts against the caps until its TTL
     /// passes, and the next start's reconcile then settles it. Nothing here
-    /// runs SQL after a stop, so a late drop is not recorded directly.
+    /// runs SQL; the row may already be raised to what was recorded.
     fn send(&self, work: Work) {
-        if self.stop.get().is_some() {
-            tracing::warn!("the settlement worker is stopped: the call stays held");
-        } else if self.work.send(work).is_err() {
-            tracing::error!("no settlement worker: the call stays held for a reconcile");
+        if self.work.send(work).is_err() {
+            tracing::warn!("no settlement worker: the call stays held for a reconcile");
         }
     }
 
@@ -218,7 +216,6 @@ impl Settler {
     /// again, ends with it. On the way out it records what each job it owes
     /// is known to have spent ([`RECORD_WINDOW`]), and the row stays held.
     fn stop(&self, bound: Duration) -> bool {
-        self.stop.get_or_init(Instant::now);
         self.send_quietly(Work::Wake);
         let mut worker = kernel_core::lock_recover(&self.worker);
         let Some(running) = worker.take() else {
@@ -242,31 +239,95 @@ impl Settler {
     }
 }
 
-static SETTLER: OnceLock<Settler> = OnceLock::new();
+/// The stop gate (when the last stop was asked, and inline settles and
+/// handovers in flight), apart from the worker, so a stop before it holds.
+#[derive(Default)]
+struct Gate {
+    stop: Option<Instant>,
+    in_flight: usize,
+}
+
+/// One budget's settling: the process has one, a test its own.
+#[derive(Default)]
+struct Budget {
+    gate: Mutex<Gate>,
+    changed: Condvar,
+    settler: OnceLock<Settler>,
+}
+
+static PROCESS: LazyLock<Budget> = LazyLock::new(Budget::default);
+
+impl Budget {
+    fn settler(&'static self) -> &'static Settler {
+        self.settler.get_or_init(|| Settler::start(self))
+    }
+
+    /// See [`stop_settle_worker`]. The flag first: a settler started now has no worker.
+    fn stop(&'static self, bound: Duration) -> bool {
+        let deadline = Instant::now() + bound;
+        kernel_core::lock_recover(&self.gate).stop = Some(Instant::now());
+        let settler = self.settler();
+        let mut gate = kernel_core::lock_recover(&self.gate);
+        while gate.in_flight > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                tracing::warn!("an inline budget settle is still mid-statement");
+                return false;
+            }
+            let waited = self.changed.wait_timeout(gate, left);
+            gate = waited.unwrap_or_else(PoisonError::into_inner).0;
+        }
+        gate.stop = Some(Instant::now()); // the window counts from here
+        drop(gate);
+        self.changed.notify_all();
+        settler.stop(deadline.saturating_duration_since(Instant::now()))
+    }
+
+    fn stopped(&self) -> bool {
+        kernel_core::lock_recover(&self.gate).stop.is_some()
+    }
+
+    fn window_closed(&self) -> bool {
+        let stop = kernel_core::lock_recover(&self.gate).stop;
+        stop.is_some_and(|at| at.elapsed() >= RECORD_WINDOW)
+    }
+
+    /// Count an inline settle or a handover in flight, under the gate's lock,
+    /// until it is done; and whether a settle may start (no stop asked).
+    fn enter(&self) -> (InFlight<'_>, bool) {
+        let mut gate = kernel_core::lock_recover(&self.gate);
+        gate.in_flight += 1;
+        (InFlight(self), gate.stop.is_none())
+    }
+}
+
+/// One counted in flight; its drop lets a stop and the worker see it done.
+struct InFlight<'b>(&'b Budget);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        kernel_core::lock_recover(&self.0.gate).in_flight -= 1;
+        self.0.changed.notify_all();
+    }
+}
 
 /// Hand `work` to the process-wide worker, started on first use.
 fn hand_over(work: Work) {
-    SETTLER.get_or_init(Settler::start).send(work);
+    LazyLock::force(&PROCESS).settler().send(work);
 }
 
-/// Stop the process-wide settlement worker before the process exits, and
+/// Stop the process-wide budget settlement before the process exits, and
 /// wait up to `bound` for it: a retry mid-statement when SQLCipher's exit hook
-/// frees its memory is a use-after-free. True once no statement is in
-/// flight (also when the worker never started); false means a statement may
-/// still be, so the caller must not exit normally but call this again, which
-/// waits again. A reservation still unsettled stays held, at the most
-/// its call is known to have spent where the worker had time to record it,
-/// until its TTL passes; the next start's reconcile then settles it. Calls
-/// after this settle nothing: the settle gate refuses and the row stays held.
+/// frees its memory is a use-after-free. True once no settle statement is in
+/// flight, the worker's or an inline one's (also when none started); usage
+/// writes outside settling (`record_usage_call`, `record_usage_for`,
+/// `try_reserve_for`) are not gated. False means one may still be: call this
+/// again, which waits again and opens a new [`RECORD_WINDOW`]. Later settles
+/// are refused and handed to the worker, which raises their rows while it
+/// runs; one handed over after this returned true is not recorded, and its row
+/// stays held at what was last recorded until the next start's reconcile.
 pub fn stop_settle_worker(bound: Duration) -> bool {
-    SETTLER.get().is_none_or(|settler| settler.stop(bound))
-}
-
-/// Whether [`stop_settle_worker`] was asked: no settle starts then, on any
-/// thread, so a runtime thread that outlived the shutdown grace runs no
-/// new statement (one already running is not waited for).
-fn stopping() -> bool {
-    SETTLER.get().is_some_and(|s| s.stop.get().is_some())
+    LazyLock::force(&PROCESS).stop(bound)
 }
 
 /// Settle, now and every minute while this process runs, the held
@@ -279,8 +340,8 @@ pub fn watch_held_reservations(store: &Arc<Mutex<Store>>) {
 /// A job the worker owes: when it is next due, and the wait after that.
 type Owed = (SettleJob, Instant, Duration);
 
-fn settle_jobs(queue: &mpsc::Receiver<Work>, stop: &OnceLock<Instant>) {
-    let stopped = || stop.get().is_some();
+fn settle_jobs(queue: &mpsc::Receiver<Work>, budget: &Budget) {
+    let stopped = || budget.stopped();
     let mut owed: Vec<Owed> = Vec::new();
     let mut watched: Vec<Weak<Mutex<Store>>> = Vec::new();
     let mut reconcile_at = Instant::now();
@@ -306,7 +367,7 @@ fn settle_jobs(queue: &mpsc::Receiver<Work>, stop: &OnceLock<Instant>) {
         // Checked after every wait and before every try, so no settle
         // starts once a stop is asked for.
         if stopped() {
-            return record_owed(queue, owed, stop);
+            return record_owed(queue, owed, budget);
         }
         let now = Instant::now();
         owed.retain_mut(|(job, at, wait)| {
@@ -321,7 +382,7 @@ fn settle_jobs(queue: &mpsc::Receiver<Work>, stop: &OnceLock<Instant>) {
             true
         });
         if stopped() {
-            return record_owed(queue, owed, stop);
+            return record_owed(queue, owed, budget);
         }
         if !watched.is_empty() && now >= reconcile_at {
             watched.retain(|store| match store.upgrade() {
@@ -337,24 +398,39 @@ fn settle_jobs(queue: &mpsc::Receiver<Work>, stop: &OnceLock<Instant>) {
 }
 
 /// On a stop: record what each job the worker owes (those still in the queue
-/// too) is known to have spent, in its held row, so the next start's
-/// reconcile counts that and not just the reserve. Within [`RECORD_WINDOW`]
-/// of the stop being asked for: the time check comes after the store's lock,
-/// whose wait may be long.
-fn record_owed(queue: &mpsc::Receiver<Work>, mut owed: Vec<Owed>, stop: &OnceLock<Instant>) {
-    let deadline = stop.get().copied().unwrap_or_else(Instant::now) + RECORD_WINDOW;
-    while let Ok(work) = queue.try_recv() {
-        if let Work::Settle(job) = work {
-            owed.push((*job, deadline, FIRST_RETRY));
+/// too, and those handed over while one is in flight) is known to have spent,
+/// in its held row, so the next start's reconcile counts that and not just the
+/// reserve. A write starts only within [`RECORD_WINDOW`] of the latest stop
+/// call (checked after the store's lock, whose wait may be long); a job past
+/// it waits for the next call's window. Ends once nothing is owed or in flight.
+fn record_owed(queue: &mpsc::Receiver<Work>, mut owed: Vec<Owed>, budget: &Budget) {
+    loop {
+        owed.retain(|(job, ..)| {
+            let store = kernel_core::lock_recover(&job.store);
+            if budget.window_closed() {
+                return true;
+            }
+            let raise = || store.raise_held_reservation(job.reservation.id, &job.actual);
+            if let Ok(Err(err)) = catch_unwind(AssertUnwindSafe(raise)) {
+                let id = job.reservation.id;
+                tracing::warn!(reservation = id, error = %err, "could not record its amount");
+            }
+            false
+        });
+        let gate = kernel_core::lock_recover(&budget.gate);
+        while let Ok(work) = queue.try_recv() {
+            if let Work::Settle(job) = work {
+                owed.push((*job, Instant::now(), FIRST_RETRY));
+            }
         }
-    }
-    for (job, ..) in &owed {
-        let store = kernel_core::lock_recover(&job.store);
-        if Instant::now() >= deadline {
+        if owed.is_empty() && gate.in_flight == 0 {
             return;
         }
-        let raise = || store.raise_held_reservation(job.reservation.id, &job.actual);
-        let _ = catch_unwind(AssertUnwindSafe(raise));
+        let open = (gate.stop).is_some_and(|at| at.elapsed() < RECORD_WINDOW);
+        if owed.is_empty() || !open {
+            // A handover in flight, or the next stop call's window.
+            drop(budget.changed.wait(gate));
+        }
     }
 }
 
@@ -418,10 +494,11 @@ fn reconcile(store: &Arc<Mutex<Store>>, owed: &[Owed], stopped: &dyn Fn() -> boo
 /// unsettled (the future making the call was cancelled after the request
 /// went out), it hands the settlement worker the reserved estimate, or what
 /// [`HeldReservation::or_known`] reports where that is more, so the spend is
-/// never handed back as headroom. The drop never blocks, takes no lock and
+/// never handed back as headroom. The drop never blocks, takes no store lock and
 /// never panics; the store row stays held (counted, never swept) until a
 /// settle deletes it, so the reservation settles once.
 pub struct HeldReservation<'k, S: SettleStore> {
+    budget: &'static Budget,
     store: S,
     reservation: Reservation,
     settled: bool,
@@ -431,8 +508,13 @@ pub struct HeldReservation<'k, S: SettleStore> {
 impl<'k, S: SettleStore> HeldReservation<'k, S> {
     /// Hold `reservation`, taken in `store`, until it is settled.
     pub fn new(store: S, reservation: Reservation) -> Self {
-        SETTLER.get_or_init(Settler::start); // started now, so no drop waits for it
+        Self::new_in(LazyLock::force(&PROCESS), store, reservation)
+    }
+
+    fn new_in(budget: &'static Budget, store: S, reservation: Reservation) -> Self {
+        budget.settler(); // started now, so no drop waits for it
         Self {
+            budget,
             store,
             reservation,
             settled: false,
@@ -458,17 +540,30 @@ impl<'k, S: SettleStore> HeldReservation<'k, S> {
     /// a settle that fails goes to the settlement worker to retry.
     pub fn settle(mut self, actual: &UsageActual) -> Result<(), StoreError> {
         self.settled = true;
-        // Past a stop nothing may start a statement: the row stays held.
-        let settled = if stopping() {
+        // Past a stop no statement starts: the job goes to the worker's drain.
+        let (_in_flight, open) = self.budget.enter();
+        if !open {
+            self.settle_later(*actual);
             let stopped = std::io::Error::other("the budget settlement is stopped");
-            Err(StoreError::Io(stopped))
-        } else {
-            self.store.settle(&self.reservation, actual)
-        };
+            return Err(StoreError::Io(stopped));
+        }
+        let settled = self.store.settle(&self.reservation, actual);
         if settled.is_err() {
-            self.store.settle_later(&self.reservation, *actual);
+            self.settle_later(*actual);
         }
         settled
+    }
+
+    /// Hand the settle at `actual` to the settlement worker.
+    fn settle_later(&self, actual: UsageActual) {
+        let _handing = self.budget.enter();
+        if let Some(store) = self.store.shared() {
+            self.budget.settler().send(Work::Settle(Box::new(SettleJob {
+                store: Arc::clone(store),
+                reservation: self.reservation.clone(),
+                actual,
+            })));
+        }
     }
 }
 
@@ -482,7 +577,7 @@ impl<S: SettleStore> Drop for HeldReservation<'_, S> {
         let known =
             (self.known.as_ref()).and_then(|known| catch_unwind(AssertUnwindSafe(known)).ok());
         let actual = at_least(known.unwrap_or_default(), &self.reservation.estimate);
-        self.store.settle_later(&self.reservation, actual);
+        self.settle_later(actual);
     }
 }
 
@@ -2151,20 +2246,25 @@ mod tests {
     const HELD: &str = "SELECT COUNT(*) FROM usage_reservations";
     const HELD_IN: &str = "SELECT tokens_in FROM usage_reservations";
 
+    /// A budget of its own: the process-wide one must outlive the other tests.
+    fn budget() -> &'static Budget {
+        Box::leak(Box::<Budget>::default())
+    }
+
     /// A worker of its own (the process-wide one must outlive the other
     /// tests), retrying a job against a store that refuses every settle.
     #[test]
     fn stop_ends_a_worker_mid_retry_runs_no_more_sql_and_keeps_the_row_held() {
         let (dir, job) = refusing_store();
-        let settler = Settler::start();
-        settler.send(Work::Settle(Box::new(job)));
+        let budget = budget();
+        budget.settler().send(Work::Settle(Box::new(job)));
         let deadline = Instant::now() + Duration::from_secs(30);
         while count(&dir, TRIES) < 5 {
             assert!(Instant::now() < deadline, "the worker never retried");
             std::thread::sleep(Duration::from_millis(2));
         }
         let asked = Instant::now();
-        assert!(settler.stop(Duration::from_secs(2)), "the worker ended");
+        assert!(budget.stop(Duration::from_secs(2)), "the worker ended");
         assert!(asked.elapsed() < Duration::from_secs(2), "within the bound");
         let after_stop = count(&dir, TRIES);
         std::thread::sleep(Duration::from_millis(100)); // 25+ retries' worth
@@ -2173,22 +2273,65 @@ mod tests {
         assert_eq!(count(&dir, HELD_IN), 90, "raised to its amount");
     }
 
-    /// The bound runs out while the worker waits for the store's lock: stop
-    /// says so (false), and the worker, once the lock is free, starts no
-    /// statement, its record window having passed.
+    /// The first stop times out on the store's lock, past its record window;
+    /// the retry opens a new one, so the owed actual is still recorded.
     #[test]
-    fn a_stop_that_times_out_on_a_held_store_lock_runs_no_statement_after_it() {
+    fn a_second_stop_after_a_timed_out_one_records_the_owed_actual() {
         let (dir, job) = refusing_store();
+        let budget = budget();
         let store = Arc::clone(&job.store);
-        let settler = Settler::start();
         let held = store.lock().unwrap();
-        settler.send(Work::Settle(Box::new(job)));
-        assert!(!settler.stop(Duration::from_millis(50)), "still blocked");
+        budget.settler().send(Work::Settle(Box::new(job)));
+        assert!(!budget.stop(Duration::from_millis(50)), "still blocked");
         std::thread::sleep(RECORD_WINDOW * 2);
-        drop(held);
-        assert!(settler.stop(Duration::from_secs(10)), "ends once free");
+        drop(held); // the worker finds the window closed, and keeps the job
+        assert_eq!(count(&dir, HELD_IN), 60, "nothing written past the window");
+        assert!(budget.stop(Duration::from_secs(10)), "a new window");
+        assert_eq!(count(&dir, TRIES), 1, "one raise, no settle");
+        assert_eq!(count(&dir, HELD_IN), 90, "the owed actual, recorded");
+    }
+
+    /// An inline settle past the gate, blocked on the store's lock: the stop
+    /// says false while it runs, and a settle it refuses meanwhile is handed
+    /// over. Both rows are raised to their actual; no SQL runs after a true.
+    #[test]
+    fn a_stop_waits_for_an_inline_settle_and_records_a_refused_one() {
+        let (dir, job) = refusing_store();
+        let ReserveOutcome::Reserved(second) = reserve(&job.store, 20) else {
+            panic!("admitted");
+        };
+        let budget = budget();
+        let locked = job.store.lock().unwrap();
+        let held = HeldReservation::new_in(budget, Arc::clone(&job.store), job.reservation);
+        let settling = std::thread::spawn(move || held.settle(&job.actual));
+        while kernel_core::lock_recover(&budget.gate).in_flight == 0 {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!budget.stop(Duration::from_millis(50)), "still running");
+        let refused = HeldReservation::new_in(budget, Arc::clone(&job.store), second);
+        assert!(refused.settle(&job.actual).is_err(), "refused at the gate");
+        drop(locked);
+        assert!(budget.stop(Duration::from_secs(10)), "done once it is");
+        let tries = count(&dir, TRIES);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(count(&dir, TRIES), tries, "no SQL runs after stop");
+        assert!(settling.join().unwrap().is_err(), "refused by the store");
+        let least = "SELECT MIN(tokens_in) FROM usage_reservations";
+        assert_eq!(count(&dir, least), 90, "both actuals, recorded");
+    }
+
+    /// A stop before the worker exists still holds: a later settle is
+    /// refused, and no worker starts.
+    #[test]
+    fn a_stop_before_the_worker_exists_refuses_settles_and_starts_none() {
+        let budget = budget();
+        assert!(budget.stop(Duration::from_secs(2)));
+        let (dir, job) = refusing_store();
+        let held = HeldReservation::new_in(budget, job.store, job.reservation);
+        let worker = &budget.settler.get().unwrap().worker;
+        assert!(kernel_core::lock_recover(worker).is_none(), "none started");
+        assert!(held.settle(&job.actual).is_err(), "refused");
         assert_eq!(count(&dir, TRIES), 0, "no statement ran");
-        assert_eq!(count(&dir, HELD_IN), 60, "the row is held at its reserve");
     }
 
     /// Owed jobs the worker never got to try (still queued) have their amount
@@ -2198,20 +2341,21 @@ mod tests {
         let (dir, job) = refusing_store();
         let (work, queue) = mpsc::channel();
         work.send(Work::Settle(Box::new(job))).unwrap();
-        let stop = OnceLock::new();
-        stop.get_or_init(Instant::now);
-        record_owed(&queue, Vec::new(), &stop);
+        let budget = budget();
+        kernel_core::lock_recover(&budget.gate).stop = Some(Instant::now());
+        record_owed(&queue, Vec::new(), budget);
         assert_eq!(count(&dir, HELD_IN), 90, "raised from the 60 reserved");
         assert_eq!(count(&dir, HELD), 1, "and still held");
     }
 
     #[test]
     fn stop_wakes_an_idle_worker_and_a_second_stop_returns_at_once() {
-        let settler = Settler::start();
+        let budget = budget();
+        budget.settler();
         let asked = Instant::now();
-        assert!(settler.stop(Duration::from_secs(2)));
+        assert!(budget.stop(Duration::from_secs(2)));
         assert!(asked.elapsed() < Duration::from_secs(2));
-        assert!(settler.stop(Duration::from_secs(2)));
+        assert!(budget.stop(Duration::from_secs(2)));
     }
 
     #[test]
@@ -2263,7 +2407,7 @@ mod tests {
         work.send(job()).unwrap();
         work.send(job()).unwrap();
         drop(work);
-        std::thread::spawn(move || settle_jobs(&queue, &OnceLock::new()))
+        std::thread::spawn(move || settle_jobs(&queue, budget()))
             .join()
             .unwrap();
         let claim = "SELECT tokens_in, tokens_out, consumed_at IS NOT NULL

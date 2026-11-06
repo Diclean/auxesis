@@ -39,7 +39,7 @@ use tracing_subscriber::EnvFilter;
 /// uninstall` / `launchctl bootout` / Ctrl-C are never blocked by a run.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// How long shutdown waits, once, for the budget settle worker to end: over
+/// How long shutdown waits, each try, for the budget settle worker to end: over
 /// the store's busy timeout (5 s, which a settle blocked on the database can
 /// spend) and the worker's 1 s to record what it owes. A retry mid-statement
 /// when the process exits is a use-after-free in SQLCipher's exit hook.
@@ -84,31 +84,31 @@ fn main() -> ExitCode {
     // during the grace spawns its notifier after the first snapshot, so only
     // the post-grace sweep can collect it (NEW-A3R). It also sweeps the
     // daemon's process group.
-    shutdown::shutdown_everything(std::process::id(), group, move || {
+    let settled = shutdown::shutdown_everything(std::process::id(), group, move || {
         // Never await a blocking job on shutdown: give the runtime a short
         // grace, then abandon it and let the process exit.
         runtime.shutdown_timeout(SHUTDOWN_GRACE);
         // After the runtime's grace, so a call it abandoned has handed over
         // its reservation. This covers the settle worker, and no settle
         // starts on any thread once it is asked to stop; a settle already
-        // running on a runtime thread the grace abandoned is not waited for.
-        // A worker that is still mid-statement is waited for again: it ends
+        // running, inline or the worker's, is waited for again: it ends
         // at its next check, within the busy timeout. Exiting normally with
         // it running is the use-after-free, so past the tries the process
         // aborts instead (no exit hooks run; its rows stay held, and the next
         // start's reconcile settles them once their TTL has passed).
-        let ended = (0..SETTLE_STOP_TRIES).any(|_| {
+        (0..SETTLE_STOP_TRIES).any(|_| {
             let ended = aux_engine::stop_settle_worker(SETTLE_STOP_BOUND);
             if !ended {
-                eprintln!("auxd: waiting for the budget settle worker to end");
+                eprintln!("auxd: waiting for a budget settle (worker or inline) to end");
             }
             ended
-        });
-        if !ended {
-            eprintln!("auxd: the budget settle worker did not end; aborting");
-            std::process::abort();
-        }
+        })
     });
+    // Only after the post-grace descendant sweep, which an abort would skip.
+    if !settled {
+        eprintln!("auxd: a budget settle (worker or inline) did not end; aborting");
+        std::process::abort();
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

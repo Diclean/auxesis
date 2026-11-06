@@ -338,6 +338,17 @@ impl Store {
         Ok(changed > 0)
     }
 
+    /// `queued` → `working` only: `false` when the row is gone or no longer
+    /// queued (a Stop landed first), so the run must not start.
+    pub fn start_delegation(&self, id: &str) -> Result<bool, StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE delegations SET state = 'working', updated_at = datetime('now')
+             WHERE id = ?1 AND state = 'queued'",
+            [id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Append one step and return the updated record; `None` when no such row.
     pub fn append_delegation_step(
         &self,

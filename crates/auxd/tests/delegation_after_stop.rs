@@ -2,7 +2,8 @@
 //! after it write no row (BUDGET-SETTLE-7): the agent's steps, progress and
 //! approval marks after the stop are refused, and a refused hand-off leaves no
 //! taint mark. A hand-off that goes through still taints the agent's workspace
-//! before the agent acts. One test, its own binary: the stop is for the process.
+//! before the agent acts, and after the stop the tool never opens the store.
+//! One test, its own binary: the stop is for the process.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -157,4 +158,16 @@ async fn a_live_delegation_and_a_tainted_handoff_after_the_stop_write_no_row() {
         )
         .unwrap();
     assert_eq!(documents, 0, "no taint mark for a refused hand-off");
+
+    // After the stop the tool does not even open the store: a deleted store
+    // file is not recreated (no key, journal or migration ran).
+    drop(raw);
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.clone().into_os_string();
+        file.push(suffix);
+        let _ = std::fs::remove_file(file);
+    }
+    let refused = tool.run(&args, &clean).await.unwrap();
+    assert!(refused.is_error, "{}", refused.content);
+    assert!(!path.exists(), "the store was recreated after the stop");
 }

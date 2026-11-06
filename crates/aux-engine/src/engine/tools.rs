@@ -321,7 +321,14 @@ impl<'a> ChatSession<'a> {
                 }
             };
             let meta = tool_result_meta(call, outcome);
-            let tool_row = self.persist(&message, Some(&meta), &outbound)?;
+            let tool_row = match self.persist(&message, Some(&meta), &outbound) {
+                Ok(row) => row,
+                Err(err) => {
+                    // The assistant row is stored: close the batch so it does not dangle.
+                    self.fail_batch(&calls, index, row.id, "the turn failed");
+                    return Err(err);
+                }
+            };
             self.emit_message(&tool_row);
             last = tool_row.id;
             Arc::make_mut(&mut self.messages).push(outbound);
@@ -760,10 +767,9 @@ impl<'a> ChatSession<'a> {
                 // read-only call here can never be followed, across turns,
                 // by a silently allowed egress fetch.
                 if self.registry().is_private_data(&name) && !self.carries_private_data {
-                    if let Err(err) = self
-                        .store
-                        .with(|store| store.mark_session_private_data(self.session.id, &name))
-                    {
+                    if let Err(err) = self.gated_write(|store| {
+                        store.mark_session_private_data(self.session.id, &name)
+                    }) {
                         self.taint.mark_unknown();
                         self.emit_call_rows(&web_attempts, None, "denied", denied_verdict);
                         return Ok(CallOutcome {

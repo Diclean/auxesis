@@ -71,8 +71,8 @@ impl TurnHost for PaidBeforeStop {
     fn emit_done(&mut self, message_id: i64) {
         self.0.emit_done(message_id);
     }
-    fn taint_session(&mut self, source: &str) {
-        self.0.taint_session(source);
+    fn taint_session(&mut self, source: &str) -> Result<(), AcpError> {
+        self.0.taint_session(source)
     }
 }
 

@@ -45,7 +45,7 @@ impl<'a> ChatSession<'a> {
     /// workspace mark covers every conversation that starts here later. Any
     /// store error propagates, so the caller can refuse to dispatch.
     pub(super) fn record_untrusted_dispatch(&self, source: &TaintSource) -> Result<(), StoreError> {
-        self.store.with(|store| {
+        self.gated_write(|store| {
             store.mark_session_tainted(self.session.id, &source.tool, source.detail.as_deref())?;
             store.mark_workspace_tainted(&self.workspace_key, &source.summary())?;
             Ok(())

@@ -61,6 +61,10 @@ impl<'a> ChatSession<'a> {
     /// system prompt is only (re)persisted when the session has none.
     pub fn start(setup: ChatSetup<'a>) -> Result<Self, ChatError> {
         validate_agent(&setup.agent)?;
+        // Before any store access: past the stop no session starts, so none of
+        // its rows (session, system prompt, private marks) is written. A start
+        // already in flight is waited for by the stop.
+        let _in_flight = super::budget::admitted()?;
         // The mode and the names are read once, here. With no contacts the
         // private gate still tokenises every pattern value; it never refuses.
         let mode = (setup.mode)();

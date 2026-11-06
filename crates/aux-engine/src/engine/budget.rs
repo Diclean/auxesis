@@ -327,7 +327,26 @@ impl Budget {
 }
 
 fn stopped_error() -> StoreError {
-    StoreError::Io(std::io::Error::other("the budget settlement is stopped"))
+    StoreError::Io(std::io::Error::other(StopRefused))
+}
+
+/// The marker inside the gate's refusal, so a caller tells it from any other
+/// store error (a busy database must not read as "the daemon is stopping").
+#[derive(Debug)]
+struct StopRefused;
+
+impl std::fmt::Display for StopRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the budget settlement is stopped")
+    }
+}
+
+impl std::error::Error for StopRefused {}
+
+/// True when `err` is the stop gate's refusal ([`gated_store_write`] after
+/// [`stop_settle_worker`]), false for any other store error.
+pub fn is_stop_refusal(err: &StoreError) -> bool {
+    matches!(err, StoreError::Io(io) if io.get_ref().is_some_and(|inner| inner.is::<StopRefused>()))
 }
 
 /// One counted in flight; its drop lets a stop and the worker see it done.
@@ -390,9 +409,10 @@ fn hand_over(work: Work) {
 /// caller handles (a refused reservation denies the call). So do a turn's
 /// day read, its message rows and a cancelled batch's close, and the ACP
 /// ledger's taint mark and answer row ([`gated_store_write`]); a paid turn
-/// whose answer is refused fails with an error and a loud log. Not gated yet:
-/// the engine's tool-result rows, the system prompt row and its taint marks
-/// (`session.rs`, `context.rs`, `taint.rs`). False
+/// whose answer is refused fails with an error and a loud log. So do the
+/// engine's tool-result rows, the system prompt row, the private and taint
+/// marks and the web fetch events, and the daemon's ACP user row, failed-turn
+/// receipt and abandoned-approval audit row. False
 /// means a statement may still be: call this again, which waits again and
 /// opens a new [`RECORD_WINDOW`]. Later settles are refused and handed to the
 /// worker, which raises their rows while it runs. Residual: a handover (a

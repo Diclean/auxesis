@@ -58,7 +58,9 @@ pub trait TurnHost: Send {
 
     /// Write the conversation's taint mark (write-ahead, before agent text is
     /// persisted, so a crash cannot launder it).
-    fn taint_session(&mut self, source: &str);
+    ///
+    /// Fatal when it cannot be written: the caller must not store the answer.
+    fn taint_session(&mut self, source: &str) -> Result<(), AcpError>;
 }
 
 /// A [`TurnHost`] over the daemon's store, events and budgets.
@@ -191,6 +193,16 @@ impl TurnHost for StoreTurnHost {
             let store = lock_store(&self.store);
             let day = store.local_day()?;
             store.try_reserve_for(self.run_id.as_deref(), &self.agent, &day, &caps, &estimate)
+        })
+        // A stop between the probe above and this write is the same refusal.
+        .map_err(|err| {
+            if aux_engine::is_stop_refusal(&err) {
+                AcpError::BudgetDenied {
+                    reason: "the daemon is stopping: no new model call".to_string(),
+                }
+            } else {
+                AcpError::Store(err)
+            }
         })?;
         match outcome {
             ReserveOutcome::Reserved(inner) => Ok(Some(TurnReservation {
@@ -278,17 +290,7 @@ impl TurnHost for StoreTurnHost {
         aux_engine::gated_store_write(|| {
             lock_store(&self.store).append_message(self.session_id, "assistant", text, Some(meta))
         })
-        .map_err(|err| {
-            tracing::error!(
-                error = %err,
-                session = self.session_id,
-                bytes = text.len(),
-                "acp: a paid turn's answer was NOT saved: the daemon is stopping"
-            );
-            AcpError::Io(std::io::Error::other(format!(
-                "the answer was not saved: {err}"
-            )))
-        })
+        .map_err(|err| write_failed(err, "the answer", self.session_id))
     }
 
     fn emit_message(&mut self, message: &Message) {
@@ -303,17 +305,32 @@ impl TurnHost for StoreTurnHost {
         }
     }
 
-    fn taint_session(&mut self, source: &str) {
-        // Past the stop gate. A refused mark is followed by a refused answer
-        // (the stop only closes), so no agent text lands in an unmarked session.
-        let marked = aux_engine::gated_store_write(|| {
+    fn taint_session(&mut self, source: &str) -> Result<(), AcpError> {
+        // Past the stop gate. A mark that cannot be written is fatal for the
+        // turn, whatever the reason: the answer must never land in a session
+        // that is not marked. The message metadata still records the taint.
+        aux_engine::gated_store_write(|| {
             lock_store(&self.store).mark_session_tainted(self.session_id, "acp", Some(source))
-        });
-        if let Err(err) = marked {
-            // The taint mark is a safety property: log loudly, but do not
-            // fail the turn (the message metadata still records it).
-            tracing::error!(error = %err, "acp: could not write the session taint mark");
-        }
+        })
+        .map_err(|err| write_failed(err, "the session taint mark", self.session_id))
+    }
+}
+
+/// A store write of the turn failed. Only the stop gate's refusal is "the
+/// daemon is stopping" (an I/O stop); any other store error stays a store error.
+fn write_failed(err: aux_store::StoreError, what: &str, session_id: i64) -> AcpError {
+    if aux_engine::is_stop_refusal(&err) {
+        tracing::error!(
+            session = session_id,
+            what,
+            "acp: a paid turn's write was NOT saved: the daemon is stopping"
+        );
+        AcpError::Io(std::io::Error::other(format!(
+            "the answer was not saved: {err}"
+        )))
+    } else {
+        tracing::error!(error = %err, session = session_id, what, "acp: a store write failed");
+        AcpError::Store(err)
     }
 }
 
@@ -520,7 +537,7 @@ mod tests {
     #[test]
     fn persist_once_and_taint_write_ahead() {
         let (mut host, store) = host(Budgets::default());
-        host.taint_session("turn 1");
+        host.taint_session("turn 1").unwrap();
         let message = host.persist_assistant("answer", r#"{"acp":true}"#).unwrap();
         assert_eq!(message.role, "assistant");
         let taint = lock_store(&store)

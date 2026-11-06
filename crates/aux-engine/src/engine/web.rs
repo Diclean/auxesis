@@ -468,10 +468,7 @@ impl<'a> ChatSession<'a> {
             tainted: attempt.tainted,
             carries_private_data: attempt.carries_private_data,
         };
-        if let Err(err) = self
-            .store
-            .with(|store| store.log_event("web.fetch", &event.to_json()))
-        {
+        if let Err(err) = self.gated_write(|store| store.log_event("web.fetch", &event.to_json())) {
             tracing::warn!(error = %err, host = %event.host, "could not write the web.fetch audit row");
         }
     }
@@ -491,10 +488,7 @@ impl<'a> ChatSession<'a> {
             tainted: self.taint.forces_ask(),
             carries_private_data: self.carries_private_data,
         };
-        if let Err(err) = self
-            .store
-            .with(|store| store.log_event("web.fetch", &event.to_json()))
-        {
+        if let Err(err) = self.gated_write(|store| store.log_event("web.fetch", &event.to_json())) {
             tracing::warn!(error = %err, host = %event.host, "could not write the web.fetch audit row");
         }
     }

@@ -108,19 +108,29 @@ fn retire_turn_cards(
     run_id: &str,
 ) {
     let retired = registry.abandon_run(thread_id, run_id);
-    let store = retired
+    let abandoned: Vec<&String> = retired
         .iter()
-        .any(|(_, pending)| *pending)
-        .then(|| Store::open(&kernel_core::store_path(home)));
-    for (id, pending) in retired {
-        if let (true, Some(Ok(store))) = (pending, &store) {
-            let payload = serde_json::json!({
-                "id": id, "decision": "abandoned", "by": "turn_end", "always": false,
-            });
-            if let Err(err) = store.log_event("approval.answered", &payload.to_string()) {
-                tracing::warn!(error = %err, "abandoned approval audit failed");
+        .filter_map(|(id, pending)| pending.then_some(id))
+        .collect();
+    if !abandoned.is_empty() {
+        // Past the stop gate: after the stop the audit rows are skipped.
+        let logged = aux_engine::gated_store_write(|| {
+            let store = Store::open(&kernel_core::store_path(home))?;
+            for id in &abandoned {
+                let payload = serde_json::json!({
+                    "id": id, "decision": "abandoned", "by": "turn_end", "always": false,
+                });
+                if let Err(err) = store.log_event("approval.answered", &payload.to_string()) {
+                    tracing::warn!(error = %err, "abandoned approval audit failed");
+                }
             }
+            Ok(())
+        });
+        if let Err(err) = logged {
+            tracing::warn!(error = %err, "abandoned approval audit skipped");
         }
+    }
+    for (id, _) in retired {
         if let Some(events) = events {
             let expired = super::wire::ApprovalStateFrame::Expired;
             let _ = super::wire::send_bounded(
@@ -908,11 +918,9 @@ impl EngineTurnRunner {
         if private {
             // CONV-PRIVATE-MIX: the chat was Private for this turn, so the
             // sticky mark keeps it out of the Conversations list for good.
-            kernel_core::lock_recover(store)
-                .mark_session_ever_private(thread_id)
-                .map_err(|err| TurnError::Store {
-                    detail: err.to_string(),
-                })?;
+            gated_turn_write(|| {
+                kernel_core::lock_recover(store).mark_session_ever_private(thread_id)
+            })?;
         }
         let real_home = kernel_core::real_user_home();
         let spec = aux_acp::config::resolve_agent(
@@ -1051,11 +1059,16 @@ impl EngineTurnRunner {
                 // Private: the gated copy, as a memory-only row (G1).
                 aux_acp::local_row(thread_id, "user", &stored_user, source_meta.as_deref())
             } else {
-                kernel_core::lock_recover(store)
-                    .append_message(thread_id, "user", &stored_user, source_meta.as_deref())
-                    .map_err(|err| TurnError::Store {
-                        detail: err.to_string(),
-                    })?
+                // Past the stop gate, before the row: a turn that starts after
+                // the stop stores nothing and gets the budget refusal.
+                gated_turn_write(|| {
+                    kernel_core::lock_recover(store).append_message(
+                        thread_id,
+                        "user",
+                        &stored_user,
+                        source_meta.as_deref(),
+                    )
+                })?
             };
             if let Some(events) = &live {
                 events.message(&user);
@@ -1228,6 +1241,24 @@ impl aux_acp::HostGate for AcpSessionGate {
     }
 }
 
+/// A store write of a turn, past the process-wide stop gate: after the stop it
+/// is refused with the budget refusal, any other store error stays one.
+fn gated_turn_write<T>(
+    write: impl FnOnce() -> Result<T, aux_store::StoreError>,
+) -> Result<T, TurnError> {
+    aux_engine::gated_store_write(write).map_err(|err| {
+        if aux_engine::is_stop_refusal(&err) {
+            TurnError::BudgetDenied {
+                detail: "the daemon is stopping: no new model call".to_string(),
+            }
+        } else {
+            TurnError::Store {
+                detail: err.to_string(),
+            }
+        }
+    })
+}
+
 /// Map an ACP failure to the API turn error the route already knows.
 #[cfg(feature = "acp")]
 fn map_acp_error(err: aux_acp::AcpError) -> TurnError {
@@ -1241,8 +1272,36 @@ fn map_acp_error(err: aux_acp::AcpError) -> TurnError {
     }
 }
 
+/// The failed turn's receipt, past the stop gate: after the stop it is skipped
+/// (a warning, no text), never written through a second connection.
 #[allow(clippy::too_many_arguments)] // Receipt context is explicit at the failure boundary.
 fn persist_failed_api_receipt(
+    home: &Path,
+    agent: &str,
+    thread_id: i64,
+    run_id: &str,
+    started: &str,
+    start: super::receipt::ReceiptCursor,
+    trigger: &str,
+    error: &TurnError,
+    evidence: &[super::receipt::ReceiptEvent],
+) {
+    let written = aux_engine::gated_store_write(|| {
+        write_failed_api_receipt(
+            home, agent, thread_id, run_id, started, start, trigger, error, evidence,
+        );
+        Ok(())
+    });
+    if written.is_err() {
+        tracing::warn!(
+            thread_id,
+            "failed turn receipt skipped: the daemon is stopping"
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Receipt context is explicit at the failure boundary.
+fn write_failed_api_receipt(
     home: &Path,
     agent: &str,
     thread_id: i64,

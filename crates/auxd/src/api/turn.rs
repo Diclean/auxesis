@@ -2654,8 +2654,13 @@ fn refuse_reserved(store: &Arc<Mutex<Store>>, agent: &str, stage: &str, tool: &s
     let logged = aux_engine::gated_store_write(|| {
         kernel_core::lock_recover(store).log_event("agent.tool_reserved", &payload)
     });
-    if logged.is_err_and(|err| aux_engine::is_stop_refusal(&err)) {
-        tracing::warn!("reserved-tool row skipped: the daemon is stopping");
+    match logged {
+        Ok(_) => {}
+        Err(err) if aux_engine::is_stop_refusal(&err) => {
+            tracing::warn!("reserved-tool row skipped: the daemon is stopping");
+        }
+        // The store error carries no owner text; the payload is not logged.
+        Err(err) => tracing::warn!(error = %err, "reserved-tool row was not written"),
     }
 }
 

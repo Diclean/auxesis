@@ -315,8 +315,10 @@ where
         let lease_until = format_timestamp(now_utc + lease_delta(lease));
         let claim_store = Arc::clone(&store);
         let claimed = match tokio::task::spawn_blocking(move || {
-            let mut store = kernel_core::lock_recover(&claim_store);
-            store.claim_due_jobs(&now_str, &lease_until)
+            // Past the budget stop nothing is claimed (refused, no SQL).
+            aux_engine::gated_store_write(|| {
+                kernel_core::lock_recover(&claim_store).claim_due_jobs(&now_str, &lease_until)
+            })
         })
         .await
         {
@@ -387,7 +389,8 @@ impl LeaseRenewer {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let lease_until = format_timestamp(now() + lease_delta(lease));
-                    match store.renew_lease(job_id, &lease_until) {
+                    match aux_engine::gated_store_write(|| store.renew_lease(job_id, &lease_until))
+                    {
                         Ok(true) => tracing::debug!(
                             job_id,
                             lease_until = %lease_until,
@@ -395,6 +398,8 @@ impl LeaseRenewer {
                         ),
                         // The job was deleted: nothing left to keep claimed.
                         Ok(false) => break,
+                        // The daemon is stopping: no renewal after the stop.
+                        Err(error) if aux_engine::is_stop_refusal(&error) => break,
                         Err(error) => {
                             tracing::warn!(job_id, error = %error, "scheduler: lease renewal failed")
                         }
@@ -459,7 +464,13 @@ fn execute(
 ) -> Result<bool, StoreError> {
     let started = now();
     let started_at = format_timestamp(started);
-    let run = locked(store).start_run(job.id, &started_at)?;
+    // Past the budget stop no run row is written, and the job does not run.
+    let Some(run) = gated_run_write(job.id, "start", || {
+        locked(store).start_run(job.id, &started_at)
+    })?
+    else {
+        return Ok(false);
+    };
 
     let schedule = match RoutineSchedule::parse(&job.schedule) {
         Ok(schedule) => schedule,
@@ -468,18 +479,19 @@ fn execute(
             // disable the job so it does not fail on every tick.
             let finished_at = format_timestamp(now());
             let summary = cap_summary(&format!("invalid schedule: {error}"));
-            let store_guard = locked(store);
-            store_guard.finish_run(run.id, &finished_at, RUN_FAILED, Some(&summary))?;
-            persist_run_receipt(
-                &store_guard,
-                run.id,
-                &job.agent,
-                &started_at,
-                &finished_at,
-                crate::api::receipt::ReceiptStatus::Failed,
-            );
-            store_guard.set_job_enabled(job.id, false)?;
-            drop(store_guard);
+            gated_run_write(job.id, "invalid schedule", || {
+                let store_guard = locked(store);
+                store_guard.finish_run(run.id, &finished_at, RUN_FAILED, Some(&summary))?;
+                persist_run_receipt(
+                    &store_guard,
+                    run.id,
+                    &job.agent,
+                    &started_at,
+                    &finished_at,
+                    crate::api::receipt::ReceiptStatus::Failed,
+                );
+                store_guard.set_job_enabled(job.id, false)
+            })?;
             tracing::warn!(job_id = job.id, schedule = %job.schedule, "scheduler: job disabled (invalid schedule)");
             return Ok(false);
         }
@@ -493,26 +505,26 @@ fn execute(
     };
 
     let finished_at = format_timestamp(now());
-    let store_guard = locked(store);
-    store_guard.finish_run(run.id, &finished_at, status, Some(&cap_summary(&summary)))?;
-    let receipt_status = if status == RUN_OK {
-        crate::api::receipt::ReceiptStatus::Done
-    } else if summary.to_ascii_lowercase().contains("budget")
-        || summary.to_ascii_lowercase().contains("capped")
-    {
-        crate::api::receipt::ReceiptStatus::StoppedBudget
-    } else {
-        crate::api::receipt::ReceiptStatus::Failed
-    };
-    persist_run_receipt(
-        &store_guard,
-        run.id,
-        &job.agent,
-        &started_at,
-        &finished_at,
-        receipt_status,
-    );
-    drop(store_guard);
+    let stopping = !succeeded && crate::shutdown::daemon_stopping();
+    let receipt_status = run_receipt_status(succeeded, &summary, stopping);
+    // Past the stop the run is not recorded: its row stays `running` until
+    // the next start marks it interrupted, and the claim lease re-runs it.
+    let recorded = gated_run_write(job.id, "finish", || {
+        let store_guard = locked(store);
+        store_guard.finish_run(run.id, &finished_at, status, Some(&cap_summary(&summary)))?;
+        persist_run_receipt(
+            &store_guard,
+            run.id,
+            &job.agent,
+            &started_at,
+            &finished_at,
+            receipt_status,
+        );
+        Ok(())
+    })?;
+    if recorded.is_none() {
+        return Ok(false);
+    }
 
     // The lease renewer must stop before the real next occurrence is
     // written, or a late renewal could overwrite it with a lease deadline.
@@ -524,8 +536,53 @@ fn execute(
     let next = runner
         .reschedule_at(job, finished)
         .unwrap_or_else(|| schedule.next_after_run(started, finished));
-    locked(store).reschedule_job(job.id, Some(&started_at), Some(&format_timestamp(next)))?;
+    gated_run_write(job.id, "reschedule", || {
+        locked(store).reschedule_job(job.id, Some(&started_at), Some(&format_timestamp(next)))
+    })?;
     Ok(succeeded)
+}
+
+/// One run row write past the budget stop gate. `None` when the daemon is
+/// stopping: the write is refused (a warning, ids only) and the run is not
+/// recorded; any other store error stays one.
+fn gated_run_write<T>(
+    job_id: i64,
+    what: &'static str,
+    write: impl FnOnce() -> Result<T, StoreError>,
+) -> Result<Option<T>, StoreError> {
+    match aux_engine::gated_store_write(write) {
+        Ok(written) => Ok(Some(written)),
+        Err(err) if aux_engine::is_stop_refusal(&err) => {
+            tracing::warn!(
+                job_id,
+                what,
+                "scheduler: run row skipped: the daemon is stopping"
+            );
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// The receipt status of a finished run. A failure that came with the daemon
+/// stop (`stopping`, from the stop gate, never from the summary) is a failed
+/// run, not a budget stop; a budget denial or a capped turn is.
+fn run_receipt_status(
+    succeeded: bool,
+    summary: &str,
+    stopping: bool,
+) -> crate::api::receipt::ReceiptStatus {
+    use crate::api::receipt::ReceiptStatus;
+    let summary = summary.to_ascii_lowercase();
+    if succeeded {
+        ReceiptStatus::Done
+    } else if stopping {
+        ReceiptStatus::Failed
+    } else if summary.contains("budget") || summary.contains("capped") {
+        ReceiptStatus::StoppedBudget
+    } else {
+        ReceiptStatus::Failed
+    }
 }
 
 fn persist_run_receipt(
@@ -733,6 +790,33 @@ mod tests {
         let stored = store.lock().unwrap().job_by_id(job.id).unwrap().unwrap();
         assert_eq!(stored.last_run_at.as_deref(), Some("2026-10-03 08:00:00"));
         assert_eq!(stored.next_run_at.as_deref(), Some("2026-10-03 08:15:00"));
+    }
+
+    #[test]
+    fn a_stop_refusal_is_a_failed_run_never_a_budget_stop() {
+        use crate::api::receipt::ReceiptStatus;
+        // The engine's stop refusal reads "the budget settlement is stopped":
+        // with the stop asked it is a failed run, whatever the summary says.
+        let stop = "budget denied: the budget settlement is stopped";
+        assert_eq!(run_receipt_status(false, stop, true), ReceiptStatus::Failed);
+        // A real budget denial or a capped turn stays a budget stop.
+        let denied = "budget denied: daily usd_cents cap reached";
+        assert_eq!(
+            run_receipt_status(false, denied, false),
+            ReceiptStatus::StoppedBudget
+        );
+        assert_eq!(
+            run_receipt_status(false, "turn capped", false),
+            ReceiptStatus::StoppedBudget
+        );
+        assert_eq!(
+            run_receipt_status(false, "boom", false),
+            ReceiptStatus::Failed
+        );
+        assert_eq!(
+            run_receipt_status(true, "budget", false),
+            ReceiptStatus::Done
+        );
     }
 
     #[test]

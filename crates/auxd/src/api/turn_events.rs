@@ -546,25 +546,36 @@ impl TurnEvents for ApiTurnEvents {
         // receipt write is best-effort and must never fail or block the turn:
         // on a persistent failure, signal it on the live stream and write the
         // minimal fallback row so the activity list still shows the run.
-        if let Err(err) = receipt::persist_receipt_retry(&db_path, &receipt) {
-            tracing::warn!(
-                error = %err,
-                run_id = %self.run_id,
-                "could not persist run receipt after retry"
-            );
-            self.send(receipt_failed_frame(
-                &self.agent,
-                session_id,
-                &self.run_id,
-                message_id,
-            ));
-            if let Err(fallback_err) = receipt::persist_fallback_receipt(&db_path, &receipt) {
+        // Past the budget stop the receipt (and its fallback) is skipped: a
+        // warning with ids only, never a write after the stop.
+        let gated = aux_engine::gated_store_write(|| {
+            if let Err(err) = receipt::persist_receipt_retry(&db_path, &receipt) {
                 tracing::warn!(
-                    error = %fallback_err,
+                    error = %err,
                     run_id = %self.run_id,
-                    "could not persist the fallback run receipt"
+                    "could not persist run receipt after retry"
                 );
+                self.send(receipt_failed_frame(
+                    &self.agent,
+                    session_id,
+                    &self.run_id,
+                    message_id,
+                ));
+                if let Err(fallback_err) = receipt::persist_fallback_receipt(&db_path, &receipt) {
+                    tracing::warn!(
+                        error = %fallback_err,
+                        run_id = %self.run_id,
+                        "could not persist the fallback run receipt"
+                    );
+                }
             }
+            Ok(())
+        });
+        if gated.is_err() {
+            tracing::warn!(
+                run_id = %self.run_id,
+                "run receipt skipped: the daemon is stopping"
+            );
         }
         // The event poller publishes the persisted `run.finished` row with
         // this receipt attached; that is the single live run-finished frame.

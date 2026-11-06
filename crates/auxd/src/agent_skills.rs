@@ -71,10 +71,17 @@ impl AuditSink for DedupSink {
                             .unwrap_or_default()
                     )
                 });
+            // The key is recorded only once the row landed: a write refused
+            // (the daemon is stopping) or failed is retried on the next load.
+            // The lock spans the write so two loads never both write it.
             let mut logged = kernel_core::sync::lock_recover(logged_errors());
-            if !logged.insert((agent.to_string(), key)) {
+            let key = (agent.to_string(), key);
+            if logged.contains(&key) {
                 return Ok(0);
             }
+            let id = self.inner.log_event(kind, payload)?;
+            logged.insert(key);
+            return Ok(id);
         }
         self.inner.log_event(kind, payload)
     }

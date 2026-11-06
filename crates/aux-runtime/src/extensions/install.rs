@@ -673,7 +673,11 @@ fn make_writable_tree(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io:
         .file_name()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let Some(dir) = open_child_dir(&parent, name)? else {
-        return Err(refusal(rel, "est un lien ou un fichier", "is a link or a file"));
+        return Err(refusal(
+            rel,
+            "est un lien ou un fichier",
+            "is a link or a file",
+        ));
     };
     make_writable_fd(&dir)
 }

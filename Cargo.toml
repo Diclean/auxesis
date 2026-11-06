@@ -28,13 +28,13 @@ description = "Auxesis — your own always-on agents, in Rust."
 
 [workspace.dependencies]
 # The kernel, a separate public repository. The five crates are pinned to one
-# tag and always move together: v0.1.7 is commit 537f623 (main). Bump one
+# tag and always move together: v0.1.8 is commit 2add881 (main). Bump one
 # kernel release at a time; this repository does not vendor the source.
-kernel-core = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.7", package = "auxesis-kernel-core" }
-kernel-privacy = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.7", package = "auxesis-kernel-privacy" }
-kernel-broker = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.7", package = "auxesis-kernel-broker" }
-kernel-net = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.7", package = "auxesis-kernel-net" }
-kernel-mcp = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.7", package = "auxesis-kernel-mcp" }
+kernel-core = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.8", package = "auxesis-kernel-core" }
+kernel-privacy = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.8", package = "auxesis-kernel-privacy" }
+kernel-broker = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.8", package = "auxesis-kernel-broker" }
+kernel-net = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.8", package = "auxesis-kernel-net" }
+kernel-mcp = { git = "https://github.com/Diclean/auxesis-privacy-kernel", tag = "v0.1.8", package = "auxesis-kernel-mcp" }
 # The e-invoice XML parsers (Factur-X/ZUGFeRD CII and UBL), vendored in-tree at
 # `crates/aux-invoices` as a byte-identical export of f29dc6b (the invoices repo
 # stays separate). It is a **pure** library (no aux-core or aux-store

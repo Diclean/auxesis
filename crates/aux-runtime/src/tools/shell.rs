@@ -38,7 +38,7 @@ use serde::Deserialize;
 use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Default wall-clock limit for a shell command.
 ///
@@ -717,7 +717,7 @@ fn pidfdinfo_filled_buffer(rc: libc::c_int, expected: usize) -> bool {
 
 /// True when `pid` holds the marker file as an open descriptor.
 #[cfg(target_os = "macos")]
-fn process_holds_marker(pid: i32, marker: &Marker) -> bool {
+fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) -> bool {
     const PROC_PIDLISTFDS: libc::c_int = 1;
     const PROC_PIDFDVNODEINFO: libc::c_int = 1;
 
@@ -756,6 +756,9 @@ fn process_holds_marker(pid: i32, marker: &Marker) -> bool {
         return false;
     }
     for entry in buf[..n as usize].as_chunks::<8>().0 {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            return false;
+        }
         let fd = i32::from_ne_bytes([entry[0], entry[1], entry[2], entry[3]]);
         if fd < 0 {
             continue;
@@ -791,13 +794,16 @@ fn process_holds_marker(pid: i32, marker: &Marker) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn process_holds_marker(pid: i32, marker: &Marker) -> bool {
+fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) -> bool {
     use std::os::unix::fs::MetadataExt;
 
     let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
         return false;
     };
     for entry in entries.flatten() {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            return false;
+        }
         let Ok(metadata) = std::fs::metadata(entry.path()) else {
             continue;
         };
@@ -809,7 +815,7 @@ fn process_holds_marker(pid: i32, marker: &Marker) -> bool {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn process_holds_marker(_pid: i32, _marker: &Marker) -> bool {
+fn process_holds_marker(_pid: i32, _marker: &Marker, _deadline: Option<Instant>) -> bool {
     false
 }
 
@@ -821,28 +827,32 @@ fn process_holds_marker(_pid: i32, _marker: &Marker) -> bool {
 /// every user agent on the machine; pass `0` on the final kill sweep. `pids`
 /// is the process listing to filter (one `all_pids()` per scan).
 fn orphan_pids_holding_marker(marker: &Marker, min_start: u64, pids: &[i32]) -> Vec<i32> {
-    orphan_pids_holding_marker_until(marker, min_start, pids, None).0
+    let (found, _) = orphan_pids_holding_marker_until(marker, min_start, pids, None);
+    found.into_iter().map(|tracked| tracked.pid).collect()
 }
 
-/// [`orphan_pids_holding_marker`] that stops at `deadline`: the second value
-/// is false when it did, so the scan did not cover every listed pid.
+/// [`orphan_pids_holding_marker`] that stops at `deadline`, even inside one
+/// process's descriptor walk: the second value is false when it did, so the
+/// scan did not cover every listed pid. Each find carries the start time read
+/// by this scan, which is what a later [`TrackedPid::still_same`] compares.
 fn orphan_pids_holding_marker_until(
     marker: &Marker,
     min_start: u64,
     pids: &[i32],
-    deadline: Option<std::time::Instant>,
-) -> (Vec<i32>, bool) {
+    deadline: Option<Instant>,
+) -> (Vec<TrackedPid>, bool) {
     let me = unsafe { libc::geteuid() };
     let own = std::process::id() as i32;
     let mut out = Vec::new();
+    let expired = || deadline.is_some_and(|d| Instant::now() >= d);
     for &pid in pids {
-        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+        if expired() {
             return (out, false);
         }
         if pid == own {
             continue;
         }
-        let Some((ppid, uid, start)) = pid_ppid_uid_start(pid) else {
+        let Some((ppid, uid, started)) = pid_ppid_uid_start(pid) else {
             continue;
         };
         if ppid != 1 || uid != me {
@@ -850,12 +860,19 @@ fn orphan_pids_holding_marker_until(
         }
         // One second of slack for clock granularity at launch time.
         #[cfg(target_os = "macos")]
-        let start = start / 1_000_000;
-        if min_start != 0 && start.saturating_add(1) < min_start {
+        let seconds = started / 1_000_000;
+        #[cfg(not(target_os = "macos"))]
+        let seconds = started;
+        if min_start != 0 && seconds.saturating_add(1) < min_start {
             continue;
         }
-        if process_holds_marker(pid, marker) {
-            out.push(pid);
+        if process_holds_marker(pid, marker, deadline) {
+            out.push(TrackedPid {
+                pid,
+                start: started,
+            });
+        } else if expired() {
+            return (out, false);
         }
     }
     (out, true)
@@ -1106,17 +1123,14 @@ fn kill_process_tree_with(
         // anything that re-setsid'd while an ancestor stayed alive. Each pid is
         // recorded and re-checked right before its signal.
         let all = all_pids();
-        for orphan in orphan_pids_holding_marker(marker, 0, &all) {
-            let Some(tracked) = TrackedPid::of(orphan) else {
-                continue;
-            };
+        for tracked in orphan_pids_holding_marker_until(marker, 0, &all, None).0 {
             if !tracked.still_same(lookup) {
                 continue;
             }
             // SAFETY: `kill` is the documented libc signal call; the orphan
-            // was re-checked immediately above.
+            // was re-checked immediately above, against its scan-time start.
             unsafe {
-                libc::kill(orphan, libc::SIGKILL);
+                libc::kill(tracked.pid, libc::SIGKILL);
             }
         }
     }
@@ -1383,10 +1397,12 @@ fn sweep_leftovers_with(
             // An empty listing means the syscall failed (this process itself
             // is always in it): it must not count as a clean pass.
             if !all.is_empty() {
+                let orphans = orphan_pids_holding_marker_until(marker, 0, &all, None).0;
                 let found = session_pids(root, &all)
                     .into_iter()
-                    .chain(orphan_pids_holding_marker(marker, 0, &all))
-                    .chain(extra_pids(pass));
+                    .chain(extra_pids(pass))
+                    .map(|pid| (pid, TrackedPid::of(pid)))
+                    .chain(orphans.into_iter().map(|t| (t.pid, Some(t))));
                 let mut found_any = false;
                 let mut signalled = 0usize;
                 // A seen process stays a candidate after leaving every net,
@@ -1404,9 +1420,9 @@ fn sweep_leftovers_with(
                         libc::kill(tracked.pid, libc::SIGKILL);
                     }
                 }
-                for pid in found {
+                for (pid, tracked) in found {
                     found_any = true;
-                    let Some(tracked) = TrackedPid::of(pid) else {
+                    let Some(tracked) = tracked else {
                         continue;
                     };
                     // A candidate found by the session/marker scan is part of
@@ -1584,6 +1600,10 @@ thread_local! {
 /// Total time the no-thread fallback spends on seen-set kills and marker passes.
 const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
 
+/// The last part of [`LATE_INLINE_BUDGET`] the seen-set kills leave to the
+/// marker pass, so a long seen set cannot starve it.
+const LATE_MARKER_RESERVE: Duration = Duration::from_millis(100);
+
 fn spawn_late_thread() -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_LATE_SPAWN.with(|seam| {
@@ -1619,7 +1639,7 @@ fn late_retry(reaper: TreeReaper) {
             queue.0 = false;
             queue.1.drain(..).collect()
         };
-        let over_budget = fast_kill_all(queued, std::time::Instant::now() + LATE_INLINE_BUDGET);
+        let over_budget = fast_kill_all(queued, Instant::now() + LATE_INLINE_BUDGET);
         tracing::error!(
             %err,
             pending,
@@ -1631,7 +1651,7 @@ fn late_retry(reaper: TreeReaper) {
 }
 
 /// A fast kill of every reaper until `deadline`; the sum of what each skipped.
-fn fast_kill_all(queued: Vec<TreeReaper>, deadline: std::time::Instant) -> usize {
+fn fast_kill_all(queued: Vec<TreeReaper>, deadline: Instant) -> usize {
     let mut skipped = 0;
     for mut reaper in queued {
         skipped += reaper.fast_kill(deadline);
@@ -1792,7 +1812,7 @@ impl TreeReaper {
     /// and `setsid()` escapee that is not in `seen`. Then disarm. Returns the
     /// seen entries the deadline left untried, plus one when the marker pass
     /// was cut short or never started.
-    fn fast_kill(&mut self, deadline: std::time::Instant) -> usize {
+    fn fast_kill(&mut self, deadline: Instant) -> usize {
         self.armed = false;
         #[allow(unused_mut)]
         let mut skipped = 0;
@@ -1803,9 +1823,14 @@ impl TreeReaper {
                 unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
             }
             let lookup = &pid_ppid_uid_start;
+            // The seen loop stops early enough to leave the marker pass its
+            // reserve.
+            let seen_until = deadline
+                .checked_sub(LATE_MARKER_RESERVE)
+                .unwrap_or(deadline);
             let seen: Vec<TrackedPid> = self.seen.iter().copied().collect();
             for (done, tracked) in seen.iter().enumerate() {
-                if std::time::Instant::now() >= deadline {
+                if Instant::now() >= seen_until {
                     skipped += seen.len() - done;
                     break;
                 }
@@ -1814,18 +1839,29 @@ impl TreeReaper {
                     unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
                 }
             }
-            let (orphans, complete) = match std::time::Instant::now() < deadline {
-                true => {
-                    orphan_pids_holding_marker_until(&self.marker, 0, &all_pids(), Some(deadline))
-                }
-                false => (Vec::new(), false),
+            // No listing after the deadline; an empty one means the listing
+            // failed (this process is always in it), as in the sweep: the pass
+            // did not run. Newest pid first: the escapee is a recent process,
+            // and a cut-off budget should lose the old ones.
+            let mut all = match Instant::now() < deadline {
+                true => all_pids(),
+                false => Vec::new(),
+            };
+            all.sort_unstable_by(|a, b| b.cmp(a));
+            let (orphans, complete) = match all.is_empty() {
+                true => (Vec::new(), false),
+                false => orphan_pids_holding_marker_until(&self.marker, 0, &all, Some(deadline)),
             };
             skipped += usize::from(!complete);
-            for orphan in orphans {
-                // Re-checked as the same process right before its own signal.
-                if TrackedPid::of(orphan).is_some_and(|t| t.still_same(lookup)) {
+            for (done, orphan) in orphans.iter().enumerate() {
+                if Instant::now() >= deadline {
+                    skipped += orphans.len() - done;
+                    break;
+                }
+                // Re-checked against its scan-time start right before its signal.
+                if orphan.still_same(lookup) {
                     // SAFETY: SIGKILL of a marker holder, re-checked above.
-                    unsafe { libc::kill(orphan, libc::SIGKILL) };
+                    unsafe { libc::kill(orphan.pid, libc::SIGKILL) };
                 }
             }
         }
@@ -2747,7 +2783,7 @@ mod tests {
 
         let _serial = LATE_QUEUE_TEST.lock().await;
         let dir = tempdir().unwrap();
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         let mut command = tokio::process::Command::new("/bin/sh");
         command
             .arg("-c")
@@ -2847,7 +2883,7 @@ mod tests {
                     continue;
                 }
                 if let Some((ppid, uid, _)) = pid_ppid_uid_start(pid) {
-                    if ppid == 1 && uid == me && process_holds_marker(pid, marker) {
+                    if ppid == 1 && uid == me && process_holds_marker(pid, marker, None) {
                         out.push(pid);
                     }
                 }
@@ -2947,7 +2983,7 @@ mod tests {
             }
         }
 
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         // The "root": alive for the whole sweep, in its own process group, so
         // it pins the (otherwise empty) session id and is never a target.
         let mut children = vec![std::process::Command::new("sleep")
@@ -3056,7 +3092,7 @@ mod tests {
             command.spawn().unwrap()
         };
 
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         let mut children = KillOnDrop(vec![sleeper(true), sleeper(false)]);
         let root_pid = children.0[0].id() as i32;
         let helper = children.0[1].id() as i32;
@@ -3095,7 +3131,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_process_that_stays_unseen_makes_the_sweep_incomplete() {
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         // No session has this id, so only the seam keeps the pass unclean.
         let sweep = sweep_leftovers_with(
             i32::MAX,
@@ -3228,7 +3264,7 @@ mod tests {
             });
             assert!(parent_in_call(zombie.pid(), &seen));
         }
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         let sweep = sweep_leftovers_with(
             i32::MAX,
             &marker,
@@ -3317,7 +3353,7 @@ mod tests {
                 .spawn()
                 .unwrap()
         };
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         for orphan in [true, false] {
             let mut children = KillOnDrop(vec![sleeper(), sleeper()]);
             let stand_in = children.0[0].id() as i32;
@@ -3353,14 +3389,24 @@ mod tests {
             // Pass 0 counted the zombie, pass 1 killed the helper, and pass 2
             // no longer counted it.
             assert_eq!(passes.get(), 3);
+            // The helper is this test's child: wait until it has really exited
+            // (a zombie until waited for) and by the kill, not by timing.
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while children.0[1].try_wait().unwrap().is_none() {
+            let status = loop {
+                if let Some(status) = children.0[1].try_wait().unwrap() {
+                    break status;
+                }
                 assert!(
                     std::time::Instant::now() < deadline,
                     "helper pid {helper} outlived the extra pass"
                 );
                 tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+            };
+            assert_eq!(
+                std::os::unix::process::ExitStatusExt::signal(&status),
+                Some(libc::SIGKILL),
+                "helper pid {helper} did not die by the extra pass's kill"
+            );
         }
     }
 
@@ -3678,7 +3724,7 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
     async fn the_timeout_kill_takes_and_remembers_a_seen_process_s_child() {
         use std::os::unix::process::CommandExt;
         let _serial = LATE_QUEUE_TEST.lock().await;
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         let mut root = std::process::Command::new("sleep");
         root.arg("60").process_group(0);
         let root = tokio::process::Command::from(root).spawn().unwrap();
@@ -3779,7 +3825,7 @@ await(q(bg.pid));
                 .map(move |start| at(pid, start))
                 .collect()
         };
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         // `answer` is what the visibility seam says of the fake pid.
         let sweep = |seen: &mut HashSet<TrackedPid>, answer: Visibility| {
             sweep_leftovers_with(
@@ -3868,7 +3914,7 @@ await(q(bg.pid));
         use std::os::unix::process::CommandExt;
         use std::sync::atomic::{AtomicUsize, Ordering};
         let _serial = LATE_QUEUE_TEST.lock().await;
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         let mut root = std::process::Command::new("sleep");
         root.arg("60").process_group(0);
         let root = tokio::process::Command::from(root).spawn().unwrap();
@@ -3906,7 +3952,7 @@ await(q(bg.pid));
     #[cfg(unix)]
     #[test]
     fn below_the_cap_an_unreadable_pid_is_never_clean_and_a_zombie_is_gone() {
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
+        let (marker, _pin) = pinned_marker();
         let zombie = HeldZombie::new();
         for (pid, want) in [
             (i32::MAX - 1, Sweep::Unavailable(Undescribed::Unreadable)),
@@ -3988,6 +4034,17 @@ await(q(bg.pid));
         use std::os::unix::process::CommandExt;
         let _serial = LATE_QUEUE_TEST.lock().await;
         late_queue_idle().await;
+        /// Marks the queue busy for as long as it lives (also on a panic).
+        struct Busy;
+        impl Drop for Busy {
+            fn drop(&mut self) {
+                late_retries().0 = false;
+            }
+        }
+        // Busy across the whole planting: a `Drop` elsewhere that queues a
+        // retry meanwhile only joins the queue and starts no thread.
+        late_retries().0 = true;
+        let busy = Busy;
         let mut reapers = Vec::new();
         let mut roots = Vec::new();
         let mut sleepers = Spawned(Vec::new(), Vec::new());
@@ -4011,14 +4068,8 @@ await(q(bg.pid));
             reapers.push(reaper);
         }
         let last = reapers.pop().unwrap();
-        {
-            // Busy while planting: a `Drop` elsewhere that queues a retry in
-            // this window only joins the queue and starts no thread.
-            let mut queue = late_retries();
-            queue.0 = true;
-            queue.1.extend(reapers);
-            queue.0 = false;
-        }
+        late_retries().1.extend(reapers);
+        drop(busy);
         FAIL_LATE_SPAWN.with(|seam| seam.set((true, 0)));
         late_retry(last);
         let (_, refused) = FAIL_LATE_SPAWN.with(|seam| seam.replace((false, 0)));
@@ -4039,16 +4090,26 @@ await(q(bg.pid));
         }
     }
 
+    /// A marker whose file the caller keeps open for the whole test, the way
+    /// production holds it: while open, its inode cannot be recycled, so a
+    /// machine-wide marker scan can name no other process.
+    fn pinned_marker() -> (Marker, std::fs::File) {
+        let file = tempfile::tempfile().unwrap();
+        (Marker::from_file(&file).unwrap(), file)
+    }
+
     /// Waits until the late-retry thread is idle, so a test starts from an
-    /// empty queue (callers hold [`LATE_QUEUE_TEST`]).
+    /// empty queue (callers hold [`LATE_QUEUE_TEST`]). It waits 30 s (room for
+    /// a queue of reapers at 2 s each) and then reports and goes on, so the
+    /// test's own assertions fail instead of this wait.
     async fn late_queue_idle() {
-        for _ in 0..1000 {
+        for _ in 0..3000 {
             if !late_retries().0 {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("the late-retry thread never went idle");
+        eprintln!("late_queue_idle: the late-retry thread was still busy after 30 s");
     }
 
     /// SHELL-SWEEP-7 (4): the no-thread fallback finds a double-forked
@@ -4122,8 +4183,8 @@ await(q(bg.pid));
         let mut root = std::process::Command::new("sleep");
         root.arg("60").process_group(0);
         let root = tokio::process::Command::from(root).spawn().unwrap();
-        let marker = Marker::from_file(&tempfile::tempfile().unwrap()).unwrap();
-        let mut reaper = TreeReaper::new(root, marker);
+        let (marker, pin) = pinned_marker();
+        let mut reaper = TreeReaper::new(root, marker).holding(pin);
         reaper.seen.insert(helper);
         let fakes = (1..=100).map(|n| TrackedPid {
             pid: i32::MAX - n,
@@ -4137,6 +4198,13 @@ await(q(bg.pid));
         assert!(
             guard.0[0].try_wait().unwrap().is_none(),
             "killed over budget"
+        );
+        // Inside the marker reserve the seen loop is already out of budget.
+        let skipped = reaper.fast_kill(Instant::now() + LATE_MARKER_RESERVE / 2);
+        assert!(skipped >= all, "the seen loop ignored the marker reserve");
+        assert!(
+            guard.0[0].try_wait().unwrap().is_none(),
+            "killed in reserve"
         );
         let skipped = reaper.fast_kill(std::time::Instant::now() + Duration::from_secs(5));
         assert_eq!(skipped, 0, "an ample budget skips nothing");

@@ -509,7 +509,7 @@ fn run_offline_inner() -> Result<String, Box<dyn std::error::Error>> {
         &config,
         now_local(),
         MAX_SOURCE_READS,
-        || kernel_core::killswitch::is_stopped(&home),
+        || aux_engine::marker_engaged(&home),
     )?;
     let lang = config.ui.language;
     Ok(match result {

@@ -2766,6 +2766,10 @@
       "en" : "Stopped",
       "fr" : "Arrêté"
     },
+    "delegStuck" : {
+      "en" : "This task is still finishing in the background. Restart Aux to reset it.",
+      "fr" : "Cette tâche se termine encore en arrière-plan. Redémarrez Aux pour la réinitialiser."
+    },
     "delegWorking" : {
       "en" : "Working",
       "fr" : "En cours"

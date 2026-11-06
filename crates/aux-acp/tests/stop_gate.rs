@@ -42,6 +42,8 @@ fn an_acp_turn_after_the_stop_reserves_nothing_and_writes_no_row() {
     // Admitted before the stop: this turn's reservation is held.
     let held = capped.reserve_turn(10).unwrap();
     assert!(held.is_some());
+    // An unlimited turn admitted before the stop: no row, its estimate kept.
+    assert!(unlimited.reserve_turn(10).unwrap().is_none());
     let before = touched();
     assert_eq!(before, 1, "the reservation");
 
@@ -50,10 +52,14 @@ fn an_acp_turn_after_the_stop_reserves_nothing_and_writes_no_row() {
     // Fail closed: no reservation, so no model call, and no audit row.
     let refused = capped.reserve_turn(10);
     assert!(refused.is_err(), "no reservation after the stop");
-    // The unlimited turn's direct usage write is refused, and the
-    // `usage.settle_failed` marker it would leave is dropped.
-    assert!(unlimited.reserve_turn(10).unwrap().is_none());
+    // The unlimited turn admitted before the stop: its direct usage write is
+    // refused, and the `usage.settle_failed` marker it would leave is dropped.
     let settled = unlimited.settle_turn(None, &UsageUpdate::default());
     assert!(settled.is_err(), "refused, not lost silently");
+    // A new unlimited turn is refused too: no paid call starts after the stop.
+    assert!(
+        unlimited.reserve_turn(10).is_err(),
+        "no unlimited call after the stop"
+    );
     assert_eq!(touched(), before, "no SQL write ran after the stop");
 }

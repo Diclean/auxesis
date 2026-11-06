@@ -1012,6 +1012,9 @@ impl<'a> ChatSession<'a> {
     ) -> Result<Option<HeldReservation<'k, StoreHandle<'a>>>, ChatError> {
         let caps = self.budgets.caps_for(&self.agent);
         if caps.is_unlimited() {
+            // After the stop no paid call starts, capped or not: its usage
+            // write would be refused and the spend lost.
+            drop(self.budget().admitted()?);
             if caps.unlimited {
                 tracing::warn!(
                     agent = %self.agent,
@@ -2513,6 +2516,14 @@ mod tests {
         session.record_usage_call(&request, &response, 1);
         assert!(session.record_usage(&request, &response).is_err());
         let denied = session.reserve_budget(&request).err();
+        assert!(matches!(denied, Some(ChatError::BudgetDenied { .. })));
+        // An unlimited agent is refused too: no paid call starts after a stop.
+        let mut budgets = Budgets::default();
+        budgets.default.unlimited = true;
+        let mut open =
+            harness.start_with(&provider, vec![], RecordingApprover::new(false), &budgets);
+        open.budget = Some(budget);
+        let denied = open.reserve_budget(&request).err();
         assert!(matches!(denied, Some(ChatError::BudgetDenied { .. })));
         assert_eq!(touched(), 1, "no row (budget.denied included) after a stop");
         assert_eq!(day_reads.load(Ordering::SeqCst), 0, "no read either");

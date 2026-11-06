@@ -163,6 +163,13 @@ impl TurnHost for StoreTurnHost {
         self.pending_cost_cents = None;
         let caps = self.budgets.caps_for(&self.agent);
         if caps.is_unlimited() {
+            // After the stop no paid call starts, capped or not: its spend
+            // could no longer be recorded.
+            if aux_engine::gated_usage_write(|| Ok(())).is_err() {
+                return Err(AcpError::BudgetDenied {
+                    reason: "the daemon is stopping: no new model call".to_string(),
+                });
+            }
             tracing::warn!(
                 agent = %self.agent,
                 "acp: budgets.unlimited = true; no daily cap is enforced for this agent"

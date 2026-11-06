@@ -480,18 +480,19 @@ impl AgentJobRunner {
         // A job transcript is its own session, durably marked `job`: it can
         // never become the agent's chat thread. Like a private chat, a private
         // run stores no title.
-        let title = (mode != PrivacyMode::Private).then(|| format!("job {}", job.name));
-        let session = kernel_core::sync::lock_recover(store).create_session_of_kind(
-            &job.agent,
-            title.as_deref(),
-            "job",
-        )?;
+        // The rules come first: a turn they refuse leaves no empty session.
         let rules = self.turn_rules(
             &job.agent,
             agent_config,
             &mut registry
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )?;
+        let title = (mode != PrivacyMode::Private).then(|| format!("job {}", job.name));
+        let session = kernel_core::sync::lock_recover(store).create_session_of_kind(
+            &job.agent,
+            title.as_deref(),
+            "job",
         )?;
         // Load the agent's skills at agent start, writing any
         // `skill.load_error` row through the store's AuditSink.
@@ -1590,6 +1591,98 @@ mod tests {
             .turn_rules("main", &AgentConfig::default(), &mut registry)
             .unwrap_err();
         assert!(err.to_string().contains("unreadable"), "{err}");
+    }
+
+    /// A scheduled job of an agent with a malformed `agent.toml` fails closed
+    /// through the whole run: a failed run that names the file, no model call,
+    /// no session row.
+    #[test]
+    fn a_scheduled_job_fails_closed_on_a_malformed_agent_toml() {
+        let mut harness = Harness::new();
+        let dir = aux_engine::agent_dir(&harness.home, "main");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agent.toml"), "not = [toml").unwrap();
+        let provider = Arc::new(FakeProvider::echo("fake"));
+        let runner = harness.runner(Arc::clone(&provider), vec![], &Budgets::default());
+        let job = harness
+            .store()
+            .create_job("main", "morning", "every 15m", &job_payload("hello"), None)
+            .unwrap();
+
+        let report = harness.tick(&runner);
+
+        assert_eq!((report.claimed, report.failed), (1, 1));
+        let runs = harness.store().runs_for_job(job.id).unwrap();
+        assert_eq!(runs[0].status, RUN_FAILED);
+        let summary = runs[0].summary.clone().unwrap();
+        assert!(summary.contains("unreadable"), "{summary}");
+        assert!(
+            summary.contains("agents/main/agent.toml"),
+            "the error names the file: {summary}"
+        );
+        assert_eq!(provider.request_count(), 0, "the model was never called");
+        assert!(harness.store().list_sessions().unwrap().is_empty());
+    }
+
+    /// The same for a config that cannot be opened as a file at all (a
+    /// directory where `agent.toml` should be).
+    #[test]
+    fn a_scheduled_job_fails_closed_on_an_agent_toml_that_cannot_be_opened() {
+        let mut harness = Harness::new();
+        let dir = aux_engine::agent_dir(&harness.home, "main");
+        std::fs::create_dir_all(dir.join("agent.toml")).unwrap();
+        let provider = Arc::new(FakeProvider::echo("fake"));
+        let runner = harness.runner(Arc::clone(&provider), vec![], &Budgets::default());
+        let job = harness
+            .store()
+            .create_job("main", "morning", "every 15m", &job_payload("hello"), None)
+            .unwrap();
+
+        harness.tick(&runner);
+
+        let runs = harness.store().runs_for_job(job.id).unwrap();
+        assert_eq!(runs[0].status, RUN_FAILED);
+        assert!(runs[0].summary.clone().unwrap().contains("unreadable"));
+        assert_eq!(provider.request_count(), 0);
+        assert!(harness.store().list_sessions().unwrap().is_empty());
+    }
+
+    /// The turn's rules are built before the job's session row is written: a
+    /// refusal leaves no empty `job` session behind (here the file goes bad
+    /// after the run read it, so the turn is the one that refuses).
+    #[test]
+    fn a_job_turn_refused_by_its_rules_writes_no_session() {
+        let harness = Harness::new();
+        let dir = aux_engine::agent_dir(&harness.home, "main");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agent.toml"), "not = [toml").unwrap();
+        let provider = Arc::new(FakeProvider::echo("fake"));
+        let runner = harness.runner(Arc::clone(&provider), vec![], &Budgets::default());
+        let job = harness
+            .store()
+            .create_job("main", "morning", "every 15m", &job_payload("hello"), None)
+            .unwrap();
+        let spec = AgentJobSpec::parse(&job).unwrap();
+
+        let err = runner
+            .run_turn(
+                &harness.store,
+                &job,
+                &spec,
+                Arc::new(RwLock::new(ToolRegistry::new())),
+                provider.as_ref(),
+                &AgentConfig::default(),
+                PrivacyMode::Open,
+                aux_runtime::known_names::empty_contacts(),
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("unreadable"), "{err}");
+        assert_eq!(provider.request_count(), 0);
+        assert!(
+            harness.store().list_sessions().unwrap().is_empty(),
+            "no session row for a refused turn"
+        );
     }
 
     /// A job turn is held to the agent's own grants, not only to the chief:

@@ -119,6 +119,10 @@ pub enum SessionError {
         /// Versions newer than the running build whose entry is corrupt.
         corrupt_newer: Vec<String>,
     },
+    /// `--accept` without `--accept-launch-change` naming exactly the launch
+    /// fields that changed since the pin: nothing started or re-pinned.
+    #[error("{0}")]
+    LaunchChangeRefused(String),
 }
 
 /// A started egress proxy plus its loopback port.
@@ -807,6 +811,39 @@ pub async fn accept_installed(
     allow_loopback: bool,
     downgrade_to: Option<&str>,
 ) -> Result<Accepted, SessionError> {
+    let options = AcceptOptions {
+        allow_loopback,
+        downgrade_to,
+        launch_change: &[],
+    };
+    accept_with(home, name, &options, |_| {}).await
+}
+
+/// What the owner's `--accept` names.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AcceptOptions<'a> {
+    /// Allow loopback egress (tests).
+    pub allow_loopback: bool,
+    /// `--downgrade-to`: the exact build other than the approved one.
+    pub downgrade_to: Option<&'a str>,
+    /// `--accept-launch-change`: the launch fields re-trusted, exactly the
+    /// ones that changed since the pin ([`super::mount::LaunchPin`]).
+    pub launch_change: &'a [String],
+}
+
+/// [`accept_installed`] with every owner flag. The launch diff is checked
+/// before anything starts: a changed `source.type`, `kind`, `sensitivity` or
+/// `[run]` field is refused ([`SessionError::LaunchChangeRefused`]) unless
+/// `launch_change` names exactly the changed fields. The new pin is saved
+/// (still frozen) and handed to `on_trusted` **before** the child starts, so
+/// the owner sees what they trust before it runs; the freeze clears once the
+/// live tools are pinned.
+pub async fn accept_with(
+    home: &Path,
+    name: &str,
+    options: &AcceptOptions<'_>,
+    on_trusted: impl FnOnce(&ExtensionState),
+) -> Result<Accepted, SessionError> {
     // Re-hash the installed bytes first: a tampered binary is refused before it
     // runs or is pinned, and the freeze stays.
     let report = super::install::verify_installed_report(home, name)?;
@@ -823,7 +860,7 @@ pub async fn accept_installed(
         None => " (no approved artefact sha256 is pinned)".to_owned(),
     };
     let other = installed.version != state.version || !why.is_empty();
-    if downgrade_to != other.then_some(installed.version.as_str()) {
+    if options.downgrade_to != other.then_some(installed.version.as_str()) {
         let fix = match other {
             true => format!(
                 "another build is re-pinned only by \
@@ -839,13 +876,35 @@ pub async fn accept_installed(
             corrupt_newer: report.corrupt_newer,
         });
     }
+    let launch = super::mount::launch_pin(&installed.entry);
+    // A row written before the launch pin has nothing to diff: it is pinned
+    // here, with the values printed before the child starts.
+    let changed = state.launch.as_ref().map_or_else(Vec::new, |pinned| {
+        super::mount::changed_launch_fields(pinned, &launch)
+    });
+    let named: BTreeSet<&str> = options.launch_change.iter().map(String::as_str).collect();
+    if named != changed.iter().copied().collect() {
+        let fields = changed.join(",");
+        let message = match (changed.is_empty(), named.is_empty()) {
+            (true, _) => {
+                format!("`{name}` has no changed launch field: drop `--accept-launch-change`")
+            }
+            (false, true) => format!(
+                "`{name}` changed launch fields since approval ({}); nothing started: \
+                 re-trust them only with `aux ext verify {name} --accept \
+                 --accept-launch-change {fields}`",
+                changed.join(", ")
+            ),
+            (false, false) => format!(
+                "`--accept-launch-change {}` does not name the changed launch fields of \
+                 `{name}`: `--accept-launch-change {fields}`",
+                options.launch_change.join(",")
+            ),
+        };
+        return Err(SessionError::LaunchChangeRefused(message));
+    }
     let previous = state.version.clone();
-    let session = session_for(home, &installed, &SessionOptions { allow_loopback }).await?;
-    let pins = pinned_tools(&session.tools);
-    state.tools = pins
-        .into_iter()
-        .map(|pin| (pin.name, pin.identity))
-        .collect();
+    let previous_sha256 = state.artefact.clone();
     // The owner's yes covers this build: its version, hosts and secret names
     // are pinned with its tools, so the next start passes the approval check.
     state.version = installed.version.clone();
@@ -858,7 +917,25 @@ pub async fn accept_installed(
     // ... and these bytes: the next start or accept refuses any other.
     state.artefact = Some(pin);
     // ... run this way, from this source type, at this sensitivity.
-    state.launch = Some(super::mount::launch_pin(&installed.entry));
+    state.launch = Some(launch);
+    // Saved and shown before the child starts; it stays frozen until its
+    // live tools are pinned, so a failed start runs nothing later.
+    state.frozen = true;
+    store_state(home, &state)?;
+    on_trusted(&state);
+    let session = session_for(
+        home,
+        &installed,
+        &SessionOptions {
+            allow_loopback: options.allow_loopback,
+        },
+    )
+    .await?;
+    let pins = pinned_tools(&session.tools);
+    state.tools = pins
+        .into_iter()
+        .map(|pin| (pin.name, pin.identity))
+        .collect();
     state.frozen = false;
     store_state(home, &state)?;
     session.stop().await;
@@ -870,8 +947,14 @@ pub async fn accept_installed(
             "version": state.version,
             "accepted": true,
             "previous": previous,
+            // The approved bytes, and the ones they replace (none on a row
+            // written before the artefact pin).
+            "sha256": state.artefact,
+            "previous_sha256": previous_sha256,
             // The owner named a build other than the approved one.
             "downgrade": other,
+            // The launch fields the owner re-trusted by name.
+            "launch_change": changed,
         }),
     );
     Ok(Accepted {

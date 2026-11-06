@@ -48,6 +48,18 @@ enum ExtAction {
         /// or gone, or a row from before the artefact pin).
         #[arg(long, value_name = "VERSION", requires = "accept", requires = "name")]
         downgrade_to: Option<String>,
+        /// With `--accept`: re-trust these changed launch fields, comma
+        /// separated (e.g. `run.args,run.command`). A plain `--accept` refuses
+        /// any change to `source.type`, `kind`, `sensitivity` or `[run]`, and
+        /// this list must name exactly the fields that changed.
+        #[arg(
+            long,
+            value_name = "FIELDS",
+            value_delimiter = ',',
+            requires = "accept",
+            requires = "name"
+        )]
+        accept_launch_change: Vec<String>,
     },
     /// Mount an installed extension for one agent.
     Mount {
@@ -83,7 +95,15 @@ pub fn run(args: ExtArgs, _lang: Lang) -> ExitCode {
             name,
             accept,
             downgrade_to,
-        } => verify(&home, name.as_deref(), accept, downgrade_to.as_deref()),
+            accept_launch_change,
+        } => {
+            let options = extensions::session::AcceptOptions {
+                allow_loopback: false,
+                downgrade_to: downgrade_to.as_deref(),
+                launch_change: &accept_launch_change,
+            };
+            verify(&home, name.as_deref(), accept, &options)
+        }
         ExtAction::Mount { name, agent } => mount(&home, &name, &agent),
         ExtAction::Unmount { name, agent } => unmount(&home, &name, &agent),
         ExtAction::Remove { name } => remove(&home, &name),
@@ -234,8 +254,17 @@ fn warn_corrupt_newer(name: &str, running: &str, corrupt_newer: &[String]) {
     }
 }
 
+/// The serde name of a catalog value (`binary`, `mcp`, `stdio`), the
+/// spelling entry.toml uses.
+fn serde_name<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
 /// What an `--accept` now trusts: the artefact sha256, the hosts granted, and
-/// how it runs, so the owner sees the pin they just approved.
+/// how it runs, so the owner sees the pin before the build starts.
 fn trusted_summary(state: &extensions::ExtensionState) -> String {
     let none = || "none".to_owned();
     let hosts = match state.network.is_empty() {
@@ -247,19 +276,27 @@ fn trusted_summary(state: &extensions::ExtensionState) -> String {
         state.artefact.clone().unwrap_or_else(none)
     );
     if let Some(launch) = &state.launch {
-        let run = std::iter::once(launch.run.command.as_str())
-            .chain(launch.run.args.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join(" ");
+        // Args as a JSON list: a space inside one arg stays visible.
+        let args = serde_json::to_string(&launch.run.args).unwrap_or_else(|_| none());
         out.push_str(&format!(
-            "  runs: {run} ({:?} source, {:?})\n",
-            launch.source, launch.sensitivity
+            "  command: {}\n  args: {args}\n  kind: {}\n  transport: {}\n  \
+             source: {}\n  sensitivity: {}\n",
+            launch.run.command,
+            serde_name(&launch.kind),
+            serde_name(&launch.run.transport),
+            serde_name(&launch.source),
+            serde_name(&launch.sensitivity),
         ));
     }
     out
 }
 
-fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&str>) -> ExitCode {
+fn verify(
+    home: &Path,
+    name: Option<&str>,
+    accept: bool,
+    options: &extensions::session::AcceptOptions<'_>,
+) -> ExitCode {
     let names: Vec<String> = match name {
         Some(name) => vec![name.to_owned()],
         // Listed through the verified home: a linked or unreadable root fails.
@@ -289,14 +326,19 @@ fn verify(home: &Path, name: Option<&str>, accept: bool, downgrade_to: Option<&s
         }
         if accept {
             // Re-pin the current identity before clearing the freeze, so the
-            // next start does not refreeze on the same drift.
-            let accepted = extensions::session::accept_installed(home, &name, false, downgrade_to);
+            // next start does not refreeze on the same drift. The pin is saved
+            // and printed before the build starts.
+            let print = |state: &extensions::ExtensionState| {
+                let version = &state.version;
+                let _ = writeln!(std::io::stdout(), "trusting {name}@{version}");
+                let _ = write!(std::io::stdout(), "{}", trusted_summary(state));
+            };
+            let accepted = extensions::session::accept_with(home, &name, options, print);
             match runtime.block_on(accepted) {
                 Ok(accepted) => {
                     let version = &accepted.state.version;
                     warn_corrupt_newer(&name, version, &accepted.corrupt_newer);
                     let _ = writeln!(std::io::stdout(), "accepted {name}@{version}");
-                    let _ = write!(std::io::stdout(), "{}", trusted_summary(&accepted.state));
                     continue;
                 }
                 Err(err) => {
@@ -455,5 +497,65 @@ mod tests {
             matches!(ok, Ok(ExtAction::Verify { downgrade_to: Some(ref v), .. }) if v == "1.0.0"),
             "{ok:?}"
         );
+        let fields = ["verify", "demo", "--accept-launch-change", "run.args"];
+        assert!(parse(&fields).is_err());
+        let ok = parse(&[
+            "verify",
+            "demo",
+            "--accept",
+            "--accept-launch-change",
+            "run.args,run.command",
+        ]);
+        let Ok(ExtAction::Verify {
+            accept_launch_change,
+            ..
+        }) = &ok
+        else {
+            panic!("{ok:?}");
+        };
+        assert_eq!(*accept_launch_change, ["run.args", "run.command"]);
+    }
+
+    // EXT-ANCHOR-8: the summary names every trusted value, with the
+    // entry.toml spelling of kind, transport, source and sensitivity.
+    #[test]
+    fn trusted_summary_names_every_trusted_value() {
+        use extensions::catalog::{EntryKind, Run, Sensitivity, SourceType, Transport};
+        let mut state = extensions::ExtensionState {
+            name: "demo".to_owned(),
+            version: "1.0.0".to_owned(),
+            kind: "mcp".to_owned(),
+            frozen: false,
+            tools: Default::default(),
+            network: vec!["a.example:443".to_owned(), "b.example:443".to_owned()],
+            secrets: Vec::new(),
+            oauth: None,
+            artefact: Some("ab".repeat(32)),
+            launch: Some(extensions::mount::LaunchPin {
+                source: SourceType::Uv,
+                kind: EntryKind::SkillPack,
+                sensitivity: Sensitivity::Sensitive,
+                run: Run {
+                    transport: Transport::Http,
+                    command: "server".to_owned(),
+                    args: vec!["-c".to_owned(), "a b".to_owned()],
+                },
+            }),
+        };
+        let text = trusted_summary(&state);
+        for line in [
+            format!("  sha256: {}\n", "ab".repeat(32)),
+            "  hosts: a.example:443, b.example:443\n".to_owned(),
+            "  command: server\n".to_owned(),
+            "  args: [\"-c\",\"a b\"]\n".to_owned(),
+            "  kind: skill-pack\n".to_owned(),
+            "  transport: http\n".to_owned(),
+            "  source: uv\n".to_owned(),
+            "  sensitivity: sensitive\n".to_owned(),
+        ] {
+            assert!(text.contains(&line), "{line:?} in {text}");
+        }
+        (state.network, state.artefact, state.launch) = (Vec::new(), None, None);
+        assert_eq!(trusted_summary(&state), "  sha256: none\n  hosts: none\n");
     }
 }

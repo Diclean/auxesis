@@ -967,8 +967,13 @@ async fn approval_binds_the_launch_fields_of_entry_toml() {
     let mut sensitive = approved.clone();
     sensitive.sensitivity = Sensitivity::Sensitive;
     rewrite(&sensitive);
-    let pinned = super::session::accept_current(home.path(), "demo", false).await;
-    assert!(pinned.unwrap().launch.is_some());
+    // EXT-ANCHOR-8: a plain `--accept` refuses it; naming the field re-trusts it.
+    let err = super::session::accept_current(home.path(), "demo", false).await;
+    let err = err.unwrap_err().to_string();
+    assert!(err.contains("--accept-launch-change sensitivity"), "{err}");
+    let fields = ["sensitivity".to_owned()];
+    let pinned = accept_launch(home.path(), &fields).await;
+    assert!(pinned.unwrap().state.launch.is_some());
     rewrite(&approved);
     let err = mount(home.path(), "demo", "bob").unwrap_err().to_string();
     assert!(err.contains("changed launch fields: sensitivity"), "{err}");
@@ -985,4 +990,88 @@ async fn approval_binds_the_launch_fields_of_entry_toml() {
         .unwrap();
     mount(home.path(), "demo", "bob").unwrap();
     assert_starts(home.path(), true).await;
+}
+
+/// `aux ext verify demo --accept --accept-launch-change <fields>`.
+async fn accept_launch(
+    home: &Path,
+    fields: &[String],
+) -> Result<super::session::Accepted, super::session::SessionError> {
+    let options = super::session::AcceptOptions {
+        launch_change: fields,
+        ..Default::default()
+    };
+    super::session::accept_with(home, "demo", &options, |_| {}).await
+}
+
+// EXT-ANCHOR-8: `--accept` diffs the launch pin before anything runs. A
+// tampered `run.args` is refused by a plain `--accept` (it names the field and
+// the flag), by a flag naming other fields, and nothing starts or is pinned;
+// only the exact field list re-trusts it, and the pin is saved and shown
+// before the child starts. The Ledger row carries both sha256s.
+#[tokio::test]
+async fn accept_refuses_a_tampered_run_args_and_starts_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    let installed = load_installed(home.path(), "demo").unwrap();
+    mount(home.path(), "demo", "alice").unwrap();
+    assert_starts(home.path(), true).await;
+    let before = load_state(home.path(), "demo").unwrap();
+    let mut tampered = installed.entry.clone();
+    tampered.run.args = vec!["--evil".to_owned()];
+    std::fs::write(
+        installed.dir.join("entry.toml"),
+        toml::to_string(&tampered).unwrap(),
+    )
+    .unwrap();
+    let err = super::session::accept_current(home.path(), "demo", false)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, super::session::SessionError::LaunchChangeRefused(_)),
+        "{err}"
+    );
+    let err = err.to_string();
+    assert!(err.contains("(run.args)"), "{err}");
+    assert!(err.contains("--accept-launch-change run.args"), "{err}");
+    let wrong = accept_launch(home.path(), &["run.command".to_owned()]).await;
+    assert!(wrong.unwrap_err().to_string().contains("run.args"));
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert_eq!(kept.launch, before.launch, "nothing re-pinned");
+    assert_starts(home.path(), false).await;
+    // The exact field re-trusts it; the pin is on disk when `on_trusted` runs.
+    let fields = ["run.args".to_owned()];
+    let options = super::session::AcceptOptions {
+        launch_change: &fields,
+        ..Default::default()
+    };
+    let mut seen = None;
+    let accepted = super::session::accept_with(home.path(), "demo", &options, |state| {
+        seen = load_state(home.path(), "demo").map(|row| (row.launch, row.frozen));
+        assert_eq!(state.launch.as_ref().unwrap().run.args, tampered.run.args);
+    })
+    .await
+    .unwrap();
+    let pinned = super::mount::launch_pin(&tampered);
+    assert_eq!(
+        seen,
+        Some((Some(pinned.clone()), true)),
+        "saved before start"
+    );
+    assert_eq!(accepted.state.launch, Some(pinned));
+    assert!(!accepted.state.frozen);
+    mount(home.path(), "demo", "alice").unwrap();
+    assert_starts(home.path(), true).await;
+    let rows = super::ledger::payloads(home.path(), super::ledger::VERIFY);
+    let sha = before.artefact.unwrap();
+    let row = format!(r#""previous_sha256":"{sha}""#);
+    assert!(rows.iter().any(|r| r.contains(&row)), "{rows:?}");
+    let row = format!(r#""sha256":"{sha}""#);
+    assert!(rows.iter().any(|r| r.contains(&row)), "{rows:?}");
+    // A flag on a build with no launch change is refused.
+    let again = accept_launch(home.path(), &fields).await.unwrap_err();
+    assert!(
+        again.to_string().contains("no changed launch field"),
+        "{again}"
+    );
 }

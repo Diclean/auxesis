@@ -592,6 +592,11 @@ fn unpack_tarball(dir: &Path, bytes: &[u8]) -> Result<(), InstallError> {
             if relative.as_os_str().is_empty() {
                 continue;
             }
+            if relative.components().count() > WINDOW {
+                return Err(InstallError::Unpack(format!(
+                    "the artefact nests deeper than {WINDOW} levels"
+                )));
+            }
             let mut header = entry.header().clone();
             header
                 .set_path(&relative)
@@ -661,31 +666,76 @@ fn ensure_within(root: &Path, path: &Path) -> Result<(), InstallError> {
     }
 }
 
-/// The deepest level below an install tree that removal walks. One fd is held
-/// per level, so a deeper tree is refused instead of exhausting descriptors.
-const MAX_TREE_DEPTH: usize = 64;
+/// Most parent fds a removal walk keeps open, as the kernel's `remove_dir_all`:
+/// above them the walk re-opens levels from the tree root by checked identity,
+/// so any depth is removed without exhausting fds. Unpack refuses a deeper
+/// artefact.
+const WINDOW: usize = 64;
 
-fn too_deep(rel: &Path) -> std::io::Error {
-    let en = format!("is deeper than {MAX_TREE_DEPTH} levels");
-    let fr = format!("dépasse {MAX_TREE_DEPTH} niveaux");
-    refusal(rel, &fr, &en)
+const MOUNT_POINT: (&str, &str) = ("est un point de montage", "is a mount point");
+const HAS_MOUNT: (&str, &str) = ("contient un point de montage", "contains a mount point");
+const CHANGED: (&str, &str) = (
+    "a un dossier qui a changé pendant la suppression",
+    "has a directory that changed during removal",
+);
+
+// The test seam: the name whose directory reports another device (a mount).
+#[cfg(test)]
+thread_local! {
+    static MOUNT_SEAM: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Delete the directory `rel` below the verified home and everything in it: its
-/// parent is opened through the home, then the tree is opened `O_NOFOLLOW` from
-/// that fd and removed only through fds (see [`remove_dir_fd`]). A link or a
-/// file at `rel` is refused.
+/// The device of the directory `name`, as the mount checks see it.
+fn seen_dev(name: &std::ffi::CStr, dev: u64) -> u64 {
+    #[cfg(test)]
+    if MOUNT_SEAM.with(|at| at.borrow().as_deref() == Some(name.to_bytes())) {
+        return dev ^ 1;
+    }
+    let _ = name;
+    dev
+}
+
+type FileId = (u64, u64);
+
+fn file_id(dir: &std::fs::File) -> std::io::Result<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = dir.metadata()?;
+    Ok((meta.dev(), meta.ino()))
+}
+
+/// Delete the directory `rel` below the verified home and everything in it,
+/// through fds only (see [`remove_tree_in`]).
 fn remove_tree_at(handle: &kernel_core::SandboxHome, rel: &Path) -> std::io::Result<()> {
     let parent = handle.open_dir(rel.parent().unwrap_or(Path::new("")))?;
     let name = rel
         .file_name()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let Some(tree) = open_child_dir(&parent, name)? else {
-        let (fr, en) = ("est un lien ou un fichier", "is a link or a file");
-        return Err(refusal(rel, fr, en));
+    remove_tree_in(&parent, name, rel, &mut |_| {})
+}
+
+/// Delete `name` in the open `parent` and everything below it, through fds
+/// only: the tree is opened `O_NOFOLLOW` from `parent` (a link or a file is
+/// refused, a root on another device is a mount point), emptied by
+/// [`empty_tree`], then unlinked if `name` still names it. `rel` names it in
+/// errors; `after_open` is the test seam once the tree is open.
+fn remove_tree_in(
+    parent: &std::fs::File,
+    name: &std::ffi::OsStr,
+    rel: &Path,
+    after_open: &mut dyn FnMut(&str),
+) -> std::io::Result<()> {
+    let dev = file_id(parent)?.0;
+    let Some(tree) = open_child_dir(parent, name, dev, rel, MOUNT_POINT)? else {
+        return Err(refusal(
+            rel,
+            "est un lien ou un fichier",
+            "is a link or a file",
+        ));
     };
-    make_writable_fd(&tree, rel, 0)?;
-    remove_dir_fd(&parent, name, &tree, rel, 0)
+    after_open("opened");
+    let id = file_id(&tree)?;
+    empty_tree(rel, &tree)?;
+    unlink_dir_checked(parent, name, id, rel)
 }
 
 fn c_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
@@ -694,27 +744,37 @@ fn c_name(name: &std::ffi::OsStr) -> std::io::Result<std::ffi::CString> {
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
 }
 
-/// Open the directory `name` in `parent` `O_NOFOLLOW`; a `000` directory gets
-/// `u+rwx` by name first (`AT_SYMLINK_NOFOLLOW`, after `fstatat` shows a real
-/// directory), so a locked tree stays removable. `None` for a file or a link.
+/// Open the directory `name` in `parent` `O_NOFOLLOW`; `None` for a file or a
+/// link. One on another device than `dev` is refused with `other_dev` before
+/// anything changes. A `000` directory gets `u+rwx` by name first
+/// (`AT_SYMLINK_NOFOLLOW`, after `fstatat` shows a real directory on `dev`), so
+/// a locked tree stays removable.
 fn open_child_dir(
     parent: &std::fs::File,
     name: &std::ffi::OsStr,
+    dev: u64,
+    rel: &Path,
+    other_dev: (&str, &str),
 ) -> std::io::Result<Option<std::fs::File>> {
     use std::os::fd::{AsRawFd, FromRawFd};
     let name = c_name(name)?;
     let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC;
     let at = parent.as_raw_fd();
+    let mounted = || refusal(rel, other_dev.0, other_dev.1);
     for retry in [true, false] {
         // SAFETY: `at` is an open directory fd and `name` a NUL-terminated CString.
         let fd = unsafe { libc::openat(at, name.as_ptr(), flags) };
         if fd >= 0 {
             // SAFETY: `fd` is a fresh, valid descriptor nothing else owns.
-            return Ok(Some(unsafe { std::fs::File::from_raw_fd(fd) }));
+            let dir = unsafe { std::fs::File::from_raw_fd(fd) };
+            if seen_dev(&name, file_id(&dir)?.0) != dev {
+                return Err(mounted());
+            }
+            return Ok(Some(dir));
         }
         let err = std::io::Error::last_os_error();
         match err.raw_os_error() {
-            // A file or a link: the kernel's removal unlinks it as itself.
+            // A file or a link: it is unlinked as itself.
             Some(libc::ENOTDIR | libc::ELOOP) => return Ok(None),
             Some(libc::EACCES) if retry => {}
             _ => return Err(err),
@@ -726,6 +786,10 @@ fn open_child_dir(
         if found != 0 || st.st_mode & libc::S_IFMT != libc::S_IFDIR {
             return Err(err);
         }
+        #[allow(clippy::unnecessary_cast)]
+        if seen_dev(&name, st.st_dev as u64) != dev {
+            return Err(mounted());
+        }
         let mode = (st.st_mode & 0o7777) | 0o700;
         // SAFETY: as above; `AT_SYMLINK_NOFOLLOW` never follows a link.
         let changed = unsafe { libc::fchmodat(at, name.as_ptr(), mode, libc::AT_SYMLINK_NOFOLLOW) };
@@ -736,61 +800,43 @@ fn open_child_dir(
     Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
 }
 
-/// Add `u+rwx` to the open directory `dir` and every directory below it, so a
-/// `555` tree can be emptied. Each directory is chmodded with `fchmod` and its
-/// children opened from its fd `O_NOFOLLOW`: a link is never followed. `rel`
-/// names the tree in errors; past [`MAX_TREE_DEPTH`] levels it is refused.
-fn make_writable_fd(dir: &std::fs::File, rel: &Path, depth: usize) -> std::io::Result<()> {
+/// Add `u+rwx` to the open directory `dir` (`fchmod`), so a `555` level can be emptied.
+fn unlock(dir: &std::fs::File) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
-    if depth > MAX_TREE_DEPTH {
-        return Err(too_deep(rel));
-    }
     use std::os::unix::fs::PermissionsExt;
     let mode = (dir.metadata()?.permissions().mode() & 0o7777) | 0o700;
     // SAFETY: `dir` is an open fd owned by the caller.
-    if unsafe { libc::fchmod(dir.as_raw_fd(), mode as libc::mode_t) } != 0 {
-        return Err(std::io::Error::last_os_error());
+    match unsafe { libc::fchmod(dir.as_raw_fd(), mode as libc::mode_t) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
     }
-    for child in list_fd(dir)? {
-        if let Some(sub) = open_child_dir(dir, &child)? {
-            make_writable_fd(&sub, rel, depth + 1)?;
-        }
-    }
-    Ok(())
 }
 
-/// Empty the open directory `dir`, then unlink it as `name` in `parent`, acting
-/// only through these fds: each child directory is opened `O_NOFOLLOW` from its
-/// parent's fd and emptied through its own, and a name is unlinked only while
-/// it still names the directory that was emptied. Nothing is re-resolved from
-/// the home, so a directory swapped in meanwhile is refused, never touched.
-fn remove_dir_fd(
-    parent: &std::fs::File,
-    name: &std::ffi::OsStr,
+fn unlink_at(
     dir: &std::fs::File,
-    rel: &Path,
-    depth: usize,
+    name: &std::ffi::OsStr,
+    flags: libc::c_int,
 ) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
-    if depth > MAX_TREE_DEPTH {
-        return Err(too_deep(rel));
+    let name = c_name(name)?;
+    // SAFETY: `dir` is an open directory fd and `name` a NUL-terminated CString.
+    match unsafe { libc::unlinkat(dir.as_raw_fd(), name.as_ptr(), flags) } {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
     }
-    let unlink = |at: &std::fs::File, name: &std::ffi::OsStr, flags| {
-        let name = c_name(name)?;
-        // SAFETY: `at` is an open directory fd and `name` a NUL-terminated CString.
-        match unsafe { libc::unlinkat(at.as_raw_fd(), name.as_ptr(), flags) } {
-            0 => Ok(()),
-            _ => Err(std::io::Error::last_os_error()),
-        }
-    };
-    for child in list_fd(dir)? {
-        match open_child_dir(dir, &child)? {
-            Some(sub) => remove_dir_fd(dir, &child, &sub, rel, depth + 1)?,
-            None => unlink(dir, &child, 0)?,
-        }
-    }
-    let opened = dir.metadata()?;
+}
+
+/// Unlink the emptied directory `name` in `parent` if `name` still shows its
+/// identity `id`; another identity is refused. This narrows the swap window but
+/// does not close it: a same-uid process can still swap in another empty
+/// directory between the `fstatat` and the `unlinkat`, and that one is removed.
+fn unlink_dir_checked(
+    parent: &std::fs::File,
+    name: &std::ffi::OsStr,
+    id: FileId,
+    rel: &Path,
+) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
     let c = c_name(name)?;
     // SAFETY: zeroed `stat` is a valid out-parameter for `fstatat`.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
@@ -807,11 +853,98 @@ fn remove_dir_fd(
         return Err(std::io::Error::last_os_error());
     }
     #[allow(clippy::unnecessary_cast)]
-    let now = (st.st_dev as u64, st.st_ino as u64);
-    if now != (opened.dev(), opened.ino()) {
-        return Err(refusal(rel, "a changé", "changed"));
+    if (st.st_dev as u64, st.st_ino as u64) != id {
+        return Err(refusal(rel, CHANGED.0, CHANGED.1));
     }
-    unlink(parent, name, libc::AT_REMOVEDIR)
+    unlink_at(parent, name, libc::AT_REMOVEDIR)
+}
+
+/// One entered directory: its name and identity, its parent's fd while in the
+/// window, and its parent's names still to do.
+struct Level {
+    name: std::ffi::OsString,
+    id: FileId,
+    parent: Option<std::fs::File>,
+    rest: Vec<std::ffi::OsString>,
+}
+
+/// Empty the open tree `root` with an explicit stack, fd-relative, as the
+/// kernel's walk: each directory is entered via [`open_child_dir`] on the
+/// root's device (a mount point is refused before any chmod or unlink), then
+/// made `u+rwx`; anything else, a link included, is unlinked as itself. The
+/// parent fds of the deepest [`WINDOW`] levels stay open; above them the
+/// up-walk re-opens the names from `root`, refusing a changed identity.
+fn empty_tree(rel: &Path, root: &std::fs::File) -> std::io::Result<()> {
+    let dev = file_id(root)?.0;
+    let mut stack: Vec<Level> = Vec::new();
+    // Levels from `low` up hold their parent's fd.
+    let mut low = 0;
+    let mut dir = root.try_clone()?;
+    unlock(&dir)?;
+    let mut todo = list_fd(&dir)?;
+    loop {
+        if let Some(name) = todo.pop() {
+            match open_child_dir(&dir, &name, dev, rel, HAS_MOUNT)? {
+                None => unlink_at(&dir, &name, 0)?,
+                Some(child) => {
+                    unlock(&child)?;
+                    let id = file_id(&child)?;
+                    let rest = std::mem::replace(&mut todo, list_fd(&child)?);
+                    let parent = Some(std::mem::replace(&mut dir, child));
+                    stack.push(Level {
+                        name,
+                        id,
+                        parent,
+                        rest,
+                    });
+                    if stack.len() - low > WINDOW {
+                        stack[low].parent = None;
+                        low += 1;
+                    }
+                }
+            }
+            continue;
+        }
+        // `dir` is empty: go back to its parent and remove it there.
+        let Some(level) = stack.pop() else {
+            return Ok(());
+        };
+        dir = match level.parent {
+            Some(parent) => parent,
+            None => {
+                let (parent, start) = reopen(rel, root, dev, &mut stack)?;
+                low = start;
+                parent
+            }
+        };
+        todo = level.rest;
+        unlink_dir_checked(&dir, &level.name, level.id, rel)?;
+    }
+}
+
+/// Re-open the names of `stack` from `root`, refusing a changed identity, and
+/// keep the parent fds of its deepest [`WINDOW`] levels; returns the top
+/// directory and the new window start.
+fn reopen(
+    rel: &Path,
+    root: &std::fs::File,
+    dev: u64,
+    stack: &mut [Level],
+) -> std::io::Result<(std::fs::File, usize)> {
+    let low = stack.len().saturating_sub(WINDOW);
+    let mut dir = root.try_clone()?;
+    for (at, level) in stack.iter_mut().enumerate() {
+        let next = open_child_dir(&dir, &level.name, dev, rel, HAS_MOUNT)?;
+        let next = next.ok_or_else(|| refusal(rel, CHANGED.0, CHANGED.1))?;
+        if file_id(&next)? != level.id {
+            return Err(refusal(rel, CHANGED.0, CHANGED.1));
+        }
+        if at >= low {
+            level.parent = Some(dir);
+        }
+        dir = next;
+    }
+    Ok((dir, low))
 }
 
 /// Strip one leading directory and refuse any traversal component.
@@ -867,14 +1000,20 @@ fn open_home(home: &Path) -> std::io::Result<Option<kernel_core::SandboxHome>> {
 /// unreadable listing or an unreadable entry is an error. An entry that reads
 /// but does not parse is skipped with a warning.
 pub fn try_load_installed(home: &Path, name: &str) -> std::io::Result<Option<InstalledExtension>> {
+    Ok(scan_installed(home, name)?.0)
+}
+
+/// `try_load_installed`, plus the versions whose entry was skipped as corrupt.
+type Scan = (Option<InstalledExtension>, Vec<String>);
+fn scan_installed(home: &Path, name: &str) -> std::io::Result<Scan> {
     let root = extensions_dir(home);
     let Some(handle) = open_home(home)? else {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     };
-    let mut best: Option<InstalledExtension> = None;
+    let (mut best, mut corrupt): Scan = (None, Vec::new());
     // Listed through the verified home: a link in place of `extensions/` is refused.
     let Some(names) = list_dir_anchored(&handle, Path::new("extensions"))? else {
-        return Ok(None);
+        return Ok((None, corrupt));
     };
     for name_on_disk in names {
         let file_name = name_on_disk.to_string_lossy().to_string();
@@ -896,6 +1035,7 @@ pub fn try_load_installed(home: &Path, name: &str) -> std::io::Result<Option<Ins
             // A corrupt entry is skipped, never fatal: a valid version beside it
             // still loads, mounts and removes.
             tracing::warn!(extension = %name, entry = %rel.display(), "corrupt extension entry skipped");
+            corrupt.push(version.to_owned());
             continue;
         };
         let candidate = InstalledExtension {
@@ -915,13 +1055,26 @@ pub fn try_load_installed(home: &Path, name: &str) -> std::io::Result<Option<Ins
             best = Some(candidate);
         }
     }
-    Ok(best)
+    Ok((best, corrupt))
 }
 
 /// Re-hash the installed artefact and confirm it still matches the entry.
 pub fn verify_installed(home: &Path, name: &str) -> Result<InstalledExtension, InstallError> {
-    let installed = try_load_installed(home, name)?
-        .ok_or_else(|| InstallError::NotInstalled(name.to_owned()))?;
+    let (installed, corrupt) = scan_installed(home, name)?;
+    let installed = installed.ok_or_else(|| InstallError::NotInstalled(name.to_owned()))?;
+    // A corrupt newer entry: the older build is never verified (or re-pinned by
+    // `--accept`) in its place.
+    let newer = |version: &&String| {
+        super::catalog::compare_versions(version, &installed.version) == std::cmp::Ordering::Greater
+    };
+    if let Some(version) = corrupt.iter().find(newer) {
+        let rel = Path::new("extensions").join(format!("{name}@{version}/entry.toml"));
+        let (fr, en) = (
+            "est corrompu : l'ancienne version n'est pas vérifiée",
+            "is corrupt: the older build is not verified",
+        );
+        return Err(refusal(&rel, fr, en).into());
+    }
     if installed.entry.source.kind == SourceType::Binary {
         // Read through the verified home: a link planted for the artefact is
         // refused, never followed, so an outside file is never hashed.
@@ -961,30 +1114,30 @@ fn remove_after_open(
     if !valid_name(name) {
         return Err(InstallError::NotInstalled(name.to_owned()));
     }
-    let state = super::mount::load_state(home, name);
     // The state is the record of this extension's secrets. Without it, the installed
     // entry names the same secrets, and it is read before the trees are deleted.
-    // Only this extension's own `EXT_<NAME>_...` names are ever deleted. An entry
+    // Only this extension's own `EXT_<NAME>__...` names are ever deleted. An entry
     // that cannot be read stops the removal before anything changes: deleting
-    // the tree would lose the only record of the secrets left in `.env`.
-    let declared: Vec<String> = match state.as_ref() {
-        Some(state) => state.secrets.clone(),
-        None => match try_load_installed(home, name)? {
-            Some(installed) => installed.entry.secret_names(),
-            // A row that holds text but does not parse is then the only record of
-            // the secrets: it is kept and the removal refused, never unlinked.
-            None if super::mount::state_row_is_corrupt(home, name) => {
-                let row = Path::new("extensions/state").join(format!("{name}.json"));
-                let (fr, en) = ("est corrompu, il est conservé", "is corrupt, it is kept");
-                return Err(refusal(&row, fr, en).into());
-            }
-            None => Vec::new(),
+    // the tree would lose the only record of the secrets left in `.env`. With no
+    // record at all (a corrupt row, or no row and a corrupt entry), `None`: every
+    // key under this extension's own prefix is swept instead.
+    let declared: Option<Vec<String>> = match super::mount::load_state(home, name) {
+        Some(state) => Some(state.secrets),
+        None if super::mount::state_row_is_corrupt(home, name) => None,
+        None => match scan_installed(home, name)? {
+            (installed, corrupt) if corrupt.is_empty() => Some(
+                installed
+                    .map(|it| it.entry.secret_names())
+                    .unwrap_or_default(),
+            ),
+            _ => None,
         },
     };
-    let secret_names: Vec<String> = declared
-        .into_iter()
-        .filter(|secret| super::catalog::valid_secret_name(name, secret))
-        .collect();
+    let secret_names: Option<Vec<String>> = declared.map(|list| {
+        list.into_iter()
+            .filter(|secret| super::catalog::valid_secret_name(name, secret))
+            .collect()
+    });
     // One rule: the trees go, then the mounts and secrets, and the state row
     // last, so a failure anywhere leaves the row (and its secret names) for a
     // retry. A refusal stops there and returns the error.
@@ -1005,8 +1158,11 @@ fn remove_after_open(
         anchored_dir_exists(handle, &Path::new("extensions").join("state"))?;
     }
     super::mount::remove_from_all_mounts(home, name)?;
-    if !secret_names.is_empty() {
-        remove_secrets(home, &secret_names)?;
+    // The row goes last: its secret names are never lost before the keys are.
+    match secret_names {
+        Some(list) if list.is_empty() => {}
+        Some(list) => remove_secrets(home, &list)?,
+        None => remove_secret_namespace(home, &super::catalog::secret_prefix(name))?,
     }
     if let Some(handle) = home_handle.as_ref() {
         remove_state_row(handle, name)?;
@@ -1061,13 +1217,7 @@ fn remove_trees_after_check(
             if id(&dir)? != root {
                 return Err(refusal(extensions, "a changé", "changed"));
             }
-            let Some(tree) = open_child_dir(&root_dir, &file_name)? else {
-                let (fr, en) = ("est un lien ou un fichier", "is a link or a file");
-                return Err(refusal(&rel, fr, en));
-            };
-            make_writable_fd(&tree, &rel, 0)?;
-            after_check("opened");
-            remove_dir_fd(&root_dir, &file_name, &tree, &rel, 0)
+            remove_tree_in(&root_dir, &file_name, &rel, &mut *after_check)
         });
         match result {
             Ok(()) => removed += 1,
@@ -1111,6 +1261,32 @@ pub fn remove_secrets(home: &Path, names: &[String]) -> std::io::Result<()> {
     // read and the write is erased by the stale text written here.
     kernel_core::with_config_lock(home, || rewrite_env(home, &names))
         .map_err(std::io::Error::other)?
+}
+
+/// Drop every `.env` key that starts with `prefix` (one extension's own
+/// `EXT_<NAME>__` namespace), under the config lock like `remove_secrets`.
+fn remove_secret_namespace(home: &Path, prefix: &str) -> std::io::Result<()> {
+    if !home.is_dir() {
+        return Ok(());
+    }
+    // The key as `kernel_core::env_file::parse` reads it.
+    let key = |line: &str| -> Option<String> {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        Some(line.split_once('=')?.0.trim().to_owned())
+    };
+    kernel_core::with_config_lock(home, || {
+        let handle = kernel_core::SandboxHome::open_existing(home)?;
+        let text = read_env(&handle)?.unwrap_or_default();
+        let names: BTreeSet<String> = (text.lines().filter_map(key))
+            .filter(|name| name.starts_with(prefix))
+            .collect();
+        match names.is_empty() {
+            true => Ok(()),
+            false => rewrite_env(home, &names),
+        }
+    })
+    .map_err(std::io::Error::other)?
 }
 
 /// Upsert one named secret in `<home>/.env` (mode 0600), keeping every other
@@ -1210,9 +1386,12 @@ mod tests {
         set_mode(&locked, 0o000).unwrap();
         std::os::unix::fs::symlink(dir.path(), dir.path().join("link")).unwrap();
         let parent = std::fs::File::open(dir.path()).unwrap();
-        let link = open_child_dir(&parent, std::ffi::OsStr::new("link")).unwrap();
-        assert!(link.is_none(), "a link is never opened");
-        let opened = open_child_dir(&parent, std::ffi::OsStr::new("locked")).unwrap();
+        let dev = file_id(&parent).unwrap().0;
+        let open = |at: &std::fs::File, name: &str| {
+            open_child_dir(at, std::ffi::OsStr::new(name), dev, &locked, HAS_MOUNT).unwrap()
+        };
+        assert!(open(&parent, "link").is_none(), "a link is never opened");
+        let opened = open(&parent, "locked");
         let mode = |path: &Path| {
             use std::os::unix::fs::PermissionsExt;
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777
@@ -1221,8 +1400,8 @@ mod tests {
         if unsafe { libc::geteuid() } != 0 {
             assert_eq!(mode(&locked), 0o700, "the target gets u+rwx, nothing more");
         }
-        make_writable_fd(&opened.expect("a 000 directory opens"), &locked, 0).unwrap();
-        assert!(std::fs::read_dir(locked.join("inner")).is_ok());
+        let inner = open(&opened.expect("a 000 directory opens"), "inner");
+        assert!(inner.is_some() && std::fs::read_dir(locked.join("inner")).is_ok());
     }
 
     fn binary_entry(name: &str, bytes: &[u8], version: &str) -> Entry {
@@ -2330,24 +2509,98 @@ mod tests {
         assert!(!root.join("demo@1.0.0").exists() && !root.join("demo@2.0.0").exists());
     }
 
-    // A state row that does not parse is the only record of its secrets: with no
-    // entry to name them, remove refuses and keeps the row and the key.
+    // With no record of the secret names (a corrupt state row, or no row and a
+    // corrupt entry), remove sweeps this extension's own `EXT_DEMO__` keys only,
+    // and the row goes last, once the keys are gone.
     #[test]
-    fn a_corrupt_state_row_with_no_entry_is_kept_and_refused() {
+    fn an_unknown_secret_list_sweeps_only_this_extensions_namespace() {
+        let env = "EXT_DEMO__TOKEN=x\nexport EXT_DEMO__OTHER = 'y'\nEXT_DEMO_X__K=1\nKEEP=1\n";
+        for (row, entry_text) in [(true, None), (false, Some("not = [toml")), (true, Some(""))] {
+            let home = tempfile::tempdir().unwrap();
+            let row_path = home.path().join("extensions/state/demo.json");
+            std::fs::create_dir_all(row_path.parent().unwrap()).unwrap();
+            if row {
+                std::fs::write(&row_path, b"{not json").unwrap();
+            }
+            if let Some(text) = entry_text {
+                let dir = extensions_dir(home.path()).join("demo@1.0.0");
+                std::fs::create_dir_all(&dir).unwrap();
+                let valid = toml::to_string(&binary_entry("demo", b"x", "1.0.0")).unwrap();
+                let text = if text.is_empty() {
+                    valid
+                } else {
+                    text.to_owned()
+                };
+                std::fs::write(dir.join("entry.toml"), text).unwrap();
+            }
+            std::fs::write(home.path().join(".env"), env).unwrap();
+            remove(home.path(), "demo").unwrap();
+            let left = std::fs::read_to_string(home.path().join(".env")).unwrap();
+            assert_eq!(left, "EXT_DEMO_X__K=1\nKEEP=1\n", "{row} {entry_text:?}");
+            assert!(!row_path.exists(), "the row goes once the keys are gone");
+        }
+    }
+
+    // A corrupt entry above the loaded version: verify (and so `--accept`, which
+    // re-pins through it) refuses, never pins the older build silently.
+    #[test]
+    fn verify_refuses_when_a_higher_version_entry_is_corrupt() {
         let home = tempfile::tempdir().unwrap();
-        let row = home.path().join("extensions/state/demo.json");
-        std::fs::create_dir_all(row.parent().unwrap()).unwrap();
-        std::fs::write(&row, b"{not json").unwrap();
-        std::fs::write(home.path().join(".env"), "EXT_DEMO__TOKEN=keep\n").unwrap();
-        let err = remove(home.path(), "demo").unwrap_err();
-        assert!(err.to_string().contains("demo.json"), "{err}");
-        assert_eq!(
-            std::fs::read(&row).unwrap(),
-            b"{not json",
-            "the row is kept"
-        );
-        let env = std::fs::read_to_string(home.path().join(".env")).unwrap();
-        assert!(env.contains("EXT_DEMO__TOKEN"), "{env}");
+        let root = extensions_dir(home.path());
+        std::fs::create_dir_all(root.join("demo@1.0.0")).unwrap();
+        let entry = toml::to_string(&binary_entry("demo", b"x", "1.0.0")).unwrap();
+        std::fs::write(root.join("demo@1.0.0/entry.toml"), entry).unwrap();
+        std::fs::write(root.join("demo@1.0.0/server"), b"x").unwrap();
+        assert!(verify_installed(home.path(), "demo").is_ok());
+        std::fs::create_dir_all(root.join("demo@2.0.0")).unwrap();
+        std::fs::write(root.join("demo@2.0.0/entry.toml"), b"not = [toml").unwrap();
+        let err = verify_installed(home.path(), "demo").unwrap_err();
+        assert!(err.to_string().contains("demo@2.0.0"), "{err}");
+    }
+
+    // A volume mounted in the tree (or at its root) is refused, through the
+    // cfg(test) seam that reports another device, before any chmod or unlink.
+    #[cfg(unix)]
+    #[test]
+    fn a_mount_point_in_the_tree_is_refused_before_any_chmod_or_unlink() {
+        use std::os::unix::fs::PermissionsExt;
+        for (seam, want) in [
+            ("mnt", "contains a mount point"),
+            ("demo@1.0.0", "is a mount point"),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            let mnt = extensions_dir(home.path()).join("demo@1.0.0/work/mnt");
+            std::fs::create_dir_all(&mnt).unwrap();
+            std::fs::write(mnt.join("file"), b"x").unwrap();
+            set_mode(&mnt, 0o555).unwrap();
+            MOUNT_SEAM.with(|at| *at.borrow_mut() = Some(seam.as_bytes().to_vec()));
+            let result = remove(home.path(), "demo");
+            MOUNT_SEAM.with(|at| *at.borrow_mut() = None);
+            let mode = std::fs::metadata(&mnt).unwrap().permissions().mode() & 0o777;
+            set_mode(&mnt, 0o700).unwrap();
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains(want) && err.contains("demo@1.0.0"), "{err}");
+            assert!(
+                mnt.join("file").is_file() && mode == 0o555,
+                "nothing under it changed"
+            );
+        }
+    }
+
+    #[test]
+    fn an_artefact_nested_deeper_than_the_window_is_refused_at_unpack() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = format!("package/{}f", "d/".repeat(WINDOW));
+        let gz = gz_tar(|builder| {
+            // `append_data` writes the GNU long name this path needs.
+            let (mut header, data) = regular("x", b"x");
+            builder
+                .append_data(&mut header, &deep, data.as_slice())
+                .unwrap();
+        });
+        let err = unpack_tarball(dir.path(), &gz).unwrap_err();
+        assert!(err.to_string().contains("64"), "{err}");
+        assert!(!dir.path().join("d").exists());
     }
 
     // Every descriptor still open whose path lies below `dir`.
@@ -2377,16 +2630,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_tree_deeper_than_the_cap_is_refused_with_no_fd_left_open() {
+    fn a_tree_deeper_than_the_window_is_removed_with_no_fd_left_open() {
         let home = tempfile::tempdir().unwrap();
-        let mut deepest = extensions_dir(home.path()).join("demo@1.0.0");
-        for _ in 0..65 {
+        let tree = extensions_dir(home.path()).join("demo@1.0.0");
+        std::fs::create_dir_all(&tree).unwrap();
+        let mut deepest = tree.clone();
+        for level in 0..80 {
             deepest.push("d");
+            std::fs::create_dir(&deepest).unwrap();
+            std::fs::write(deepest.join(format!("f{level}")), b"x").unwrap();
         }
-        std::fs::create_dir_all(&deepest).unwrap();
-        let err = remove(home.path(), "demo").unwrap_err();
-        assert!(err.to_string().contains("64"), "{err}");
-        assert!(deepest.is_dir(), "nothing is deleted");
+        set_mode(&deepest, 0o555).unwrap();
+        assert_eq!(remove(home.path(), "demo").unwrap(), 1);
+        assert!(!tree.exists(), "the whole tree is gone");
         assert_eq!(
             fds_below(home.path()),
             Vec::<PathBuf>::new(),

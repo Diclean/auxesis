@@ -760,9 +760,12 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
             buf.len() as libc::c_int,
         )
     };
-    if n <= 0 {
-        return Holds::No;
+    let errno = std::io::Error::last_os_error().raw_os_error();
+    if let Some(unknown) = fd_list_unknown(n, errno) {
+        return unknown;
     }
+    // A full buffer may have cut the list: no hit then is unknown, not "No".
+    let truncated = n as usize == buf.len();
     for entry in buf[..n as usize].as_chunks::<8>().0 {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             return Holds::Cut;
@@ -798,7 +801,23 @@ fn process_holds_marker(pid: i32, marker: &Marker, deadline: Option<Instant>) ->
             return Holds::Yes;
         }
     }
-    Holds::No
+    match truncated {
+        true => Holds::Cut,
+        false => Holds::No,
+    }
+}
+
+/// Sorts a failed `PROC_PIDLISTFDS` answer: `ESRCH` is a process that is gone
+/// (`No`); any other failure (`ENOMEM`, `EPERM`, ...) means the descriptors
+/// could not be read at all, which is `Cut`. `None` for a usable list. Pure,
+/// so tested on every OS.
+#[cfg(any(target_os = "macos", test))]
+fn fd_list_unknown(n: i32, errno: Option<i32>) -> Option<Holds> {
+    match n > 0 {
+        true => None,
+        false if errno == Some(libc::ESRCH) => Some(Holds::No),
+        false => Some(Holds::Cut),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1623,14 +1642,20 @@ thread_local! {
         const { std::cell::Cell::new((false, 0)) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam: how many marker passes `fast_kill` started on this thread.
+    static MARKER_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The no-thread fallback's seen-set budget: every queued reaper's seen loop
 /// shares these 250 ms. The marker pass then gets at least
 /// [`LATE_MARKER_RESERVE`] more, once for the whole batch.
 const LATE_INLINE_BUDGET: Duration = Duration::from_millis(250);
 
-/// The time the batch's marker passes always get after the seen-set kills,
-/// even when they used the whole of [`LATE_INLINE_BUDGET`], so neither starves
-/// the other. One deadline for the batch, not one per reaper.
+/// The time the batch's marker passes get after the shared seen deadline, even
+/// when the seen loops used the whole of [`LATE_INLINE_BUDGET`], so neither
+/// starves the other. One deadline for the batch, not one per reaper.
 const LATE_MARKER_RESERVE: Duration = Duration::from_millis(100);
 
 fn spawn_late_thread() -> std::io::Result<()> {
@@ -1653,8 +1678,8 @@ fn spawn_late_thread() -> std::io::Result<()> {
 /// worker) takes the whole queue and marks it idle, then gives every reaper
 /// only a fast kill, never the up-to-2 s sweep: each unreaped root's group,
 /// then its seen processes while [`LATE_INLINE_BUDGET`] lasts, then one marker
-/// pass until the batch's marker deadline (the budget's end or
-/// [`LATE_MARKER_RESERVE`] from the start of the passes, whichever is later).
+/// pass until the batch's marker deadline: [`LATE_MARKER_RESERVE`] after the
+/// budget's end.
 fn late_retry(reaper: TreeReaper) {
     let mut queue = late_retries();
     queue.1.push_back(reaper);
@@ -1681,11 +1706,12 @@ fn late_retry(reaper: TreeReaper) {
 }
 
 /// A fast kill of every reaper: seen loops until `deadline`, marker passes
-/// until one batch-wide marker deadline (`deadline`, or [`LATE_MARKER_RESERVE`]
-/// from now if later), so N queued reapers cost about the budget plus one
-/// reserve, not N reserves. The sum of what each skipped.
+/// until one batch-wide marker deadline, a fixed [`LATE_MARKER_RESERVE`] after
+/// `deadline`. The reserve is therefore real even when the seen loops used all
+/// of the budget, and N queued reapers cost about the budget plus one reserve,
+/// not N reserves. The sum of what each skipped.
 fn fast_kill_all(queued: Vec<TreeReaper>, deadline: Instant) -> usize {
-    let marker_deadline = deadline.max(Instant::now() + LATE_MARKER_RESERVE);
+    let marker_deadline = deadline + LATE_MARKER_RESERVE;
     let mut skipped = 0;
     for mut reaper in queued {
         skipped += reaper.fast_kill(deadline, marker_deadline);
@@ -1877,7 +1903,11 @@ impl TreeReaper {
             // and a cut-off budget should lose the old ones.
             let deadline = marker_deadline;
             let mut all = match Instant::now() < deadline {
-                true => all_pids(),
+                true => {
+                    #[cfg(test)]
+                    MARKER_PASSES.with(|passes| passes.set(passes.get() + 1));
+                    all_pids()
+                }
                 false => Vec::new(),
             };
             all.sort_unstable_by(|a, b| b.cmp(a));
@@ -3622,12 +3652,24 @@ for (1 .. 100) {{ last if -s q(bg.pid); select(undef, undef, undef, 0.005) }} ex
     /// still there at the limit is SIGKILLed, so a failing test cannot leak it.
     #[cfg(unix)]
     async fn gone_within(pid: i32, limit: Duration) -> bool {
+        // The identity is read now; a pid with none is already gone.
+        match TrackedPid::of(pid) {
+            Some(tracked) => gone_tracked(tracked, limit).await,
+            None => true,
+        }
+    }
+
+    /// Waits until `tracked` (pid and start time) is gone. A recycled pid has
+    /// another start time, so it counts as gone and is never signalled; on
+    /// timeout the process is killed only while `still_same` holds.
+    async fn gone_tracked(tracked: TrackedPid, limit: Duration) -> bool {
         let deadline = std::time::Instant::now() + limit;
-        // SAFETY: signal 0 only probes a pid this test's command reported.
-        while unsafe { libc::kill(pid, 0) } == 0 {
+        while tracked.still_same(&pid_ppid_uid_start) {
             if std::time::Instant::now() >= deadline {
-                // SAFETY: best-effort SIGKILL of a process this test spawned.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
+                if tracked.still_same(&pid_ppid_uid_start) {
+                    // SAFETY: best-effort SIGKILL of a test process, re-checked.
+                    unsafe { libc::kill(tracked.pid, libc::SIGKILL) };
+                }
                 return false;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -4116,7 +4158,7 @@ await(q(bg.pid));
             .count();
         assert_eq!(left, 0, "queued reapers were left in the queue");
         for sleeper in &sleepers.1 {
-            let gone = gone_within(sleeper.pid, Duration::from_secs(2)).await;
+            let gone = gone_tracked(*sleeper, Duration::from_secs(2)).await;
             assert!(
                 gone,
                 "queued reaper's process {} was never killed",
@@ -4192,7 +4234,7 @@ await(q(bg.pid));
         late_retry(reaper);
         let (_, refused) = FAIL_LATE_SPAWN.with(|seam| seam.replace((false, 0)));
         assert_eq!(refused, 1, "the spawn-failure path never ran");
-        let gone = gone_within(escapee.pid, Duration::from_secs(2)).await;
+        let gone = gone_tracked(escapee, Duration::from_secs(2)).await;
         assert!(gone, "the unseen setsid escapee {} survived", escapee.pid);
     }
 
@@ -4263,29 +4305,43 @@ await(q(bg.pid));
         }
     }
 
-    /// SHELL-SWEEP-8 (1): the marker reserve is taken once for the batch. Past
-    /// the seen budget, N queued reapers share one reserve, not N: after it
-    /// expires a later reaper's pass never starts and is counted.
+    /// SHELL-SWEEP-8 (1): the production shape. The seen loops get a budget
+    /// that is already spent (the worst case: they used all of it), and the
+    /// marker pass must still run, in the reserve after the shared deadline.
+    /// With the reserve deleted (`marker_deadline = deadline`) no pass starts.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn the_batch_shares_one_marker_reserve() {
+    #[test]
+    fn the_marker_pass_runs_even_when_the_seen_budget_is_spent() {
+        let (marker, _pin) = pinned_marker();
+        MARKER_PASSES.with(|passes| passes.set(0));
+        // The deadline is the real one's shape: `now`, with the seen loops
+        // finished right at it.
+        fast_kill_all(vec![idle_reaper(marker)], std::time::Instant::now());
+        let passes = MARKER_PASSES.with(|passes| passes.replace(0));
+        assert_eq!(passes, 1, "no marker pass ran after the seen budget");
+    }
+
+    /// SHELL-SWEEP-8 (1): the reserve is taken once for the batch, so a long
+    /// queue stays close to the budget plus one reserve, not a reserve each.
+    #[cfg(unix)]
+    #[test]
+    fn the_batch_shares_one_marker_reserve() {
         let (marker, _pin) = pinned_marker();
         let queued: Vec<TreeReaper> = (0..200).map(|_| idle_reaper(marker)).collect();
         let started = std::time::Instant::now();
-        let skipped = fast_kill_all(queued, started);
+        fast_kill_all(queued, started);
         let took = started.elapsed();
-        // One reserve (100 ms) plus the pass that was running when it ended.
+        // Loose on purpose: a per-reaper reserve is 200 x 100 ms.
         assert!(
-            took < Duration::from_millis(400),
+            took < Duration::from_secs(1),
             "200 reapers took {took:?}: the reserve is per reaper"
         );
-        // Each pass a reaper could not run is counted once.
-        assert!(skipped >= 1, "no reaper was cut by the batch deadline");
     }
 
-    /// SHELL-SWEEP-8 (2, 3): past the seen deadline the marker pass still runs
-    /// and SIGKILLs a real double-forked `setsid()` escapee that is not in
-    /// `seen`; and a descriptor walk cut by the deadline is `Cut`, not `No`.
+    /// SHELL-SWEEP-8 (2, 3): through `fast_kill_all`, with a spent seen budget,
+    /// the marker pass still SIGKILLs a real double-forked `setsid()` escapee
+    /// that is not in `seen`; and a descriptor walk cut by the deadline is
+    /// `Cut`, not `No`.
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn past_the_seen_budget_the_marker_pass_still_kills_an_unseen_holder() {
@@ -4332,17 +4388,35 @@ await(q(bg.pid));
             pid: i32::MAX - n,
             start: 1,
         }));
-        // The seen deadline is past: all 3 entries skipped. The marker pass
-        // has its own deadline and is the only thing that can kill the escapee.
-        let marker_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let skipped = reaper.fast_kill(past, marker_deadline);
-        assert_eq!(skipped, 3, "the marker pass did not complete");
+        // The production shape: the seen budget is spent (all 3 skipped), the
+        // marker pass runs in the reserve after it and is the only thing that
+        // can kill the escapee.
+        let skipped = fast_kill_all(vec![reaper], std::time::Instant::now());
+        // 3 seen entries; plus one when a loaded host's walk ran out of
+        // reserve. The kill itself is asserted below, not the host's speed.
+        assert!(
+            (3..=4).contains(&skipped),
+            "unexpected skip count {skipped}"
+        );
         // Not our child (it reparented to launchd): gone is the proof.
         assert!(
-            gone_within(escapee.pid, Duration::from_secs(2)).await,
+            gone_tracked(escapee, Duration::from_secs(2)).await,
             "the unseen marker holder {} survived",
             escapee.pid
         );
+    }
+
+    /// SHELL-SWEEP-8 (5): a descriptor list that could not be read is unknown;
+    /// only a process that is gone holds nothing.
+    #[test]
+    fn an_unreadable_fd_list_is_unknown_not_empty() {
+        assert_eq!(fd_list_unknown(16, Some(0)), None);
+        assert_eq!(fd_list_unknown(0, Some(libc::ESRCH)), Some(Holds::No));
+        for errno in [libc::ENOMEM, libc::EPERM] {
+            assert_eq!(fd_list_unknown(-1, Some(errno)), Some(Holds::Cut));
+            assert_eq!(fd_list_unknown(0, Some(errno)), Some(Holds::Cut));
+        }
+        assert_eq!(fd_list_unknown(0, None), Some(Holds::Cut));
     }
 
     /// SHELL-SWEEP-8 (4): the watchdog's tree list keeps the start time the

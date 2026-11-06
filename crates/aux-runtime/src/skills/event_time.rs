@@ -24,6 +24,10 @@ pub const ATTENDEE_ZONE_SOURCE: &str = "attendee_time_zone_source";
 /// The owner's system zone: `TZ` when it names one, else the `/etc/localtime`
 /// link (`…/zoneinfo/Europe/Paris` on macOS). `None` when neither does.
 pub fn owner_time_zone() -> Option<String> {
+    #[cfg(test)]
+    if let Some(zone) = TEST_ZONE.with(|zone| zone.borrow().clone()) {
+        return Some(zone);
+    }
     let from_env = std::env::var("TZ").ok().map(|n| n.replace(':', ""));
     let from_link = || {
         let target = std::fs::read_link("/etc/localtime").ok()?;
@@ -32,6 +36,14 @@ pub fn owner_time_zone() -> Option<String> {
     };
     let known = |name: &String| name.parse::<Tz>().is_ok();
     from_env.filter(known).or_else(|| from_link().filter(known))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A fixed owner zone for this thread's tests, so no assertion depends
+    /// on the host's `TZ` or `/etc/localtime`.
+    pub(crate) static TEST_ZONE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Resolve a create's times in its `time_zone`, else `owner_zone` (stated on

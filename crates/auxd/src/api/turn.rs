@@ -4992,8 +4992,10 @@ mod m4_invite_tests {
         let agent_dir = aux_engine::agent_dir(&home, "mail");
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(agent_dir.join("soul.md"), "Mail soul.\n").unwrap();
-        if let Some(grants) = MAIL_GRANTS.with(std::cell::Cell::get) {
-            std::fs::write(agent_dir.join("grants.toml"), grants).unwrap();
+        for (agent, file, text) in HOME_FILES.with(std::cell::RefCell::take) {
+            let dir = aux_engine::agent_dir(&home, agent);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(file), text).unwrap();
         }
         crate::agents::install_shipped_files(&home).unwrap();
         let mut contacts = kernel_privacy::ContactIndex::new();
@@ -5457,9 +5459,9 @@ mod m4_invite_tests {
     }
 
     thread_local! {
-        /// The Mail agent's own `grants.toml` for the next `mail_skill_run`.
-        static MAIL_GRANTS: std::cell::Cell<Option<&'static str>> =
-            const { std::cell::Cell::new(None) };
+        /// `(agent, file, text)` written into the next `mail_skill_run` home.
+        static HOME_FILES: std::cell::RefCell<Vec<(&'static str, &'static str, String)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
     }
 
     /// EXECUTOR-READS: with `calendar.read` off (or the free times not
@@ -5471,9 +5473,30 @@ mod m4_invite_tests {
             [[do]]\nskill = \"mail.send\"\nlevel = \"ask\"\n";
         let off = format!("{BASE}\n[[do]]\nskill = \"calendar.read\"\nlevel = \"off\"\n");
         let both = format!("{off}\n[[do]]\nskill = \"calendar.freebusy\"\nlevel = \"auto\"\n");
+        // READS-3: a chief that lists tools without `calendar_freebusy` caps
+        // the read too, and the refusal says what to add to which list.
+        const MAIN: &str = "---\nname: main\ntools:\n  - mail.list\n  - mail.search\n  \
+            - mail.thread\n  - mail.read\n  - mail.draft\n  - mail.send\n---\nMain.\n";
+        let cases = [
+            (BASE, false),
+            (off.as_str(), false),
+            (both.as_str(), false),
+            ("", true),
+        ];
         // Each refuses with the broker's deny and names the line to add.
-        for grants in [BASE.to_string(), off, both] {
-            MAIL_GRANTS.with(|cell| cell.set(Some(Box::leak(grants.clone().into_boxed_str()))));
+        for (grants, chief_lists) in cases {
+            let mut files = Vec::new();
+            if !grants.is_empty() {
+                files.push(("mail", "grants.toml", grants.to_string()));
+            }
+            if chief_lists {
+                files.push((
+                    aux_runtime::grants::CHIEF_AGENT,
+                    "agent.md",
+                    MAIN.to_string(),
+                ));
+            }
+            HOME_FILES.with(|cell| *cell.borrow_mut() = files);
             let fill = serde_json::json!({
                 "slots": { "person": "Camille Exemple", "topic": "the Q3 review" },
                 "calls": [{ "tool": "mail_send", "arguments": {
@@ -5488,9 +5511,14 @@ mod m4_invite_tests {
                 None,
                 Answer::Yes,
             );
-            MAIL_GRANTS.with(|cell| cell.set(None));
             assert_eq!((cards.len(), sent.len()), (0, 0), "{grants}\n{cards:?}");
-            let hint = r#"matched: deny. This agent may not read the owner's free times: its grants need `[[do]] skill = \"calendar.freebusy\" level = \"auto\""#;
+            let hint = concat!(
+                r#"matched: deny. This agent may not read the owner's free times: its grants need "#,
+                r#"`[[do]] skill = \"calendar.freebusy\" level = \"auto\"` (and calendar.read not off), "#,
+                "an owner rule for this read names the tool `calendar_freebusy`, and every tools ",
+                "list over the agent needs `calendar_freebusy`: its own, and the chief's when the ",
+                "chief lists tools (add calendar_freebusy to the chief's tools list)"
+            );
             assert!(stored.contains(hint), "{grants}\n{stored}");
         }
     }

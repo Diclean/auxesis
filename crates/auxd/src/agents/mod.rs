@@ -632,8 +632,9 @@ pub(crate) fn is_shipped_skill(agent: &str, name: &str) -> bool {
 /// none of them was edited by the owner and is kept byte-identical.
 ///
 /// The hash is the first 16 hex characters of the BLAKE3 of the shipped bytes.
-/// Every shipped file that changes adds its old hash here, in the same commit
-/// that changes it.
+/// Every shipped file that changes adds its old hash here before that change
+/// merges (one PR), with a test that the old bytes are updated; a file shipped
+/// without its old hash would read as an owner edit and stay old for good.
 const PAST_SHIPPED_HASHES: [(&str, &str, &str); 11] = [
     ("calendar", "agent.md", "eae3a046eee2a171"),
     ("calendar", "agent.md", "2a4d1d80176dc3b7"),
@@ -2180,6 +2181,13 @@ level = "auto"
         std::fs::write(&file, OLD).unwrap();
         install_shipped_files(dir.path()).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), CURRENT);
+
+        // READS-3: an owner's own edit of that old file is kept byte for byte;
+        // `calendar_freebusy` is never added behind the owner's back.
+        let edited = OLD.replace("  - mail.send\n", "");
+        std::fs::write(&file, &edited).unwrap();
+        install_shipped_files(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
     }
 
     #[test]

@@ -620,6 +620,8 @@ pub fn default_grants(agent: &str) -> Option<AgentGrants> {
             see: vec![
                 see("mail", "IMAP (local)", AccessLevel::Read),
                 see("contacts", "Address Book", AccessLevel::Ask),
+                // The free times `calendar.freebusy` reads: busy spans only.
+                see("calendar", "free times only (local)", AccessLevel::Read),
             ],
             can_do: vec![
                 do_grant("mail.read", ActionLevel::Auto),
@@ -722,6 +724,12 @@ mod tests {
         );
         assert!(ok(&mail, FREEBUSY_TOOL) && ok(&chief, FREEBUSY_TOOL));
         assert!(!ok(&mail, "apple_calendar_list_events") && !mail.allows_scope("calendar"));
+        // Mail's See list names the free times it reads (READS-3).
+        let calendar = mail.see.iter().find(|see| see.scope == "calendar").unwrap();
+        assert_eq!(
+            (calendar.via.as_str(), calendar.level),
+            ("free times only (local)", AccessLevel::Read)
+        );
         assert!(!ok(
             &with(&mail, "calendar.read", ActionLevel::Off),
             FREEBUSY_TOOL

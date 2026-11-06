@@ -867,10 +867,15 @@ pub fn freebusy_hint(agent: &str, denials: &[ReadDenial]) -> String {
                 ask,
             } => {
                 let does = if *ask { "asks first" } else { "denies it" };
-                if rule_agent == "*" {
-                    // A rule for every agent stays: only this agent is let in.
+                if rule_agent == "*" || tool != "calendar_freebusy" {
+                    // A rule wider than this one read (every agent, or more
+                    // tools than free times) stays: only this read is let in.
+                    let whom = match rule_agent.as_str() {
+                        "*" => "every agent".to_string(),
+                        named => format!("agent `{named}`"),
+                    };
                     format!(
-                        "the config.toml rule for every agent on `{tool}` {does}: keep it and \
+                        "the config.toml rule for {whom} on `{tool}` {does}: keep it and \
                          add after it a rule with agent = \"{who}\", tool = \
                          \"calendar_freebusy\", action = \"allow\""
                     )
@@ -4496,12 +4501,24 @@ mod tests {
             own.contains("\"calendar_\" from `never` in agents/mail/"),
             "{own}"
         );
-        // An owner rule names its tool; one for every agent is kept.
-        let mine = hint(&[rule("mail", "calendar_*", true)]);
+        // An owner rule names its tool; one wider than the free-times read
+        // (every agent, or more tools) is kept and a narrow allow added.
+        let exact = hint(&[rule("mail", "calendar_freebusy", true)]);
         assert!(
-            mine.contains("rule for agent `mail` on `calendar_*` asks first: remove it"),
-            "{mine}"
+            exact.contains("rule for agent `mail` on `calendar_freebusy` asks first: remove it"),
+            "{exact}"
         );
+        for tool in ["calendar_*", "*"] {
+            let wide = hint(&[rule("main", tool, false)]);
+            assert!(
+                wide.contains(&format!(
+                    "rule for agent `main` on `{tool}` denies it: keep it"
+                )),
+                "{wide}"
+            );
+            assert!(wide.contains("tool = \"calendar_freebusy\""), "{wide}");
+            assert!(!wide.contains("remove"), "{wide}");
+        }
         let global = hint(&[rule("*", "*", false)]);
         assert!(
             global.contains("every agent on `*` denies it: keep it"),

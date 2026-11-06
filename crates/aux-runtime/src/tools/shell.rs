@@ -5845,7 +5845,7 @@ await(q(bg.pid));
     /// the drain's empty pop clears the flag.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_failed_backlog_spawn_runs_only_this_retry_here() {
+    async fn a_failed_backlog_spawn_drains_the_whole_backlog_here() {
         use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         let _serial = LATE_QUEUE_TEST.lock().await;
         backlog_idle().await;

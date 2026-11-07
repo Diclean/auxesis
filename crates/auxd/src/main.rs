@@ -40,7 +40,9 @@ use tracing_subscriber::EnvFilter;
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// How long shutdown waits for a shell overflow drainer thread before it
-/// drains the rest of that backlog itself.
+/// drains the rest of that backlog itself. That drain has its own soft budget
+/// (the shell tool's inline drain budget, also 10 s): leftovers are fine,
+/// the post-grace sweep that follows kills the process group and its tree.
 const OVERFLOW_DRAIN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// How long shutdown waits, each try, for the budget settle worker to end: over

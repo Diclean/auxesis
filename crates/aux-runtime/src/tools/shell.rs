@@ -2512,8 +2512,15 @@ fn drainer_threads() -> std::sync::MutexGuard<'static, Vec<std::thread::JoinHand
 /// process, mid-drain), then drains whatever is still in the
 /// [`OVERFLOW_BACKLOG`] here: a drainer thread past `wait`, or a pool task
 /// the runtime abandoned, may run beside it; each item is popped once, and
-/// no reaper is left unrun. Returns how many reapers ran here.
+/// no reaper is left unrun. The drain here is soft-bounded by
+/// `INLINE_DRAIN_BUDGET` and each item is panic-caught. Past the budget the
+/// rest stays queued, with a warning: auxd's post-grace sweep
+/// (`shutdown::shutdown_everything`) kills the process group and the
+/// descendant tree right after. It ends by clearing the drainer flag and
+/// token, so a later push does not queue behind a gone drainer. Returns how
+/// many reapers ran here.
 pub fn finish_overflow_drain(wait: Duration) -> usize {
+    use std::sync::atomic::Ordering::SeqCst;
     let threads = std::mem::take(&mut *drainer_threads());
     let deadline = Instant::now() + wait;
     for thread in threads {
@@ -2530,17 +2537,37 @@ pub fn finish_overflow_drain(wait: Duration) -> usize {
             );
         }
     }
-    let mut ran = 0;
-    loop {
-        let next = overflow_backlog().1.pop_front();
-        let Some(mut next) = next else {
-            return ran;
+    let end = Instant::now() + inline_drain_budget();
+    let (mut ran, mut longest) = (0, Duration::ZERO);
+    let left = loop {
+        let next = {
+            let mut backlog = overflow_backlog();
+            if !backlog.1.is_empty() && Instant::now() + longest >= end {
+                break backlog.1.len();
+            }
+            backlog.1.pop_front()
         };
-        late_retry_logged(&mut next);
-        ran += 1;
+        let Some(mut next) = next else {
+            break 0;
+        };
+        let started = Instant::now();
         #[cfg(test)]
-        OVERFLOW_BACKLOGGED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::thread::sleep(BACKLOG_ITEM_DELAY.with(std::cell::Cell::get));
+        run_backlog_item(&mut next);
+        ran += 1;
+        longest = longest.max(started.elapsed());
+    };
+    if left > 0 {
+        tracing::warn!(left, "shell: the shutdown drain ran out of budget");
     }
+    // Nobody drains this backlog any more: hand it back, so a later push
+    // claims a drainer or runs inline instead of queueing behind a gone one.
+    let mut backlog = overflow_backlog();
+    if let Some((token, _)) = backlog.2.take() {
+        let _ = token.compare_exchange(TOKEN_TASK, TOKEN_GONE, SeqCst, SeqCst);
+    }
+    backlog.0 = false;
+    ran
 }
 
 /// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty. The
@@ -2582,22 +2609,26 @@ fn drain_backlog_until(bound: Option<(Instant, usize)>) -> usize {
         if let Some(hook) = BACKLOG_ITEM_HOOK.with(std::cell::Cell::get) {
             hook();
         }
-        // `late_retry_logged` catches the retry; this also catches its
-        // logging, so one item never ends the drain.
-        let item = std::panic::AssertUnwindSafe(|| {
-            #[cfg(test)]
-            if BACKLOG_ITEM_PANICS.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                panic!("test seam: a backlog item panicked");
-            }
-            late_retry_logged(&mut next);
-            #[cfg(test)]
-            OVERFLOW_BACKLOGGED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        });
-        if std::panic::catch_unwind(item).is_err() {
-            tracing::error!("shell: an overflow backlog retry panicked");
-        }
+        run_backlog_item(&mut next);
         ran += 1;
         longest = longest.max(started.elapsed());
+    }
+}
+
+/// Runs one backlog reaper. `late_retry_logged` catches the retry; this also
+/// catches its logging, so one item never ends a drain.
+fn run_backlog_item(next: &mut TreeReaper) {
+    let item = std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        if BACKLOG_ITEM_PANICS.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("test seam: a backlog item panicked");
+        }
+        late_retry_logged(next);
+        #[cfg(test)]
+        OVERFLOW_BACKLOGGED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    if std::panic::catch_unwind(item).is_err() {
+        tracing::error!("shell: an overflow backlog retry panicked");
     }
 }
 
@@ -6291,6 +6322,92 @@ await(q(bg.pid));
         assert_eq!(waiting, 0, "the drain stopped at the panic");
         assert!(!running, "the drainer flag stayed set");
         assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 1);
+    }
+
+    /// SHELL-SWEEP-16 r2 (1): the shutdown drain has a budget. Six slow items
+    /// against a short budget: it stops early with some left, and says so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_shutdown_drain_stops_at_its_budget() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(200))));
+        BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(80)));
+        let _reset = OnDrop(|| {
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+            clear_backlog();
+        });
+        for _ in 0..6 {
+            overflow_backlog()
+                .1
+                .push_back(idle_reaper(pinned_marker().0));
+        }
+        let ran = finish_overflow_drain(Duration::from_secs(5));
+        let left = overflow_backlog().1.len();
+        assert!(ran >= 1 && left > 0, "ran {ran}, left {left}");
+        assert_eq!(ran + left, 6);
+    }
+
+    /// SHELL-SWEEP-16 r2 (2): a panicking item does not stop the shutdown
+    /// drain: the next one still runs and the call returns.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_panicking_item_does_not_stop_the_shutdown_drain() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        let _reset = OnDrop(|| {
+            BACKLOG_ITEM_PANICS.store(false, SeqCst);
+            clear_backlog();
+        });
+        for _ in 0..2 {
+            overflow_backlog()
+                .1
+                .push_back(idle_reaper(pinned_marker().0));
+        }
+        let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
+        BACKLOG_ITEM_PANICS.store(true, SeqCst);
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 2);
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 1);
+    }
+
+    /// SHELL-SWEEP-16 r2 (3): after the shutdown drain nothing owns the
+    /// backlog: the drainer flag and token are clear, with items left or not.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_shutdown_drain_leaves_no_drainer_flag_or_token() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        let _reset = OnDrop(|| {
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+            clear_backlog();
+        });
+        for slow in [false, true] {
+            if slow {
+                INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(100))));
+                BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(80)));
+            }
+            let token = {
+                let mut backlog = overflow_backlog();
+                let token = claim_drainer(&mut backlog).expect("a drainer to claim");
+                for _ in 0..4 {
+                    backlog.1.push_back(idle_reaper(pinned_marker().0));
+                }
+                token
+            };
+            finish_overflow_drain(Duration::from_secs(5));
+            let mut backlog = overflow_backlog();
+            assert!(!backlog.0 && backlog.2.is_none(), "owned (slow {slow})");
+            assert_eq!(token.load(std::sync::atomic::Ordering::SeqCst), TOKEN_GONE);
+            assert!(claim_drainer(&mut backlog).is_some(), "no later claim");
+            drop(backlog);
+            clear_backlog();
+        }
     }
 
     /// SHELL-SWEEP-13 (1): when the drainer spawn fails, the caller runs its

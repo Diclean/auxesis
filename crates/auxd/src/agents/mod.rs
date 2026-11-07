@@ -334,10 +334,23 @@ fn seed_for(home: &Path, chief: &'static str) -> Result<Vec<AgentDef>, RegistryE
 /// No agent ever holds more than the chief: one that would (a template agent
 /// whose directory was made by hand, with the chief lowered) is capped.
 pub fn registry(home: &Path) -> Result<Vec<AgentDef>, RegistryError> {
+    registry_with(home, &[])
+}
+
+/// [`registry`] with the grants files in `read` taken as already read
+/// (`None`: no file), so a turn reads each chief's file once (READS-10).
+pub(crate) fn registry_with(
+    home: &Path,
+    read: &[(&str, Option<AgentGrants>)],
+) -> Result<Vec<AgentDef>, RegistryError> {
     let chief = chief_id(home);
     let mut agents = seed_for(home, chief)?;
     for agent in &mut agents {
-        if let Some(grants) = read_agent_grants(home, &agent.id)? {
+        let file = match read.iter().find(|(id, _)| *id == agent.id) {
+            Some((_, grants)) => grants.clone(),
+            None => read_agent_grants(home, &agent.id)?,
+        };
+        if let Some(grants) = file {
             agent.grants = grants;
         }
     }
@@ -806,17 +819,38 @@ pub(crate) fn uncapped_grants(
     home: &Path,
     id: &str,
 ) -> Result<Option<AgentGrants>, aux_runtime::executor::FileFault> {
+    uncapped_from(home, id, read_grants_file(home, id))
+}
+
+/// One agent's `grants.toml` as written (`None`: no file), or why it cannot
+/// be used. Read once; [`uncapped_from`] and [`registry_with`] reuse it.
+pub(crate) fn read_grants_file(
+    home: &Path,
+    id: &str,
+) -> Result<Option<AgentGrants>, aux_runtime::executor::FileFault> {
     use aux_runtime::executor::FileFault;
     match read_private(home, &grants_rel(id)) {
         Ok(Some(text)) => toml::from_str::<GrantsFile>(&text)
             .map(|file| Some(AgentGrants::from(file)))
             .map_err(|_| FileFault::Parse),
-        Ok(None) => Ok(seed_for(home, chief_id(home)).ok().and_then(|seed| {
+        Ok(None) => Ok(None),
+        Err(_) => Err(unreadable_fault(&home.join(grants_rel(id)))),
+    }
+}
+
+/// [`uncapped_grants`] from a file already read: no file is the seed's.
+pub(crate) fn uncapped_from(
+    home: &Path,
+    id: &str,
+    file: Result<Option<AgentGrants>, aux_runtime::executor::FileFault>,
+) -> Result<Option<AgentGrants>, aux_runtime::executor::FileFault> {
+    match file? {
+        Some(grants) => Ok(Some(grants)),
+        None => Ok(seed_for(home, chief_id(home)).ok().and_then(|seed| {
             seed.into_iter()
                 .find(|agent| agent.id == id)
                 .map(|agent| agent.grants)
         })),
-        Err(_) => Err(unreadable_fault(&home.join(grants_rel(id)))),
     }
 }
 
@@ -1696,6 +1730,36 @@ mod tests {
 
     /// Break-It A: a template agent whose directory was made by hand (or by
     /// an older daemon) is capped at a lowered chief on every reload.
+    /// READS-10: a chief's grants file read once is the one the registry
+    /// uses, even when the file changes after that read.
+    #[test]
+    fn the_registry_reuses_a_grants_file_already_read() {
+        let dir = tempdir().unwrap();
+        let home = dir.path();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        let shipped = aux_runtime::grants::default_grants(CHIEF_AGENT).unwrap();
+        let mut lowered = shipped.clone();
+        let send = lowered.can_do.iter_mut().find(|g| g.skill == "mail.send");
+        send.unwrap().level = ActionLevel::Off;
+        write_grants(home, CHIEF_AGENT, &lowered).unwrap();
+        let read = read_grants_file(home, CHIEF_AGENT).unwrap();
+        write_grants(home, CHIEF_AGENT, &shipped).unwrap();
+        let level = |grants: &AgentGrants| grants.level_for_skill("mail.send");
+        let agents = registry_with(home, &[(CHIEF_AGENT, read.clone())]).unwrap();
+        assert_eq!(
+            level(&ceiling_grants(&agents, CHIEF_AGENT)),
+            Some(ActionLevel::Off)
+        );
+        let own = uncapped_from(home, CHIEF_AGENT, Ok(read)).unwrap().unwrap();
+        assert_eq!(level(&own), Some(ActionLevel::Off));
+        // A fresh read sees the newer file.
+        let fresh = registry(home).unwrap();
+        assert_eq!(
+            level(&ceiling_grants(&fresh, CHIEF_AGENT)),
+            Some(ActionLevel::Auto)
+        );
+    }
+
     #[test]
     fn a_hand_made_template_directory_is_capped_at_the_chief() {
         let dir = tempdir().unwrap();

@@ -155,8 +155,12 @@ pub(crate) fn url_host(raw: &str) -> &str {
     // `[::1]:80`); `x:s3cr3t` is an opaque body, never a host (READS-9).
     // Only a leading `[...]` is a literal, and after it comes nothing or
     // `:port`; an unclosed `[` is no host.
+    // READS-10: what is inside must be an IPv6 address ([`ipv6_literal`]).
     let (literal, after) = match host.strip_prefix('[') {
-        Some(inner) => (true, inner.split_once(']').map_or("[", |(_, tail)| tail)),
+        Some(inner) => match inner.split_once(']') {
+            Some((address, tail)) if ipv6_literal(address) => (true, tail),
+            _ => (true, "["),
+        },
         None => (false, host),
     };
     let port_ok = match after.split_once(':') {
@@ -179,6 +183,22 @@ pub(crate) fn url_host(raw: &str) -> &str {
     } else {
         host
     }
+}
+
+/// What a `[...]` host may hold (READS-10): hex digits, `:` and `.`, with at
+/// least one `:`, then an optional `%` zone of letters and digits
+/// (`fe80::1%25en0`). Anything else (`[s3cr3t]`) is no host.
+fn ipv6_literal(inner: &str) -> bool {
+    let (address, zone) = match inner.split_once('%') {
+        Some((address, zone)) => (address, Some(zone)),
+        None => (inner, None),
+    };
+    address.contains(':')
+        && address
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
+        && zone
+            .is_none_or(|zone| !zone.is_empty() && zone.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// `scheme:` of a URL with no `//` after the colon and no port (`scheme:`
@@ -326,6 +346,40 @@ mod tests {
         assert_eq!(host_only(acp.clone()), acp);
         assert_eq!(host_only_reason("shell".into()).as_deref(), Some("shell"));
         assert_eq!(host_only_reason("/etc/passwd".into()), None);
+    }
+
+    /// READS-10: a leading `[...]` holds only an IPv6 address (hex digits,
+    /// `:` and `.`, and a `%` zone of letters and digits); any other text is
+    /// refused, so the scheme alone is shown. A bare `::1` stays hidden.
+    #[test]
+    fn a_bracket_literal_holds_only_ipv6_characters() {
+        for (url, shown) in [
+            ("https://[s3cr3t]:80/x", "https"),
+            ("[s3cr3t]:80", ""),
+            ("http://[s3cr3t]/", "http"),
+            ("https://u:p@[s3cr3t]:80/", "https"),
+            ("http://[]:80/", "http"),
+            ("http://[deadbeef]/", "http"),
+            ("http://[v1.s3cr3t]/", "http"),
+            ("http://[::1%]/", "http"),
+            ("http://[::1%en-0]/", "http"),
+            ("http://[::1%25en0%25x]/", "http"),
+            ("http://[::1]x/", "http"),
+            ("::1", ""),
+            ("http://::1/x", "http"),
+            ("[::1]:80", "[::1]:80"),
+            ("http://[fe80::1%25en0]/x", "[fe80::1%25en0]"),
+            ("http://[::ffff:192.0.2.1]:8080/", "[::ffff:192.0.2.1]:8080"),
+            ("a.example:8443", "a.example:8443"),
+            ("https://münchen.example/x", "münchen.example"),
+            ("localhost:3000", "localhost:3000"),
+        ] {
+            assert_eq!(url_host(url), shown, "{url}");
+        }
+        assert_eq!(host_only(Some("[s3cr3t]:80".into())), None);
+        let reason = host_only_reason("http_fetch: https://[s3cr3t]:80/".into());
+        assert_eq!(reason.as_deref(), Some("http_fetch: https"));
+        assert_eq!(host_only_reason("[s3cr3t]:80".into()), None);
     }
 
     /// READS-8: an opaque URL gives its scheme, never its body; an empty

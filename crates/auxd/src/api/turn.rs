@@ -2977,10 +2977,20 @@ fn freebusy_denials(
         Ok(file) => ReadDenial::OwnTools(file),
         Err(file) => ReadDenial::OwnFile(file),
     }));
-    let agents = crate::agents::registry(home).ok();
-    for id in ids {
-        // The chief's file is read once; a fault in it wins over the registry.
-        let own = crate::agents::uncapped_grants(home, id);
+    // Each chief's file is read once (READS-10): the registry reuses that
+    // read, so the fault check and the ceiling never see two versions. A
+    // fault in any of them wins over the registry, as it would fail there.
+    let files: Vec<_> = ids
+        .iter()
+        .map(|id| (*id, crate::agents::read_grants_file(home, id)))
+        .collect();
+    let read: Option<Vec<(&str, Option<AgentGrants>)>> = files
+        .iter()
+        .map(|(id, file)| file.as_ref().ok().map(|grants| (*id, grants.clone())))
+        .collect();
+    let agents = read.and_then(|read| crate::agents::registry_with(home, &read).ok());
+    for (id, file) in files {
+        let own = crate::agents::uncapped_from(home, id, file);
         let grants = match agents.as_deref() {
             Some(a) if own.is_ok() => Ok(Some(crate::agents::ceiling_grants(a, id))),
             _ => own,
@@ -4342,7 +4352,7 @@ mod tests {
         );
     }
 
-    struct NamedTestTool(&'static str);
+    pub(super) struct NamedTestTool(pub(super) &'static str);
 
     impl kernel_broker::NativeTool for NamedTestTool {
         fn native_name(&self) -> &'static str {
@@ -5931,15 +5941,16 @@ mod m4_invite_tests {
         std::fs::write(&path, format!("# {}\n", "x".repeat(300 * 1024))).unwrap();
         let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
         assert!(denials.contains(&gap(FileFault::TooLarge)), "{denials:?}");
+        // READS-10: root reads a mode-000 file, so a read and a missing
+        // grant look the same there; skip that case rather than pass it.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("SKIPPED mode-000 case: running as root reads any mode");
+            return;
+        }
         std::fs::write(&path, "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
-        if std::fs::File::open(&path).is_err() {
-            assert!(denials.contains(&gap(FileFault::Denied)), "{denials:?}");
-        } else {
-            // Root reads a mode-000 file: it is never called locked.
-            assert!(!denials.contains(&gap(FileFault::Denied)), "{denials:?}");
-        }
+        assert!(denials.contains(&gap(FileFault::Denied)), "{denials:?}");
     }
 
     /// READS-9: a grants file that cannot be used DENIES the free times: the
@@ -5947,7 +5958,25 @@ mod m4_invite_tests {
     #[test]
     fn a_grants_fault_denies_and_is_never_no_grants() {
         use aux_runtime::executor::{FileFault, GrantsGap, ReadDenial};
+        use aux_runtime::grants::{ToolOrigin, FREEBUSY_TOOL};
         use std::os::unix::fs::symlink;
+        // READS-10: the grant itself is denied by `apply_own_grants`, not
+        // only named in the hint.
+        let own_denied = |home: &Path| {
+            let mut registry = kernel_broker::ToolRegistry::new();
+            registry.register_native(Box::new(super::tests::NamedTestTool(FREEBUSY_TOOL)));
+            let origins = HashMap::from([(FREEBUSY_TOOL.to_string(), ToolOrigin::Connector)]);
+            let mut rules = Vec::new();
+            apply_own_grants(home, "mail", &registry, &origins, &[], &mut rules);
+            rules
+                .iter()
+                .any(|r| r.agent == "mail" && r.tool == FREEBUSY_TOOL && r.action == Action::Deny)
+        };
+        // Control: Mail's shipped grants let the free times run.
+        let shipped = tempdir().unwrap();
+        let shipped_home = shipped.path().join("home");
+        std::fs::create_dir_all(aux_engine::agent_dir(&shipped_home, "mail")).unwrap();
+        assert!(!own_denied(shipped_home.as_path()), "shipped grants denied");
         let oversize = format!("# {}\n", "x".repeat(300 * 1024)).into_bytes();
         for (bytes, fault) in [
             (b"[[do]\n".to_vec(), FileFault::Parse),
@@ -5968,6 +5997,7 @@ mod m4_invite_tests {
                     .any(|d| matches!(d, ReadDenial::OwnGrants(GrantsGap::Rows { .. }))),
                 "{fault:?}: {denials:?}"
             );
+            assert!(own_denied(home.as_path()), "{fault:?}: grant not denied");
         }
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
@@ -5985,6 +6015,7 @@ mod m4_invite_tests {
                 .any(|d| matches!(d, ReadDenial::OwnGrants(GrantsGap::Rows { .. }))),
             "{denials:?}"
         );
+        assert!(own_denied(home.as_path()), "symlink: grant not denied");
     }
 
     /// READS-8: the agent's own agent.toml that will not parse is named as

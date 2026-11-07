@@ -2514,13 +2514,12 @@ fn drainer_threads() -> std::sync::MutexGuard<'static, Vec<std::thread::JoinHand
 /// the runtime abandoned, may run beside it; each item is popped once, and
 /// no reaper is left unrun. The drain here is soft-bounded by
 /// `INLINE_DRAIN_BUDGET` and each item is panic-caught. Past the budget the
-/// rest stays queued, with a warning: auxd's post-grace sweep
-/// (`shutdown::shutdown_everything`) kills the process group and the
-/// descendant tree right after. It ends by clearing the drainer flag and
-/// token, so a later push does not queue behind a gone drainer. Returns how
-/// many reapers ran here.
+/// rest gets the bounded fast kill ([`fast_kill_all`]), with a warning, and
+/// auxd's post-grace sweep (`shutdown::shutdown_everything`) runs right after.
+/// The drainer flag and token are handed back under the lock of the last pop
+/// ([`release_backlog`]), so a later push does not queue behind a gone
+/// drainer. Returns how many reapers ran here in full.
 pub fn finish_overflow_drain(wait: Duration) -> usize {
-    use std::sync::atomic::Ordering::SeqCst;
     let threads = std::mem::take(&mut *drainer_threads());
     let deadline = Instant::now() + wait;
     for thread in threads {
@@ -2539,16 +2538,26 @@ pub fn finish_overflow_drain(wait: Duration) -> usize {
     }
     let end = Instant::now() + inline_drain_budget();
     let (mut ran, mut longest) = (0, Duration::ZERO);
-    let left = loop {
+    let left: Vec<TreeReaper> = loop {
         let next = {
             let mut backlog = overflow_backlog();
             if !backlog.1.is_empty() && Instant::now() + longest >= end {
-                break backlog.1.len();
+                // Taken under the lock with the hand-back: a push after
+                // this claims its own drainer.
+                let left = backlog.1.drain(..).collect();
+                release_backlog(&mut backlog);
+                break left;
             }
-            backlog.1.pop_front()
+            let next = backlog.1.pop_front();
+            if next.is_none() {
+                // Under the same lock as the empty pop: a push cannot queue
+                // between them behind a drainer that is gone.
+                release_backlog(&mut backlog);
+            }
+            next
         };
         let Some(mut next) = next else {
-            break 0;
+            break Vec::new();
         };
         let started = Instant::now();
         #[cfg(test)]
@@ -2557,17 +2566,37 @@ pub fn finish_overflow_drain(wait: Duration) -> usize {
         ran += 1;
         longest = longest.max(started.elapsed());
     };
-    if left > 0 {
-        tracing::warn!(left, "shell: the shutdown drain ran out of budget");
+    if !left.is_empty() {
+        // Past the budget the rest still gets the bounded fast kill (group
+        // kill, seen re-check, one marker pass): a `setsid()` command group
+        // is outside auxd's own group sweep, so it is never just dropped.
+        let count = left.len();
+        let skipped = fast_kill_all(left, Instant::now() + LATE_INLINE_BUDGET);
+        tracing::warn!(
+            left = count,
+            skipped,
+            "shell: the shutdown drain ran out of budget; the rest got the fast kill"
+        );
     }
-    // Nobody drains this backlog any more: hand it back, so a later push
-    // claims a drainer or runs inline instead of queueing behind a gone one.
-    let mut backlog = overflow_backlog();
-    if let Some((token, _)) = backlog.2.take() {
+    ran
+}
+
+/// Under the backlog lock, at shutdown: nobody drains this backlog any more,
+/// so hand it back and a later push claims a drainer or runs inline instead
+/// of queueing behind a gone one. A caller draining inline (its token
+/// [`TOKEN_CALLER`]) keeps the drain and hands it back itself. A queued task
+/// (still [`TOKEN_TASK`]) is revoked so it skips; a started one is left to
+/// end.
+fn release_backlog(backlog: &mut Backlog) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if let Some((token, _)) = backlog.2.as_ref() {
+        if token.load(SeqCst) == TOKEN_CALLER {
+            return;
+        }
         let _ = token.compare_exchange(TOKEN_TASK, TOKEN_GONE, SeqCst, SeqCst);
     }
+    backlog.2 = None;
     backlog.0 = false;
-    ran
 }
 
 /// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty. The
@@ -6345,9 +6374,11 @@ await(q(bg.pid));
                 .push_back(idle_reaper(pinned_marker().0));
         }
         let ran = finish_overflow_drain(Duration::from_secs(5));
-        let left = overflow_backlog().1.len();
-        assert!(ran >= 1 && left > 0, "ran {ran}, left {left}");
-        assert_eq!(ran + left, 6);
+        // Past the budget the rest got the fast kill, not a full retry, and
+        // nothing stays queued behind a gone drainer.
+        assert!((1..6).contains(&ran), "ran {ran} of 6 in full");
+        let backlog = overflow_backlog();
+        assert!(backlog.1.is_empty() && !backlog.0 && backlog.2.is_none());
     }
 
     /// SHELL-SWEEP-16 r2 (2): a panicking item does not stop the shutdown

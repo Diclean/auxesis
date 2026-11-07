@@ -380,6 +380,11 @@ public final class FixtureDaemon: AuxdTransport, TeamClient, ModelSawProviding, 
         if let index = delegationList.firstIndex(where: { $0.id == id }) { delegationList[index].state = .stopped }
     }
 
+    /// Tests: `id` finishes (done), as a late run's result would.
+    public func finishDelegation(id: String) {
+        if let index = delegationList.firstIndex(where: { $0.id == id }) { delegationList[index].state = .done }
+    }
+
     public func resumeDelegation(id: String) async throws {
         if let resumeFailure { throw resumeFailure }
         if let index = delegationList.firstIndex(where: { $0.id == id }) { delegationList[index].state = .working }

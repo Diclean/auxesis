@@ -326,3 +326,148 @@ async fn a_run_stuck_past_the_bound_says_so_and_still_blocks_the_resume() {
     agent.release[1].notify_one();
     handle.shutdown();
 }
+
+/// A brain that ignores its cancel until its sender drops, as a hung one.
+struct Hung {
+    entered: std::sync::atomic::AtomicBool,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+#[async_trait]
+impl aux_providers::ChatProvider for Hung {
+    async fn complete(
+        &self,
+        _req: &aux_providers::ChatRequest,
+    ) -> Result<aux_providers::ChatResponse, aux_providers::ProviderError> {
+        self.entered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.release.lock().unwrap().recv();
+        Ok(aux_providers::ChatResponse::assistant("late"))
+    }
+
+    fn name(&self) -> &str {
+        "fakey"
+    }
+}
+
+fn seeded_home(dir: &tempfile::TempDir, id: &str) -> std::path::PathBuf {
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        kernel_core::config_path(&home),
+        "version = 1\nprivacy.mode = \"open\"\ndefault_agent = \"aux\"\n\n[[providers]]\n\
+         id = \"fakey\"\nbase_url = \"http://127.0.0.1:9/v1\"\nmodel = \"m\"\nkind = \"fake\"\n",
+    )
+    .unwrap();
+    std::fs::write(api::token_path(&home), format!("{TOKEN}\n")).unwrap();
+    let store = Store::open(&kernel_core::store_path(&home)).unwrap();
+    let mode = kernel_core::privacy::PrivacyMode::Open;
+    store
+        .create_delegation(id, "aux", "mail", "sort the inbox", None, mode)
+        .unwrap();
+    store
+        .set_delegation_state(id, DelegationState::Stopped)
+        .unwrap();
+    home
+}
+
+/// A deadline stops a hung turn like an owner Stop: its stuck clock starts
+/// then, so once the row is stopped a resume past the bound reads
+/// `delegation_stuck` (not "still finishing" forever), and never runs beside.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deadline_hung_run_reads_stuck_through_the_resume_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = "dlg-deadline";
+    let home = seeded_home(&dir, id);
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let brain = Arc::new(Hung {
+        entered: Default::default(),
+        release: Mutex::new(release_rx),
+    });
+    let handle = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            provider: Some(brain.clone()),
+            delegation_timeout: Some(Duration::from_secs(1)),
+            // Shorter than the deadline's 5 s stop grace: the deadline's own
+            // stamp is already past it once the row retires.
+            delegation_stuck_after: Some(Duration::from_secs(3)),
+            ..ApiOptions::default()
+        },
+    )
+    .unwrap();
+    let resume = || {
+        common::post(
+            handle.addr(),
+            &format!("/v1/delegations/{id}/resume"),
+            Some(TOKEN),
+            "{}",
+        )
+    };
+
+    assert_eq!(resume().status, 200);
+    until("the turn never reached its brain", || {
+        brain.entered.load(std::sync::atomic::Ordering::SeqCst)
+    })
+    .await;
+    // The deadline retires the row (it took a step: failed) while the turn
+    // still hangs; the owner then stops it, which keeps the earlier stamp.
+    until("the deadline never retired the row", || {
+        row(&home, id).state == DelegationState::Failed
+    })
+    .await;
+    assert_eq!(post(&handle, id, "stop"), 200);
+    assert_eq!(row(&home, id).state, DelegationState::Stopped);
+    common::assert_error(&resume(), 409, "delegation_stuck");
+
+    // Once the hung turn returns, the claim frees and a resume runs.
+    drop(release);
+    until("the resume never became possible", || {
+        resume().status == 200
+    })
+    .await;
+    handle.shutdown();
+}
+
+/// `api::spawn` adopts an injected delegating runner's own registry: a run
+/// live in it gates the resume route, and its end frees it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_adopts_an_injected_delegating_runners_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = "dlg-adopted";
+    let home = seeded_home(&dir, id);
+    let agent = Arc::new(Slow {
+        runs: Mutex::new(0),
+        release: vec![Arc::new(Notify::new())],
+    });
+    let cancels = Arc::new(auxd::delegation::DelegationCancels::new());
+    let runner =
+        api::EngineTurnRunner::new(&home).with_delegations(agent.clone(), Arc::clone(&cancels));
+    let handle = api::spawn(
+        &home,
+        ApiOptions {
+            port: 0,
+            runner: Some(Arc::new(runner)),
+            delegations: Some(agent.clone() as Arc<dyn DelegationExecutor>),
+            ..ApiOptions::default()
+        },
+    )
+    .unwrap();
+    let live = cancels.register(id, aux_engine::TurnCancel::new());
+    common::assert_error(
+        &common::post(
+            handle.addr(),
+            &format!("/v1/delegations/{id}/resume"),
+            Some(TOKEN),
+            "{}",
+        ),
+        409,
+        "delegation_still_stopping",
+    );
+    drop(live);
+    assert_eq!(post(&handle, id, "resume"), 200);
+    until("the run never started", || *agent.runs.lock().unwrap() == 1).await;
+    agent.release[0].notify_one();
+    handle.shutdown();
+}

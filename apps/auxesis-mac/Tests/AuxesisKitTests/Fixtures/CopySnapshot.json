@@ -2730,6 +2730,14 @@
       "en" : "Needs you",
       "fr" : "À traiter"
     },
+    "delegNotFound" : {
+      "en" : "This task no longer exists.",
+      "fr" : "Cette tâche n’existe plus."
+    },
+    "delegNotStopped" : {
+      "en" : "Only a stopped task can resume.",
+      "fr" : "Seule une tâche arrêtée peut reprendre."
+    },
     "delegOpenIn" : {
       "en" : "Open in %@",
       "fr" : "Ouvrir dans %@"
@@ -2745,6 +2753,10 @@
     "delegResume" : {
       "en" : "Resume",
       "fr" : "Reprendre"
+    },
+    "delegResumeFailed" : {
+      "en" : "Aux couldn't resume this task. Try again.",
+      "fr" : "Aux n’a pas pu reprendre cette tâche. Réessayez."
     },
     "delegSentBack" : {
       "en" : "%@ sent back:",

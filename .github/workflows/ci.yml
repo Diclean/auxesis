@@ -179,6 +179,16 @@ jobs:
           tar -xzf "$tgz" -C "$bin" cargo-nextest
           rm -f "$tgz"
           "$bin/cargo-nextest" nextest --version
+      - name: TEMP flake loop (SHELL-SWEEP-17, removed before merge)
+        run: |
+          fails=0
+          for i in $(seq 1 30); do
+            if ! scripts/ci-sandbox-env.sh cargo nextest run --locked -p aux-runtime --retries 0 --no-fail-fast -E 'test(/tools::shell::tests::/)' > "$RUNNER_TEMP/loop.log" 2>&1; then
+              grep -B2 -A40 'FAIL \[' "$RUNNER_TEMP/loop.log" | grep -E 'FAIL \[|DIAG|left:|right:|panicked' | head -40
+              fails=$((fails+1))
+            fi
+          done
+          echo "loop failures: $fails/30"
       - name: Tests (sandboxed, no Keychain)
         # The workspace suite under a scratch HOME with a fake `security` on
         # PATH: a test that reaches the Keychain fails the step. --nextest runs

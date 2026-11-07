@@ -205,8 +205,6 @@ struct Message {
     thread_id: Option<String>,
     #[serde(default)]
     payload: Option<MessagePart>,
-    #[serde(rename = "internalDate")]
-    internal_date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -249,7 +247,6 @@ struct MessageOutput {
     date: Option<String>,
     plain_text: String,
     attachments: Vec<AttachmentInfo>,
-    internal_date: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1028,10 +1025,12 @@ fn parse_message(message: Message) -> Result<MessageOutput, GoogleApiError> {
         from: header("From"),
         to: header("To"),
         subject: header("Subject"),
-        date: header("Date"),
+        // The owner's local time with the offset of that date, like the IMAP
+        // mail tools; a header that is not a date stays as written. The raw
+        // `internalDate` epoch is no longer sent: it only repeated the instant.
+        date: header("Date").map(|raw| aux_runtime::today::mail_time_local(&raw)),
         plain_text,
         attachments: body.attachments,
-        internal_date: message.internal_date,
     })
 }
 
@@ -1140,9 +1139,15 @@ mod tests {
         assert_eq!(result.from.as_deref(), Some("sender@example.test"));
         assert_eq!(result.to.as_deref(), Some("owner@example.test"));
         assert_eq!(result.subject.as_deref(), Some("Quarterly update"));
-        assert_eq!(
-            result.date.as_deref(),
-            Some("Thu, 8 Oct 2026 12:00:00 +0000")
+        // The sender's offset is gone: the model reads the owner's local time
+        // with its offset, and no raw `internalDate` epoch.
+        let date = result.date.as_deref().unwrap();
+        assert!(date.contains("(local time, UTC"), "{date}");
+        assert!(!date.contains("+0000"), "{date}");
+        let sent = serde_json::to_string(&result).unwrap();
+        assert!(
+            !sent.contains("internal_date") && !sent.contains("1234"),
+            "{sent}"
         );
         assert!(result.plain_text.contains("Hello plain"));
         assert!(!result.plain_text.contains("ignore previous instructions"));
@@ -1150,6 +1155,31 @@ mod tests {
         assert_eq!(result.attachments[0].name, "statement.pdf");
         assert_eq!(result.attachments[0].size, 765432);
         assert_eq!(result.attachments[0].content_type, "application/pdf");
+    }
+
+    /// A `Date` header that is not a date, or has text after the date, reaches
+    /// the model as written, as on main; a missing one stays missing.
+    #[test]
+    fn a_date_header_that_is_not_a_date_is_kept_as_written() {
+        let with_date = |date: Option<&str>| {
+            let headers: Vec<_> = date
+                .map(|value| json!({"name":"Date","value":value}))
+                .into_iter()
+                .collect();
+            let message: Message = serde_json::from_value(json!({
+                "id":"msg-3",
+                "payload":{"mimeType":"text/plain","headers":headers,"body":{"data":encode("Hi")}}
+            }))
+            .unwrap();
+            parse_message(message).unwrap().date
+        };
+        let tail = "Thu, 15 Oct 2026 12:59:00 +0000 TAIL";
+        assert_eq!(with_date(Some(tail)).as_deref(), Some(tail));
+        assert_eq!(
+            with_date(Some("yesterday-ish")).as_deref(),
+            Some("yesterday-ish")
+        );
+        assert_eq!(with_date(None), None);
     }
 
     #[test]

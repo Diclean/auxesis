@@ -122,6 +122,16 @@ pub fn render_envelopes_counted(
     items: &[EnvelopeItem],
     direction: &EnvelopeDirection<'_>,
 ) -> (String, usize) {
+    render_envelopes_with(items, direction, &local_date)
+}
+
+/// The list renderer with the date conversion given, so a test pins the zone
+/// instead of reading the host's.
+fn render_envelopes_with(
+    items: &[EnvelopeItem],
+    direction: &EnvelopeDirection<'_>,
+    date: &dyn Fn(&str) -> String,
+) -> (String, usize) {
     let mut out = String::with_capacity(items.len().min(64) * 112 + 64);
     out.push_str(UNTRUSTED_MAIL_TAG);
     out.push('\n');
@@ -132,7 +142,7 @@ pub fn render_envelopes_counted(
             item.uid,
             header(&item.subject),
             header(&item.from),
-            header(&local_date(&item.date)),
+            header(&date(&item.date)),
             if item.unread { "unread" } else { "read" },
             human_size(item.size),
             direction.for_row(&item.from, None).as_str(),
@@ -177,5 +187,65 @@ pub fn human_size(bytes: u32) -> String {
         format!("{:.0} KiB", value / KIB)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope(date: &str) -> EnvelopeItem {
+        EnvelopeItem {
+            uid: 7,
+            message_id: "<a@example.test>".to_string(),
+            subject: "Quarterly update".to_string(),
+            from: "Sender <sender@example.test>".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            date: date.to_string(),
+            size: 1024,
+            unread: true,
+            in_reply_to: None,
+        }
+    }
+
+    /// The list column carries the converted date with the exact offset of
+    /// its own date, in a pinned zone (Paris), and keeps what is not a date,
+    /// or has text after the date, as written.
+    #[test]
+    fn the_list_date_is_local_time_with_the_exact_offset_of_that_date() {
+        let owner: Vec<String> = Vec::new();
+        let direction = EnvelopeDirection {
+            owner_addresses: &owner,
+            sent_folder: None,
+            folder: None,
+        };
+        let paris = |raw: &str| {
+            aux_runtime::today::mail_time_in_named(raw, "Europe/Paris")
+                .unwrap_or_else(|| raw.to_string())
+        };
+        let items = [
+            envelope("Thu, 15 Oct 2026 12:59:00 +0000"),
+            envelope("Sat, 7 Nov 2026 12:59:00 +0000"),
+            envelope("Thu, 15 Oct 2026 12:59:00 +0000 TAIL"),
+            envelope("yesterday-ish"),
+        ];
+        let (text, shown) = render_envelopes_with(&items, &direction, &paris);
+        assert_eq!(shown, 4, "{text}");
+        let dates: Vec<&str> = text
+            .lines()
+            .filter_map(|row| row.split(" · date: ").nth(1))
+            .map(|rest| rest.split(" · ").next().unwrap_or(rest))
+            .collect();
+        assert_eq!(
+            dates,
+            [
+                "Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)",
+                "Sat, 7 Nov 2026 13:59 (local time, UTC+01:00)",
+                "Thu, 15 Oct 2026 12:59:00 +0000 TAIL",
+                "yesterday-ish",
+            ],
+            "{text}"
+        );
     }
 }

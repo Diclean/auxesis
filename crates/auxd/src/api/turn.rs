@@ -1847,13 +1847,14 @@ impl EngineTurnRunner {
             ceilings.push(tools);
         }
         apply_tools_ceiling(agent, &registry, &ceilings, &mut rules);
-        // D33: the per-agent grant ceiling ([`apply_own_grants`]).
-        let customised_grants = apply_own_grants(
-            &self.home, agent, &registry, &origins, &ceilings, &mut rules,
-        );
+        // D33: the per-agent grant ceiling ([`apply_own_grants`]). Each
+        // grants file is read once for the whole turn (READS-11).
+        let snapshot = crate::agents::GrantsSnapshot::read(&self.home, agent);
+        let customised_grants =
+            apply_own_grants(&snapshot, &registry, &origins, &ceilings, &mut rules);
         let chief_asks = apply_chief_ceiling(
             &self.home,
-            agent,
+            &snapshot,
             &registry,
             &origins,
             &owner_rules,
@@ -1861,7 +1862,7 @@ impl EngineTurnRunner {
         );
         // A generated grant `ask` never softens the owner's own deny.
         deny_again(agent, &registry, &owner_rules, &mut rules);
-        let freebusy_denials = freebusy_denials(&self.home, agent, &origins, &owner_rules);
+        let freebusy_denials = freebusy_denials(&self.home, &snapshot, &origins, &owner_rules);
         // The tools ceiling last too, as outside the API: a grant `ask`
         // pushed above must never soften a tool the agent's lists deny.
         apply_tools_ceiling(agent, &registry, &ceilings, &mut rules);
@@ -2707,21 +2708,27 @@ fn apply_grant_rules(
 ///
 /// Returns false only for grants that are the shipped defaults (ACT-FREE).
 fn apply_own_grants(
-    home: &Path,
-    agent: &str,
+    snapshot: &crate::agents::GrantsSnapshot,
     registry: &kernel_broker::ToolRegistry,
     origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
     lists: &[Vec<String>],
     rules: &mut Vec<Rule>,
 ) -> bool {
-    match crate::agents::grants(home, agent) {
-        Ok(grants) => {
+    let agent = snapshot.agent();
+    let own = snapshot.registry().map(|agents| {
+        agents
+            .iter()
+            .find(|def| def.id == agent)
+            .map(|def| def.grants.clone())
+    });
+    match own {
+        Ok(Some(grants)) => {
             apply_grant_rules(rules, agent, registry, &grants, origins);
             // The display-only See row decides nothing (READS-4).
             !aux_runtime::grants::default_grants(agent)
                 .is_some_and(|shipped| grants.decides_like(&shipped))
         }
-        Err(crate::agents::RegistryError::UnknownAgent(_)) => {
+        Ok(None) => {
             let grants = implicit_grants(agent, lists, rules);
             apply_grant_rules(rules, agent, registry, &grants, origins);
             true
@@ -2822,7 +2829,7 @@ fn push_implicit_skill(can_do: &mut Vec<aux_runtime::grants::DoGrant>, tool: &st
 /// older install an added agent stays under `aux` as well as under `main`.
 pub fn apply_chief_ceiling(
     home: &Path,
-    agent: &str,
+    snapshot: &crate::agents::GrantsSnapshot,
     registry: &kernel_broker::ToolRegistry,
     origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
     owner_rules: &[Rule],
@@ -2830,18 +2837,18 @@ pub fn apply_chief_ceiling(
 ) -> Vec<Rule> {
     use aux_runtime::grants::{GrantLevel, ToolOrigin};
     let mut asks = Vec::new();
-    let ids = crate::agents::ceilings(home, agent);
+    let agent = snapshot.agent();
+    let ids = snapshot.ceilings();
     if ids.is_empty() {
         return asks;
     }
-    let agents = crate::agents::registry(home);
+    let agents = snapshot.registry();
     let caps: Vec<Ceiling> = ids
-        .into_iter()
-        .map(|id| Ceiling {
+        .iter()
+        .map(|&id| Ceiling {
             id,
             // An unreadable registry refuses every tool.
             grants: agents
-                .as_ref()
                 .ok()
                 .map(|agents| crate::agents::ceiling_grants(agents, id)),
             lists: tool_lists(home, id),
@@ -2900,7 +2907,7 @@ pub fn apply_chief_ceiling(
 /// tools list are named as written (READS-5).
 fn freebusy_denials(
     home: &Path,
-    agent: &str,
+    snapshot: &crate::agents::GrantsSnapshot,
     origins: &HashMap<String, aux_runtime::grants::ToolOrigin>,
     owner_rules: &[Rule],
 ) -> Vec<aux_runtime::executor::ReadDenial> {
@@ -2909,6 +2916,7 @@ fn freebusy_denials(
         ActionLevel, AgentGrants, GrantLevel, GrantRefusalKind, ToolOrigin, FREEBUSY_SKILL,
         FREEBUSY_TOOL as TOOL,
     };
+    let agent = snapshot.agent();
     let origin = origins.get(TOOL).copied().unwrap_or(ToolOrigin::Unknown);
     let scope = aux_runtime::grants::tool_scope(TOOL);
     // `None`: the grants let it run. `Ok(entries)`: every `never` entry that
@@ -2963,12 +2971,13 @@ fn freebusy_denials(
             })
             .collect()
     };
-    let ids = crate::agents::ceilings(home, agent);
+    let ids = snapshot.ceilings();
     let mut out: Vec<ReadDenial> = std::iter::once(agent)
         .chain(ids.iter().copied())
         .filter_map(owner_rule)
         .collect();
-    match refuses(crate::agents::uncapped_grants(home, agent), agent) {
+    let own = crate::agents::uncapped_from(home, agent, snapshot.file(agent));
+    match refuses(own, agent) {
         Some(Ok(entries)) => out.push(ReadDenial::OwnNever(entries)),
         Some(Err(gap)) => out.push(ReadDenial::OwnGrants(gap)),
         None => {}
@@ -2977,21 +2986,13 @@ fn freebusy_denials(
         Ok(file) => ReadDenial::OwnTools(file),
         Err(file) => ReadDenial::OwnFile(file),
     }));
-    // Each chief's file is read once (READS-10): the registry reuses that
-    // read, so the fault check and the ceiling never see two versions. A
-    // fault in any of them wins over the registry, as it would fail there.
-    let files: Vec<_> = ids
-        .iter()
-        .map(|id| (*id, crate::agents::read_grants_file(home, id)))
-        .collect();
-    let read: Option<Vec<(&str, Option<AgentGrants>)>> = files
-        .iter()
-        .map(|(id, file)| file.as_ref().ok().map(|grants| (*id, grants.clone())))
-        .collect();
-    let agents = read.and_then(|read| crate::agents::registry_with(home, &read).ok());
-    for (id, file) in files {
-        let own = crate::agents::uncapped_from(home, id, file);
-        let grants = match agents.as_deref() {
+    // Each chief's file and the registry come from the turn's snapshot
+    // (READS-11), as the ceiling does, so the hint and the enforcement never
+    // see two versions. A fault in any file wins over the registry.
+    let agents = snapshot.registry().ok();
+    for &id in ids {
+        let own = crate::agents::uncapped_from(home, id, snapshot.file(id));
+        let grants = match agents {
             Some(a) if own.is_ok() => Ok(Some(crate::agents::ceiling_grants(a, id))),
             _ => own,
         };
@@ -3125,8 +3126,9 @@ pub fn constrain_non_api_turn(
     let lists = checked_tool_lists(home, agent)?;
     apply_tools_ceiling(agent, registry, &lists, rules);
     let owner_rules = rules.clone();
-    apply_own_grants(home, agent, registry, &origins, &lists, rules);
-    apply_chief_ceiling(home, agent, registry, &origins, &owner_rules, rules);
+    let snapshot = crate::agents::GrantsSnapshot::read(home, agent);
+    apply_own_grants(&snapshot, registry, &origins, &lists, rules);
+    apply_chief_ceiling(home, &snapshot, registry, &origins, &owner_rules, rules);
     deny_again(agent, registry, &owner_rules, rules);
     Ok(())
 }
@@ -4472,8 +4474,7 @@ mod tests {
         let customised = |grants: &aux_runtime::grants::AgentGrants| {
             crate::agents::write_grants(home, "mail", grants).unwrap();
             apply_own_grants(
-                home,
-                "mail",
+                &crate::agents::GrantsSnapshot::read(home, "mail"),
                 &registry,
                 &HashMap::new(),
                 &[],
@@ -4492,8 +4493,7 @@ mod tests {
         let calendar_edited = |grants: &aux_runtime::grants::AgentGrants| {
             crate::agents::write_grants(home, "calendar", grants).unwrap();
             apply_own_grants(
-                home,
-                "calendar",
+                &crate::agents::GrantsSnapshot::read(home, "calendar"),
                 &registry,
                 &HashMap::new(),
                 &[],
@@ -4531,7 +4531,8 @@ mod tests {
             "mail_read".to_string(),
             aux_runtime::grants::ToolOrigin::Connector,
         )]);
-        let asks = apply_chief_ceiling(home, "scout", &registry, &origins, &owner, &mut rules);
+        let scout = crate::agents::GrantsSnapshot::read(home, "scout");
+        let asks = apply_chief_ceiling(home, &scout, &registry, &origins, &owner, &mut rules);
         assert!(asks.is_empty(), "{asks:?}");
         let last = kernel_broker::matching_rule(&rules, "scout", "mail_read", false);
         assert_eq!(last.map(|(_, rule)| rule.action), Some(Action::Deny));
@@ -4632,7 +4633,8 @@ mod tests {
             std::fs::create_dir_all(aux_engine::agent_dir(home, "mail")).unwrap();
             let owner = aux_engine::config::load_rules(&config).unwrap();
             let mut api = owner.clone();
-            apply_chief_ceiling(home, "mail", &registry, &origins, &owner, &mut api);
+            let mail = crate::agents::GrantsSnapshot::read(home, "mail");
+            apply_chief_ceiling(home, &mail, &registry, &origins, &owner, &mut api);
             assert_eq!(denied(&api), capped, "daemon turn: {rules}");
             let mut cli = owner.clone();
             constrain_non_api_turn(home, "mail", &registry, &mut cli).unwrap();
@@ -5899,7 +5901,7 @@ mod m4_invite_tests {
         let mail = aux_engine::agent_dir(&home, "mail");
         std::fs::create_dir_all(&mail).unwrap();
         std::fs::write(mail.join("grants.toml"), "[[do]\n").unwrap();
-        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let denials = mail_denials(&home);
         let own: Vec<_> = denials
             .iter()
             .filter(|d| matches!(d, ReadDenial::OwnGrants(_)))
@@ -5913,7 +5915,7 @@ mod m4_invite_tests {
             (vec![0xff, 0xfe, b'\n'], FileFault::Read),
         ] {
             std::fs::write(mail.join("grants.toml"), bytes).unwrap();
-            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+            let denials = mail_denials(&home);
             let gap = ReadDenial::OwnGrants(GrantsGap::Unreadable(fault));
             assert!(denials.contains(&gap), "{denials:?}");
         }
@@ -5934,23 +5936,29 @@ mod m4_invite_tests {
         std::fs::write(&target, "").unwrap();
         symlink(&target, &path).unwrap();
         let gap = |fault| ReadDenial::OwnGrants(GrantsGap::Unreadable(fault));
-        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let denials = mail_denials(&home);
         assert!(denials.contains(&gap(FileFault::Symlink)), "{denials:?}");
         std::fs::remove_file(&path).unwrap();
         // READS-9: an oversize file is named as such (this holds as root).
         std::fs::write(&path, format!("# {}\n", "x".repeat(300 * 1024))).unwrap();
-        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let denials = mail_denials(&home);
         assert!(denials.contains(&gap(FileFault::TooLarge)), "{denials:?}");
-        // READS-10: root reads a mode-000 file, so a read and a missing
-        // grant look the same there; skip that case rather than pass it.
-        if unsafe { libc::geteuid() } == 0 {
-            eprintln!("SKIPPED mode-000 case: running as root reads any mode");
-            return;
-        }
         std::fs::write(&path, "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
-        assert!(denials.contains(&gap(FileFault::Denied)), "{denials:?}");
+        let denials = mail_denials(&home);
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(denials.contains(&gap(FileFault::Denied)), "{denials:?}");
+        } else {
+            // READS-11: root reads a mode-000 file. It is never called
+            // locked, and the empty grants still refuse the free times.
+            assert!(!denials.contains(&gap(FileFault::Denied)), "{denials:?}");
+            assert!(
+                denials
+                    .iter()
+                    .any(|d| matches!(d, ReadDenial::OwnGrants(_))),
+                "{denials:?}"
+            );
+        }
     }
 
     /// READS-9: a grants file that cannot be used DENIES the free times: the
@@ -5967,7 +5975,8 @@ mod m4_invite_tests {
             registry.register_native(Box::new(super::tests::NamedTestTool(FREEBUSY_TOOL)));
             let origins = HashMap::from([(FREEBUSY_TOOL.to_string(), ToolOrigin::Connector)]);
             let mut rules = Vec::new();
-            apply_own_grants(home, "mail", &registry, &origins, &[], &mut rules);
+            let snapshot = crate::agents::GrantsSnapshot::read(home, "mail");
+            apply_own_grants(&snapshot, &registry, &origins, &[], &mut rules);
             rules
                 .iter()
                 .any(|r| r.agent == "mail" && r.tool == FREEBUSY_TOOL && r.action == Action::Deny)
@@ -5988,7 +5997,7 @@ mod m4_invite_tests {
             let mail = aux_engine::agent_dir(&home, "mail");
             std::fs::create_dir_all(&mail).unwrap();
             std::fs::write(mail.join("grants.toml"), bytes).unwrap();
-            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+            let denials = mail_denials(&home);
             let gap = ReadDenial::OwnGrants(GrantsGap::Unreadable(fault));
             assert!(denials.contains(&gap), "{fault:?}: {denials:?}");
             assert!(
@@ -6006,7 +6015,7 @@ mod m4_invite_tests {
         let target = dir.path().join("elsewhere.toml");
         std::fs::write(&target, "").unwrap();
         symlink(&target, mail.join("grants.toml")).unwrap();
-        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let denials = mail_denials(&home);
         let gap = ReadDenial::OwnGrants(GrantsGap::Unreadable(FileFault::Symlink));
         assert!(denials.contains(&gap), "{denials:?}");
         assert!(
@@ -6016,6 +6025,115 @@ mod m4_invite_tests {
             "{denials:?}"
         );
         assert!(own_denied(home.as_path()), "symlink: grant not denied");
+    }
+
+    /// Mail's free-times denials from one fresh snapshot of its grants.
+    fn mail_denials(home: &Path) -> Vec<aux_runtime::executor::ReadDenial> {
+        let snapshot = crate::agents::GrantsSnapshot::read(home, "mail");
+        freebusy_denials(home, &snapshot, &HashMap::new(), &[])
+    }
+
+    /// The free-times tool as the connector it is.
+    fn freebusy_origins() -> HashMap<String, aux_runtime::grants::ToolOrigin> {
+        use aux_runtime::grants::{ToolOrigin, FREEBUSY_TOOL};
+        HashMap::from([(FREEBUSY_TOOL.to_string(), ToolOrigin::Connector)])
+    }
+
+    /// Whether the chief ceiling and Mail's own grants deny the free-times
+    /// read, decided on `snapshot` as the turn does.
+    fn freebusy_enforced(home: &Path, snapshot: &crate::agents::GrantsSnapshot) -> (bool, bool) {
+        use aux_runtime::grants::FREEBUSY_TOOL;
+        let mut registry = kernel_broker::ToolRegistry::new();
+        registry.register_native(Box::new(super::tests::NamedTestTool(FREEBUSY_TOOL)));
+        let origins = freebusy_origins();
+        let denied = |rules: &[Rule]| {
+            kernel_broker::matching_rule(rules, "mail", FREEBUSY_TOOL, false)
+                .is_some_and(|(_, rule)| rule.action == Action::Deny)
+        };
+        let mut chief = Vec::new();
+        apply_chief_ceiling(home, snapshot, &registry, &origins, &[], &mut chief);
+        let mut own = Vec::new();
+        apply_own_grants(snapshot, &registry, &origins, &[], &mut own);
+        (denied(&chief), denied(&own))
+    }
+
+    /// READS-11: one turn reads the chief's grants.toml once. A file that
+    /// changes after that read changes neither the hint nor the enforcement,
+    /// and the two always agree: both deny, or neither does.
+    #[test]
+    fn the_free_times_hint_and_enforcement_share_one_chief_read() {
+        use aux_runtime::executor::ReadDenial;
+        use aux_runtime::grants::{default_grants, CHIEF_AGENT as CHIEF, FREEBUSY_TOOL};
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(aux_engine::agent_dir(&home, CHIEF)).unwrap();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        // Both files are written before Mail exists (the chief is never
+        // lowered below an agent), then swapped in by hand.
+        let chief_file = aux_engine::agent_dir(&home, CHIEF).join("grants.toml");
+        let text = |grants: &aux_runtime::grants::AgentGrants| {
+            crate::agents::write_grants(&home, CHIEF, grants).unwrap();
+            std::fs::read(&chief_file).unwrap()
+        };
+        let mut lowered = default_grants(CHIEF).unwrap();
+        lowered.never.push(FREEBUSY_TOOL.to_string());
+        let lowered = text(&lowered);
+        let shipped = text(&default_grants(CHIEF).unwrap());
+        std::fs::create_dir_all(aux_engine::agent_dir(&home, "mail")).unwrap();
+        let chief_named = |denials: &[ReadDenial]| {
+            denials
+                .iter()
+                .any(|d| matches!(d, ReadDenial::ChiefNever(CHIEF, _)))
+        };
+        // Read lowered, then the file goes back: both still deny.
+        std::fs::write(&chief_file, &lowered).unwrap();
+        let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
+        std::fs::write(&chief_file, &shipped).unwrap();
+        let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
+        assert!(chief_named(&denials), "{denials:?}");
+        assert!(freebusy_enforced(&home, &snapshot).0);
+        // Read shipped, then the file is lowered: neither denies.
+        let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
+        std::fs::write(&chief_file, &lowered).unwrap();
+        let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
+        assert!(denials.is_empty(), "{denials:?}");
+        assert_eq!(freebusy_enforced(&home, &snapshot), (false, false));
+        // Read shipped, then the file breaks: the read still decides.
+        std::fs::write(&chief_file, &shipped).unwrap();
+        let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
+        std::fs::write(&chief_file, "[[do]\n").unwrap();
+        let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
+        assert!(denials.is_empty(), "{denials:?}");
+        assert_eq!(freebusy_enforced(&home, &snapshot), (false, false));
+    }
+
+    /// READS-11: a chief grants.toml that cannot be used is named as the
+    /// chief's, and the free-times read is denied by the ceiling and by
+    /// Mail's own grants, even when the file is fixed after the read.
+    #[test]
+    fn a_chief_grants_fault_denies_the_free_times_and_is_named() {
+        use aux_runtime::executor::{FileFault, GrantsGap, ReadDenial};
+        use aux_runtime::grants::CHIEF_AGENT as CHIEF;
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(aux_engine::agent_dir(&home, "mail")).unwrap();
+        let chief = aux_engine::agent_dir(&home, CHIEF);
+        std::fs::create_dir_all(&chief).unwrap();
+        std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
+        // Control: the shipped chief lets the free times run.
+        let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
+        assert_eq!(freebusy_enforced(&home, &snapshot), (false, false));
+        let fault = ReadDenial::ChiefGrants(CHIEF, GrantsGap::Unreadable(FileFault::Parse));
+        std::fs::write(chief.join("grants.toml"), "[[do]\n").unwrap();
+        let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
+        // Fixed after the read: no file is the shipped chief.
+        std::fs::remove_file(chief.join("grants.toml")).unwrap();
+        let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
+        assert!(denials.contains(&fault), "{denials:?}");
+        assert_eq!(freebusy_enforced(&home, &snapshot), (true, true));
+        // A fresh read sees the fixed file.
+        let denials = mail_denials(&home);
+        assert!(!denials.contains(&fault), "{denials:?}");
     }
 
     /// READS-8: the agent's own agent.toml that will not parse is named as
@@ -6028,7 +6146,7 @@ mod m4_invite_tests {
         let mail = aux_engine::agent_dir(&home, "mail");
         std::fs::create_dir_all(&mail).unwrap();
         std::fs::write(mail.join("agent.toml"), "tools = [\n").unwrap();
-        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let denials = mail_denials(&home);
         let hint = freebusy_hint("mail", &denials);
         assert!(
             denials.contains(&ReadDenial::OwnFile("agent.toml")),
@@ -6057,7 +6175,7 @@ mod m4_invite_tests {
             let chief = aux_engine::agent_dir(&home, CHIEF);
             std::fs::create_dir_all(&chief).unwrap();
             std::fs::write(chief.join(file), "tools = [\n").unwrap();
-            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+            let denials = mail_denials(&home);
             let hint = freebusy_hint("mail", &denials);
             assert!(
                 denials.contains(&ReadDenial::ChiefFile(CHIEF, file)),

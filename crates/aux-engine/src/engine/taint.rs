@@ -11,7 +11,7 @@ pub(super) fn taint_source(tool: &str, arguments: &serde_json::Value) -> TaintSo
     let detail = arguments
         .get("url")
         .and_then(|value| value.as_str())
-        .map(|url| sanitize_detail(crate::taint::url_host(url)))
+        .map(|url| sanitize_detail(&crate::taint::url_host(url)))
         .filter(|detail| !detail.is_empty());
     TaintSource::new(tool, detail)
 }

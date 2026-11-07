@@ -2068,8 +2068,10 @@ struct TreeReaper {
 /// them is alive: the queue runs one retry at a time on its one thread. Cut
 /// overflows past the queue's cap run on at most [`OVERFLOW_THREADS_MAX`]
 /// threads of their own, and beyond that one by one by the backlog's one
-/// drainer ([`OVERFLOW_BACKLOG`], a blocking-pool task; the caller drains it
-/// when the pool has no thread or the runtime shuts down), or on the caller
+/// drainer ([`OVERFLOW_BACKLOG`], a blocking-pool task, or a thread of its own
+/// when the pool fails and its task is gone; the caller drains it when no
+/// thread runs at all or the runtime shuts down, and daemon shutdown waits
+/// for a drainer thread, see [`finish_overflow_drain`]), or on the caller
 /// (no runtime, or past [`OVERFLOW_BACKLOG_MAX`]), so at most
 /// `2 + OVERFLOW_THREADS_MAX` late retries run off the callers at once.
 static LATE_RETRIES: std::sync::Mutex<(bool, VecDeque<TreeReaper>)> =
@@ -2342,10 +2344,11 @@ const OVERFLOW_BACKLOG_MAX: usize = 32;
 /// Drains the whole [`OVERFLOW_BACKLOG`] before its drop returns: dropped by
 /// the blocking-pool task that ran it, or unrun on the caller (a runtime
 /// shutting down drops the task there, maybe during an unwind), as before
-/// SHELL-SWEEP-13. A shutdown drop drains inline, never handed to a thread: a
-/// detached thread dies with the exiting daemon. Only a caller whose queued
-/// task is gone hands the rest to one ([`spawn_drainer_thread`]), and drains
-/// inline when it cannot. One drainer at a time (the flag),
+/// SHELL-SWEEP-13. A shutdown drop drains inline, never handed to a thread.
+/// Only a caller whose queued task is gone hands the rest to one
+/// ([`spawn_drainer_thread`]: its handle is kept, and daemon shutdown waits
+/// for it, then drains what is left, see [`finish_overflow_drain`]), and
+/// drains inline when it cannot. One drainer at a time (the flag),
 /// and the token ([`TOKEN_TASK`]) says who holds it: a task a failed spawn
 /// left in the pool (`NoThreads`) skips while the caller holds it
 /// ([`TOKEN_CALLER`]), and drains the whole backlog when the caller hands it
@@ -2421,11 +2424,9 @@ impl Drop for DrainerGone {
 
 /// Hands the [`OVERFLOW_BACKLOG`] to a fresh drainer on a thread of its own,
 /// under a fresh token (re-armed now, so [`claim_drainer`] may replace it like
-/// any task). False when the OS gives no thread: the closure dropped unrun
-/// never built its [`DrainBacklog`], so the token is still [`TOKEN_TASK`], and
-/// the caller takes it here and drains the whole backlog itself.
+/// any task); its handle goes to [`DRAINER_THREADS`] for shutdown. False when
+/// the OS gives no thread ([`drainer_thread_failed`]): the caller drains.
 fn spawn_drainer_thread() -> bool {
-    use std::sync::atomic::Ordering::SeqCst;
     let token = DrainToken::new(std::sync::atomic::AtomicU8::new(TOKEN_TASK));
     {
         let mut backlog = overflow_backlog();
@@ -2433,20 +2434,169 @@ fn spawn_drainer_thread() -> bool {
         backlog.2 = Some((token.clone(), Instant::now()));
     }
     let task = token.clone();
+    // The caller's item seams follow the drain onto its thread.
     #[cfg(test)]
-    let fail = FAIL_DRAINER_THREAD.with(std::cell::Cell::get);
+    let seams = (
+        BACKLOG_ITEM_DELAY.with(std::cell::Cell::get),
+        BACKLOG_ITEM_HOOK.with(std::cell::Cell::get),
+    );
+    let drain = move || {
+        #[cfg(test)]
+        {
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(seams.0));
+            BACKLOG_ITEM_HOOK.with(|seam| seam.set(seams.1));
+        }
+        drop(DrainBacklog(task))
+    };
+    // The seam fails the spawn itself: the real `Err` arm below runs.
+    #[cfg(test)]
+    let spawned = if FAIL_DRAINER_THREAD.with(std::cell::Cell::get) {
+        drop(drain);
+        Err(std::io::Error::other("test seam: no drainer thread"))
+    } else {
+        drainer_thread_builder().spawn(drain)
+    };
     #[cfg(not(test))]
-    let fail = false;
-    let spawned = !fail
-        && std::thread::Builder::new()
-            .name("shell-overflow-drain".into())
-            .spawn(move || drop(DrainBacklog(task)))
-            .is_ok();
-    // Taken here, the token makes the spawned task skip if it ever runs.
-    spawned
-        || token
-            .compare_exchange(TOKEN_TASK, TOKEN_GONE, SeqCst, SeqCst)
-            .is_err()
+    let spawned = drainer_thread_builder().spawn(drain);
+    match spawned {
+        Ok(handle) => {
+            let mut threads = drainer_threads();
+            threads.retain(|thread| !thread.is_finished());
+            threads.push(handle);
+            true
+        }
+        Err(err) => drainer_thread_failed(&token, &err),
+    }
+}
+
+fn drainer_thread_builder() -> std::thread::Builder {
+    std::thread::Builder::new().name("shell-overflow-drain".into())
+}
+
+/// The `Err` arm of [`spawn_drainer_thread`], the real failure and the test
+/// seam alike: the closure was dropped unrun, so it never built its
+/// [`DrainBacklog`] and the token is still [`TOKEN_TASK`]. Taken here, under
+/// the backlog lock: false, the caller drains the whole backlog itself. The
+/// token already gone means [`claim_drainer`] revoked it for a replacement:
+/// true only while that replacement's live token holds the flag, else
+/// false, so the caller drains: never trusted blind.
+fn drainer_thread_failed(token: &DrainToken, err: &std::io::Error) -> bool {
+    use std::sync::atomic::Ordering::SeqCst;
+    tracing::error!(%err, "shell: no thread for the overflow backlog drainer");
+    let backlog = overflow_backlog();
+    if token
+        .compare_exchange(TOKEN_TASK, TOKEN_GONE, SeqCst, SeqCst)
+        .is_ok()
+    {
+        return false;
+    }
+    backlog.0
+        && backlog.2.as_ref().is_some_and(|(other, _)| {
+            !std::sync::Arc::ptr_eq(other, token) && other.load(SeqCst) != TOKEN_GONE
+        })
+}
+
+/// Handles of the drainer threads [`spawn_drainer_thread`] started (finished
+/// ones pruned at each spawn), for [`finish_overflow_drain`].
+static DRAINER_THREADS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn drainer_threads() -> std::sync::MutexGuard<'static, Vec<std::thread::JoinHandle<()>>> {
+    DRAINER_THREADS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Daemon shutdown, after the runtime's grace: waits up to `wait` for every
+/// live overflow drainer thread (a detached one dies with the exiting
+/// process, mid-drain), then drains whatever is still in the
+/// [`OVERFLOW_BACKLOG`] here: a drainer thread past `wait`, or a pool task
+/// the runtime abandoned, may run beside it; each item is popped once, and
+/// no reaper is left unrun. The drain here is soft-bounded by
+/// `INLINE_DRAIN_BUDGET` and each item is panic-caught. Past the budget the
+/// rest gets the bounded fast kill ([`fast_kill_all`]), with a warning, and
+/// auxd's post-grace sweep (`shutdown::shutdown_everything`) runs right after.
+/// The drainer flag and token are handed back under the lock of the last pop
+/// ([`release_backlog`]), so a later push does not queue behind a gone
+/// drainer. Returns how many reapers ran here in full.
+pub fn finish_overflow_drain(wait: Duration) -> usize {
+    let threads = std::mem::take(&mut *drainer_threads());
+    let deadline = Instant::now() + wait;
+    for thread in threads {
+        while !thread.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if thread.is_finished() {
+            let _ = thread.join();
+        } else {
+            tracing::warn!(
+                ?wait,
+                "shell: an overflow backlog drainer is still running at shutdown; the rest \
+                 drains here"
+            );
+        }
+    }
+    let end = Instant::now() + inline_drain_budget();
+    let (mut ran, mut longest) = (0, Duration::ZERO);
+    let left: Vec<TreeReaper> = loop {
+        let next = {
+            let mut backlog = overflow_backlog();
+            if !backlog.1.is_empty() && Instant::now() + longest >= end {
+                // Taken under the lock with the hand-back: a push after
+                // this claims its own drainer.
+                let left = backlog.1.drain(..).collect();
+                release_backlog(&mut backlog);
+                break left;
+            }
+            let next = backlog.1.pop_front();
+            if next.is_none() {
+                // Under the same lock as the empty pop: a push cannot queue
+                // between them behind a drainer that is gone.
+                release_backlog(&mut backlog);
+            }
+            next
+        };
+        let Some(mut next) = next else {
+            break Vec::new();
+        };
+        let started = Instant::now();
+        #[cfg(test)]
+        std::thread::sleep(BACKLOG_ITEM_DELAY.with(std::cell::Cell::get));
+        run_backlog_item(&mut next);
+        ran += 1;
+        longest = longest.max(started.elapsed());
+    };
+    if !left.is_empty() {
+        // Past the budget the rest still gets the bounded fast kill (group
+        // kill, seen re-check, one marker pass): a `setsid()` command group
+        // is outside auxd's own group sweep, so it is never just dropped.
+        let count = left.len();
+        let skipped = fast_kill_all(left, Instant::now() + LATE_INLINE_BUDGET);
+        tracing::warn!(
+            left = count,
+            skipped,
+            "shell: the shutdown drain ran out of budget; the rest got the fast kill"
+        );
+    }
+    ran
+}
+
+/// Under the backlog lock, at shutdown: nobody drains this backlog any more,
+/// so hand it back and a later push claims a drainer or runs inline instead
+/// of queueing behind a gone one. A caller draining inline (its token
+/// [`TOKEN_CALLER`]) keeps the drain and hands it back itself. A queued task
+/// (still [`TOKEN_TASK`]) is revoked so it skips; a started one is left to
+/// end.
+fn release_backlog(backlog: &mut Backlog) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if let Some((token, _)) = backlog.2.as_ref() {
+        if token.load(SeqCst) == TOKEN_CALLER {
+            return;
+        }
+        let _ = token.compare_exchange(TOKEN_TASK, TOKEN_GONE, SeqCst, SeqCst);
+    }
+    backlog.2 = None;
+    backlog.0 = false;
 }
 
 /// Runs the [`OVERFLOW_BACKLOG`] reapers one by one until it is empty. The
@@ -2488,22 +2638,26 @@ fn drain_backlog_until(bound: Option<(Instant, usize)>) -> usize {
         if let Some(hook) = BACKLOG_ITEM_HOOK.with(std::cell::Cell::get) {
             hook();
         }
-        // `late_retry_logged` catches the retry; this also catches its
-        // logging, so one item never ends the drain.
-        let item = std::panic::AssertUnwindSafe(|| {
-            #[cfg(test)]
-            if BACKLOG_ITEM_PANICS.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                panic!("test seam: a backlog item panicked");
-            }
-            late_retry_logged(&mut next);
-            #[cfg(test)]
-            OVERFLOW_BACKLOGGED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        });
-        if std::panic::catch_unwind(item).is_err() {
-            tracing::error!("shell: an overflow backlog retry panicked");
-        }
+        run_backlog_item(&mut next);
         ran += 1;
         longest = longest.max(started.elapsed());
+    }
+}
+
+/// Runs one backlog reaper. `late_retry_logged` catches the retry; this also
+/// catches its logging, so one item never ends a drain.
+fn run_backlog_item(next: &mut TreeReaper) {
+    let item = std::panic::AssertUnwindSafe(|| {
+        #[cfg(test)]
+        if BACKLOG_ITEM_PANICS.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("test seam: a backlog item panicked");
+        }
+        late_retry_logged(next);
+        #[cfg(test)]
+        OVERFLOW_BACKLOGGED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    if std::panic::catch_unwind(item).is_err() {
+        tracing::error!("shell: an overflow backlog retry panicked");
     }
 }
 
@@ -4588,18 +4742,13 @@ mod tests {
                 &mut HashSet::new(),
                 &|pass| {
                     passes.set(pass + 1);
-                    // SIGKILL only schedules a process's death. A helper still
-                    // dying when pass 2 reads `seen` is "found" again and
-                    // costs a fourth pass (the 2026-11-05 macOS CI flake), so
-                    // pass 2 starts only once pass 1's kill has landed: the
-                    // helper is a zombie before any pass looks. Linux reads a
-                    // zombie as gone; macOS still describes it, so ask.
+                    // SIGKILL only schedules a process's death. Pass 2's
+                    // family re-check runs after this call: it starts only
+                    // once the helper is a zombie (this test reaps it later),
+                    // not merely unreadable, which it is while still exiting.
                     if pass == 2 {
                         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                        while pid_ppid_uid_start(helper).is_some()
-                            && !is_zombie(helper)
-                            && std::time::Instant::now() < deadline
-                        {
+                        while !is_zombie(helper) && std::time::Instant::now() < deadline {
                             std::thread::sleep(Duration::from_millis(5));
                         }
                     }
@@ -4609,12 +4758,16 @@ mod tests {
                         Vec::new()
                     }
                 },
-                &|_pass, pid| {
-                    if pid == stand_in {
-                        Visibility::Zombie { orphan, parent: 0 }
-                    } else {
-                        Visibility::Described
-                    }
+                // The helper is real: the kernel's answer. Pass 2's
+                // `forget_gone` runs before the wait above; a helper still
+                // exiting then fails its lookup, and a seam answering
+                // `Described` made macOS keep it as unreadable: a fourth pass
+                // (SHELL-SWEEP-16, the 2026-11-05 flake). The kernel says
+                // `Unseen` or `Zombie` there: gone, as in production.
+                &|_pass, pid| match pid {
+                    _ if pid == stand_in => Visibility::Zombie { orphan, parent: 0 },
+                    _ if pid == helper => pid_visibility(pid),
+                    _ => Visibility::Described,
                 },
                 &pid_lookup,
                 MAX_SWEEP_PASSES,
@@ -6200,6 +6353,94 @@ await(q(bg.pid));
         assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 1);
     }
 
+    /// SHELL-SWEEP-16 r2 (1): the shutdown drain has a budget. Six slow items
+    /// against a short budget: it stops early with some left, and says so.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_shutdown_drain_stops_at_its_budget() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(200))));
+        BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(80)));
+        let _reset = OnDrop(|| {
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+            clear_backlog();
+        });
+        for _ in 0..6 {
+            overflow_backlog()
+                .1
+                .push_back(idle_reaper(pinned_marker().0));
+        }
+        let ran = finish_overflow_drain(Duration::from_secs(5));
+        // Past the budget the rest got the fast kill, not a full retry, and
+        // nothing stays queued behind a gone drainer.
+        assert!((1..6).contains(&ran), "ran {ran} of 6 in full");
+        let backlog = overflow_backlog();
+        assert!(backlog.1.is_empty() && !backlog.0 && backlog.2.is_none());
+    }
+
+    /// SHELL-SWEEP-16 r2 (2): a panicking item does not stop the shutdown
+    /// drain: the next one still runs and the call returns.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_panicking_item_does_not_stop_the_shutdown_drain() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        let _reset = OnDrop(|| {
+            BACKLOG_ITEM_PANICS.store(false, SeqCst);
+            clear_backlog();
+        });
+        for _ in 0..2 {
+            overflow_backlog()
+                .1
+                .push_back(idle_reaper(pinned_marker().0));
+        }
+        let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
+        BACKLOG_ITEM_PANICS.store(true, SeqCst);
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 2);
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 1);
+    }
+
+    /// SHELL-SWEEP-16 r2 (3): after the shutdown drain nothing owns the
+    /// backlog: the drainer flag and token are clear, with items left or not.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_shutdown_drain_leaves_no_drainer_flag_or_token() {
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        let _reset = OnDrop(|| {
+            INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(None));
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+            clear_backlog();
+        });
+        for slow in [false, true] {
+            if slow {
+                INLINE_DRAIN_TEST_BUDGET.with(|seam| seam.set(Some(Duration::from_millis(100))));
+                BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(80)));
+            }
+            let token = {
+                let mut backlog = overflow_backlog();
+                let token = claim_drainer(&mut backlog).expect("a drainer to claim");
+                for _ in 0..4 {
+                    backlog.1.push_back(idle_reaper(pinned_marker().0));
+                }
+                token
+            };
+            finish_overflow_drain(Duration::from_secs(5));
+            let mut backlog = overflow_backlog();
+            assert!(!backlog.0 && backlog.2.is_none(), "owned (slow {slow})");
+            assert_eq!(token.load(std::sync::atomic::Ordering::SeqCst), TOKEN_GONE);
+            assert!(claim_drainer(&mut backlog).is_some(), "no later claim");
+            drop(backlog);
+            clear_backlog();
+        }
+    }
+
     /// SHELL-SWEEP-13 (1): when the drainer spawn fails, the caller runs its
     /// OWN reaper and also the one another call pushed after it (r2: the
     /// whole backlog drains), both counted here.
@@ -6453,6 +6694,169 @@ await(q(bg.pid));
                 backlog.0
             );
         }
+    }
+
+    /// Items the drainer thread started; it holds in item [`HOLD_AT`] (1-based)
+    /// until that is reset to 0.
+    static DRAINER_ITEMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static HOLD_AT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A [`BACKLOG_ITEM_HOOK`] that counts and holds only on a drainer thread.
+    fn hold_drainer_thread() {
+        use std::sync::atomic::Ordering::SeqCst;
+        if std::thread::current().name() != Some("shell-overflow-drain") {
+            return;
+        }
+        let item = DRAINER_ITEMS.fetch_add(1, SeqCst) + 1;
+        while HOLD_AT.load(SeqCst) == item {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Polls `done` for up to 5 s.
+    async fn within_5s(done: impl Fn() -> bool) -> bool {
+        for _ in 0..500 {
+            if done() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        done()
+    }
+
+    /// SHELL-SWEEP-16 (1): a drainer thread is live at shutdown with 3 items.
+    /// Within the wait, shutdown joins it: all 3 ran when it returns, none
+    /// here. Held past the wait in item 1, shutdown drains the other 2 here,
+    /// and the held item still ends: every reaper runs.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_waits_for_a_live_drainer_thread_then_drains_the_rest() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        for (wait, hold) in [(Duration::from_secs(10), 0), (Duration::from_millis(50), 1)] {
+            backlog_idle().await;
+            // Earlier tests' drainer threads, joined (nothing left to drain).
+            assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+            DRAINER_ITEMS.store(0, SeqCst);
+            HOLD_AT.store(hold, SeqCst);
+            BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::from_millis(50)));
+            BACKLOG_ITEM_HOOK.with(|seam| seam.set(Some(hold_drainer_thread)));
+            let _reset = OnDrop(|| {
+                HOLD_AT.store(0, SeqCst);
+                BACKLOG_ITEM_DELAY.with(|seam| seam.set(Duration::ZERO));
+                BACKLOG_ITEM_HOOK.with(|seam| seam.set(None));
+                clear_backlog();
+            });
+            for _ in 0..3 {
+                overflow_backlog()
+                    .1
+                    .push_back(idle_reaper(pinned_marker().0));
+            }
+            let backlogged = OVERFLOW_BACKLOGGED.load(SeqCst);
+            assert!(spawn_drainer_thread());
+            assert!(within_5s(|| DRAINER_ITEMS.load(SeqCst) >= 1).await);
+            assert!(drainer_threads().iter().any(|t| !t.is_finished()));
+            let here = finish_overflow_drain(wait);
+            assert!(drainer_threads().is_empty());
+            if hold == 0 {
+                assert_eq!(here, 0, "the live drainer was not waited for");
+                assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 3);
+                continue;
+            }
+            assert_eq!(here, 2, "the rest did not drain at shutdown");
+            assert_eq!(DRAINER_ITEMS.load(SeqCst), 1);
+            HOLD_AT.store(0, SeqCst);
+            let all = || OVERFLOW_BACKLOGGED.load(SeqCst) == backlogged + 3;
+            assert!(within_5s(all).await, "the held reaper never ran");
+            assert!(within_5s(|| !overflow_backlog().0).await);
+        }
+    }
+
+    /// SHELL-SWEEP-16 (3): the flag stays set while the fresh drainer thread
+    /// runs its last item; a push then queues for that thread, under the same
+    /// token: no second drainer. The thread runs it, then clears the flag.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_push_in_the_drainer_threads_last_item_starts_no_second_drainer() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        let live: &'static AtomicUsize =
+            Box::leak(Box::new(AtomicUsize::new(OVERFLOW_THREADS_MAX)));
+        OVERFLOW_LIVE.with(|seam| seam.set(Some(live)));
+        assert_eq!(finish_overflow_drain(Duration::from_secs(5)), 0);
+        DRAINER_ITEMS.store(0, SeqCst);
+        HOLD_AT.store(2, SeqCst);
+        BACKLOG_ITEM_HOOK.with(|seam| seam.set(Some(hold_drainer_thread)));
+        let _reset = OnDrop(|| {
+            HOLD_AT.store(0, SeqCst);
+            OVERFLOW_LIVE.with(|seam| seam.set(None));
+            BACKLOG_ITEM_HOOK.with(|seam| seam.set(None));
+            clear_backlog();
+        });
+        for _ in 0..2 {
+            overflow_backlog()
+                .1
+                .push_back(idle_reaper(pinned_marker().0));
+        }
+        let (backlogged, here) = (
+            OVERFLOW_BACKLOGGED.load(SeqCst),
+            BACKLOG_HERE.with(std::cell::Cell::get),
+        );
+        assert!(spawn_drainer_thread());
+        let token = overflow_backlog().2.clone().unwrap().0;
+        assert!(within_5s(|| DRAINER_ITEMS.load(SeqCst) == 2).await);
+        {
+            let backlog = overflow_backlog();
+            assert!(backlog.0 && backlog.1.is_empty(), "flag cleared early");
+        }
+        overflow_retry(idle_reaper(pinned_marker().0));
+        {
+            let backlog = overflow_backlog();
+            assert!(backlog.0 && backlog.1.len() == 1);
+            let now = &backlog.2.as_ref().unwrap().0;
+            assert!(std::sync::Arc::ptr_eq(now, &token), "a second drainer");
+        }
+        assert_eq!(drainer_threads().len(), 1);
+        HOLD_AT.store(0, SeqCst);
+        backlog_idle().await;
+        assert_eq!(OVERFLOW_BACKLOGGED.load(SeqCst), backlogged + 3);
+        assert_eq!(BACKLOG_HERE.with(std::cell::Cell::get), here, "ran here");
+    }
+
+    /// SHELL-SWEEP-16 (2, 4): the one `Err` arm of a drainer thread spawn
+    /// (the real failure and the seam alike). Its token still `TASK`: taken,
+    /// the caller drains. Already revoked: "a drainer exists" only while
+    /// another live token holds the flag; otherwise the caller drains.
+    #[tokio::test]
+    async fn a_failed_drainer_thread_trusts_only_a_live_replacement() {
+        use std::sync::atomic::{AtomicU8, Ordering::SeqCst};
+        let _serial = LATE_QUEUE_TEST.lock().await;
+        backlog_idle().await;
+        let _reset = OnDrop(clear_backlog);
+        let err = std::io::Error::other("no thread");
+        let fresh = || DrainToken::new(AtomicU8::new(TOKEN_TASK));
+        let set = |flag: bool, owner: Option<&DrainToken>| {
+            let mut backlog = overflow_backlog();
+            backlog.0 = flag;
+            backlog.2 = owner.map(|t| (t.clone(), Instant::now()));
+        };
+        let mine = fresh();
+        set(true, Some(&mine));
+        assert!(!drainer_thread_failed(&mine, &err));
+        assert_eq!(mine.load(SeqCst), TOKEN_GONE, "the token was not taken");
+        let other = fresh();
+        set(true, Some(&other));
+        assert!(drainer_thread_failed(&mine, &err), "a live replacement");
+        other.store(TOKEN_GONE, SeqCst);
+        assert!(!drainer_thread_failed(&mine, &err), "a gone replacement");
+        other.store(TOKEN_CALLER, SeqCst);
+        set(false, Some(&other));
+        assert!(!drainer_thread_failed(&mine, &err), "no flag");
+        set(true, Some(&mine));
+        assert!(!drainer_thread_failed(&mine, &err), "its own revoked token");
+        set(true, None);
+        assert!(!drainer_thread_failed(&mine, &err), "no token");
     }
 
     /// SHELL-SWEEP-14 (2), the production shape: `spawn_blocking` panics

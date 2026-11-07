@@ -22,7 +22,7 @@ pub use http_fetch::HttpFetchTool;
 pub use memory::{sync_note_mirror, ForgetTool, MemoryTools, RecallTool, SuggestMemoryTool};
 pub use owner_profile::OwnerProfileTool;
 pub use read_file::ReadFileTool;
-pub use shell::ShellTool;
+pub use shell::{finish_overflow_drain, ShellTool};
 #[cfg(feature = "l1-fetch")]
 pub use weather::{WeatherForecastTool, WeatherGeocodeTool};
 pub use write_file::WriteFileTool;

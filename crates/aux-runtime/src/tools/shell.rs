@@ -1993,8 +1993,12 @@ fn sweep_leftovers_with(
                     if !unsettled && !unreadable && !lost && lost_seen.is_empty() && scanned {
                         return if capped { Sweep::SeenCap } else { Sweep::Clean };
                     }
+                    #[cfg(test)]
+                    eprintln!("SWEEPDIAG pass={pass} unsettled={unsettled} unreadable={unreadable} lost={lost} lost_seen={} scanned={scanned}", lost_seen.len());
                     pending = true;
                 } else {
+                    #[cfg(test)]
+                    eprintln!("SWEEPDIAG pass={pass} found_any signalled={signalled}");
                     pending = false;
                 }
                 survivors = signalled;
@@ -4766,7 +4770,16 @@ mod tests {
                 // `Unseen` or `Zombie` there: gone, as in production.
                 &|_pass, pid| match pid {
                     _ if pid == stand_in => Visibility::Zombie { orphan, parent: 0 },
-                    _ if pid == helper => pid_visibility(pid),
+                    _ if pid == helper => {
+                        let v = pid_visibility(pid);
+                        if _pass >= 2 {
+                            eprintln!(
+                                "SEAMDIAG pass={_pass} vis={v:?} lookup={:?}",
+                                pid_lookup(pid)
+                            );
+                        }
+                        v
+                    }
                     _ => Visibility::Described,
                 },
                 &pid_lookup,

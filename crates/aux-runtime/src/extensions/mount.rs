@@ -303,7 +303,11 @@ pub(crate) struct StateLock(std::fs::File);
 impl StateLock {
     /// How long a caller waits for the lock before it is refused as busy (as
     /// `kernel_core::config_lock`): holders only read and write one row.
-    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+    /// EXT-ANCHOR-13: 300 ms in tests, so no busy test waits 5 s.
+    const WAIT: std::time::Duration = match cfg!(test) {
+        true => std::time::Duration::from_millis(300),
+        false => std::time::Duration::from_secs(5),
+    };
     const STEP: std::time::Duration = std::time::Duration::from_millis(20);
 
     /// Take the lock of `name`, waiting at most [`Self::WAIT`] (blocking: for
@@ -357,7 +361,9 @@ impl StateLock {
         super::install::force_private_dir(&handle, dirs)?;
         let dir = handle.open_dir(dirs)?;
         let leaf = std::ffi::CString::new(format!("{name}.lock")).map_err(std::io::Error::other)?;
-        let flags = libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+        // `O_APPEND`: each epoch byte lands at the end, held or not.
+        let flags =
+            libc::O_RDWR | libc::O_APPEND | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK;
         // `openat` is variadic: the mode goes as `c_uint`.
         const MODE: libc::c_uint = 0o600;
         // SAFETY: `dir` is an open directory fd and `leaf` NUL-terminated.
@@ -387,10 +393,33 @@ impl StateLock {
     }
 
     fn bump(&self) -> std::io::Result<()> {
-        use std::io::{Seek, Write};
-        let mut file = &self.0;
-        file.seek(std::io::SeekFrom::End(0))?;
-        file.write_all(b"\n")
+        use std::io::Write;
+        (&self.0).write_all(b"\n")
+    }
+
+    /// EXT-ANCHOR-13: move the epoch of `name` without the lock (a freeze
+    /// past the wait): one `O_APPEND` byte, so a holder's final store sees it.
+    pub(crate) fn bump_unlocked(home: &Path, name: &str) -> std::io::Result<()> {
+        Self(Self::open(home, name)?).bump()
+    }
+
+    /// EXT-ANCHOR-13: store `state` under this lock, frozen when the epoch is
+    /// not `epoch` (or unreadable). An unfrozen row is re-checked after the
+    /// write: a freeze that bumped without the lock meanwhile writes it again,
+    /// frozen. `state.frozen` tells the caller what is on disk.
+    pub(crate) fn store_held(
+        &self,
+        home: &Path,
+        state: &mut ExtensionState,
+        epoch: u64,
+    ) -> std::io::Result<()> {
+        state.frozen |= self.epoch().ok() != Some(epoch);
+        store_state(home, state)?;
+        if !state.frozen && self.epoch().ok() != Some(epoch) {
+            state.frozen = true;
+            store_state(home, state)?;
+        }
+        Ok(())
     }
 }
 
@@ -755,7 +784,12 @@ pub fn freeze(home: &Path, name: &str, reason: &str) -> Result<(), MountError> {
     // EXT-ANCHOR-12: read, bumped and written under the row's lock; the epoch
     // moves first. A lock that cannot be taken or bumped never stops the
     // freeze (fail closed): it is written and unmounted, then the error returned.
+    // EXT-ANCHOR-13: past the wait the epoch still moves (unlocked append), so
+    // a holder's final store keeps this freeze.
     let lock = StateLock::acquire(home, name);
+    if lock.is_err() {
+        let _ = StateLock::bump_unlocked(home, name);
+    }
     let mut state =
         load_state(home, name).ok_or_else(|| MountError::NotInstalled(name.to_owned()))?;
     let table = load_mounts(home);
@@ -1152,6 +1186,43 @@ mod tests {
         let dir = home.path().join("extensions/state");
         std::fs::hard_link(dir.join("demo.lock"), home.path().join("twin")).unwrap();
         assert!(StateLock::acquire(home.path(), "demo").is_err());
+    }
+
+    // EXT-ANCHOR-13: a freeze past the wait (another holder: an `--accept`)
+    // still moves the epoch, without the lock; the holder's final unfrozen
+    // store, under the lock it kept, then writes the row frozen.
+    #[test]
+    fn a_freeze_past_the_wait_is_kept_by_the_holders_store() {
+        let home = tempfile::tempdir().unwrap();
+        store_state(home.path(), &state("demo")).unwrap();
+        let held = StateLock::acquire(home.path(), "demo").unwrap();
+        let epoch = held.epoch().unwrap();
+        let path = home.path().to_path_buf();
+        let late = std::thread::spawn(move || freeze(&path, "demo", "late").is_err());
+        assert!(late.join().unwrap(), "busy past the test wait");
+        assert_eq!(held.epoch().unwrap(), epoch + 1, "the epoch moved unlocked");
+        let mut row = state("demo");
+        held.store_held(home.path(), &mut row, epoch).unwrap();
+        drop(held);
+        assert!(row.frozen);
+        assert!(is_frozen(home.path(), "demo"), "the freeze is never erased");
+        let held = StateLock::acquire(home.path(), "demo").unwrap();
+        let mut row = state("demo");
+        held.store_held(home.path(), &mut row, epoch + 1).unwrap();
+        assert!(!row.frozen, "an unchanged epoch stores the row as given");
+    }
+
+    // EXT-ANCHOR-13: the async taker is refused as busy past the wait too.
+    #[tokio::test]
+    async fn acquire_async_refuses_a_held_lock_as_busy() {
+        let home = tempfile::tempdir().unwrap();
+        let held = StateLock::acquire(home.path(), "demo").unwrap();
+        let err = StateLock::acquire_async(home.path(), "demo").await;
+        let err = err.err().unwrap();
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(err.to_string().contains("busy"), "{err}");
+        drop(held);
+        assert!(StateLock::acquire_async(home.path(), "demo").await.is_ok());
     }
 
     fn unreadable_table(home: &Path) -> PathBuf {

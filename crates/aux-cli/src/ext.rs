@@ -456,10 +456,19 @@ fn verify(
                     .await
                     {
                         Ok(session) => {
-                            let result =
-                                extensions::session::verify_identity(home, &name, &session.tools);
+                            // EXT-ANCHOR-13: `freeze` may wait on the row lock:
+                            // off the runtime thread, as the daemon does.
+                            let (path, id) = (home.to_path_buf(), name.clone());
+                            let tools = session.tools.clone();
+                            let result = tokio::task::spawn_blocking(move || {
+                                extensions::session::verify_identity(&path, &id, &tools)
+                            })
+                            .await;
                             session.stop().await;
-                            result.map_err(|err| err.to_string())
+                            match result {
+                                Ok(result) => result.map_err(|err| err.to_string()),
+                                Err(err) => Err(format!("identity check failed: {err}")),
+                            }
                         }
                         Err(err) => Err(err.to_string()),
                     }

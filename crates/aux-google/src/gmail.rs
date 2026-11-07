@@ -996,6 +996,15 @@ fn draft_output(reply: Option<DraftCreateReply>, audit_recorded: bool) -> String
 }
 
 fn parse_message(message: Message) -> Result<MessageOutput, GoogleApiError> {
+    parse_message_with(message, aux_runtime::today::mail_time_local)
+}
+
+/// [`parse_message`] with the `Date` conversion passed in, so a test can pin
+/// the zone.
+fn parse_message_with(
+    message: Message,
+    local_time: impl Fn(&str) -> String,
+) -> Result<MessageOutput, GoogleApiError> {
     let Some(payload) = message.payload.as_ref() else {
         return Err(GoogleApiError::InvalidResponse);
     };
@@ -1028,7 +1037,7 @@ fn parse_message(message: Message) -> Result<MessageOutput, GoogleApiError> {
         // The owner's local time with the offset of that date, like the IMAP
         // mail tools; a header that is not a date stays as written. The raw
         // `internalDate` epoch is no longer sent: it only repeated the instant.
-        date: header("Date").map(|raw| aux_runtime::today::mail_time_local(&raw)),
+        date: header("Date").map(|raw| local_time(&raw)),
         plain_text,
         attachments: body.attachments,
     })
@@ -1157,8 +1166,60 @@ mod tests {
         assert_eq!(result.attachments[0].content_type, "application/pdf");
     }
 
-    /// A `Date` header that is not a date, or has text after the date, reaches
-    /// the model as written, as on main; a missing one stays missing.
+    fn dated(date: Option<&str>) -> Message {
+        let headers: Vec<_> = date
+            .map(|value| json!({"name":"Date","value":value}))
+            .into_iter()
+            .collect();
+        serde_json::from_value(json!({
+            "id":"msg-5","threadId":"thread-5","internalDate":"1760533140000",
+            "payload":{"mimeType":"text/plain","headers":headers,"body":{"data":encode("Hi")}}
+        }))
+        .unwrap()
+    }
+
+    /// The Gmail path in a fixed zone: the offset is the one of the mail's own
+    /// date, so a conversion that always used UTC (or today's offset) fails.
+    #[test]
+    fn a_gmail_date_is_converted_in_the_owner_zone_with_its_own_offset() {
+        let paris = |raw: &str| {
+            aux_runtime::today::mail_time_in_named(raw, "Europe/Paris")
+                .unwrap_or_else(|| raw.to_string())
+        };
+        let summer = parse_message_with(dated(Some("Thu, 15 Oct 2026 12:59:00 +0000")), paris);
+        assert_eq!(
+            summer.unwrap().date.as_deref(),
+            Some("Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)")
+        );
+        let winter = parse_message_with(dated(Some("Sat, 7 Nov 2026 12:59:00 +0000")), paris);
+        assert_eq!(
+            winter.unwrap().date.as_deref(),
+            Some("Sat, 7 Nov 2026 13:59 (local time, UTC+01:00)")
+        );
+        // A trailing comment converts and does not reach the model.
+        let commented =
+            parse_message_with(dated(Some("Thu, 15 Oct 2026 14:59:00 +0200 (CEST)")), paris);
+        let commented = commented.unwrap().date.unwrap();
+        assert_eq!(commented, "Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)");
+    }
+
+    /// No `Date` header: the model sees no time at all, and no epoch or
+    /// internal date taken from elsewhere in the message.
+    #[test]
+    fn a_headerless_gmail_message_shows_no_time_and_no_epoch() {
+        let result = parse_message(dated(None)).unwrap();
+        assert_eq!(result.date, None);
+        let sent = serde_json::to_string(&result).unwrap();
+        assert!(
+            !sent.contains("1760533140000") && !sent.contains("internal"),
+            "{sent}"
+        );
+        assert!(!sent.contains("local time"), "{sent}");
+    }
+
+    /// A `Date` header that is not a date, or has text after the date other
+    /// than an RFC 2822 comment, reaches the model as written, as on main; a
+    /// missing one stays missing.
     #[test]
     fn a_date_header_that_is_not_a_date_is_kept_as_written() {
         let with_date = |date: Option<&str>| {

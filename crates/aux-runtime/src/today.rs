@@ -34,9 +34,11 @@ pub fn today_line_now() -> String {
 /// 14:59, 15:59 or 16:59 from run to run.
 ///
 /// What the model learns is the owner's own offset on that date, which is the
-/// only new fact; nothing about the sender or the mail is added. A header with
-/// text after the date (`… +0000 TAIL`) is not a date: `None`, so the caller
-/// keeps the whole header, sanitised like any other.
+/// only new fact; nothing about the sender or the mail is added. A trailing
+/// RFC 2822 comment (`… +0200 (CEST)`) is part of the date: it converts and the
+/// comment text is dropped. Any other text after the date (`… +0000 TAIL`)
+/// makes it not a date: `None`, so the caller keeps the whole header,
+/// sanitised like any other.
 pub fn mail_time_in<Z: TimeZone>(raw: &str, zone: &Z) -> Option<String>
 where
     Z::Offset: std::fmt::Display,
@@ -231,6 +233,26 @@ mod tests {
         let raw = "Thu, 15 Oct 2026 12:59:00 +0000 TAIL";
         assert_eq!(mail_time_in_named(raw, "Europe/Paris"), None);
         assert_eq!(mail_time_local(raw), raw);
+    }
+
+    /// A trailing RFC 2822 comment is part of the date: it converts, and the
+    /// comment text never reaches the output.
+    #[test]
+    fn a_trailing_rfc2822_comment_converts_and_is_dropped() {
+        for raw in [
+            "Thu, 15 Oct 2026 14:59:00 +0200 (CEST)",
+            "Thu, 15 Oct 2026 12:59:00 +0000 (UTC)",
+        ] {
+            let out = mail_time_in_named(raw, "Europe/Paris").expect(raw);
+            assert_eq!(out, "Thu, 15 Oct 2026 14:59 (local time, UTC+02:00)");
+            assert!(!out.contains("CEST") && !out.contains("UTC)"), "{out}");
+            let local = mail_time_local(raw);
+            assert!(local.contains("(local time, UTC"), "{local}");
+            assert!(
+                !local.contains("CEST") && !local.contains("(UTC)"),
+                "{local}"
+            );
+        }
     }
 
     /// A Paris instant on a given day. Paris is CET (+01:00) at midday on

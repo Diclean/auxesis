@@ -5927,12 +5927,64 @@ mod m4_invite_tests {
         let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
         assert!(denials.contains(&gap(FileFault::Symlink)), "{denials:?}");
         std::fs::remove_file(&path).unwrap();
+        // READS-9: an oversize file is named as such (this holds as root).
+        std::fs::write(&path, format!("# {}\n", "x".repeat(300 * 1024))).unwrap();
+        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        assert!(denials.contains(&gap(FileFault::TooLarge)), "{denials:?}");
         std::fs::write(&path, "").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
         if std::fs::File::open(&path).is_err() {
-            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
             assert!(denials.contains(&gap(FileFault::Denied)), "{denials:?}");
+        } else {
+            // Root reads a mode-000 file: it is never called locked.
+            assert!(!denials.contains(&gap(FileFault::Denied)), "{denials:?}");
         }
+    }
+
+    /// READS-9: a grants file that cannot be used DENIES the free times: the
+    /// fault is named, and it is never reported as "no grants".
+    #[test]
+    fn a_grants_fault_denies_and_is_never_no_grants() {
+        use aux_runtime::executor::{FileFault, GrantsGap, ReadDenial};
+        use std::os::unix::fs::symlink;
+        let oversize = format!("# {}\n", "x".repeat(300 * 1024)).into_bytes();
+        for (bytes, fault) in [
+            (b"[[do]\n".to_vec(), FileFault::Parse),
+            (oversize, FileFault::TooLarge),
+            (vec![0xff, 0xfe, b'\n'], FileFault::Read),
+        ] {
+            let dir = tempdir().unwrap();
+            let home = dir.path().join("home");
+            let mail = aux_engine::agent_dir(&home, "mail");
+            std::fs::create_dir_all(&mail).unwrap();
+            std::fs::write(mail.join("grants.toml"), bytes).unwrap();
+            let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+            let gap = ReadDenial::OwnGrants(GrantsGap::Unreadable(fault));
+            assert!(denials.contains(&gap), "{fault:?}: {denials:?}");
+            assert!(
+                !denials
+                    .iter()
+                    .any(|d| matches!(d, ReadDenial::OwnGrants(GrantsGap::Rows { .. }))),
+                "{fault:?}: {denials:?}"
+            );
+        }
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let mail = aux_engine::agent_dir(&home, "mail");
+        std::fs::create_dir_all(&mail).unwrap();
+        let target = dir.path().join("elsewhere.toml");
+        std::fs::write(&target, "").unwrap();
+        symlink(&target, mail.join("grants.toml")).unwrap();
+        let denials = freebusy_denials(&home, "mail", &HashMap::new(), &[]);
+        let gap = ReadDenial::OwnGrants(GrantsGap::Unreadable(FileFault::Symlink));
+        assert!(denials.contains(&gap), "{denials:?}");
+        assert!(
+            !denials
+                .iter()
+                .any(|d| matches!(d, ReadDenial::OwnGrants(GrantsGap::Rows { .. }))),
+            "{denials:?}"
+        );
     }
 
     /// READS-8: the agent's own agent.toml that will not parse is named as

@@ -399,7 +399,7 @@ impl StateLock {
 
     /// EXT-ANCHOR-13: move the epoch of `name` without the lock (a freeze
     /// past the wait): one `O_APPEND` byte, so a holder's final store sees it.
-    fn bump_unlocked(home: &Path, name: &str) -> std::io::Result<()> {
+    pub(crate) fn bump_unlocked(home: &Path, name: &str) -> std::io::Result<()> {
         Self(Self::open(home, name)?).bump()
     }
 

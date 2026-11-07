@@ -1744,15 +1744,8 @@ async fn pin_extension_is_busy_under_the_lock_and_keeps_an_epoch_move() {
     let busy = super::session::pin_extension(home.path(), &installed, true).await;
     assert!(busy.unwrap_err().to_string().contains("busy"));
     drop(held);
-    let lock = home.path().join("extensions/state/demo.lock");
-    let bump = move || {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&lock)
-            .unwrap();
-        file.write_all(b"\n").unwrap();
-    };
+    let path = home.path().to_path_buf();
+    let bump = move || StateLock::bump_unlocked(&path, "demo").unwrap();
     let watcher = once_started(installed.work_dir(), bump);
     let pinned = super::session::pin_extension(home.path(), &installed, true).await;
     watcher.join().unwrap();

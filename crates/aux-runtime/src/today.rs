@@ -32,6 +32,11 @@ pub fn today_line_now() -> String {
 /// The model used to get the sender's raw header (`… 12:59:00 +0000`) and
 /// converted it itself, with only today's offset, so one mail read at
 /// 14:59, 15:59 or 16:59 from run to run.
+///
+/// What the model learns is the owner's own offset on that date, which is the
+/// only new fact; nothing about the sender or the mail is added. A header with
+/// text after the date (`… +0000 TAIL`) is not a date: `None`, so the caller
+/// keeps the whole header, sanitised like any other.
 pub fn mail_time_in<Z: TimeZone>(raw: &str, zone: &Z) -> Option<String>
 where
     Z::Offset: std::fmt::Display,
@@ -45,17 +50,20 @@ where
     ))
 }
 
+/// [`mail_time_in`] in a named IANA zone (`Europe/Paris`); `None` when the
+/// name is unknown or `raw` is not a date.
+pub fn mail_time_in_named(raw: &str, zone: &str) -> Option<String> {
+    mail_time_in(raw, &zone.parse::<chrono_tz::Tz>().ok()?)
+}
+
 /// [`mail_time_in`] in the owner's system zone (the IANA name when the Mac
 /// names one, else the system's local rules), and `raw` unchanged when it is
 /// not a date.
 pub fn mail_time_local(raw: &str) -> String {
-    let named = crate::skills::event_time::owner_time_zone()
-        .and_then(|name| name.parse::<chrono_tz::Tz>().ok());
-    let shown = match named {
-        Some(zone) => mail_time_in(raw, &zone),
-        None => mail_time_in(raw, &Local),
-    };
-    shown.unwrap_or_else(|| raw.to_string())
+    crate::skills::event_time::owner_time_zone()
+        .and_then(|name| mail_time_in_named(raw, &name))
+        .or_else(|| mail_time_in(raw, &Local))
+        .unwrap_or_else(|| raw.to_string())
 }
 
 /// The date context the model gets at the start of every turn: today's line,
@@ -173,6 +181,56 @@ mod tests {
         assert_eq!(mail_time_local("yesterday-ish"), "yesterday-ish");
         let local = mail_time_local("Thu, 15 Oct 2026 12:59:00 +0000");
         assert!(local.contains("(local time, UTC"), "{local}");
+    }
+
+    /// The offset changes at the transition instant, 01:00 UTC on 25 October
+    /// 2026: 00:30 UTC is still summer time, 01:30 UTC is winter time.
+    #[test]
+    fn the_offset_changes_at_the_dst_transition_instant() {
+        let paris = chrono_tz::Europe::Paris;
+        assert_eq!(
+            mail_time_in("Sun, 25 Oct 2026 00:30:00 +0000", &paris).as_deref(),
+            Some("Sun, 25 Oct 2026 02:30 (local time, UTC+02:00)")
+        );
+        assert_eq!(
+            mail_time_in("Sun, 25 Oct 2026 01:30:00 +0000", &paris).as_deref(),
+            Some("Sun, 25 Oct 2026 02:30 (local time, UTC+01:00)")
+        );
+    }
+
+    /// A date far ahead still converts, with the rule of its own year.
+    #[test]
+    fn a_far_date_is_converted_with_its_own_offset() {
+        assert_eq!(
+            mail_time_in_named("Thu, 16 Jul 2099 12:00:00 +0000", "Europe/Paris").as_deref(),
+            Some("Thu, 16 Jul 2099 14:00 (local time, UTC+02:00)")
+        );
+        assert_eq!(
+            mail_time_in_named("Thu, 17 Dec 2099 12:00:00 +0000", "Europe/Paris").as_deref(),
+            Some("Thu, 17 Dec 2099 13:00 (local time, UTC+01:00)")
+        );
+    }
+
+    /// A zone name the database does not know falls back to the system's
+    /// local rules, never to the raw header.
+    #[test]
+    fn an_unknown_zone_falls_back_to_the_system_local_rules() {
+        let raw = "Thu, 15 Oct 2026 12:59:00 +0000";
+        assert_eq!(mail_time_in_named(raw, "Not/AZone"), None);
+        let _zone = crate::skills::event_time::TestZone::set("Not/AZone");
+        assert_eq!(
+            Some(mail_time_local(raw)),
+            mail_time_in(raw, &Local),
+            "the Local branch, whatever the host zone"
+        );
+    }
+
+    /// Text after a valid date is not dropped: the header is kept whole.
+    #[test]
+    fn text_after_a_valid_date_keeps_the_whole_header() {
+        let raw = "Thu, 15 Oct 2026 12:59:00 +0000 TAIL";
+        assert_eq!(mail_time_in_named(raw, "Europe/Paris"), None);
+        assert_eq!(mail_time_local(raw), raw);
     }
 
     /// A Paris instant on a given day. Paris is CET (+01:00) at midday on

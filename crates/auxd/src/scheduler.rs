@@ -478,7 +478,7 @@ fn execute(
             // disable the job so it does not fail on every tick.
             let finished_at = format_timestamp(now());
             let summary = cap_summary(&format!("invalid schedule: {error}"));
-            gated_run_write(job.id, "invalid schedule", || {
+            let disabled = gated_run_write(job.id, "invalid schedule", || {
                 let store_guard = locked(store);
                 store_guard.finish_run(run.id, &finished_at, RUN_FAILED, Some(&summary))?;
                 persist_run_receipt(
@@ -491,7 +491,10 @@ fn execute(
                 );
                 store_guard.set_job_enabled(job.id, false)
             })?;
-            tracing::warn!(job_id = job.id, schedule = %job.schedule, "scheduler: job disabled (invalid schedule)");
+            // Said only once the write really landed.
+            if disabled == Some(true) {
+                tracing::warn!(job_id = job.id, schedule = %job.schedule, "scheduler: job disabled (invalid schedule)");
+            }
             return Ok(false);
         }
     };

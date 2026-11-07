@@ -49,6 +49,7 @@ public enum UIKey: String, CaseIterable {
     case delegDone, delegNeedsYou, delegStopped, delegWorking, delegQueued, delegFailed, delegPercent
     case delegSentBack, delegSentBackToAux, delegOpenIn, delegAskedAt, delegAskedByAux, delegResume
     case delegStopTask, delegCouldntFinish, delegKeptPartial, delegStillStopping, delegStuck
+    case delegNotStopped, delegNotFound, delegResumeFailed
 
     // Approvals
     case apDrafted, apSend, apEdit, apNotNow, apShowDraft, apHideDraft, apWaits, apTo, apSendingIn, apUndo
@@ -440,6 +441,9 @@ public extension L10n {
         .delegResume: "Resume",
         .delegStillStopping: "Still stopping, try again in a moment",
         .delegStuck: "This task is still finishing in the background. Restart Aux to reset it.",
+        .delegNotStopped: "Only a stopped task can resume.",
+        .delegNotFound: "This task no longer exists.",
+        .delegResumeFailed: "Aux couldn't resume this task. Try again.",
         .delegStopTask: "Stop this task",
         .delegCouldntFinish: "%@ couldn't finish. Retry",
         .delegKeptPartial: "Stopped. Partial work kept, nothing filed or sent.",
@@ -1459,6 +1463,9 @@ public extension L10n {
         .delegSentBackToAux: "Renvoyé à Aux :",
         .delegStillStopping: "Arrêt en cours, réessayez dans un instant",
         .delegStuck: "Cette tâche se termine encore en arrière-plan. Redémarrez Aux pour la réinitialiser.",
+        .delegNotStopped: "Seule une tâche arrêtée peut reprendre.",
+        .delegNotFound: "Cette tâche n’existe plus.",
+        .delegResumeFailed: "Aux n’a pas pu reprendre cette tâche. Réessayez.",
         .delegStopTask: "Arrêter cette tâche",
         .delegStopped: "Arrêté",
         .delegWorking: "En cours",

@@ -182,6 +182,13 @@ impl DelegationRegistration {
     pub fn token(&self) -> Arc<TurnCancel> {
         Arc::clone(&self.token)
     }
+
+    /// Stop this run as an owner Stop would: its stuck clock starts while
+    /// anything of it lives, so a resume can answer `delegation_stuck`.
+    pub fn stop(&self) {
+        self.registry.stamp_stopping(Some(&self.id));
+        self.token.cancel();
+    }
 }
 
 impl Drop for DelegationRegistration {
@@ -287,6 +294,14 @@ impl DelegationRun {
     /// The task-scoped cancel token the child turn runs under.
     pub fn cancel_token(&self) -> Arc<TurnCancel> {
         Arc::clone(&self.cancel)
+    }
+
+    /// Cancel the run and, when it holds a claim, start its stuck clock.
+    fn stop(&self) {
+        if let Some(claim) = &self._claim {
+            claim.stop();
+        }
+        self.cancel.cancel();
     }
 
     /// Every store access of a live run, past the budget stop gate: after the
@@ -686,7 +701,8 @@ impl DelegationExecutor for EngineDelegationExecutor {
                 .as_ref()
                 .is_some_and(|approvals| approvals.cards_holding(thread) > 0);
             if !parked && remaining.is_zero() {
-                run.cancel_token().cancel();
+                // Stamped like an owner Stop: a turn hung past it reads stuck.
+                run.stop();
                 let _ = tokio::time::timeout(DELEGATION_STOP_GRACE, &mut record).await;
                 record.abort();
                 drain.abort();
@@ -975,7 +991,7 @@ impl Tool for DelegateTool {
         // stops at once and retires its pending card; a call dropped before
         // the agent answered closes the record instead of leaving it working.
         let mut orphan = OrphanGuard {
-            cancel: Arc::clone(&cancel),
+            claim: Arc::clone(&registration),
             store: Arc::clone(&store),
             events: self.events.clone(),
             id: id.clone(),
@@ -988,7 +1004,7 @@ impl Tool for DelegateTool {
             Some(parent) => tokio::select! {
                 outcome = &mut execute => outcome,
                 _ = parent.cancelled() => {
-                    cancel.cancel();
+                    registration.stop();
                     execute.await
                 }
             },
@@ -1035,6 +1051,8 @@ impl Tool for DelegateTool {
                 Ok(ToolOutput::ok(shown))
             }
             Err(reason) => {
+                // Anything of the run still alive is stopped and on the clock.
+                registration.stop();
                 // Read past the stop gate: after the stop, no row (and no write).
                 let row = aux_engine::gated_store_write(|| {
                     kernel_core::lock_recover(&store).delegation(&id)
@@ -1113,7 +1131,7 @@ fn gated_delegation_write<T>(
 /// answered: the agent's turn is cancelled and a record still open is marked
 /// failed, so neither runs nor shows "working" past the chief's turn.
 struct OrphanGuard {
-    cancel: Arc<TurnCancel>,
+    claim: Arc<DelegationRegistration>,
     store: Arc<Mutex<Store>>,
     events: Option<broadcast::Sender<String>>,
     id: String,
@@ -1126,7 +1144,7 @@ impl Drop for OrphanGuard {
         if !self.armed {
             return;
         }
-        self.cancel.cancel();
+        self.claim.stop();
         let closed = {
             let guard = kernel_core::lock_recover(&self.store);
             let row = aux_engine::gated_store_write(|| guard.delegation(&self.id))
@@ -1608,6 +1626,8 @@ pub fn spawn_run(
                 );
             }
             Err(reason) => {
+                // Anything of the run still alive is stopped and on the clock.
+                _registration.stop();
                 let row = gated_open(&db_path, |store| store.delegation(&id))
                     .ok()
                     .flatten();

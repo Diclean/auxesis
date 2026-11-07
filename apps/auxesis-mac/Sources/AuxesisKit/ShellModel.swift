@@ -214,7 +214,15 @@ public final class ShellModel: ObservableObject {
     /// Set when an agent thread was opened from one of Aux's delegation rows.
     @Published public private(set) var returnDelegation: String?
     @Published public private(set) var flashDelegation: String?
-    @Published public private(set) var delegations: [Delegation] = []
+    @Published public private(set) var delegations: [Delegation] = [] {
+        // A refusal note is about a stopped row: it goes once that row
+        // finishes (done or failed) or is gone.
+        didSet {
+            guard let note = delegationResumeNote else { return }
+            let state = delegations.first { $0.id == note.id }?.state
+            if state == nil || state == .done || state == .failed { delegationResumeNote = nil }
+        }
+    }
     @Published public private(set) var delegationsAvailable = true
     @Published public var expanded: Set<String> = []
     /// The drafts the owner has unfolded (a mirror in Aux's thread).
@@ -1000,9 +1008,10 @@ public final class ShellModel: ObservableObject {
     /// (one inline line on its row, never a modal).
     @Published public private(set) var delegationResumeNote: (id: String, text: String)?
 
-    /// The refusal line `delegation`'s row shows, whatever state it is in now.
+    /// The refusal line `delegation`'s row shows, only while it is stopped.
     public func resumeNote(for delegation: Delegation) -> String? {
-        guard let note = delegationResumeNote, note.id == delegation.id else { return nil }
+        guard delegation.state == .stopped,
+              let note = delegationResumeNote, note.id == delegation.id else { return nil }
         return note.text
     }
 
@@ -1031,9 +1040,12 @@ public final class ShellModel: ObservableObject {
         switch auxd.apiErrorCode {
         case "delegation_still_stopping": return L10n.ui(.delegStillStopping, language)
         case "delegation_stuck": return L10n.ui(.delegStuck, language)
+        case "delegation_not_stopped": return L10n.ui(.delegNotStopped, language)
+        case "delegation_not_found": return L10n.ui(.delegNotFound, language)
+        case "delegation_error": return L10n.ui(.delegResumeFailed, language)
         default: break
         }
-        // The daemon's own words beat the generic "the service refused".
+        // An unknown code: the daemon's own words beat "the service refused".
         if auxd.budgetRefusal == nil,
            let message = auxd.apiErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
            !message.isEmpty {

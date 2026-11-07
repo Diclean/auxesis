@@ -136,12 +136,38 @@ import Testing
         )
         XCTAssertEqual(ShellModel.resumeNote(busy, .en), "Still stopping, try again in a moment")
         XCTAssertFalse(ShellModel.resumeNote(AuxdError.transport("down"), .en).isEmpty)
-        // Any other refusal keeps the daemon's own words.
+        // A known code is the app's own copy in the owner's language.
         let other = AuxdError.http(
             status: 409,
             body: #"{"error":{"code":"delegation_not_stopped","message":"only a stopped delegation can resume"}}"#
         )
-        XCTAssertEqual(ShellModel.resumeNote(other, .en), "only a stopped delegation can resume")
+        XCTAssertEqual(ShellModel.resumeNote(other, .en), "Only a stopped task can resume.")
+        XCTAssertEqual(ShellModel.resumeNote(other, .fr), "Seule une tâche arrêtée peut reprendre.")
+        let codes = ["delegation_still_stopping", "delegation_stuck", "delegation_not_stopped",
+                     "delegation_not_found", "delegation_error"]
+        for code in codes {
+            let refusal = AuxdError.http(status: 409, body: #"{"error":{"code":"\#(code)","message":"english words"}}"#)
+            XCTAssertNotEqual(ShellModel.resumeNote(refusal, .fr), "english words", code)
+        }
+        // An unknown code keeps the daemon's own words.
+        let unknown = AuxdError.http(status: 409, body: #"{"error":{"code":"delegation_new","message":"new words"}}"#)
+        XCTAssertEqual(ShellModel.resumeNote(unknown, .en), "new words")
+    }
+
+    func testAResumeNoteShowsOnlyOnTheStoppedRowAndGoesWhenItFinishes() {
+        let team = FixtureDaemon(scenario: .stopped)
+        team.resumeFailure = AuxdError.http(status: 409, body: #"{"error":{"code":"delegation_stuck"}}"#)
+        let shell = ShellModel(store: Store(transport: team, language: .en), client: team)
+        shell.refreshDelegations()
+        XCTAssertTrue(waitUntil { shell.delegations.contains { $0.id == "dl-3" } })
+        guard var row = shell.delegations.first(where: { $0.id == "dl-3" }) else { return XCTFail("no dl-3") }
+        shell.resumeDelegation(row)
+        XCTAssertTrue(waitUntil { shell.resumeNote(for: row) != nil })
+        row.state = .working
+        XCTAssertNil(shell.resumeNote(for: row), "a note on a row that is not stopped")
+        team.finishDelegation(id: "dl-3")
+        shell.refreshDelegations()
+        XCTAssertTrue(waitUntil { shell.delegationResumeNote == nil }, "the note outlived its finished row")
     }
 
     func testAStuckResumeKeepsTheRowStoppedWithItsNoteUntilStop() {

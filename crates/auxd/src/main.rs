@@ -39,6 +39,10 @@ use tracing_subscriber::EnvFilter;
 /// uninstall` / `launchctl bootout` / Ctrl-C are never blocked by a run.
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// How long shutdown waits for a shell overflow drainer thread before it
+/// drains the rest of that backlog itself.
+const OVERFLOW_DRAIN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// How long shutdown waits, each try, for the budget settle worker to end: over
 /// the store's busy timeout (5 s, which a settle blocked on the database can
 /// spend) and the worker's 1 s to record what it owes. A retry mid-statement
@@ -88,6 +92,9 @@ fn main() -> ExitCode {
         // Never await a blocking job on shutdown: give the runtime a short
         // grace, then abandon it and let the process exit.
         runtime.shutdown_timeout(SHUTDOWN_GRACE);
+        // A shell overflow drainer thread would die mid-drain with the
+        // process: wait for it, bounded, then drain what is left here.
+        aux_runtime::tools::finish_overflow_drain(OVERFLOW_DRAIN_WAIT);
         // After the runtime's grace, so a call it abandoned has handed over
         // its reservation. This covers the settle worker, and no settle or
         // usage write starts on any thread once it is asked to stop; one

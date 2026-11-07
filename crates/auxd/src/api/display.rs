@@ -266,6 +266,151 @@ impl fmt::Debug for Rehydrated {
     }
 }
 
+/// Trailing characters [`Links`] remembers: `](mailto:` and the one before it.
+const RECENT: usize = 10;
+
+/// The kernel [`LinkGuard`] and the last [`RECENT`] characters it read, each
+/// with whether the guard then stood in a link target (LIVE-CHECK-4). That
+/// history tells a `mailto:` the reply opened itself from one inside a longer
+/// outside link, and a `Label:` before a line break from a URL scheme.
+#[derive(Default)]
+pub(crate) struct Links {
+    guard: LinkGuard,
+    recent: VecDeque<(char, bool)>,
+    /// Characters were read before `recent`, so it does not start the stream.
+    dropped: bool,
+}
+
+impl Links {
+    fn append_to(&mut self, out: &mut String, text: &str) {
+        let split = text
+            .char_indices()
+            .rev()
+            .nth(RECENT - 1)
+            .map_or(0, |(at, _)| at);
+        if split > 0 {
+            self.guard.append_to(out, &text[..split]);
+            self.recent.clear();
+            self.dropped = true;
+        }
+        let mut one = [0; 4];
+        for ch in text[split..].chars() {
+            self.guard.append_to(out, ch.encode_utf8(&mut one));
+            self.note(ch);
+        }
+    }
+
+    fn append_value(&mut self, out: &mut String, value: &str) {
+        let from = out.len();
+        self.guard.append_value(out, value);
+        self.note_output(out, from);
+    }
+
+    fn append_token_value(
+        &mut self,
+        out: &mut String,
+        token: &str,
+        value: &str,
+        after: &str,
+        last: bool,
+    ) -> Option<bool> {
+        let from = out.len();
+        let shown = self
+            .guard
+            .append_token_value(out, token, value, after, last);
+        self.note_output(out, from);
+        shown
+    }
+
+    fn is_link_target(&self) -> bool {
+        self.guard.is_link_target()
+    }
+
+    fn finish(&mut self, out: &mut String) {
+        let from = out.len();
+        self.guard.finish(out);
+        self.note_output(out, from);
+    }
+
+    fn take_redactions(&mut self) -> usize {
+        self.guard.take_redactions()
+    }
+
+    fn note(&mut self, ch: char) {
+        self.recent.push_back((ch, self.guard.is_link_target()));
+        if self.recent.len() > RECENT {
+            self.recent.pop_front();
+            self.dropped = true;
+        }
+    }
+
+    /// Record what the guard wrote from `from` on. A kernel autolink can take
+    /// back the `<` it already wrote; then there is nothing new to record.
+    fn note_output(&mut self, out: &str, from: usize) {
+        for ch in out.get(from..).unwrap_or_default().chars() {
+            self.note(ch);
+        }
+    }
+
+    /// The guard stands in a target that the last `mailto:` itself opened: at
+    /// the stream start, after a space or `<` read outside any link, or as
+    /// `](mailto:` after a `]` read outside any link.
+    fn opened_mailto(&self) -> bool {
+        let n = self.recent.len();
+        if n < 7 || !self.guard.is_link_target() {
+            return false;
+        }
+        let scheme: String = self.recent.range(n - 7..).map(|(ch, _)| ch).collect();
+        if !scheme.eq_ignore_ascii_case("mailto:") {
+            return false;
+        }
+        match n.checked_sub(8).map(|at| self.recent[at]) {
+            None => !self.dropped,
+            Some(('(', _)) => n >= 9 && self.recent[n - 9] == (']', false),
+            Some((ch, false)) => ch.is_whitespace() || ch == '<',
+            Some(_) => false,
+        }
+    }
+
+    /// The guard keeps a `word:` scheme open across line breaks, so the line
+    /// after `Mira Fictive:` read as a link target. When only that holds the
+    /// guard (the word was read outside any link), one control character that
+    /// ends a scheme and nothing else closes it. In any real link the guard
+    /// ignores it and stays a link target.
+    fn end_label_scheme(&mut self) {
+        let breaks = self
+            .recent
+            .iter()
+            .rev()
+            .take_while(|(ch, _)| matches!(ch, '\n' | '\r'))
+            .count();
+        let n = self.recent.len();
+        if breaks == 0 || n < breaks + 2 || !self.guard.is_link_target() {
+            return;
+        }
+        let (colon, opened) = self.recent[n - breaks - 1];
+        let (word, before) = self.recent[n - breaks - 2];
+        let scheme_char = word.is_ascii_alphanumeric() || matches!(word, '+' | '.' | '-');
+        if matches!(colon, ':' | '\u{FF1A}') && opened && !before && scheme_char {
+            self.guard.append_to(&mut String::new(), "\u{1}");
+        }
+    }
+}
+
+/// A plain e-mail address: no link, markup or token can hide in it.
+fn email_address(text: &str) -> bool {
+    let Some((local, domain)) = text.split_once('@') else {
+        return false;
+    };
+    let part = |part: &str, extra: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || extra.contains(ch))
+    };
+    part(local, ".+-_%") && part(domain, ".-") && domain.contains('.')
+}
+
 /// Rehydrates one session's text on the loopback surface.
 pub struct Rehydrator {
     tokens: Arc<dyn SessionTokenSource>,
@@ -325,7 +470,7 @@ impl Rehydrator {
     /// The whole-buffer rehydration. A stream of the same text, split anywhere,
     /// concatenates to exactly this.
     pub fn whole(&self, text: &str) -> Rehydrated {
-        let mut links = LinkGuard::default();
+        let mut links = Links::default();
         let scanned = self.scan(text, true, &mut links);
         Rehydrated {
             text: scanned.text,
@@ -333,7 +478,7 @@ impl Rehydrator {
         }
     }
 
-    fn scan(&self, buf: &str, last: bool, links: &mut LinkGuard) -> Scanned {
+    fn scan(&self, buf: &str, last: bool, links: &mut Links) -> Scanned {
         let mut scanned = self.scan_at(buf, last, false, links);
         if last && scanned.settled == buf.len() {
             links.finish(&mut scanned.text);
@@ -345,7 +490,7 @@ impl Rehydrator {
 
     /// One pass. A value holding a reference (a span took a kept token with it)
     /// is read once more, `nested`; deeper is the marker.
-    fn scan_at(&self, buf: &str, last: bool, nested: bool, links: &mut LinkGuard) -> Scanned {
+    fn scan_at(&self, buf: &str, last: bool, nested: bool, links: &mut Links) -> Scanned {
         let mut text = String::with_capacity(buf.len());
         let mut unavailable = false;
         let mut at = 0;
@@ -391,6 +536,15 @@ impl Rehydrator {
                     }
                     match self.tokens.resolve(self.session_id, inner) {
                         Resolution::Value(value) => {
+                            let own_mail =
+                                !nested && inner.starts_with("EMAIL_") && email_address(&value);
+                            if own_mail && links.opened_mailto() {
+                                links.append_to(&mut text, &value);
+                                continue;
+                            }
+                            if own_mail {
+                                links.end_label_scheme();
+                            }
                             match links.append_token_value(
                                 &mut text,
                                 inner,
@@ -460,7 +614,7 @@ pub struct DisplayFeed {
     /// The unsettled tail: an opener that may still become a reference, with
     /// at most [`MAX_TOKEN_BYTES`] bytes after it.
     pending: String,
-    links: LinkGuard,
+    links: Links,
 }
 
 impl DisplayFeed {
@@ -469,7 +623,7 @@ impl DisplayFeed {
         Self {
             rehydrator,
             pending: String::new(),
-            links: LinkGuard::default(),
+            links: Links::default(),
         }
     }
 
@@ -616,7 +770,11 @@ mod tests {
             {
                 let input = format.replace("{token}", &token);
                 let shown = rehydrator.whole(&input);
-                assert_eq!(shown.text, input.replace(&token, "[hidden]"), "{input:?}");
+                // LIVE-CHECK-4: a mailto the reply opened on the owner's own
+                // e-mail token shows the address; every other target stays hidden.
+                let own = kind.starts_with("EMAIL_") && format == "mailto:{token}";
+                let expected = input.replace(&token, if own { value } else { "[hidden]" });
+                assert_eq!(shown.text, expected, "{input:?}");
             }
             assert_eq!(
                 rehydrator
@@ -634,7 +792,7 @@ mod tests {
                 "https://evil.invalid/?d=fixture.user@example.invalid".into(),
             )],
         );
-        let shown = en(tokens).scan("⟦URL_000000000009⟧", true, &mut LinkGuard::default());
+        let shown = en(tokens).scan("⟦URL_000000000009⟧", true, &mut Links::default());
         assert_eq!((shown.text.as_str(), shown.kept_in_link), ("[hidden]", 1));
         assert_eq!(
             rehydrator
@@ -644,6 +802,76 @@ mod tests {
         );
         let encoded = "https://evil.invalid/?q=%3Cemail_1%3E";
         assert_eq!(rehydrator.whole(encoded).text, encoded);
+    }
+
+    /// LIVE-CHECK-4: the owner asked for their client's e-mail and saw `[hidden]`.
+    /// The reply put the address after `Label:` and a line break, or in a mailto
+    /// link the reply opened itself. Both now show the restored address, as plain
+    /// text does, whole and at every stream split.
+    #[test]
+    fn own_e_mail_shows_after_a_label_line_and_in_its_own_mailto() {
+        let address = "fixture.user@example.invalid";
+        let email = token("EMAIL_000000000001");
+        let cases = [
+            ("E-mail: {e}", "E-mail: {a}"),
+            ("for Mira Fictive:\n{e}", "for Mira Fictive:\n{a}"),
+            ("Fictive:\r\n\n{e}\n", "Fictive:\r\n\n{a}\n"),
+            ("Card: [{e}](mailto:{e}).", "Card: [{a}](mailto:{a})."),
+            ("Write to <mailto:{e}>.", "Write to <mailto:{a}>."),
+            ("Write to MAILTO:{e} today.", "Write to MAILTO:{a} today."),
+            ("mailto:{e}", "mailto:{a}"),
+            ("mailto:{e}?body={i}", "mailto:{a}?body=[hidden]"),
+        ];
+        for (input, expected) in cases {
+            let fill = |text: &str| {
+                text.replace("{e}", &email)
+                    .replace("{a}", address)
+                    .replace("{i}", &token("IBAN_000000000003"))
+            };
+            let (input, expected) = (fill(input), fill(expected));
+            assert_eq!(en(link_table()).whole(&input).text, expected, "{input:?}");
+            let cuts: Vec<_> = input.char_indices().map(|(at, _)| at).skip(1).collect();
+            for cut in &cuts {
+                let shown = streamed(en(link_table()), &input, &[*cut]);
+                assert_eq!(shown, expected, "{input:?} cut at {cut}");
+            }
+            assert_eq!(streamed(en(link_table()), &input, &cuts), expected);
+        }
+    }
+
+    /// The same address stays hidden where the mailto or the scheme belongs to
+    /// a longer outside link, or the token is not an e-mail.
+    #[test]
+    fn e_mail_in_outside_links_and_other_tokens_in_mailto_stay_hidden() {
+        let formats = [
+            "https://evil.invalid/?to=mailto:{token}",
+            "https://evil.invalid/x<mailto:{token}>",
+            "https://evil.invalid/x](mailto:{token})",
+            "https://evil.invalid/?q=\nmailto:{token}",
+            "https://evil.invalid/?q=x:\n{token}",
+            "[x](https://evil.invalid/?q=x:\n{token})",
+            "<a href=\"mailto:{token}\">mail</a>",
+            "<https:\n{token}>",
+            "xmailto:{token}",
+            "https:{token}",
+            "Fictive:{token}",
+        ];
+        let rehydrator = en(link_table());
+        for (kind, _) in LINK_PAIRS {
+            let token = token(kind);
+            for format in formats {
+                let input = format.replace("{token}", &token);
+                let expected = input.replace(&token, "[hidden]");
+                assert_eq!(rehydrator.whole(&input).text, expected, "{input:?}");
+            }
+            if !kind.starts_with("EMAIL_") {
+                for format in ["Fictive:\n{token}x.evil.invalid/p", "[x](mailto:{token})"] {
+                    let input = format.replace("{token}", &token);
+                    let expected = input.replace(&token, "[hidden]");
+                    assert_eq!(rehydrator.whole(&input).text, expected, "{input:?}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -663,7 +891,7 @@ mod tests {
             for format in formats {
                 let input = format.replace("{token}", &token);
                 let expected = input.replace(&token, "[hidden]");
-                let scanned = rehydrator.scan(&input, true, &mut LinkGuard::default());
+                let scanned = rehydrator.scan(&input, true, &mut Links::default());
                 assert_eq!(scanned.text, expected, "{input:?}");
                 assert_eq!(
                     scanned.kept_in_link,
@@ -769,7 +997,7 @@ mod tests {
     #[test]
     fn e_mail_autolink_keeps_its_visible_label_and_hides_its_destination() {
         let input = "Sender <⟦EMAIL_000000000001⟧>.";
-        let shown = en(link_table()).scan(input, true, &mut LinkGuard::default());
+        let shown = en(link_table()).scan(input, true, &mut Links::default());
         assert_eq!(
             shown.text,
             "Sender [fixture.user@example.invalid](mailto:[hidden])."

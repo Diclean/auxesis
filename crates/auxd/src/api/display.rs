@@ -266,19 +266,18 @@ impl fmt::Debug for Rehydrated {
     }
 }
 
-/// Trailing characters [`Links`] remembers: `](mailto:` and the one before it.
+/// Trailing characters [`Links`] remembers: a `Label:` and the line breaks
+/// after it.
 const RECENT: usize = 10;
 
 /// The kernel [`LinkGuard`] and the last [`RECENT`] characters it read, each
 /// with whether the guard then stood in a link target (LIVE-CHECK-4). That
-/// history tells a `mailto:` the reply opened itself from one inside a longer
-/// outside link, and a `Label:` before a line break from a URL scheme.
+/// history tells a `Label:` before a line break from a URL scheme. A mailto
+/// target stays hidden: text after the address in it (`?cc=`) would go with it.
 #[derive(Default)]
 pub(crate) struct Links {
     guard: LinkGuard,
     recent: VecDeque<(char, bool)>,
-    /// Characters were read before `recent`, so it does not start the stream.
-    dropped: bool,
 }
 
 impl Links {
@@ -291,7 +290,6 @@ impl Links {
         if split > 0 {
             self.guard.append_to(out, &text[..split]);
             self.recent.clear();
-            self.dropped = true;
         }
         let mut one = [0; 4];
         for ch in text[split..].chars() {
@@ -340,7 +338,6 @@ impl Links {
         self.recent.push_back((ch, self.guard.is_link_target()));
         if self.recent.len() > RECENT {
             self.recent.pop_front();
-            self.dropped = true;
         }
     }
 
@@ -349,26 +346,6 @@ impl Links {
     fn note_output(&mut self, out: &str, from: usize) {
         for ch in out.get(from..).unwrap_or_default().chars() {
             self.note(ch);
-        }
-    }
-
-    /// The guard stands in a target that the last `mailto:` itself opened: at
-    /// the stream start, after a space or `<` read outside any link, or as
-    /// `](mailto:` after a `]` read outside any link.
-    fn opened_mailto(&self) -> bool {
-        let n = self.recent.len();
-        if n < 7 || !self.guard.is_link_target() {
-            return false;
-        }
-        let scheme: String = self.recent.range(n - 7..).map(|(ch, _)| ch).collect();
-        if !scheme.eq_ignore_ascii_case("mailto:") {
-            return false;
-        }
-        match n.checked_sub(8).map(|at| self.recent[at]) {
-            None => !self.dropped,
-            Some(('(', _)) => n >= 9 && self.recent[n - 9] == (']', false),
-            Some((ch, false)) => ch.is_whitespace() || ch == '<',
-            Some(_) => false,
         }
     }
 
@@ -538,10 +515,6 @@ impl Rehydrator {
                         Resolution::Value(value) => {
                             let own_mail =
                                 !nested && inner.starts_with("EMAIL_") && email_address(&value);
-                            if own_mail && links.opened_mailto() {
-                                links.append_to(&mut text, &value);
-                                continue;
-                            }
                             if own_mail {
                                 links.end_label_scheme();
                             }
@@ -770,11 +743,7 @@ mod tests {
             {
                 let input = format.replace("{token}", &token);
                 let shown = rehydrator.whole(&input);
-                // LIVE-CHECK-4: a mailto the reply opened on the owner's own
-                // e-mail token shows the address; every other target stays hidden.
-                let own = kind.starts_with("EMAIL_") && format == "mailto:{token}";
-                let expected = input.replace(&token, if own { value } else { "[hidden]" });
-                assert_eq!(shown.text, expected, "{input:?}");
+                assert_eq!(shown.text, input.replace(&token, "[hidden]"), "{input:?}");
             }
             assert_eq!(
                 rehydrator
@@ -805,9 +774,9 @@ mod tests {
     }
 
     /// LIVE-CHECK-4: the owner asked for their client's e-mail and saw `[hidden]`.
-    /// The reply put the address after `Label:` and a line break, or in a mailto
-    /// link the reply opened itself. Both now show the restored address, as plain
-    /// text does, whole and at every stream split.
+    /// The reply put the address after `Label:` and a line break. It now shows
+    /// the restored address, as plain text does, whole and at every stream
+    /// split. A mailto target stays hidden (its `?cc=` would carry the address).
     #[test]
     fn own_e_mail_shows_after_a_label_line_and_in_its_own_mailto() {
         let address = "fixture.user@example.invalid";
@@ -816,11 +785,13 @@ mod tests {
             ("E-mail: {e}", "E-mail: {a}"),
             ("for Mira Fictive:\n{e}", "for Mira Fictive:\n{a}"),
             ("Fictive:\r\n\n{e}\n", "Fictive:\r\n\n{a}\n"),
-            ("Card: [{e}](mailto:{e}).", "Card: [{a}](mailto:{a})."),
-            ("Write to <mailto:{e}>.", "Write to <mailto:{a}>."),
-            ("Write to MAILTO:{e} today.", "Write to MAILTO:{a} today."),
-            ("mailto:{e}", "mailto:{a}"),
-            ("mailto:{e}?body={i}", "mailto:{a}?body=[hidden]"),
+            ("Card: [{e}](mailto:{e}).", "Card: [{a}](mailto:[hidden])."),
+            ("mailto:{e}", "mailto:[hidden]"),
+            (
+                "mailto:{e}?cc=collector@evil.invalid",
+                "mailto:[hidden]?cc=collector@evil.invalid",
+            ),
+            ("mailto:{e}?body={i}", "mailto:[hidden]?body=[hidden]"),
         ];
         for (input, expected) in cases {
             let fill = |text: &str| {
@@ -845,6 +816,8 @@ mod tests {
     fn e_mail_in_outside_links_and_other_tokens_in_mailto_stay_hidden() {
         let formats = [
             "https://evil.invalid/?to=mailto:{token}",
+            "https://evil.invalid/?to=\u{00A0}mailto:{token}",
+            "mailto:{token}?cc=collector@evil.invalid",
             "https://evil.invalid/x<mailto:{token}>",
             "https://evil.invalid/x](mailto:{token})",
             "https://evil.invalid/?q=\nmailto:{token}",

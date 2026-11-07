@@ -811,15 +811,77 @@ fn read_agent_grants(home: &Path, id: &str) -> Result<Option<AgentGrants>, Regis
     Ok(Some(AgentGrants::from(file)))
 }
 
-/// One agent's grants as its own `grants.toml` (or the seed) says, before
-/// any chief cap, or why that file cannot be used (READS-6, words per
-/// READS-7/8). The file is read once; `Err` exactly when [`read_agent_grants`]
-/// fails. `Ok(None)`: no file and not seeded.
-pub(crate) fn uncapped_grants(
-    home: &Path,
-    id: &str,
-) -> Result<Option<AgentGrants>, aux_runtime::executor::FileFault> {
-    uncapped_from(home, id, read_grants_file(home, id))
+/// The `grants.toml` files one turn decides on (READS-11): the agent's own
+/// and each ceiling's, each read once, and the registry built from those
+/// same reads. The grants, the chief ceiling and the free-times hint all use
+/// this one snapshot, so a file that changes mid-turn is never seen twice.
+#[derive(Debug)]
+pub struct GrantsSnapshot {
+    agent: String,
+    ceilings: Vec<&'static str>,
+    files: Vec<(&'static str, GrantsRead)>,
+    own: GrantsRead,
+    /// `Err`: a grants file (one of these, or another agent's) cannot be
+    /// used, so every scoped tool is refused (fail closed).
+    registry: Result<Vec<AgentDef>, String>,
+}
+
+type GrantsRead = Result<Option<AgentGrants>, aux_runtime::executor::FileFault>;
+
+impl GrantsSnapshot {
+    /// Read `agent`'s grants file and each of its ceilings' once.
+    pub fn read(home: &Path, agent: &str) -> Self {
+        let ceilings = ceilings(home, agent);
+        let own = read_grants_file(home, agent);
+        let files: Vec<_> = ceilings
+            .iter()
+            .filter(|id| **id != agent)
+            .map(|id| (*id, read_grants_file(home, id)))
+            .collect();
+        let read: Option<Vec<(&str, Option<AgentGrants>)>> = std::iter::once((agent, &own))
+            .chain(files.iter().map(|(id, file)| (*id, file)))
+            .map(|(id, file)| file.as_ref().ok().map(|grants| (id, grants.clone())))
+            .collect();
+        // A fault fails the registry as a fresh read of that file would.
+        let registry = match read {
+            Some(read) => registry_with(home, &read).map_err(|err| err.to_string()),
+            None => Err("a grants file cannot be used".to_string()),
+        };
+        Self {
+            agent: agent.to_string(),
+            ceilings,
+            files,
+            own,
+            registry,
+        }
+    }
+
+    /// The agent this turn runs.
+    pub fn agent(&self) -> &str {
+        &self.agent
+    }
+
+    /// The agents that cap it, as [`ceilings`] gave them at the read.
+    pub fn ceilings(&self) -> &[&'static str] {
+        &self.ceilings
+    }
+
+    /// One file as read (`None`: no file). An id not read is a fault.
+    pub(crate) fn file(&self, id: &str) -> GrantsRead {
+        if id == self.agent {
+            return self.own.clone();
+        }
+        self.files
+            .iter()
+            .find(|(read, _)| *read == id)
+            .map(|(_, file)| file.clone())
+            .unwrap_or(Err(aux_runtime::executor::FileFault::Read))
+    }
+
+    /// The registry built from these reads, or why it cannot be.
+    pub fn registry(&self) -> Result<&[AgentDef], &str> {
+        self.registry.as_deref().map_err(String::as_str)
+    }
 }
 
 /// One agent's `grants.toml` as written (`None`: no file), or why it cannot
@@ -838,7 +900,9 @@ pub(crate) fn read_grants_file(
     }
 }
 
-/// [`uncapped_grants`] from a file already read: no file is the seed's.
+/// One agent's grants as its own `grants.toml` (or the seed) says, before
+/// any chief cap, from a file already read, or why that file cannot be used
+/// (READS-6, words per READS-7/8). `Ok(None)`: no file and not seeded.
 pub(crate) fn uncapped_from(
     home: &Path,
     id: &str,

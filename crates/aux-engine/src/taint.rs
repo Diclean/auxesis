@@ -19,6 +19,7 @@
 
 use aux_store::Message;
 use kernel_broker::{Taint, TaintSource, ToolRegistry};
+use std::borrow::Cow;
 
 /// Rebuild the taint state of a conversation from its persisted messages.
 ///
@@ -118,22 +119,22 @@ fn body_only(scheme: &str) -> Option<&'static str> {
 /// controls and spaces are dropped first, as WHATWG does (READS-9); text
 /// before `://` that no scheme can hold gives nothing. Every taint row,
 /// Activity entry and card shows this.
-pub(crate) fn url_host(raw: &str) -> &str {
+pub(crate) fn url_host(raw: &str) -> Cow<'_, str> {
     let rest = raw.trim_start_matches(|c: char| c <= '\u{20}' || c.is_whitespace());
     // Schemes that never name a host: their scheme only, whatever follows
     // (`javascript://token`, `data:x@token` would otherwise parse a host).
     if let Some((scheme, _)) = rest.split_once(':') {
         if let Some(shown) = body_only(scheme) {
             // No tab or newline dropped: show the scheme as written.
-            return if scheme.len() + 1 == shown.len() {
+            return Cow::Borrowed(if scheme.len() + 1 == shown.len() {
                 &rest[..=scheme.len()]
             } else {
                 shown
-            };
+            });
         }
     }
     if let Some(scheme) = opaque_scheme(rest) {
-        return scheme;
+        return Cow::Borrowed(scheme);
     }
     let (separated, (scheme, rest)) = match rest.split_once("://") {
         Some(parts) => (true, parts),
@@ -156,12 +157,15 @@ pub(crate) fn url_host(raw: &str) -> &str {
     // Only a leading `[...]` is a literal, and after it comes nothing or
     // `:port`; an unclosed `[` is no host.
     // READS-10: what is inside must be an IPv6 address ([`ipv6_literal`]).
-    let (literal, after) = match host.strip_prefix('[') {
+    // READS-11: a zone (`%25en0`) is never shown, only `[address]:port`.
+    let (literal, zoned, after) = match host.strip_prefix('[') {
         Some(inner) => match inner.split_once(']') {
-            Some((address, tail)) if ipv6_literal(address) => (true, tail),
-            _ => (true, "["),
+            Some((address, tail)) if ipv6_literal(address) => {
+                (true, address.split_once('%').map(|(bare, _)| bare), tail)
+            }
+            _ => (true, None, "["),
         },
-        None => (false, host),
+        None => (false, None, host),
     };
     let port_ok = match after.split_once(':') {
         Some((before, port)) => {
@@ -177,17 +181,20 @@ pub(crate) fn url_host(raw: &str) -> &str {
             .all(|c| c.is_alphanumeric() || ".-_:[]%".contains(c));
     if !scheme_ok {
         // `java%73cript://token`: no scheme, so what follows is a body.
-        ""
+        Cow::Borrowed("")
     } else if host.is_empty() || !host_ok {
-        scheme
+        Cow::Borrowed(scheme)
+    } else if let Some(bare) = zoned {
+        Cow::Owned(format!("[{bare}]{after}"))
     } else {
-        host
+        Cow::Borrowed(host)
     }
 }
 
 /// What a `[...]` host may hold (READS-10): hex digits, `:` and `.`, with at
 /// least one `:`, then an optional `%` zone of letters and digits
-/// (`fe80::1%25en0`). Anything else (`[s3cr3t]`) is no host.
+/// (`fe80::1%25en0`). Anything else (`[s3cr3t]`) is no host. READS-11: an
+/// empty zone, written `%` or `%25`, is refused both ways.
 fn ipv6_literal(inner: &str) -> bool {
     let (address, zone) = match inner.split_once('%') {
         Some((address, zone)) => (address, Some(zone)),
@@ -197,8 +204,10 @@ fn ipv6_literal(inner: &str) -> bool {
         && address
             .chars()
             .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
-        && zone
-            .is_none_or(|zone| !zone.is_empty() && zone.chars().all(|c| c.is_ascii_alphanumeric()))
+        && zone.is_none_or(|zone| {
+            let zone = zone.strip_prefix("25").unwrap_or(zone);
+            !zone.is_empty() && zone.chars().all(|c| c.is_ascii_alphanumeric())
+        })
 }
 
 /// `scheme:` of a URL with no `//` after the colon and no port (`scheme:`
@@ -240,7 +249,7 @@ pub(crate) fn host_only(detail: Option<String>) -> Option<String> {
     if !detail.contains(['/', '?', '#', '@', '\\', ':']) {
         return Some(detail);
     }
-    Some(url_host(&detail).to_string()).filter(|host| !host.is_empty())
+    Some(url_host(&detail).into_owned()).filter(|host| !host.is_empty())
 }
 
 /// A stored workspace mark (`tool: detail`, see [`TaintSource::summary`])
@@ -368,7 +377,12 @@ mod tests {
             ("::1", ""),
             ("http://::1/x", "http"),
             ("[::1]:80", "[::1]:80"),
-            ("http://[fe80::1%25en0]/x", "[fe80::1%25en0]"),
+            ("http://[fe80::1%25en0]/x", "[fe80::1]"),
+            // READS-11: zones are never shown; an empty zone is refused.
+            ("http://[::1%25s3cr3t]/x", "[::1]"),
+            ("http://[::1%25s3cr3t]:8080/x", "[::1]:8080"),
+            ("[fe80::1%en0]:80", "[fe80::1]:80"),
+            ("http://[::1%25]/", "http"),
             ("http://[::ffff:192.0.2.1]:8080/", "[::ffff:192.0.2.1]:8080"),
             ("a.example:8443", "a.example:8443"),
             ("https://münchen.example/x", "münchen.example"),

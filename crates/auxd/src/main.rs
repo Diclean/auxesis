@@ -523,6 +523,13 @@ async fn serve(
         notify_flush,
         messages_gateway,
     } = gateways;
+    // Arm the stop signals before any readiness line. Arming is not atomic:
+    // `sigaction` goes in before the handler's slot and tokio's listener, and a
+    // signal landing in that gap runs the saved default action, which the
+    // registry skips, so it is lost and the daemon would wait forever. A stop
+    // sent once "auxd ready" or "auxd api on" is out must always be seen.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let _ = writeln!(
         std::io::stdout(),
         "auxd ready — version {}, home {}, schema v{}",
@@ -594,9 +601,8 @@ async fn serve(
         _ => None,
     };
 
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
+        _ = sigint.recv() => {}
         _ = sigterm.recv() => {}
     }
 

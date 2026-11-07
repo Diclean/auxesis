@@ -6066,33 +6066,41 @@ mod m4_invite_tests {
         use aux_runtime::grants::{default_grants, CHIEF_AGENT as CHIEF, FREEBUSY_TOOL};
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
-        std::fs::create_dir_all(aux_engine::agent_dir(&home, "mail")).unwrap();
         std::fs::create_dir_all(aux_engine::agent_dir(&home, CHIEF)).unwrap();
         std::fs::write(home.join("config.toml"), "default_agent = \"main\"\n").unwrap();
-        let shipped = default_grants(CHIEF).unwrap();
-        let mut lowered = shipped.clone();
+        // Both files are written before Mail exists (the chief is never
+        // lowered below an agent), then swapped in by hand.
+        let chief_file = aux_engine::agent_dir(&home, CHIEF).join("grants.toml");
+        let text = |grants: &aux_runtime::grants::AgentGrants| {
+            crate::agents::write_grants(&home, CHIEF, grants).unwrap();
+            std::fs::read(&chief_file).unwrap()
+        };
+        let mut lowered = default_grants(CHIEF).unwrap();
         lowered.never.push(FREEBUSY_TOOL.to_string());
+        let lowered = text(&lowered);
+        let shipped = text(&default_grants(CHIEF).unwrap());
+        std::fs::create_dir_all(aux_engine::agent_dir(&home, "mail")).unwrap();
         let chief_named = |denials: &[ReadDenial]| {
             denials
                 .iter()
                 .any(|d| matches!(d, ReadDenial::ChiefNever(CHIEF, _)))
         };
         // Read lowered, then the file goes back: both still deny.
-        crate::agents::write_grants(&home, CHIEF, &lowered).unwrap();
+        std::fs::write(&chief_file, &lowered).unwrap();
         let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
-        crate::agents::write_grants(&home, CHIEF, &shipped).unwrap();
+        std::fs::write(&chief_file, &shipped).unwrap();
         let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
         assert!(chief_named(&denials), "{denials:?}");
         assert!(freebusy_enforced(&home, &snapshot).0);
         // Read shipped, then the file is lowered: neither denies.
         let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
-        crate::agents::write_grants(&home, CHIEF, &lowered).unwrap();
+        std::fs::write(&chief_file, &lowered).unwrap();
         let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
         assert!(denials.is_empty(), "{denials:?}");
         assert_eq!(freebusy_enforced(&home, &snapshot), (false, false));
         // Read shipped, then the file breaks: the read still decides.
+        std::fs::write(&chief_file, &shipped).unwrap();
         let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
-        let chief_file = aux_engine::agent_dir(&home, CHIEF).join("grants.toml");
         std::fs::write(&chief_file, "[[do]\n").unwrap();
         let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
         assert!(denials.is_empty(), "{denials:?}");
@@ -6105,7 +6113,7 @@ mod m4_invite_tests {
     #[test]
     fn a_chief_grants_fault_denies_the_free_times_and_is_named() {
         use aux_runtime::executor::{FileFault, GrantsGap, ReadDenial};
-        use aux_runtime::grants::{default_grants, CHIEF_AGENT as CHIEF};
+        use aux_runtime::grants::CHIEF_AGENT as CHIEF;
         let dir = tempdir().unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(aux_engine::agent_dir(&home, "mail")).unwrap();
@@ -6118,7 +6126,8 @@ mod m4_invite_tests {
         let fault = ReadDenial::ChiefGrants(CHIEF, GrantsGap::Unreadable(FileFault::Parse));
         std::fs::write(chief.join("grants.toml"), "[[do]\n").unwrap();
         let snapshot = crate::agents::GrantsSnapshot::read(&home, "mail");
-        crate::agents::write_grants(&home, CHIEF, &default_grants(CHIEF).unwrap()).unwrap();
+        // Fixed after the read: no file is the shipped chief.
+        std::fs::remove_file(chief.join("grants.toml")).unwrap();
         let denials = freebusy_denials(&home, &snapshot, &freebusy_origins(), &[]);
         assert!(denials.contains(&fault), "{denials:?}");
         assert_eq!(freebusy_enforced(&home, &snapshot), (true, true));

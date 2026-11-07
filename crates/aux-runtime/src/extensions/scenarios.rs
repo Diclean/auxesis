@@ -21,7 +21,7 @@ use super::catalog::{Entry, EntryKind, Run, Sensitivity, Source, SourceType, Tra
 use super::install::{install, load_installed, remove, InstallOptions};
 use super::mount::{
     accept, freeze, is_frozen, is_mounted, load_state, mount, mounted_extensions, store_state,
-    unmount, ExtensionHost, ExtensionState,
+    unmount, ExtensionHost, ExtensionState, StateLock,
 };
 use super::session::{session_for, verify_identity, SessionOptions};
 use super::{extensions_dir, hex};
@@ -1564,8 +1564,11 @@ async fn a_failed_start_puts_the_approved_row_back() {
 
 /// v1 installed, then a v2 that exits at once with a new host: `--accept`
 /// stores the v2 pin, calls `planted` (between the store and the restore)
-/// and fails to start.
-async fn failed_accept_with(home: &Path, planted: impl FnOnce(&ExtensionState)) -> ExtensionState {
+/// and fails to start. Returns v1's row and the error.
+async fn failed_accept_with(
+    home: &Path,
+    planted: impl FnOnce(&ExtensionState),
+) -> (ExtensionState, String) {
     install_fixture(home, "demo", &fixture_script("Ping the fixture")).await;
     let before = load_state(home, "demo").unwrap();
     let v2 = "#!/bin/sh\nexit 1\n";
@@ -1578,8 +1581,7 @@ async fn failed_accept_with(home: &Path, planted: impl FnOnce(&ExtensionState)) 
         ..Default::default()
     };
     let started = super::session::accept_with(home, "demo", &options, planted).await;
-    assert!(started.is_err());
-    before
+    (before, started.unwrap_err().to_string())
 }
 
 // EXT-ANCHOR-12: a daemon `freeze` of the stored v2 row (byte-identical: it is
@@ -1593,7 +1595,7 @@ async fn a_freeze_before_the_restore_is_kept() {
         assert!(state.frozen && state.version == "2.0.0");
         freeze(&path, "demo", "daemon drift").unwrap();
     };
-    let before = failed_accept_with(home.path(), freeze_v2).await;
+    let (before, _) = failed_accept_with(home.path(), freeze_v2).await;
     let kept = load_state(home.path(), "demo").unwrap();
     let frozen = ExtensionState {
         frozen: true,
@@ -1605,28 +1607,62 @@ async fn a_freeze_before_the_restore_is_kept() {
     assert_eq!(audit["frozen"], true, "{audit}");
 }
 
-// EXT-ANCHOR-12 r2: a freeze after the store, while the build starts, is kept
-// by the final unfreeze: v1's row comes back frozen, `frozen_during_start` is
-// audited, and the advice names v2 over v1 (never `tools`: they match).
-#[tokio::test]
-async fn a_freeze_during_the_start_restores_the_approved_row_frozen() {
-    let home = tempfile::tempdir().unwrap();
-    let script = fixture_script("Ping the fixture");
-    install_fixture(home.path(), "demo", &script).await;
-    let before = load_state(home.path(), "demo").unwrap();
-    let mut entry = fixture_entry("demo", script.as_bytes(), "2.0.0", Sensitivity::Public);
+/// EXT-ANCHOR-13: the fixture, gated: it writes `started` in its work dir,
+/// then waits for `go` there before it answers.
+fn gated_script() -> String {
+    let gate = "#!/bin/sh\n: > started\nwhile [ ! -f go ]; do :; done\n";
+    fixture_script("Ping the fixture").replacen("#!/bin/sh\n", gate, 1)
+}
+
+/// Runs `act` once the gated child in `work` has started, then lets it go.
+fn once_started(work: PathBuf, act: impl FnOnce() + Send + 'static) -> std::thread::JoinHandle<()> {
+    std::fs::create_dir_all(&work).unwrap();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !work.join("started").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        act();
+        std::fs::write(work.join("go"), "").unwrap();
+    })
+}
+
+/// v1, then a gated v2 with a new host: `--accept` of v2 runs `act` once its
+/// child has started. Returns v1's row and the error.
+async fn accept_acting_on_start(
+    home: &Path,
+    act: impl FnOnce(&Path) + Send + 'static,
+) -> (ExtensionState, String) {
+    install_fixture(home, "demo", &fixture_script("Ping the fixture")).await;
+    let before = load_state(home, "demo").unwrap();
+    let v2 = gated_script();
+    let mut entry = fixture_entry("demo", v2.as_bytes(), "2.0.0", Sensitivity::Public);
     entry.tools[0].network = vec!["b.example:443".to_owned()];
-    install_upgrade(home.path(), entry, &script).await;
+    install_upgrade(home, entry, &v2).await;
     let options = super::session::AcceptOptions {
         downgrade_to: Some("2.0.0"),
         launch_change: &["network".to_owned()],
         ..Default::default()
     };
-    let path = home.path().to_path_buf();
-    let freeze_v2 = |_: &ExtensionState| freeze(&path, "demo", "daemon drift").unwrap();
-    let err = super::session::accept_with(home.path(), "demo", &options, freeze_v2).await;
-    let err = err.unwrap_err().to_string();
+    let path = home.to_path_buf();
+    let work = load_installed(home, "demo").unwrap().work_dir();
+    let watcher = once_started(work, move || act(&path));
+    let err = super::session::accept_with(home, "demo", &options, |_| {}).await;
+    watcher.join().unwrap();
+    (before, err.unwrap_err().to_string())
+}
+
+// EXT-ANCHOR-12 r2: a freeze after the child started is kept by the final
+// unfreeze: v1's row comes back frozen, `frozen_during_start` is audited, and
+// the advice names v2 over v1 (never `tools`: they match). r13: frozen once
+// the child runs, not in `on_trusted`.
+#[tokio::test]
+async fn a_freeze_during_the_start_restores_the_approved_row_frozen() {
+    let home = tempfile::tempdir().unwrap();
+    let act = |home: &Path| freeze(home, "demo", "daemon drift").unwrap();
+    let (before, err) = accept_acting_on_start(home.path(), act).await;
     assert!(err.contains("frozen or changed while it started"), "{err}");
+    assert!(err.contains("the approved row is kept, frozen"), "{err}");
     assert!(err.contains("--downgrade-to 2.0.0"), "{err}");
     assert!(!err.contains("tools"), "{err}");
     let kept = load_state(home.path(), "demo").unwrap();
@@ -1639,6 +1675,106 @@ async fn a_freeze_during_the_start_restores_the_approved_row_frozen() {
     assert_eq!(audit["refused_version"], "2.0.0", "{audit}");
     assert_eq!(audit["restored_version"], "1.0.0", "{audit}");
     assert_eq!(audit["frozen"], true, "{audit}");
+}
+
+// EXT-ANCHOR-13: another writer's row during the start is kept, and the
+// refusal says so from that row, never "the approved row is kept".
+#[tokio::test]
+async fn another_row_during_the_start_is_named_as_kept() {
+    let home = tempfile::tempdir().unwrap();
+    let act = |home: &Path| {
+        let mut row = load_state(home, "demo").unwrap();
+        row.version = "9.9.9".to_owned();
+        store_state(home, &row).unwrap();
+    };
+    let (_, err) = accept_acting_on_start(home.path(), act).await;
+    assert!(
+        err.contains("another write's row is kept (9.9.9, frozen)"),
+        "{err}"
+    );
+    assert!(!err.contains("the approved row"), "{err}");
+    assert_eq!(load_state(home.path(), "demo").unwrap().version, "9.9.9");
+    let audit = audit_row(home.path(), "frozen_during_start");
+    assert_eq!(audit["kept_current"], true, "{audit}");
+}
+
+// EXT-ANCHOR-13: a restore that cannot take the lock keeps the start error,
+// says the approval was not restored, and leaves v2's row frozen; the audit
+// row says `restore_failed`, never `kept_current`.
+#[tokio::test]
+async fn a_restore_without_the_lock_keeps_the_error_and_the_freeze() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().to_path_buf();
+    let held = std::sync::Mutex::new(None);
+    let hold = |_: &ExtensionState| {
+        *held.lock().unwrap() = Some(StateLock::acquire(&path, "demo").unwrap());
+    };
+    let (_, err) = failed_accept_with(home.path(), hold).await;
+    drop(held);
+    assert!(!err.starts_with("io:"), "{err}");
+    assert!(err.contains("; the approval was not restored ("), "{err}");
+    assert!(err.contains("busy"), "{err}");
+    assert!(err.ends_with("the row on disk is 2.0.0, frozen"), "{err}");
+    let kept = load_state(home.path(), "demo").unwrap();
+    assert!(kept.frozen && kept.version == "2.0.0", "{kept:?}");
+    let audit = audit_row(home.path(), "start_failed");
+    assert_eq!(audit["restore_failed"], true, "{audit}");
+    assert_eq!(audit["kept_current"], false, "{audit}");
+    assert_eq!(audit["restored_version"], serde_json::Value::Null);
+    assert_eq!(audit["frozen"], true, "{audit}");
+}
+
+// EXT-ANCHOR-13: `pin_extension` is refused as busy under a held lock; an
+// epoch move while its child starts (a freeze past the wait) pins it frozen.
+#[tokio::test]
+async fn pin_extension_is_busy_under_the_lock_and_keeps_an_epoch_move() {
+    let home = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let script = gated_script();
+    let mut entry = fixture_entry("demo", script.as_bytes(), "1.0.0", Sensitivity::Public);
+    let server = write_script(scratch.path(), "server", &script);
+    entry.source.package = server.to_string_lossy().into_owned();
+    let options = InstallOptions {
+        allow_loopback: true,
+        pin: false,
+    };
+    install(home.path(), &entry, &options).await.unwrap();
+    let installed = load_installed(home.path(), "demo").unwrap();
+    let held = StateLock::acquire(home.path(), "demo").unwrap();
+    let busy = super::session::pin_extension(home.path(), &installed, true).await;
+    assert!(busy.unwrap_err().to_string().contains("busy"));
+    drop(held);
+    let lock = home.path().join("extensions/state/demo.lock");
+    let bump = move || {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&lock)
+            .unwrap();
+        file.write_all(b"\n").unwrap();
+    };
+    let watcher = once_started(installed.work_dir(), bump);
+    let pinned = super::session::pin_extension(home.path(), &installed, true).await;
+    watcher.join().unwrap();
+    assert!(pinned.unwrap().frozen);
+    assert!(is_frozen(home.path(), "demo"));
+}
+
+// EXT-ANCHOR-13: a drift whose freeze cannot take the lock still reports the
+// drift, and the row is frozen.
+#[tokio::test]
+async fn identity_drift_past_a_held_lock_still_freezes() {
+    let home = tempfile::tempdir().unwrap();
+    install_fixture(home.path(), "demo", &fixture_script("Ping the fixture")).await;
+    let held = StateLock::acquire(home.path(), "demo").unwrap();
+    let drift = verify_identity(home.path(), "demo", &[]);
+    drop(held);
+    let reported = matches!(
+        drift,
+        Err(super::session::SessionError::IdentityDrift { .. })
+    );
+    assert!(reported, "{drift:?}");
+    assert!(is_frozen(home.path(), "demo"));
 }
 
 // EXT-ANCHOR-12: another row written between the store and the restore is

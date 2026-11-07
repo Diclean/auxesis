@@ -123,6 +123,15 @@ pub enum SessionError {
     /// fields that changed since the pin: nothing started or re-pinned.
     #[error("{0}")]
     LaunchChangeRefused(String),
+    /// EXT-ANCHOR-13: a failed `--accept` whose approved row could not be put
+    /// back: the original error, then why.
+    #[error("{error}; {note}")]
+    NotRestored {
+        /// The start failure or refusal.
+        error: Box<SessionError>,
+        /// That the approval was not restored, and the row on disk.
+        note: String,
+    },
 }
 
 /// A started egress proxy plus its loopback port.
@@ -812,8 +821,9 @@ pub async fn pin_extension(
             if !matches!(super::mount::read_state(home, &installed.name), Ok(None)) {
                 return Err(super::mount::state_busy(&installed.name));
             }
-            state.frozen = held.epoch()? != epoch;
-            store_state(home, &state)
+            // EXT-ANCHOR-13: re-checked after the write (an unlocked freeze).
+            state.frozen = false;
+            held.store_held(home, &mut state, epoch)
         })
     };
     session.stop().await;
@@ -1037,18 +1047,17 @@ pub async fn accept_with(
     // restored row frozen. A failed write keeps the new, frozen row (fails
     // closed) and logs `restore_failed`, never a `restored_version`.
     // r2: the lock is taken by the caller (async); a lock that is not held
-    // writes nothing and is still audited. Returns the row now on disk.
-    let restore = |lock: std::io::Result<StateLock>,
-                   outcome: &str,
-                   drift: bool|
-     -> Result<Option<ExtensionState>, SessionError> {
-        let mut back = previous_row.clone();
+    // writes nothing and is still audited. EXT-ANCHOR-13: returns the row now
+    // on disk and, when the approval was not put back, a note saying so.
+    let restore = |lock: std::io::Result<StateLock>, outcome: &str, drift: bool| {
+        let mut back = ExtensionState {
+            frozen: previous_row.frozen || drift,
+            ..previous_row.clone()
+        };
         let row = super::mount::read_state(home, name).ok().flatten();
         let stored = lock.as_ref().ok().and_then(|held| {
-            back.frozen |= drift || held.epoch().ok() != Some(epoch);
-            same_row(row.as_ref(), &state).then(|| store_state(home, &back))
+            same_row(row.as_ref(), &state).then(|| held.store_held(home, &mut back, epoch))
         });
-        let failed = lock.err();
         let restored = matches!(stored, Some(Ok(())));
         let frozen = match restored {
             true => back.frozen,
@@ -1059,16 +1068,24 @@ pub async fn accept_with(
             "outcome": outcome,
             "refused_version": state.version,
             "restored_version": restored.then_some(&back.version),
-            "restore_failed": failed.is_some() || matches!(stored, Some(Err(_))),
-            "kept_current": stored.is_none(),
+            "restore_failed": lock.is_err() || matches!(stored, Some(Err(_))),
+            "kept_current": lock.is_ok() && stored.is_none(),
             "frozen": frozen,
         });
         super::ledger::log(home, super::ledger::VERIFY, &audit);
-        if let Some(err) = failed {
-            return Err(err.into());
-        }
-        stored.transpose()?;
-        Ok(if restored { Some(back) } else { row })
+        let note = match (&lock, stored) {
+            (_, Some(Ok(()))) => None,
+            (Err(err), _) => Some(format!(
+                "the approval was not restored ({err}); the row on disk is {}",
+                row_words(row.as_ref())
+            )),
+            (Ok(_), Some(Err(err))) => Some(format!("the approval was not restored ({err})")),
+            (Ok(_), None) => Some(format!(
+                "the approval was not restored: another write's row is kept ({})",
+                row_words(row.as_ref())
+            )),
+        };
+        (if restored { Some(back) } else { row }, note)
     };
     let started = session_for(
         home,
@@ -1081,12 +1098,14 @@ pub async fn accept_with(
     let session = match started {
         Ok(session) => session,
         Err(err) => {
-            restore(
-                StateLock::acquire_async(home, name).await,
-                "start_failed",
-                false,
-            )?;
-            return Err(err);
+            let lock = StateLock::acquire_async(home, name).await;
+            return Err(match restore(lock, "start_failed", false).1 {
+                None => err,
+                Some(note) => SessionError::NotRestored {
+                    error: Box::new(err),
+                    note,
+                },
+            });
         }
     };
     let pins: BTreeMap<String, String> = pinned_tools(&session.tools)
@@ -1106,7 +1125,7 @@ pub async fn accept_with(
             super::mount::remove_from_all_mounts(home, name)?;
         }
         let lock = StateLock::acquire_async(home, name).await;
-        restore(lock, "tools_refused", drift)?;
+        let note = restore(lock, "tools_refused", drift).1;
         // EXT-ANCHOR-12: the live tools are known here, so `tools` is named
         // only on a drift, never for a frozen row whose tools match the pin.
         let unfrozen = ExtensionState {
@@ -1114,10 +1133,14 @@ pub async fn accept_with(
             ..previous_row.clone()
         };
         let command = super::mount::accept_command(&unfrozen, &installed);
+        let tail = note
+            .as_ref()
+            .map_or_else(String::new, |note| format!("; {note}"));
+        let kept = note.unwrap_or_else(|| "the approved row is kept".to_owned());
         let message = match tools_changed.is_empty() {
-            true => format!("`{name}` has no changed tool: drop `tools`, run `{command}`"),
+            true => format!("`{name}` has no changed tool: drop `tools`, run `{command}`{tail}"),
             false => format!(
-                "`{name}` changed tools since approval ({}); the approved row is kept: \
+                "`{name}` changed tools since approval ({}); {kept}: \
                  re-trust them only with `{}`",
                 tools_changed.join(", "),
                 with_tools(&command),
@@ -1141,34 +1164,49 @@ pub async fn accept_with(
             let row = super::mount::read_state(home, name).ok().flatten();
             held.epoch().ok() == Some(epoch) && same_row(row.as_ref(), &state)
         });
-        match unchanged {
-            true => store_state(home, &live).map_err(SessionError::from),
-            false => {
+        // EXT-ANCHOR-13: a freeze that bumped the epoch without the lock
+        // after the check re-freezes the row; the pinned row goes back so the
+        // restore below replaces it.
+        let mut kept = live.clone();
+        let started = match (unchanged, lock.as_ref()) {
+            (true, Ok(held)) => held
+                .store_held(home, &mut kept, epoch)
+                .and_then(|()| match kept.frozen {
+                    true => store_state(home, &state).map(|()| false),
+                    false => Ok(true),
+                })
+                .map_err(SessionError::from),
+            _ => Ok(false),
+        };
+        match started {
+            Ok(true) => Ok(()),
+            Err(err) => Err(err),
+            Ok(false) => {
                 let outcome = match lock.is_ok() {
                     true => "frozen_during_start",
                     false => "unfreeze_busy",
                 };
-                restore(lock, outcome, true).and_then(|row| {
-                    let advice = row.map_or_else(
-                        || command.clone(),
-                        |row| {
-                            let changed = tool_changes(&row.tools, &live.tools);
-                            let row = ExtensionState {
-                                frozen: false,
-                                ..row
-                            };
-                            let advice = super::mount::accept_command(&row, &installed);
-                            match changed.is_empty() {
-                                true => advice,
-                                false => with_tools(&advice),
-                            }
-                        },
-                    );
-                    Err::<(), _>(SessionError::LaunchChangeRefused(format!(
-                        "`{name}` was frozen or changed while it started; the approved row \
-                     is kept, frozen: run `{advice}`"
-                    )))
-                })
+                let (row, note) = restore(lock, outcome, true);
+                let advice = row.as_ref().map_or_else(
+                    || command.clone(),
+                    |row| {
+                        let changed = tool_changes(&row.tools, &live.tools);
+                        let row = ExtensionState {
+                            frozen: false,
+                            ..row.clone()
+                        };
+                        let advice = super::mount::accept_command(&row, &installed);
+                        match changed.is_empty() {
+                            true => advice,
+                            false => with_tools(&advice),
+                        }
+                    },
+                );
+                // EXT-ANCHOR-13: worded from the row actually kept.
+                let kept = note.unwrap_or_else(|| "the approved row is kept, frozen".to_owned());
+                Err(SessionError::LaunchChangeRefused(format!(
+                    "`{name}` was frozen or changed while it started; {kept}: run `{advice}`"
+                )))
             }
         }
     };
@@ -1181,6 +1219,17 @@ pub async fn accept_with(
         state: live,
         corrupt_newer: report.corrupt_newer,
     })
+}
+
+/// `2.0.0, frozen`: the row on disk, for a refusal.
+fn row_words(row: Option<&ExtensionState>) -> String {
+    row.map_or_else(
+        || "absent".to_owned(),
+        |row| {
+            let state = if row.frozen { "frozen" } else { "not frozen" };
+            format!("{}, {state}", super::escape_text(&row.version))
+        },
+    )
 }
 
 /// Whether `row` is exactly `ours`, field by field.

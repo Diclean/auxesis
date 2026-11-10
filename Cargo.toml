@@ -57,7 +57,7 @@ serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
-toml = "0.9"
+toml = "1.1"
 # `mcp.toml` rewrites edit the parsed document in place, so comments,
 # formatting and quarantined entries survive byte-for-byte. `toml` still owns
 # the entry shape; `toml_edit` owns the document. Pinned to the version already
